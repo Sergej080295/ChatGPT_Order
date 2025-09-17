@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Планировщик</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.20.2/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+  --cap:15; --cell:28px; --gcell:30.8px; --line:#e5e7eb; --muted:#777;
+  --leftWidth:660px; --dayWidth:94px; --stackHeight:288px; --labelW:276px;
+}
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;color:#111;background:#fff}
+header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);padding:12px 20px}
+h1{margin:0 0 6px;font-size:20px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.tools{display:flex;gap:8px;flex-wrap:wrap}
+.muted{color:var(--muted)}
+
+.container{padding:16px 20px;display:grid;grid-template-columns:var(--leftWidth) 1fr;gap:16px}
+@media (max-width:1100px){.container{grid-template-columns:1fr}}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px}
+.card h3{margin:0 0 10px;font-size:16px}
+
+#capacity{width:70px}
+
+fieldset{border:1px dashed #d1d5db;border-radius:8px;padding:8px 10px}
+legend{font-size:12px;color:#6b7280;padding:0 6px}
+
+.table-wrap{max-height:calc(var(--cell)*15 + 42px);overflow:auto;border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:14px}
+thead th{position:sticky;top:0;z-index:2;background:#fafafa;font-weight:600;user-select:none;cursor:default}
+th,td{border-bottom:1px solid var(--line);padding:4px 6px;height:var(--cell);vertical-align:middle;text-align:center}
+td[contenteditable="true"]{background:#fffceb;outline:0;border-radius:4px}
+.error{background:#ffdada}
+.newRow td{font-weight:700}
+.status-ok{background:#e7f7ec;color:#14532d;font-weight:600;border-radius:6px}
+.status-early{background:#fff6cc;color:#7a5d00;font-weight:600;border-radius:6px}
+.status-late{background:#ffe4e4;color:#7f1d1d;font-weight:600;border-radius:6px}
+.legend{display:flex;gap:14px;font-size:13px}
+.chip{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:4px}
+.chip.green{background:#22c55e}.chip.amber{background:#f59e0b}.chip.red{background:#ef4444}
+button.highlight{box-shadow:0 0 0 2px #f43f5e33 inset;background:#ffe4e6;border-color:#f43f5e}
+
+.gantt-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.gantt-wrap{border:1px solid var(--line);border-radius:10px;display:grid;grid-template-columns:var(--labelW) 1fr;max-height:min(calc(var(--gcell)*15+56px),calc(100vh - 260px))}
+.gantt-wrap.fs{position:fixed;inset:10px;z-index:1000;background:#fff;border:2px solid #000;max-height:none}
+.gantt-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow-y:auto}
+.gantt-right{display:flex;flex-direction:column;overflow:hidden}
+.gantt-header-x{background:#fff;border-bottom:1px solid var(--line);overflow:hidden}
+.gantt-header-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth);will-change:transform}
+.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.gantt-body{display:flex;overflow:auto}
+.gantt-dates{min-width:calc(var(--dayWidth)*var(--dayCount));display:grid;grid-auto-rows:var(--gcell);grid-auto-flow:row}
+.gantt-dates-row{display:grid;grid-template-columns:repeat(var(--dayCount),var(--dayWidth))}
+.gcell{position:relative;min-height:var(--gcell);border-left:1px solid #f0f0f0;border-bottom:1px solid var(--line)}
+.gfill{position:absolute;inset:3px;border-radius:4px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;color:#0a0a0a;background:#22c55e33}
+.gfill.late{background:#ef444433}
+.row-label{height:var(--gcell);display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-label.header{height:calc(var(--gcell)*0.9);font-weight:600;border-bottom:1px solid var(--line)}
+
+.detail7{margin-top:12px}
+.stack-wrap{display:flex;gap:14px;overflow:auto}
+.stack-col{min-width:253px;border:1px solid var(--line);border-radius:10px;padding:8px}
+.stack-title{font-weight:600;margin-bottom:8px;text-align:center}
+.stack{position:relative;height:var(--stackHeight);border:1px dashed #ddd;border-radius:8px;background:#fafafa;display:flex;flex-direction:column;gap:4px;padding:4px}
+.slice{border:1px solid #aaa;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#111;text-shadow:0 1px 0 rgba(255,255,255,.6);padding:0 8px;white-space:nowrap;overflow:hidden}
+
+#tasksTable col#colExtra{width:95px;}
+tr.dragging{opacity:.6}
+tr.drop-above{box-shadow:0 -2px 0 #3b82f6 inset}
+tr.drop-below{box-shadow:0 2px 0 #3b82f6 inset}
+.sort-hint{font-weight:600;cursor:pointer}
+
+.route-wrap{display:block;overflow:auto;white-space:nowrap}
+.route-lane{display:inline-flex;gap:12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0;background:#fafafa}
+.route-num{min-width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#111;color:#fff;font-weight:700}
+.route-box{min-width:220px;border:1px solid #cbd5e1;border-radius:8px;padding:8px;background:#fff;display:flex;flex-direction:column;gap:6px}
+.route-title{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.route-stage{display:flex;gap:8px;align-items:center}
+.route-chip{font-size:12px;border:1px solid #e5e7eb;border-radius:999px;padding:2px 8px;background:#f8fafc}
+.route-status.ok{background:#e7f7ec;color:#14532d}
+.route-status.early{background:#fff6cc;color:#7a5d00}
+.route-status.late{background:#ffe4e4;color:#7f1d1d}
+.eye{cursor:pointer;font-size:16px}
+</style>
+</head>
+<body>
+<header>
+  <h1 id="pageTitle">Планировщик — Гибка</h1>
+  <div class="row" style="align-items:flex-end">
+    <label>Передел:
+      <select id="process">
+        <option value="bend">Гибка</option>
+        <option value="laser">Лазер</option>
+        <option value="route">Маршрут</option>
+      </select>
+    </label>
+    <label>Базовая вместимость (ч/сутки): <input id="capacity" type="number" min="1" step="0.1" value="15"></label>
+
+    <div class="tools">
+      <fieldset>
+        <legend>Исходные данные</legend>
+        <input id="file" type="file" accept=".csv,.xlsx" title="Импорт исходных данных">
+      </fieldset>
+      <fieldset>
+        <legend>Доп. загрузка</legend>
+        <input id="fileDelta" type="file" accept=".csv,.xlsx" title="Импорт CSV_2 (дельта)">
+      </fieldset>
+      <button id="loadExample">Загрузить пример</button>
+      <button id="exportCSV">Экспорт CSV</button>
+      <button id="optimize">Оптимизация очереди</button>
+      <button id="exceptionsBtn">Исключения</button>
+      <button id="bookingBtn">Бронь</button>
+      <button id="clearAll">Очистить</button>
+    </div>
+
+    <div class="muted" id="freshnessBox" style="margin-left:auto">
+      Актуальность: <b id="freshness">—</b>
+    </div>
+  </div>
+</header>
+
+<div class="container">
+  <div class="card" id="leftCard">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h3>Список заказов</h3>
+      <div class="row">
+        <button id="showDone">Готовые</button>
+        <button id="addOrder">Добавить заказ</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="ordersScroller">
+      <table id="tasksTable">
+        <colgroup>
+          <col style="width:40px"><col style="width:34px"><col style="width:64px">
+          <col id="colOrderId" style="width:240px">
+          <col id="colHours"   style="width:81px">
+          <col id="colExtra"   style="width:95px">
+          <col id="colStart"   style="width:110px">
+          <col id="colEnd"     style="width:110px">
+          <col id="colState"   style="width:120px">
+          <col id="colDelta"   style="width:140px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>✔</th>
+            <th>Исп. бронь</th>
+            <th>Заказ</th>
+            <th>Часов</th>
+            <th id="colExtraHdr">Доп. время</th>
+            <th id="thStart" class="sort-hint" title="Сортировать по дате начала (по возрастанию)">Начало ⇅</th>
+            <th>Конец</th>
+            <th>Состояние</th>
+            <th>Статус</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div class="legend">
+        <span><i class="chip green"></i> Точно в срок</span>
+        <span><i class="chip amber"></i> Досрочно</span>
+        <span><i class="chip red"></i> Сорван срок</span>
+      </div>
+    </div>
+
+    <h3 style="margin-top:16px;">Сорваны сроки</h3>
+    <div id="overDays" class="overdays muted">нет</div>
+
+    <div id="detail7" class="detail7">
+      <h3>Подетально</h3>
+      <div class="stack-wrap" id="stackWrap"></div>
+    </div>
+
+    <div id="routeView" class="route-wrap" style="display:none"></div>
+  </div>
+
+  <div class="card" id="ganttCard">
+    <div class="gantt-toolbar">
+      <h3 style="margin:0">Диаграмма Ганта</h3>
+      <span class="muted">Фильтр дней:</span>
+      <select id="ganttFilter">
+        <option value="all">Все</option>
+        <option value="free">Свободно</option>
+        <option value="busy">Занято</option>
+      </select>
+      <button id="toggleFS">Во весь экран</button>
+      <select id="processFS" style="display:none">
+        <option value="bend">Гибка</option>
+        <option value="laser">Лазер</option>
+      </select>
+    </div>
+    <div class="gantt-wrap" id="ganttWrap">
+      <div class="gantt-left" id="ganttLeft">
+        <div class="row-label header">Заказ / Дата</div>
+        <div id="ganttLeftBody"></div>
+      </div>
+      <div class="gantt-right">
+        <div class="gantt-header-x">
+          <div class="gantt-header-row" id="ganttDatesHeader"></div>
+        </div>
+        <div class="gantt-body" id="ganttBody">
+          <div class="gantt-dates" id="ganttDates"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Исключения -->
+<dialog id="exceptionsDlg">
+  <h3 style="margin:0 0 6px">Исключения календаря</h3>
+  <p class="muted" style="margin-top:0">
+    Каждая строка: дата или дата с ёмкостью.<br>
+    <code>12.09.2025</code> → выходной (0 ч) &nbsp; | &nbsp; <code>12.09.2025 (18)</code> → ёмкость 18 ч
+  </p>
+  <textarea id="exceptionsText" style="width:min(70vw,640px);height:200px;border:1px solid #e5e7eb;border-radius:8px;padding:8px"></textarea>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="excCancel">Отмена</button>
+    <button id="excApply">Применить</button>
+  </div>
+</dialog>
+
+<!-- Бронь -->
+<dialog id="bookingDlg">
+  <h3 style="margin:0 0 6px">Бронь мощностей</h3>
+  <p class="muted" style="margin-top:0">
+    Каждая строка: <code>ДД.ММ.ГГГГ (часы)</code>. Эти часы доступны <b>только</b> для заказов с флажком «Исп. бронь».<br>
+    Пример: <code>15.09.2025 (10)</code>
+  </p>
+  <textarea id="bookingText" style="width:min(70vw,640px);height:200px;border:1px solid #e5e7eb;border-radius:8px;padding:8px"></textarea>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="bookCancel">Отмена</button>
+    <button id="bookApply">Применить</button>
+  </div>
+</dialog>
+
+<!-- Готовые -->
+<dialog id="doneDlg">
+  <h3 style="margin:0 0 6px">Готовые заказы</h3>
+  <div id="doneList" class="table-wrap" style="max-height:50vh">
+    <table style="table-layout:auto">
+      <thead><tr><th>Заказ</th><th>Часов</th><th>Начало</th><th>Конец</th><th>Источник</th><th>Когда</th><th>Действие</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="doneClose">Закрыть</button>
+  </div>
+</dialog>
+
+<!-- Маршрут по одному заказу -->
+<dialog id="routeDlg">
+  <h3 style="margin:0 0 6px">Маршрут заказа</h3>
+  <div id="routeOne" style="max-width:86vw;overflow:auto"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="routeClose">Закрыть</button>
+  </div>
+</dialog>
+
+<script>
+/* ===== helpers ===== */
+const $=s=>document.querySelector(s); const $$=s=>Array.from(document.querySelectorAll(s));
+const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);x.setHours(0,0,0,0);return x;}
+const fmtDate=d=>`${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`
+const fmtDM=d=>`${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}`
+const normalize=(s)=>String(s||'').trim().replace(/\./g,'-');
+const parseDate=s=>{const m=/^(\d{2})-(\d{2})-(\d{4})$/.exec(normalize(s)); if(!m) return null; const d=new Date(+m[3],+m[2]-1,+m[1]); if(isNaN(d)) return null; d.setHours(0,0,0,0); return d;}
+const daysBetween=(a,b)=>Math.round((b-a)/86400000);
+const parseHours=s=>Number(String(s).replace(',','.').trim());
+const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
+
+/* ===== state ===== */
+let tasks=[], schedule=null, exceptions=new Map(), bookings=new Map(), freshnessStr='—';
+let lastRows=null, doneTasks=[];
+
+/* ===== CSV/XLSX decode ===== */
+async function readTextSmart(file){
+  const buff = new Uint8Array(await file.arrayBuffer());
+  if(buff[0]===0xEF && buff[1]===0xBB && buff[2]===0xBF){ return new TextDecoder('utf-8').decode(buff.subarray(3)); }
+  let txt = new TextDecoder('utf-8',{fatal:false}).decode(buff);
+  const bad=(txt.match(/\uFFFD/g)||[]).length, hasHigh=buff.some(b=>b>=0x80), hasCyr=/[ЁА-Яёа-я]/.test(txt);
+  if((bad>3 || (!hasCyr && hasHigh))){
+    const map=[...'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—�™љ›њќћџ ЎўЈ¤Ґ¦§Ё©Є«¬­®Ї°±Ііґµ¶·ё№є»јЅѕїАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя'];
+    txt = Array.from(buff, b=> b<128?String.fromCharCode(b): (map[b-128]||'?')).join('');
+  }
+  return txt;
+}
+function parseCSVText(text){ return text.split(/\r?\n/).filter(l=>l.trim().length>0).map(l=>l.split(';')); }
+
+/* ===== exceptions & bookings ===== */
+function parsePairs(text){
+  const map=new Map();
+  (String(text||'').split(/\r?\n/)).map(l=>l.trim()).filter(Boolean).forEach(line=>{
+    const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})(?:\s*\((\d+(?:[.,]\d+)?)\))?$/.exec(line);
+    if(!m) return;
+    const d=parseDate(m[1]); if(!d) return;
+    map.set(fmtDate(d), m[2]!=null ? Number(String(m[2]).replace(',','.')) : 0);
+  });
+  return map;
+}
+
+/* ===== allocation (с учётом Брони) ===== */
+function allocate(tasks, baseCapacity, exceptionsMap, bookingsMap){
+  if(!tasks.length){
+    const t=new Date(); t.setHours(0,0,0,0);
+    return {minD:t,maxD:t, perTask:new Map(), perDay:new Map()};
+  }
+  const starts=tasks.map(t=>t.startDate), ends=tasks.map(t=>t.endDate||t.startDate);
+  const minD=new Date(Math.min.apply(null,starts)); const maxD0=new Date(Math.max.apply(null,ends));
+  minD.setHours(0,0,0,0); maxD0.setHours(0,0,0,0);
+
+  const perTask=new Map(), perDay=new Map(), freeGen=new Map(), freeBook=new Map();
+  const dayCap=ds=>exceptionsMap.has(ds)?exceptionsMap.get(ds):baseCapacity;
+
+  for(let d=new Date(minD); d<=maxD0; d=addDays(d,1)){
+    const ds=fmtDate(d), cap=dayCap(ds), bk=bookingsMap.get(ds)||0;
+    perDay.set(ds,[]);
+    freeGen.set(ds, Math.max(0, cap - bk));
+    freeBook.set(ds, Math.max(0, bk));
+  }
+
+  function takeFromDay(ds, amount, allowBook){
+    let take=0, usedBook=0;
+    if(allowBook){
+      const fb=freeBook.get(ds)||0; const tb=Math.min(amount, fb);
+      if(tb>0){ freeBook.set(ds, fb-tb); take+=tb; usedBook+=tb; amount-=tb; }
+    }
+    const fg=freeGen.get(ds)||0; const tg=Math.min(amount, fg);
+    if(tg>0){ freeGen.set(ds, fg-tg); take+=tg; amount-=tg; }
+    return {take, usedBook};
+  }
+
+  for(const t of tasks){
+    const total=(+t.hours||0)+(+t.extraHours||0);
+    const allowBook = !!t.useBooking;
+    const start=t.startDate||new Date(); start.setHours(0,0,0,0);
+    const end=t.endDate||new Date(start); end.setHours(0,0,0,0);
+    let remain=total; const rec={segments:[],lateHours:0};
+
+    for(let d=new Date(start); d<=end && remain>1e-9; d=addDays(d,1)){
+      const ds=fmtDate(d);
+      if(!perDay.has(ds)){ perDay.set(ds,[]); freeGen.set(ds, Math.max(0,dayCap(ds)-(bookingsMap.get(ds)||0))); freeBook.set(ds, bookingsMap.get(ds)||0); }
+      const {take, usedBook}=takeFromDay(ds, remain, allowBook);
+      if(take>0){ perDay.get(ds).push({orderId:t.orderId,hours:take,late:false,fromBook:usedBook>0}); rec.segments.push({date:new Date(d),hours:take,late:false,fromBook:usedBook>0}); remain-=take; }
+    }
+    let cur=addDays(end,1);
+    while(remain>1e-9){
+      const ds=fmtDate(cur);
+      if(!perDay.has(ds)){ perDay.set(ds,[]); freeGen.set(ds, Math.max(0,dayCap(ds)-(bookingsMap.get(ds)||0))); freeBook.set(ds, bookingsMap.get(ds)||0); }
+      const {take, usedBook}=takeFromDay(ds, remain, allowBook);
+      if(take>0){ perDay.get(ds).push({orderId:t.orderId,hours:take,late:true,fromBook:usedBook>0}); rec.segments.push({date:new Date(cur),hours:take,late:true,fromBook:usedBook>0}); rec.lateHours+=take; remain-=take; }
+      cur=addDays(cur,1);
+    }
+    perTask.set(t.orderId,rec);
+  }
+  let maxD=maxD0; for(const ds of perDay.keys()){const d=parseDate(ds); if(d>maxD) maxD=d;}
+  return {minD,maxD,perTask,perDay};
+}
+
+/* ===== schema detection & mapping ===== */
+function isNewSchemaHeader(hdr){
+  const s = hdr.map(x=>String(x||'').toLowerCase());
+  return s.length>=15 && (s.some(x=>x.includes('гибка')) || s[7]?.includes('№') || s[7]?.includes('no'));
+}
+
+function mapRows(rows, process='bend'){
+  if(!rows.length) return [];
+  const hdr = rows[0].map(v=>String(v).trim());
+  const newSchema = isNewSchemaHeader(hdr);
+
+  // свежесть
+  const firstData = rows[1] || [];
+  const fresh = newSchema && firstData[14] != null ? String(firstData[14]).trim() : '';
+  if(fresh) $("#freshness").textContent = fresh, freshnessStr=fresh;
+
+  if(newSchema){
+    const body = rows.slice(1);
+    const parents = new Map(); const childrenByParent = new Map();
+    for(const r of body){
+      if(!r || r.length<15) continue;
+      const id=(r[0]??'').toString().trim(), pid=(r[1]??'').toString().trim();
+      if(id && !pid) parents.set(id,r);
+      else if(pid){ if(!childrenByParent.has(pid)) childrenByParent.set(pid,[]); childrenByParent.get(pid).push(r); }
+    }
+    const out=[];
+    for(const [pid,prow] of parents.entries()){
+      const childs=(childrenByParent.get(pid)||[]);
+      const found = childs.find(ch=>{
+        const name=(ch[2]??'').toString().trim();
+        const cutH=parseHours(ch[8]??''), bendH=parseHours(ch[9]??'');
+        return process==='bend' ? (/гибка/i.test(name) || bendH>0)
+             : process==='laser'? (/лазер/i.test(name) || cutH>0)
+             : (/гибка|лазер/i.test(name) || cutH>0 || bendH>0);
+      });
+      if(!found) continue;
+
+      const orderNum=(prow[7]??'').toString().trim();
+      const customer=(prow[11]??'').toString().trim();
+      const orderId=[orderNum,customer].filter(Boolean).join(' ').trim();
+      if(!orderId) continue;
+
+      const hours = process==='bend' ? parseHours(prow[9]??'')
+                   : process==='laser'? parseHours(prow[8]??'')
+                   : Math.max(parseHours(prow[9]??''), parseHours(prow[8]??''));
+      if(!(hours>0)) continue;
+
+      const sd = parseDate((found[12]??'').toString().trim());
+      const ed = parseDate((found[13]??'').toString().trim());
+      if(!sd && !ed) continue;
+
+      const state=(prow[4]??'').toString().trim();
+      // базовое доп. время = 0.25 + 5% от часов
+      const extra = 0.25 + hours*0.05;
+
+      const rec={orderId,hours,extraHours: extra,startDate:sd||new Date(),endDate:ed||null,startMissing:!sd,endMissing:!(found[13]??'').toString().trim(),state,useBooking:false};
+      rec.startDate.setHours(0,0,0,0);
+      out.push(rec);
+    }
+    return out;
+  }
+
+  // Старый плоский формат
+  const lower = rows[0].map(v=>String(v).toLowerCase());
+  const hasRu = lower.includes('заказ') || lower.includes('часов') || lower.includes('начало') || lower.includes('конец');
+  const named = lower.includes('orderid') || hasRu;
+  const body = named ? rows.slice(1) : rows;
+  const norm = n => n.replace(/\s+/g,'');
+  const idx = name => lower.findIndex(h=>norm(h)===norm(name));
+  const out = body.map(r=>{
+    const get=(n,f)=> (named ? r[(idx(n)>-1? idx(n):f)] : r[f]) ?? '';
+    const orderId = String(get(hasRu?'заказ':'orderId',0)).trim();
+    const hours   = parseHours(get(hasRu?'часов':'hours',1));
+    const sd      = parseDate(get(hasRu?'начало':'startDate',2));
+    const edRaw   = get(hasRu?'конец':'endDate',3);
+    const ed      = parseDate(edRaw);
+    if(!orderId || !(hours>0) || (!sd && !ed)) return null;
+    const extra   = 0.25 + hours*0.05; // базовое правило
+    const rec={orderId,hours,extraHours:extra,startDate:sd||new Date(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',useBooking:false};
+    rec.startDate.setHours(0,0,0,0);
+    return rec;
+  }).filter(Boolean);
+  return out;
+}
+
+/* ===== status & table ===== */
+function statusForTask(t){
+  const rec=schedule?.perTask?.get(t.orderId); if(!rec) return {text:'Ок',cls:'status-ok'};
+  let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); }
+  if(last && t.endDate){
+    const ms = last - t.endDate;
+    const days = Math.ceil(Math.abs(ms)/86400000);
+    if(ms < 0) return {text:`Ок (-${days})`, cls: days>2 ? 'status-early' : 'status-ok'};
+    if(ms > 0) return {text:`Срыв (+${days})`, cls:'status-late'};
+    return {text:'Ок (0)', cls:'status-ok'};
+  }
+  return {text:'Ок',cls:'status-ok'};
+}
+
+/* ===== DnD + edits + done + booking flag ===== */
+let dragIndex=-1, dropAbove=true;
+function applyEditImmediate(cell, task){
+  const field=cell.dataset.field, val=cell.textContent.trim();
+  if(field==='orderId'){ if(val) task.orderId=val; }
+  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; /* не трогаем вручную правленное extra */ } }
+  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=e; }
+  else if(field==='startDate'){ const d=parseDate(val); if(d){ task.startDate=d; task.startMissing=false; cell.classList.remove('error'); } }
+  else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); }
+}
+function sortTasksByStart(){ tasks.sort((a,b)=> (a.startDate - b.startDate) || a.orderId.localeCompare(b.orderId)); }
+
+function renderTasksTable(){
+  const tb=$("#tasksTable tbody"); tb.innerHTML='';
+  tasks.forEach((t,i)=>{
+    const st=statusForTask(t);
+    const tr=document.createElement('tr');
+    tr.draggable=true; tr.dataset.index=i; if(t.isNew) tr.classList.add('newRow');
+    tr.innerHTML=`
+      <td>${i+1}</td>
+      <td><input type="checkbox" ${t.done?'checked':''}></td>
+      <td><input type="checkbox" ${t.useBooking?'checked':''} data-role="useBook"></td>
+      <td class="drag-handle" ${t.isUserNew?'contenteditable="true" data-field="orderId"':''} title="Перетащите для изменения приоритета">
+        <span class="eye" title="Показать маршрут" data-eye="${encodeURIComponent(t.orderId)}">👁</span>&nbsp;${t.orderId}
+      </td>
+      <td contenteditable="true" data-field="hours">${String(t.hours).replace('.',',')}</td>
+      <td contenteditable="true" data-field="extraHours">${String(t.extraHours??(0.25+t.hours*0.05)).replace('.',',')}</td>
+      <td contenteditable="true" data-field="startDate" class="${t.startMissing?'error':''}">${fmtDate(t.startDate)}</td>
+      <td contenteditable="true" data-field="endDate"   class="${t.endMissing?'error':''}">${t.endDate?fmtDate(t.endDate):'—'}</td>
+      <td>${t.state||''}</td>
+      <td class="${st.cls}">${st.text}</td>`;
+
+    tr.querySelector('input[type=checkbox]').addEventListener('change',e=>{
+      if(e.target.checked){
+        doneTasks.push({orderId:t.orderId,hours:t.hours,extra:t.extraHours,start:t.startDate,end:t.endDate,when:new Date(),source:'checkbox'});
+        tasks.splice(i,1); recompute();
+      }
+    });
+    tr.querySelector('input[data-role="useBook"]').addEventListener('change', e=>{ t.useBooking = e.target.checked; recompute(); });
+
+    // глаз — маршрут одного заказа
+    tr.querySelector('.eye').addEventListener('click',()=>{ openRouteOne(t.orderId); });
+
+    tr.querySelectorAll('[contenteditable]').forEach(cell=>{
+      const field=cell.dataset.field;
+      cell.addEventListener('keydown', e=>{
+        if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); }
+        else if(e.key==='Escape'){ e.preventDefault();
+          if(field==='orderId') cell.textContent=t.orderId;
+          if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
+          if(field==='extraHours') cell.textContent=String(t.extraHours??(0.25+t.hours*0.05)).replace('.',',');
+          if(field==='startDate') cell.textContent=fmtDate(t.startDate);
+          if(field==='endDate') cell.textContent=t.endDate?fmtDate(t.endDate):'—';
+          cell.blur();
+        }
+      });
+      cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); });
+    });
+
+    // robust DnD
+    tr.addEventListener('dragstart', e=>{
+      dragIndex = Number(tr.dataset.index);
+      tr.classList.add('dragging');
+      e.dataTransfer.effectAllowed='move';
+    });
+    tr.addEventListener('dragend', ()=>{ tr.classList.remove('dragging'); $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below')); dragIndex=-1; });
+    tr.addEventListener('dragover', e=>{
+      e.preventDefault();
+      const rect=tr.getBoundingClientRect(); const mid=rect.top+rect.height/2;
+      dropAbove = e.clientY < mid;
+      $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below'));
+      tr.classList.add(dropAbove?'drop-above':'drop-below');
+    });
+    tr.addEventListener('drop', e=>{
+      e.preventDefault();
+      const targetIndex = Number(tr.dataset.index);
+      if(dragIndex<0 || dragIndex===targetIndex) return;
+      let insertIndex = targetIndex;
+      if(dropAbove){
+        insertIndex = targetIndex;
+        if(targetIndex>dragIndex) insertIndex = targetIndex-1;
+      } else {
+        insertIndex = targetIndex+1;
+        if(targetIndex<dragIndex) insertIndex = targetIndex;
+      }
+      const item = tasks.splice(dragIndex,1)[0];
+      tasks.splice(insertIndex,0,item);
+      recompute();
+    });
+
+    tb.appendChild(tr);
+  });
+
+  // подсветка кнопки «Готовые»
+  $("#showDone").classList.toggle('highlight', doneTasks.length>0);
+
+  requestAnimationFrame(()=>{ const w=Math.min(1100,Math.max(420,$("#tasksTable").offsetWidth+24)); document.documentElement.style.setProperty('--leftWidth',w+'px'); });
+}
+
+/* ===== Гант + фильтр + FS ===== */
+function visibleDayIndices(filter, cap, perDay, minD, maxD){
+  const idx=[]; const N=daysBetween(minD,maxD)+1;
+  for(let i=0;i<N;i++){
+    const d=addDays(minD,i), ds=fmtDate(d);
+    const used=(perDay.get(ds)||[]).reduce((s,x)=>s+x.hours,0);
+    const capacity = (exceptions.has(ds)?exceptions.get(ds):cap);
+    const free=Math.max(0, capacity - used);
+    if(filter==='all') idx.push(i);
+    else if(filter==='free' && free>0) idx.push(i);
+    else if(filter==='busy' && capacity>0 && Math.abs(used-capacity)<1e-6) idx.push(i);
+  }
+  return idx.length? idx : [...Array(N).keys()];
+}
+
+function renderGantt(){
+  const card=$("#ganttCard");
+  if($("#process").value==='route'){ card.style.display='none'; return; }
+  card.style.display='block';
+
+  const leftBody=$("#ganttLeftBody"), header=$("#ganttDatesHeader"), dates=$("#ganttDates");
+  leftBody.innerHTML=''; header.innerHTML=''; dates.innerHTML='';
+  if(!schedule) return;
+
+  const baseCap = Number($("#capacity").value)|| ($("#process").value==='laser'?36:15);
+  const filter = $("#ganttFilter").value;
+  const visIdx = visibleDayIndices(filter, baseCap, schedule.perDay, schedule.minD, schedule.maxD);
+  document.documentElement.style.setProperty('--dayCount', visIdx.length);
+
+  // header
+  visIdx.forEach(i=>{ const d=addDays(schedule.minD,i); const c=document.createElement('div'); c.className='gantt-header-cell'; c.textContent=fmtDate(d); header.appendChild(c); });
+
+  // rows
+  tasks.forEach(t=>{
+    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=t.orderId; $("#ganttLeftBody").appendChild(lab);
+    const row=document.createElement('div'); row.className='gantt-dates-row';
+    const rec=schedule.perTask.get(t.orderId); const perD=new Map();
+    if(rec){ for(const s of rec.segments){ const ds=fmtDate(s.date), cur=perD.get(ds)||{hours:0,late:false}; cur.hours+=s.hours; cur.late=cur.late||s.late; perD.set(ds,cur); } }
+    visIdx.forEach(i=>{
+      const d=addDays(schedule.minD,i), ds=fmtDate(d);
+      const cell=document.createElement('div'); cell.className='gcell';
+      const cap=(exceptions.has(ds)?exceptions.get(ds):baseCap);
+      const val=perD.get(ds)?.hours||0; const late=perD.get(ds)?.late||false;
+      if(val>0 && cap>0){ const f=document.createElement('div'); f.className='gfill'+(late?' late':''); f.textContent=`${val.toFixed(1)}ч`; cell.appendChild(f); }
+      row.appendChild(cell);
+    });
+    dates.appendChild(row);
+  });
+
+  // sync scroll + sticky header dates
+  const left=$("#ganttLeft"), body=$("#ganttBody"); let lock=0;
+  left.addEventListener('scroll',()=>{ if(lock) return; lock=1; body.scrollTop=left.scrollTop; lock=0; });
+  body.addEventListener('scroll',()=>{ if(lock) return; lock=1; left.scrollTop=body.scrollTop; lock=0; $("#ganttDatesHeader").style.transform = `translateX(${-body.scrollLeft}px)`; });
+}
+
+/* ===== Detail ===== */
+function fitSliceText(el, text){
+  el.textContent = text;
+  if(el.scrollWidth <= el.clientWidth) return;
+  for(let i=text.length;i>1;i--){
+    const txt = text.slice(0,i-1) + '…';
+    el.textContent = txt;
+    if(el.scrollWidth <= el.clientWidth) return;
+  }
+}
+function renderDetail(){
+  const wrap=$("#stackWrap"); if($("#process").value==='route'){ wrap.innerHTML=''; $("#detail7").style.display='none'; return; }
+  $("#detail7").style.display='block';
+  wrap.innerHTML=''; if(!schedule) return;
+  const cap=Number($("#capacity").value)|| ($("#process").value==='laser'?36:15);
+  const totalDays=daysBetween(schedule.minD,schedule.maxD)+1;
+  const days=[...Array(totalDays)].map((_,i)=>addDays(schedule.minD,i));
+  const totalBy=new Map(tasks.map(t=>[t.orderId,(+t.hours||0)+(+t.extraHours||0)]));
+  const cumBy=new Map([...totalBy.keys()].map(k=>[k,0]));
+
+  days.forEach(d=>{
+    const ds=fmtDate(d);
+    const col=document.createElement('div'); col.className='stack-col';
+    const title=document.createElement('div'); title.className='stack-title'; title.textContent=fmtDate(d);
+    const stack=document.createElement('div'); stack.className='stack';
+
+    const recs=(schedule.perDay.get(ds)||[]).slice(); let used=0, usedBook=0;
+    recs.forEach(r=>{
+      const h=r.hours; if(h<=0||cap<=0) return; used+=h; if(r.fromBook) usedBook+=h;
+      const prev=cumBy.get(r.orderId)||0, now=prev+h; cumBy.set(r.orderId,now);
+      const total=totalBy.get(r.orderId)||0, pct= total? Math.min(100,(now/total)*100):0;
+      const slice=document.createElement('div'); slice.className='slice'; slice.style.height=`max(8px, ${(h/cap*100).toFixed(2)}%)`; slice.style.background=hashColor(r.orderId);
+      stack.appendChild(slice); const lbl=`${r.orderId} — ${h.toFixed(1)}ч (${pct.toFixed(0)}%)`; requestAnimationFrame(()=>fitSliceText(slice, lbl));
+    });
+
+    const capDay = exceptions.has(ds)?exceptions.get(ds):cap;
+    const bookCap = bookings.get(ds)||0;
+    const remBook = Math.max(0, bookCap - usedBook);
+    const remGen  = Math.max(0, (capDay - bookCap) - Math.max(0, used - usedBook));
+
+    if(capDay===0){
+      const tile=document.createElement('div'); tile.className='slice'; tile.style.height='14%'; tile.style.background='#ffe4e4'; tile.style.borderStyle='dashed';
+      stack.appendChild(tile); requestAnimationFrame(()=>fitSliceText(tile, 'Исключение'));
+    } else if(remBook>0){
+      const tile=document.createElement('div'); tile.className='slice'; tile.style.height='12%'; tile.style.background='#fff7ed'; tile.style.borderStyle='dashed';
+      stack.appendChild(tile); requestAnimationFrame(()=>fitSliceText(tile, `Бронь — ${remBook.toFixed(1)}ч`));
+    } else if(remGen>0){
+      const tile=document.createElement('div'); tile.className='slice'; tile.style.height='10%'; tile.style.background='#e5f6ff'; tile.style.borderStyle='dashed';
+      stack.appendChild(tile); requestAnimationFrame(()=>fitSliceText(tile, `свободно — ${remGen.toFixed(1)}ч`));
+    }
+
+    col.appendChild(title); col.appendChild(stack); wrap.appendChild(col);
+  });
+}
+
+/* ===== Overdue ===== */
+function renderOverdue(){
+  const box=$("#overDays"); if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
+  const items=[]; for(const t of tasks){ const rec=schedule.perTask.get(t.orderId); if(!rec||!t.endDate) continue; let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); } if(last>t.endDate) items.push({orderId:t.orderId,date:last}); }
+  if(!items.length){ box.textContent='нет'; box.classList.add('muted'); return; }
+  box.classList.remove('muted'); items.sort((a,b)=>a.date-b.date);
+  box.innerHTML=items.map(x=>`<div>• ${x.orderId} (<b>${fmtDate(x.date)}</b>)</div>`).join('');
+}
+
+/* ===== Маршрут ===== */
+function buildStageTasks(rows, stage){ return mapRows(rows, stage); }
+function buildScheduleFor(stageList, cap){ if(!stageList.length) return null; return allocate(stageList, cap, exceptions, bookings); }
+function stageStatus(t, sch){
+  if(!sch) return {text:'—',cls:'route-status'};
+  const rec=sch.perTask.get(t.orderId); if(!rec || !t.endDate) return {text:'—',cls:'route-status'};
+  let last=null; for(const s of rec.segments){ if(!last || s.date>last) last=new Date(s.date);}
+  if(!last) return {text:'—',cls:'route-status'};
+  const ms=last - t.endDate; const days=Math.ceil(Math.abs(ms)/86400000);
+  if(ms<0) return {text:`Ок (-${days})`, cls: days>2 ? 'route-status early':'route-status ok'};
+  if(ms>0) return {text:`Срыв (+${days})`, cls:'route-status late'};
+  return {text:'Ок (0)', cls:'route-status ok'};
+}
+function renderRoute(){
+  const wrap=$("#routeView");
+  if($("#process").value!=='route'){ wrap.style.display='none'; return; }
+  wrap.style.display='block';
+
+  const bendList = buildStageTasks(lastRows||[], 'bend');
+  const laserList= buildStageTasks(lastRows||[], 'laser');
+  const bendCap=15, laserCap=36;
+  const bendSch = buildScheduleFor(bendList, bendCap);
+  const laserSch= buildScheduleFor(laserList, laserCap);
+
+  // объединяем по заказу
+  const byId=new Map();
+  const mergeIn=(list,stage)=>list.forEach(t=>{
+    if(!byId.has(t.orderId)) byId.set(t.orderId,{orderId:t.orderId, stages:{}, state:t.state});
+    byId.get(t.orderId).stages[stage]=t;
+  });
+  mergeIn(laserList,'Лазер'); mergeIn(bendList,'Гибка');
+
+  // сортировка по самому раннему старту среди этапов
+  const items=[...byId.values()].map(it=>{
+    const sDates=Object.values(it.stages).map(t=>t.startDate).filter(Boolean);
+    it.earliest = sDates.length? new Date(Math.min(...sDates)) : new Date(8640000000000000);
+    return it;
+  }).sort((a,b)=>a.earliest-b.earliest);
+
+  wrap.innerHTML='';
+  items.forEach((it,idx)=>{
+    const lane=document.createElement('div'); lane.className='route-lane';
+    const num=document.createElement('div'); num.className='route-num'; num.textContent=idx+1;
+    const box=document.createElement('div'); box.className='route-box';
+    const title=document.createElement('div'); title.className='route-title'; title.textContent=it.orderId;
+    const state=document.createElement('div'); state.className='route-chip'; state.textContent=`Состояние: ${it.state||'—'}`;
+    box.appendChild(title); box.appendChild(state);
+
+    const addStage=(name, t, sch)=>{
+      const row=document.createElement('div'); row.className='route-stage';
+      const ss=stageStatus(t, sch);
+      const win = `${t.startDate?fmtDM(t.startDate):'—'} → ${t.endDate?fmtDM(t.endDate):'—'}`;
+      row.innerHTML = `<span class="route-chip">${name}</span><span>${win}</span><span class="${ss.cls} route-chip">${ss.text}</span>`;
+      box.appendChild(row);
+    };
+    if(it.stages['Лазер']) addStage('Лазер', it.stages['Лазер'], laserSch);
+    if(it.stages['Гибка']) addStage('Гибка', it.stages['Гибка'], bendSch);
+
+    const eye=document.createElement('span'); eye.className='eye'; eye.textContent='👁'; eye.title='Открыть маршрут заказа';
+    eye.addEventListener('click',()=>openRouteOne(it.orderId));
+    lane.appendChild(num); lane.appendChild(box); lane.appendChild(eye);
+    wrap.appendChild(lane);
+  });
+}
+
+function openRouteOne(orderId){
+  const bendList = buildStageTasks(lastRows||[], 'bend');
+  const laserList= buildStageTasks(lastRows||[], 'laser');
+  const bendCap=15, laserCap=36;
+  const bendSch = buildScheduleFor(bendList, bendCap);
+  const laserSch= buildScheduleFor(laserList, laserCap);
+  const one=$("#routeOne"); one.innerHTML='';
+
+  const stages=[];
+  const b = bendList.find(t=>t.orderId===orderId);
+  const l = laserList.find(t=>t.orderId===orderId);
+  if(l) stages.push({name:'Лазер', t:l, sch:laserSch});
+  if(b) stages.push({name:'Гибка', t:b, sch:bendSch});
+
+  const wrap=document.createElement('div'); wrap.className='route-lane';
+  const num=document.createElement('div'); num.className='route-num'; num.textContent='•';
+  wrap.appendChild(num);
+  stages.forEach(s=>{
+    const card=document.createElement('div'); card.className='route-box';
+    const title=document.createElement('div'); title.className='route-title'; title.textContent=`${orderId} — ${s.name}`;
+    const ss=stageStatus(s.t,s.sch);
+    const win=`${s.t.startDate?fmtDM(s.t.startDate):'—'} → ${s.t.endDate?fmtDM(s.t.endDate):'—'}`;
+    const meta=document.createElement('div'); meta.className='route-stage';
+    meta.innerHTML = `<span class="route-chip">${win}</span><span class="${ss.cls} route-chip">${ss.text}</span>`;
+    card.appendChild(title); card.appendChild(meta); wrap.appendChild(card);
+  });
+  one.appendChild(wrap);
+  $("#routeDlg").showModal();
+}
+
+/* ===== recompute ===== */
+function recompute(){
+  tasks.forEach(t=>{
+    if(t.endDate && t.startDate && t.endDate<t.startDate){const tmp=t.startDate;t.startDate=t.endDate;t.endDate=tmp;}
+    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=0.25 + (t.hours||0)*0.05;
+  });
+  const proc=$("#process").value;
+  if(proc==='route'){
+    schedule=null;
+  }else{
+    const cap=Number($("#capacity").value)|| (proc==='laser'?36:15);
+    schedule = allocate(tasks,cap,exceptions,bookings);
+  }
+  renderTasksTable(); renderGantt(); renderDetail(); renderOverdue(); renderRoute();
+}
+
+/* ===== Import base ===== */
+async function loadFile(file){
+  clearAllUI(false); // не трогаем диалоги/кнопки
+  const name=file.name.toLowerCase(); let rows=null;
+  if(name.endsWith('.csv')){ const text=await readTextSmart(file); rows=parseCSVText(text); }
+  else if(name.endsWith('.xlsx')){ const ab=await file.arrayBuffer(); const wb=XLSX.read(ab,{type:'array'}); const first=wb.SheetNames[0]; rows=XLSX.utils.sheet_to_json(wb.Sheets[first],{header:1,raw:false,defval:''}); }
+  else { alert('Поддерживаются .csv и .xlsx'); return; }
+  lastRows = rows;
+  const p=$("#process").value;
+  tasks = mapRows(rows, p);
+  sortTasksByStart();
+  recompute();
+  // сброс инпута, чтобы можно было выбрать тот же файл ещё раз
+  $("#file").value='';
+}
+
+/* ===== Import delta (csv_2) ===== */
+async function loadDeltaFile(file){
+  if(!lastRows && !tasks.length){ alert('Сначала загрузите исходные данные.'); $("#fileDelta").value=''; return; }
+  const name=file.name.toLowerCase(); let rows=null;
+  if(name.endsWith('.csv')){ const text=await readTextSmart(file); rows=parseCSVText(text); }
+  else if(name.endsWith('.xlsx')){ const ab=await file.arrayBuffer(); const wb=XLSX.read(ab,{type:'array'}); const first=wb.SheetNames[0]; rows=XLSX.utils.sheet_to_json(wb.Sheets[first],{header:1,raw:false,defval:''}); }
+  else { alert('Поддерживаются .csv и .xlsx'); $("#fileDelta").value=''; return; }
+
+  // обновляем «Актуальность»: берём из 15-го столбца, если нет — текущее время
+  const fresh= rows?.[1]?.[14] ? String(rows[1][14]).trim() : new Date().toLocaleString('ru-RU');
+  $("#freshness").textContent = fresh;
+
+  const p=$("#process").value;
+  const deltaList = mapRows(rows, p);
+  const deltaIds = new Set(deltaList.map(x=>x.orderId));
+
+  const now=new Date();
+  const keep=[]; tasks.forEach(t=>{
+    if(!deltaIds.has(t.orderId)){
+      doneTasks.push({orderId:t.orderId,hours:t.hours,extra:t.extraHours,start:t.startDate,end:t.endDate,when:now,source:'csv_2'});
+    } else keep.push(t);
+  });
+  tasks = keep;
+
+  const idToIndex=new Map(tasks.map((t,i)=>[t.orderId,i]));
+  const cap=Number($("#capacity").value)|| (p==='laser'?36:15);
+  const tempSchedule = allocate(tasks,cap,exceptions,bookings);
+
+  function earliestFreeDayBetween(sd,ed){
+    for(let d=new Date(sd); d<=ed; d=addDays(d,1)){
+      const ds=fmtDate(d), used=(tempSchedule.perDay.get(ds)||[]).reduce((s,x)=>s+x.hours,0);
+      const capacity=(exceptions.has(ds)?exceptions.get(ds):cap);
+      if(used < capacity - 1e-9) return new Date(d);
+    } return null;
+  }
+
+  deltaList.forEach(d=>{
+    if(idToIndex.has(d.orderId)){
+      const t=tasks[idToIndex.get(d.orderId)];
+      t.hours=d.hours; t.startDate=d.startDate; t.endDate=d.endDate; t.startMissing=d.startMissing; t.endMissing=d.endMissing; t.state=d.state||t.state; t.isNew=false;
+    } else {
+      d.isNew=true;
+      let insertAt=tasks.length;
+      const ef = (d.startDate && d.endDate) ? earliestFreeDayBetween(d.startDate,d.endDate) : null;
+      if(ef){ for(let i=0;i<tasks.length;i++){ if(tasks[i].startDate > ef){ insertAt=i; break; } } }
+      tasks.splice(insertAt,0,d);
+    }
+  });
+
+  recompute();
+  $("#fileDelta").value='';
+}
+
+/* ===== Export CSV (перезагружаемый плоский формат) ===== */
+function exportCSV(){
+  if(!tasks.length){ alert('Нет данных для экспорта'); return; }
+  // Заголовок в плоском виде: Заказ;Часов;Начало;Конец;ExtraHours
+  const rows = [['Заказ','Часов','Начало','Конец','ExtraHours']];
+  tasks.forEach(t=> rows.push([
+    t.orderId,
+    String(t.hours).replace('.',','),
+    fmtDate(t.startDate),
+    t.endDate?fmtDate(t.endDate):'',
+    String((t.extraHours??(0.25+t.hours*0.05))).replace('.',',')
+  ]));
+  const csv = rows.map(r=>r.join(';')).join('\r\n');
+  const bom = '\uFEFF'; // UTF-8 BOM для корректного отображения кириллицы в Excel
+  const blob = new Blob([bom + csv], {type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='plan_export.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ===== Done dialog with restore ===== */
+function renderDoneList(){
+  const tb=$("#doneList tbody"); tb.innerHTML='';
+  doneTasks.slice().reverse().forEach((d,idx)=>{
+    const tr=document.createElement('tr');
+    const i = doneTasks.length-1-idx;
+    tr.innerHTML=`<td>${d.orderId}</td><td>${(d.hours||0).toFixed(1)}</td><td>${d.start?fmtDate(d.start):'—'}</td><td>${d.end?fmtDate(d.end):'—'}</td><td>${d.source}</td><td>${d.when?fmtDate(d.when):''}</td><td><button data-restore="${i}">Вернуть</button></td>`;
+    tb.appendChild(tr);
+  });
+  tb.querySelectorAll('button[data-restore]').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const idx = Number(e.target.dataset.restore);
+      const d = doneTasks.splice(idx,1)[0];
+      tasks.push({orderId:d.orderId,hours:d.hours,extraHours:d.extra||0.25,startDate:d.start||new Date(),endDate:d.end||null,startMissing:!d.start,endMissing:!d.end,state:'',useBooking:false,isNew:true});
+      recompute();
+      renderDoneList();
+    });
+  });
+}
+
+/* ===== Optimization (EDD + ранний старт) ===== */
+function optimizeQueue(){
+  // 1) сортировка по возрастанию Конца, затем по Началу, затем по часам
+  tasks.sort((a,b)=> ((a.endDate?.getTime()||Infinity) - (b.endDate?.getTime()||Infinity)) || (a.startDate - b.startDate) || (a.hours - b.hours));
+  // 2) лёгкая подтяжка: если есть задачи, которые можно начать раньше «окон», подтянем их вперёд
+  // (эвристика; без тяжелой перестановки внутри окна)
+  recompute();
+}
+
+/* ===== UI hooks ===== */
+const exampleCSV = `Id задачи;Id родителя;Задача;Доска;Состояние;Статус;К-во подзадач;№;Резка, час;Гибка, час;Сумма услуг;Заказчик;Начало;Конец;Изм.JSON
+P1;;Родитель A;Гибка;В работе;—;2;ORD-001;5;10;—;Клиент А;05.09.2025;10.09.2025;2025-09-14 12:00
+C1;P1;Лазер;—;—;—;—;ORD-001;5;0;—;Клиент А;05.09.2025;06.09.2025;
+C2;P1;Гибка;—;—;—;—;ORD-001;0;10;—;Клиент А;07.09.2025;10.09.2025;
+P2;;Родитель B;Гибка;Ожидание;—;1;ORD-002;3;0;—;Клиент Б;09.09.2025;12.09.2025;2025-09-14 12:00
+C3;P2;Лазер;—;—;—;—;ORD-002;3;0;—;Клиент Б;09.09.2025;10.09.2025;`;
+
+const processSel=$("#process");
+$("#file").addEventListener('change', async e=>{ const f=e.target.files[0]; if(!f) return; await loadFile(f); });
+$("#fileDelta").addEventListener('change', async e=>{ const f=e.target.files[0]; if(!f) return; await loadDeltaFile(f); });
+$("#loadExample").addEventListener('click', ()=>{ clearAllUI(false); lastRows=parseCSVText(exampleCSV); tasks=mapRows(lastRows, processSel.value); sortTasksByStart(); recompute(); });
+$("#exceptionsBtn").addEventListener('click', ()=>$("#exceptionsDlg").showModal());
+$("#excCancel").addEventListener('click', ()=>$("#exceptionsDlg").close());
+$("#excApply").addEventListener('click', ()=>{ exceptions=parsePairs($("#exceptionsText").value); $("#exceptionsDlg").close(); recompute(); });
+$("#bookingBtn").addEventListener('click', ()=>$("#bookingDlg").showModal());
+$("#bookCancel").addEventListener('click', ()=>$("#bookingDlg").close());
+$("#bookApply").addEventListener('click', ()=>{ bookings=parsePairs($("#bookingText").value); $("#bookingDlg").close(); recompute(); });
+$("#clearAll").addEventListener('click', ()=>clearAllUI(true));
+$("#capacity").addEventListener('input', ()=>{ if(tasks.length || $("#process").value==='route') recompute(); });
+$("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
+$("#exportCSV").addEventListener('click', exportCSV);
+$("#optimize").addEventListener('click', optimizeQueue);
+$("#ganttFilter").addEventListener('change', renderGantt);
+$("#toggleFS").addEventListener('click', ()=>{
+  const wrap=$("#ganttWrap");
+  wrap.classList.toggle('fs');
+  const fs = wrap.classList.contains('fs');
+  $("#toggleFS").textContent = fs ? 'Выход' : 'Во весь экран';
+  $("#processFS").style.display = fs ? 'inline-block' : 'none';
+  if(fs){
+    // синхронизируем передел
+    $("#processFS").value = $("#process").value==='laser'?'laser':'bend';
+  }
+});
+$("#processFS").addEventListener('change', ()=>{
+  const v=$("#processFS").value;
+  $("#process").value=v;
+  $("#pageTitle").textContent = `Планировщик — ${v==='bend'?'Гибка':'Лазер'}`;
+  $("#capacity").value = (v==='bend'?15:36);
+  if(lastRows){ tasks = mapRows(lastRows, v); sortTasksByStart(); }
+  recompute();
+});
+processSel.addEventListener('change', ()=>{
+  $("#pageTitle").textContent = `Планировщик — ${processSel.value==='bend'?'Гибка':processSel.value==='laser'?'Лазер':'Маршрут'}`;
+  const defCap = processSel.value==='bend' ? 15 : processSel.value==='laser' ? 36 : '';
+  if(defCap!=='') $("#capacity").value = defCap;
+  if(lastRows){ tasks = mapRows(lastRows, processSel.value); sortTasksByStart(); }
+  recompute();
+});
+
+$("#showDone").addEventListener('click', ()=>{ renderDoneList(); $("#doneDlg").showModal(); });
+$("#doneClose").addEventListener('click', ()=>$("#doneDlg").close());
+$("#routeClose").addEventListener('click', ()=>$("#routeDlg").close());
+
+// Добавление нового заказа
+$("#addOrder").addEventListener('click', ()=>{
+  const today=new Date(); today.setHours(0,0,0,0);
+  const t={orderId:'Новый заказ',hours:1,extraHours:0.25+1*0.05,startDate:today,endDate:null,startMissing:false,endMissing:true,state:'',useBooking:false,isUserNew:true,isNew:true};
+  tasks.push(t); recompute();
+});
+
+/* ===== clear ===== */
+function clearAllUI(resetInputs){
+  tasks=[]; schedule=null; lastRows=null; $("#freshness").textContent='—';
+  $("#tasksTable tbody").innerHTML="";
+  $("#ganttLeftBody").innerHTML=""; $("#ganttDatesHeader").innerHTML=""; $("#ganttDates").innerHTML="";
+  $("#overDays").textContent="нет"; $("#stackWrap").innerHTML=""; $("#routeView").innerHTML="";
+  if(resetInputs){ $("#file").value=''; $("#fileDelta").value=''; $("#exceptionsText").value=''; $("#bookingText").value=''; }
+}
+
+/* ===== initial ===== */
+recompute();
+</script>
+</body>
+</html>
