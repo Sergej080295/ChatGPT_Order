@@ -3024,7 +3024,7 @@ function buildDeltaDetailBlock(type, entry){
   return `<div class="delta-detail"><div class="delta-detail-title">${sticker}${escapeHtml(title)}</div>${rowsToHtml(rows)}</div>`;
 }
 
-function renderDeltaDialog(diff){
+function renderDeltaDialog(diff, currentAll, incomingAll){
   const el=$("#deltaContent");
   const groups={
     add: aggregateDeltaItems(diff.added||[], 'add'),
@@ -3032,7 +3032,7 @@ function renderDeltaDialog(diff){
     del: aggregateDeltaItems(diff.removed||[], 'del'),
     done: aggregateDeltaItems(diff.toDone||[], 'done')
   };
-  currentDeltaAggregated = { diff, groups };
+  currentDeltaAggregated = { diff, groups, currentAll: Array.isArray(currentAll)? currentAll.slice(): [], incomingAll: Array.isArray(incomingAll)? incomingAll.slice(): [] };
 
   const block = (title, entries, type)=>{
     const total = entries.reduce((sum, entry)=> sum + entry.entries.length, 0);
@@ -3106,6 +3106,7 @@ function renderDeltaDialog(diff){
     });
 
     const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    const allMap = new Map((currentDeltaAggregated?.currentAll || snapshotAllStagesForExport()).map(t=>[t.uid, {...t}]));
     const now = new Date();
     const currentStage = $("#process").value;
 
@@ -3116,6 +3117,8 @@ function renderDeltaDialog(diff){
       tasks.splice(idx,1);
       byId.delete(r.uid);
     });
+
+    filtered.removed.forEach(r=>{ allMap.delete(r.uid); });
 
     filtered.toDone.forEach(d=>{
       if(byId.has(d.uid)){
@@ -3139,6 +3142,8 @@ function renderDeltaDialog(diff){
       }
     });
 
+    filtered.toDone.forEach(d=>{ allMap.delete(d.uid); });
+
     filtered.changed.forEach(({from,to})=>{
       if(to.stage !== currentStage) return;
       if(!byId.has(from.uid)) return;
@@ -3154,11 +3159,29 @@ function renderDeltaDialog(diff){
       t.isNew=true;
     });
 
+    filtered.changed.forEach(({to})=>{
+      if(!to?.uid) return;
+      const next={...to};
+      next.startDate = next.startDate ? new Date(next.startDate) : null;
+      next.endDate = next.endDate ? new Date(next.endDate) : null;
+      allMap.set(next.uid, next);
+    });
+
     filtered.added.forEach(n=>{
       if(n.stage !== currentStage) return;
       n.isNew=true;
       tasks.push(n);
     });
+
+    filtered.added.forEach(n=>{
+      if(!n?.uid) return;
+      const copy={...n};
+      copy.startDate = copy.startDate ? new Date(copy.startDate) : null;
+      copy.endDate = copy.endDate ? new Date(copy.endDate) : null;
+      allMap.set(copy.uid, copy);
+    });
+
+    allTasksFromState = Array.from(allMap.values());
 
     lastDiffApplied = filtered;
     lastRows = pendingRows;
@@ -3245,35 +3268,68 @@ async function importRows(rows){
   const currentAll = snapshotAllStagesForExport();
   const incomingAll = mapAllStagesFromRows(rows);
   const diff = buildDeltaPreview(currentAll, incomingAll);
-  renderDeltaDialog(diff);
+  renderDeltaDialog(diff, currentAll, incomingAll);
 }
 
 /* =========
    СОХРАНЕНИЕ
 ========= */
 const LS_KEY='yougile_planner_state_v5';
-function serializeState(){
-  const t = tasks.map(x=>({
-    uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-    hours:x.hours, extraHours:x.extraHours,
-    startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
-    startMissing:!!x.startMissing, endMissing:!!x.endMissing,
-    state:x.state||'', status:x.status||'',
-    useReserve:!!x.useReserve, progress:x.progress||0,
-    origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
-	route:{
-	  laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
-	  bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'',   end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
-	  draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'',   end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
-	  weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'',   end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
-	  mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'',   end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
-	  proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'',   end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
-	  shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
-	  pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'',   end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
-	  ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'',   end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-	}
+function serializeRouteSegment(seg){
+  if(!seg) return null;
+  const hours = Number(seg.hours);
+  const start = seg.start instanceof Date ? seg.start : (seg.start ? new Date(seg.start) : null);
+  const end   = seg.end   instanceof Date ? seg.end   : (seg.end   ? new Date(seg.end)   : null);
+  return {
+    hours: Number.isFinite(hours) ? hours : 0,
+    start: start ? start.toISOString() : '',
+    end:   end   ? end.toISOString()   : ''
+  };
+}
 
-  }));
+function serializeTaskList(source){
+  if(!Array.isArray(source)) return [];
+  return source.map(item=>{
+    if(!item) return null;
+    const start = item.startDate instanceof Date ? item.startDate : (item.startDate ? new Date(item.startDate) : null);
+    const end   = item.endDate   instanceof Date ? item.endDate   : (item.endDate   ? new Date(item.endDate)   : null);
+    const orig  = item.origStartDate instanceof Date ? item.origStartDate : (item.origStartDate ? new Date(item.origStartDate) : null);
+    const route = item.route || {};
+    return {
+      uid:item.uid,
+      orderId:item.orderId,
+      stage:item.stage,
+      childId:item.childId,
+      parentId:item.parentId,
+      hours:item.hours,
+      extraHours:item.extraHours,
+      startDate:start ? start.toISOString() : '',
+      endDate:end ? end.toISOString() : '',
+      startMissing:!!item.startMissing,
+      endMissing:!!item.endMissing,
+      state:item.state||'',
+      status:item.status||'',
+      useReserve:!!item.useReserve,
+      progress:item.progress||0,
+      origStartDate:orig ? orig.toISOString() : '',
+      route:{
+        laser: serializeRouteSegment(route.laser),
+        bend:  serializeRouteSegment(route.bend),
+        draw:  serializeRouteSegment(route.draw),
+        weld:  serializeRouteSegment(route.weld),
+        mech:  serializeRouteSegment(route.mech),
+        proc:  serializeRouteSegment(route.proc),
+        shear: serializeRouteSegment(route.shear),
+        pack:  serializeRouteSegment(route.pack),
+        ship:  serializeRouteSegment(route.ship)
+      }
+    };
+  }).filter(Boolean);
+}
+
+function serializeState(){
+  const t = serializeTaskList(tasks);
+
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
     parentId:x.parentId||'', childId:x.childId||'',
@@ -3456,37 +3512,48 @@ function persistNow(stageOverride){
 
     // 2) Предыдущее состояние из LS (если было)
     const rawPrev = localStorage.getItem(LS_KEY);
+    let prev = null;
     if (rawPrev) {
       try{
-        const prev = JSON.parse(rawPrev);
+        prev = JSON.parse(rawPrev);
+      }catch(_){ prev = null; }
+    }
 
-        // --- слить задачи: оставляем все предыдущие, КРОМЕ текущего передела, и добавляем текущие ---
-        const prevTasks = Array.isArray(prev.t) ? prev.t : [];
-        const others = prevTasks.filter(x => x && x.stage !== curStage);
-        cur.t = others.concat(cur.t || []);
-		
-		// де-дуп по uid (оставляем последнее вхождение)
-		const seen = new Set();
-		cur.t = cur.t.filter(x=>{
-		  if(!x || !x.uid) return false;
-		  if(seen.has(x.uid)) return false;
-		  seen.add(x.uid);
-		  return true;
-		});
+    const byUid = new Map();
+    (cur.t || []).forEach(obj=>{
+      if(!obj || !obj.uid) return;
+      byUid.set(obj.uid, obj);
+    });
 
-        // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
-        if (Array.isArray(prev.orders)) {
-          const map = new Map(prev.orders);
-          (cur.orders || []).forEach(([k,v])=> map.set(k, v));
-          cur.orders = [...map.entries()];
-        }
+    if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+      const others = serializeTaskList(allTasksFromState.filter(x=>x && x.stage !== curStage));
+      others.forEach(obj=>{
+        if(!obj || !obj.uid) return;
+        byUid.set(obj.uid, obj);
+      });
+    } else if(prev){
+      const prevTasks = Array.isArray(prev.t) ? prev.t : [];
+      prevTasks.forEach(obj=>{
+        if(!obj || obj.stage === curStage || !obj.uid) return;
+        byUid.set(obj.uid, obj);
+      });
+    }
 
-        // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
-        if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
-        if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
+    cur.t = [...byUid.values()];
 
-        // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
-      }catch(_){ /* если вдруг не распарсилось — просто перезапишем */ }
+    if (prev) {
+      // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
+      if (Array.isArray(prev.orders)) {
+        const map = new Map(prev.orders);
+        (cur.orders || []).forEach(([k,v])=> map.set(k, v));
+        cur.orders = [...map.entries()];
+      }
+
+      // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
+      if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
+      if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
+
+      // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
     }
 
     // 3) Запись в LS
