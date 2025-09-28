@@ -3130,7 +3130,8 @@ function importStateFromCSV(text){
   const autosaveMetaEl = document.getElementById('autosave');
   if(autosaveMetaEl) autosaveMetaEl.checked = autosaveOn;
   autoOptimizeOn = !!Number(meta.autoOptimizeOn);
-  $("#autoOptimize").checked = autoOptimizeOn;
+  const autoOptimizeMetaEl = document.getElementById('autoOptimize');
+  if(autoOptimizeMetaEl) autoOptimizeMetaEl.checked = autoOptimizeOn;
 
   const shiftMetaRaw = meta.shiftOnProgress;
   if(shiftMetaRaw !== undefined){ shiftOnProgress = !!Number(shiftMetaRaw); }
@@ -3927,10 +3928,13 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   }
   
   // Авто оптимизация
-  $("#autoOptimize").addEventListener('change', e=>{
-    autoOptimizeOn = !!e.target.checked;
-    persistMaybe();
-  });
+  const autoOptimizeEl = document.getElementById('autoOptimize');
+  if(autoOptimizeEl){
+    autoOptimizeEl.addEventListener('change', e=>{
+      autoOptimizeOn = !!e.target.checked;
+      persistMaybe();
+    });
+  }
 
   // Гант — FS
   $("#toggleFS").addEventListener('click', ()=>{
