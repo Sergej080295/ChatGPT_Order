@@ -5,8 +5,10 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const STATE_FILE = path.join(__dirname, 'planner-state.json');
+const STATIC_ROOT = path.join(__dirname, 'public');
 
 app.use(express.json({ limit: '20mb' }));
+app.use(express.static(STATIC_ROOT));
 
 async function readState() {
   try {
@@ -46,6 +48,10 @@ app.post('/api/state', async (req, res) => {
     console.error('Failed to persist state', err);
     res.status(500).json({ error: 'Failed to persist state' });
   }
+});
+
+app.get('/', (req, res) => {
+  res.redirect('/Planner_Codex_v2.html');
 });
 
 app.listen(PORT, () => {
