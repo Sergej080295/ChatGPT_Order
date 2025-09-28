@@ -33,6 +33,12 @@ h3{margin:0 0 10px;font-size:16px}
 .muted{color:var(--muted)}
 .small{font-size:12px}
 
+.save-indicator{margin-left:10px;font-size:12px;color:var(--muted);transition:color .2s ease}
+.save-indicator.loading,.save-indicator.syncing{color:#2563eb}
+.save-indicator.saved,.save-indicator.synced{color:#15803d}
+.save-indicator.error{color:#dc2626}
+.save-indicator.offline{color:#6b7280}
+
 .btn{
   padding:6px 10px;
   border:1px solid #d1d5db;
@@ -316,6 +322,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <label class="small"><input type="checkbox" id="autosave"> Автосохранение</label>
       <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
       <button id="saveBtn" class="btn small">Сохранить</button>
+      <span id="saveStatus" class="save-indicator small">—</span>
       <div class="muted small">Актуальность: <b id="freshness">—</b></div>
     </div>
 	<label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
@@ -685,6 +692,33 @@ const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
 
 const VERSION='v2025.09.22-rc2';
+const SERVER_STATE_URL='/api/state';
+const SAVE_STATUS_TEXT={
+  idle:'—',
+  loading:'Загрузка…',
+  syncing:'Сохранение…',
+  saved:'Сохранено',
+  synced:'Синхронизировано',
+  error:'Ошибка сохранения',
+  offline:'Сохранено локально'
+};
+let saveStatusResetTimer=null;
+
+function setSaveStatus(state='idle', detail=''){
+  const el=$('#saveStatus');
+  if(!el) return;
+  const text=detail || SAVE_STATUS_TEXT[state] || SAVE_STATUS_TEXT.idle;
+  el.textContent=text;
+  el.dataset.state=state;
+  el.className=`save-indicator small ${state}`;
+  if(['saved','synced'].includes(state)){
+    if(saveStatusResetTimer) clearTimeout(saveStatusResetTimer);
+    saveStatusResetTimer=setTimeout(()=>setSaveStatus('idle'),4000);
+  } else if(state!=='saved' && state!=='synced' && saveStatusResetTimer){
+    clearTimeout(saveStatusResetTimer);
+    saveStatusResetTimer=null;
+  }
+}
 
 /* =========
    СОСТОЯНИЕ
@@ -3216,7 +3250,9 @@ function loadStageFromLS(stage){
   }catch(_){ return null; }
 }
 
-function persistNow(stageOverride){
+function persistNow(stageOverride, options={}){
+  const {markSaved=false, reason='manual'} = options;
+  let snapshot='';
   try{
     // 1) Текущее состояние только активного передела
     const cur = JSON.parse(serializeState());
@@ -3233,15 +3269,15 @@ function persistNow(stageOverride){
         const prevTasks = Array.isArray(prev.t) ? prev.t : [];
         const others = prevTasks.filter(x => x && x.stage !== curStage);
         cur.t = others.concat(cur.t || []);
-		
-		// де-дуп по uid (оставляем последнее вхождение)
-		const seen = new Set();
-		cur.t = cur.t.filter(x=>{
-		  if(!x || !x.uid) return false;
-		  if(seen.has(x.uid)) return false;
-		  seen.add(x.uid);
-		  return true;
-		});
+
+                // де-дуп по uid (оставляем последнее вхождение)
+                const seen = new Set();
+                cur.t = cur.t.filter(x=>{
+                  if(!x || !x.uid) return false;
+                  if(seen.has(x.uid)) return false;
+                  seen.add(x.uid);
+                  return true;
+                });
 
         // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
         if (Array.isArray(prev.orders)) {
@@ -3259,13 +3295,44 @@ function persistNow(stageOverride){
     }
 
     // 3) Запись в LS
-    localStorage.setItem(LS_KEY, JSON.stringify(cur));
+    snapshot = JSON.stringify(cur);
+    localStorage.setItem(LS_KEY, snapshot);
   }catch(e){
     console.warn('persist failed', e);
+    setSaveStatus('error', 'Ошибка локального сохранения');
+    return Promise.resolve({ ok:false, error:e, step:'local' });
   }
+
+  return syncStateWithServer(snapshot, {markSaved, reason});
 }
 
-function persistMaybe(){ if(autosaveOn) persistNow(); }
+function syncStateWithServer(snapshot, {markSaved=false, reason='manual'}={}){
+  if(!snapshot) return Promise.resolve({ ok:false, step:'empty' });
+  if(typeof fetch !== 'function'){
+    setSaveStatus('offline');
+    return Promise.resolve({ ok:false, step:'offline' });
+  }
+
+  setSaveStatus('syncing', markSaved? 'Сохранение…' : 'Синхронизация…');
+  return fetch(SERVER_STATE_URL, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:snapshot,
+    keepalive: reason==='autosave',
+    cache:'no-store',
+    credentials:'same-origin'
+  }).then(resp=>{
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    setSaveStatus(markSaved? 'saved':'synced');
+    return { ok:true };
+  }).catch(error=>{
+    console.warn('remote persist failed', error);
+    setSaveStatus('error', 'Ошибка синхронизации');
+    return { ok:false, error, step:'remote' };
+  });
+}
+
+function persistMaybe(){ if(autosaveOn) return persistNow(undefined,{reason:'autosave'}); return Promise.resolve({ok:false, step:'skipped'}); }
 
 /* =========
    ПЕРЕСЧЁТ
@@ -3570,9 +3637,22 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(); });
+  $("#autosave").addEventListener('change', e=>{
+    autosaveOn = !!e.target.checked;
+    if(autosaveOn) persistNow(undefined,{markSaved:true, reason:'manual'});
+  });
   $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
-  $("#saveBtn").addEventListener('click', ()=>{ persistNow(); alert('Состояние сохранено.'); });
+  $("#saveBtn").addEventListener('click', ()=>{
+    persistNow(undefined,{markSaved:true, reason:'manual'}).then(result=>{
+      if(result?.ok){
+        alert('Состояние сохранено.');
+      } else if(result?.step === 'local'){
+        alert('Не удалось сохранить состояние. Проверьте консоль.');
+      } else {
+        alert('Не удалось синхронизировать с сервером. Данные сохранены локально.');
+      }
+    });
+  });
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
@@ -3726,7 +3806,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	  }
 	  routeEditsWorking.clear();
 	  recompute();    // таблица/подетально/гант
-	  persistNow();   // и в localStorage
+          persistNow(undefined,{markSaved:true, reason:'manual'});   // и в localStorage
 	  alert('Изменения сохранены.');
 	  renderOverview();
 	});
@@ -3738,15 +3818,54 @@ $("#autosave").checked = autosaveOn;
 /* =========
    ИНИЦИАЛИЗАЦИЯ
 ========= */
-document.addEventListener('DOMContentLoaded', ()=>{
-
+document.addEventListener('DOMContentLoaded', async ()=>{
+  setSaveStatus('loading');
   wireHandlers();
-  const saved=localStorage.getItem(LS_KEY);
-  if (saved) {
-    restoreState(saved);
-  } else {
+
+  let restored=false;
+  let restoredFrom='';
+  let remoteFailed=false;
+
+  if(typeof fetch === 'function'){
+    try{
+      const resp = await fetch(SERVER_STATE_URL, {cache:'no-store', credentials:'same-origin'});
+      if(resp.ok){
+        const text=(await resp.text()).trim();
+        if(text){
+          const applied = restoreState(text);
+          if(applied === null){
+            remoteFailed=true;
+            setSaveStatus('error','Некорректный ответ сервера');
+          } else {
+            restored=true;
+            restoredFrom='remote';
+            setSaveStatus('synced','Загружено с сервера');
+          }
+        } else {
+          setSaveStatus('idle');
+        }
+      } else if(resp.status!==204){
+        remoteFailed=true;
+      }
+    }catch(err){
+      remoteFailed=true;
+      console.warn('load remote state failed', err);
+    }
+  }
+
+  if(!restored){
+    const saved=localStorage.getItem(LS_KEY);
+    if(saved){
+      restoreState(saved);
+      restored=true;
+      restoredFrom='local';
+      setSaveStatus('offline','Локальный снимок');
+    }
+  }
+
+  if(!restored){
     const st = $("#process").value;
-	currentProc = st;
+    currentProc = st;
     adjustUIForProcess(st);
     if (!NOHOUR_STAGES.has(st)) {
       $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
@@ -3754,6 +3873,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
       $("#parallelOps").value = String(parallelByProc[st] ?? 3);
     }
     recompute();
+    setSaveStatus(remoteFailed ? 'error' : 'idle', remoteFailed ? 'Сервер недоступен' : '');
+  } else if(restoredFrom==='local' && remoteFailed){
+    setSaveStatus('offline','Сервер недоступен — использован локальный снимок');
   }
 });
 </script>
