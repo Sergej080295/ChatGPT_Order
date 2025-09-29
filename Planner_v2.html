@@ -32,6 +32,22 @@ h3{margin:0 0 10px;font-size:16px}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--muted)}
 .small{font-size:12px}
+.session-label{display:flex;align-items:center;gap:6px}
+.session-label input{border:1px solid #d1d5db;border-radius:6px;padding:2px 6px;font-size:12px;min-width:120px}
+
+#toastContainer{position:fixed;top:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:2000;pointer-events:none}
+.toast{background:#0f172a;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.2);display:flex;flex-direction:column;gap:8px;pointer-events:auto;min-width:240px;max-width:320px;transition:opacity .3s ease,transform .3s ease}
+.toast.fade{opacity:0;transform:translateY(-10px)}
+.toast strong{font-size:14px}
+.toast-actions{display:flex;gap:8px;justify-content:flex-end}
+.toast button{border:none;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer}
+.toast button.primary{background:#2563eb;color:#fff}
+.toast button.secondary{background:#e2e8f0;color:#0f172a}
+
+#logList{max-height:60vh;overflow:auto;padding:8px 0;margin:0}
+.log-entry{padding:8px 0;border-bottom:1px solid #e2e8f0;font-size:13px}
+.log-entry:last-child{border-bottom:none}
+.log-entry .meta{color:var(--muted);font-size:12px;margin-top:2px}
 
 .btn{
   padding:6px 10px;
@@ -312,15 +328,24 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <button id="clearAll" class="btn">Очистить</button>
     </div>
 
-    <div class="row" style="margin-left:auto">
-      <label class="small"><input type="checkbox" id="autosave"> Автосохранение</label>
+    <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
+      <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
       <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
+      <label class="small session-label">Имя сеанса:
+        <input id="userAlias" type="text" maxlength="48" placeholder="User">
+      </label>
       <button id="saveBtn" class="btn small">Сохранить</button>
-      <div class="muted small">Актуальность: <b id="freshness">—</b></div>
+      <button id="logBtn" class="btn small ghost">Журнал</button>
     </div>
-	<label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+    <div class="row small muted" id="freshnessRow" style="margin-left:auto;gap:16px">
+      <span>CSV: <b id="freshnessCsv">—</b></span>
+      <span>Ручные правки: <b id="freshnessManual">—</b></span>
+    </div>
+        <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
   </div>
 </header>
+
+<div id="toastContainer" aria-live="polite"></div>
 
 <div class="main">
   <!-- ЛЕВАЯ КОЛОНКА: Список заказов + Подетально -->
@@ -572,6 +597,31 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   </div>
 </dialog>
 
+<dialog id="logDlg">
+  <h3 style="margin:0 0 6px">Журнал изменений</h3>
+  <div id="logList"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px;gap:8px">
+    <button id="logClear" class="btn ghost">Очистить журнал</button>
+    <button id="logClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="updateDetailsDlg">
+  <h3 style="margin:0 0 6px">Подробности изменения</h3>
+  <div id="updateDetails" class="small" style="max-width:720px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button id="updateDetailsClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="conflictDlg">
+  <h3 style="margin:0 0 6px">Конфликт изменений</h3>
+  <div id="conflictDetails" class="small" style="max-width:720px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button id="conflictAcknowledge" class="btn primary">Понял</button>
+  </div>
+</dialog>
+
 
 
 <!-- ОБЩИЙ МАРШРУТ ЗАКАЗОВ -->
@@ -691,6 +741,15 @@ const VERSION='v2025.09.22-rc2';
 ========= */
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
 const DEFAULT_PARALLEL = { proc:5, shear:5, pack:3, ship:5 };
+const USER_ALIAS_KEY = 'yougile_planner_user_alias_v2';
+const UI_PREF_KEY = 'yougile_planner_ui_v2';
+const SYNC_PING_KEY = 'yougile_planner_sync_ping_v1';
+const LOG_LIMIT = 200;
+const SESSION_ID = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+  ? crypto.randomUUID()
+  : ('sess-'+Math.random().toString(16).slice(2,12));
+let userAlias = localStorage.getItem(USER_ALIAS_KEY) || `User-${SESSION_ID.slice(0,5)}`;
+
 let parallelByProc = { ...DEFAULT_PARALLEL };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
@@ -703,15 +762,24 @@ let autosaveOn=true;
 let shiftOnProgress=true;
 let autoOptimizeOn = true;
 let capByProc = { ...DEFAULT_CAP };   // вместимость по переделам
-let freshnessStr='—';
+let csvFreshnessStr='—';
+let manualFreshnessStr='—';
 let lastRows=null;           // сырые строки последнего импорта
-let lastImportTime='';
+let lastImportTime='';       // совместимость для CSV
+let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
-let allTasksFromState = null;	// полный снимок задач всех переделов, если он приехал из импорта состояния
+let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
+let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[] };
+let activityLog = [];
+let lastKnownVersions = new Map();      // stage -> version
+let lastSyncedSnapshots = new Map();    // stage -> snapshot array
+let broadcastChannel = null;
+let suppressIncoming = false;
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
+
 
 // Зафиксировать текущий порядок видимого передела
 function rememberStageOrder(stage){
@@ -966,7 +1034,7 @@ function mapRows(rows, process='bend'){
   // Фрешность (если есть)
   const firstData = rows[1] || [];
   const fresh = schemaOk && firstData[IDX.changed] != null ? String(firstData[IDX.changed]).trim() : '';
-  if(fresh){ freshnessStr = fresh; $("#freshness").textContent = fresh; }
+  if(fresh){ csvFreshnessStr = fresh; stateMeta.csvTimestamp = fresh; updateFreshnessUI(); }
 
   // Маппинг процессов -> индекс и тест названия подзадачи
   const PROC = {
@@ -2513,8 +2581,10 @@ function exportStateCSV(){
     lines.push(`par.${s}${sep}${parallelByProc[s] ?? 3}`);
   });
   
-  lines.push(`freshness${sep}${$("#freshness").textContent||''}`);
+  lines.push(`freshnessCsv${sep}${csvFreshnessStr||''}`);
+  lines.push(`freshnessManual${sep}${manualFreshnessStr||''}`);
   lines.push(`lastImportTime${sep}${lastImportTime||''}`);
+  lines.push(`lastManualTime${sep}${lastManualTime||''}`);
   lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
 
   // EXCEPTIONS
@@ -2808,8 +2878,13 @@ function importStateFromCSV(text){
   capByProc = capNew;
   $("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
 
-  $("#freshness").textContent = meta.freshness || '—';
-  lastImportTime = meta.lastImportTime || '';
+  csvFreshnessStr = meta.freshness || meta.freshnessCsv || csvFreshnessStr;
+  manualFreshnessStr = meta.freshnessManual || manualFreshnessStr;
+  stateMeta.csvTimestamp = csvFreshnessStr;
+  stateMeta.manualTimestamp = manualFreshnessStr;
+  lastImportTime = meta.lastImportTime || csvFreshnessStr || '';
+  lastManualTime = meta.lastManualTime || manualFreshnessStr || '';
+  updateFreshnessUI();
   
   // параллельные операции (включая ship)
   ['proc','shear','pack','ship'].forEach(s=>{
@@ -2953,8 +3028,11 @@ function renderDeltaDialog(diff){
 
     lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
     lastRows = pendingRows; // установим из глобалки (см. importRows)
-    lastImportTime = new Date().toLocaleString();
-    $("#freshness").textContent = lastImportTime;
+    const stamp = new Date().toLocaleString();
+    lastImportTime = stamp;
+    csvFreshnessStr = lastImportTime;
+    stateMeta.csvTimestamp = lastImportTime;
+    updateFreshnessUI();
 	sortTasksByStart();
 	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
 	persistNow();
@@ -3005,9 +3083,12 @@ async function importRows(rows){
 	rememberStageOrder();
 	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
 
-    lastImportTime = new Date().toLocaleString();
-    if(!freshnessStr) $("#freshness").textContent = lastImportTime;
-    persistMaybe();
+    const stamp = new Date().toLocaleString();
+    lastImportTime = stamp;
+    csvFreshnessStr = stamp;
+    stateMeta.csvTimestamp = stamp;
+    updateFreshnessUI();
+    persistNow(undefined,{source:'csv'});
     return;
   }
 
@@ -3021,7 +3102,7 @@ async function importRows(rows){
    СОХРАНЕНИЕ
 ========= */
 const LS_KEY='yougile_planner_state_v5';
-function serializeState(){
+function buildStateObject(){
   const t = tasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
     hours:x.hours, extraHours:x.extraHours,
@@ -3030,18 +3111,17 @@ function serializeState(){
     state:x.state||'', status:x.status||'',
     useReserve:!!x.useReserve, progress:x.progress||0,
     origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
-	route:{
-	  laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
-	  bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'',   end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
-	  draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'',   end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
-	  weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'',   end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
-	  mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'',   end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
-	  proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'',   end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
-	  shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
-	  pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'',   end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
-	  ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'',   end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-	}
-
+    route:{
+      laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
+      bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'', end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
+      draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'', end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
+      weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'', end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
+      mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'', end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
+      proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'', end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
+      shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
+      pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'', end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
+      ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'', end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
+    }
   }));
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
@@ -3050,43 +3130,319 @@ function serializeState(){
     start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
     when:x.when?x.when.toISOString():'', source:x.source||''
   }));
-  
+
   const trashArr = trash.map(x=>({
-	uid:x.uid, orderId:x.orderId, stage:x.stage||'',
-	parentId:x.parentId||'', childId:x.childId||'',
-	hours:x.hours, extra:x.extra,
-	start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-	when:x.when?x.when.toISOString():'', source:x.source||''
+    uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+    parentId:x.parentId||'', childId:x.childId||'',
+    hours:x.hours, extra:x.extra,
+    start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
+    when:x.when?x.when.toISOString():'', source:x.source||''
   }));
 
   const exc=[...exceptions.entries()];
   const res=[...reserves.entries()];
   const ro = [...routeOverrides.entries()].map(([k,v])=>[k,{
-	start: v.start ? v.start.toISOString() : '',
-	end:   v.end   ? v.end.toISOString()   : ''
+    start: v.start ? v.start.toISOString() : '',
+    end:   v.end   ? v.end.toISOString()   : ''
   }]);
 
-  return JSON.stringify({
-	routeOverrides: ro,
-	t, done, trash: trashArr, exc, res,
+  const versionsObj = {};
+  lastKnownVersions.forEach((v,k)=>{ versionsObj[k] = v; });
+  const history = activityLog.slice(-LOG_LIMIT);
 
-	process: $("#process").value,
-	capByProc,
-	parallelByProc,        // <— ДОБАВЛЕНО
-	filter: $("#ganttFilter").value,
-	locked:[...lockedUids],
-	orders:[...ordersByStage.entries()],
-	freshness: $("#freshness").textContent || '',
-	lastImportTime,
-	autosaveOn,
-	autoOptimizeOn,
-	shiftOnProgress: $("#shiftOnProgress").checked
-  });
+  return {
+    routeOverrides: ro,
+    t, done, trash: trashArr, exc, res,
 
+    process: $("#process").value,
+    capByProc,
+    parallelByProc,
+    filter: $("#ganttFilter").value,
+    locked:[...lockedUids],
+    orders:[...ordersByStage.entries()],
+    freshness: csvFreshnessStr,
+    freshnessCsv: csvFreshnessStr,
+    freshnessManual: manualFreshnessStr,
+    lastImportTime,
+    lastManualTime,
+    autosaveOn,
+    autoOptimizeOn,
+    shiftOnProgress: $("#shiftOnProgress").checked,
+    meta: {
+      versions: versionsObj,
+      lastAuthors: { ...(stateMeta.lastAuthors||{}) },
+      csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
+      manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
+      history
+    }
+  };
 }
-function restoreState(json){
+
+function serializeState(){
+  return JSON.stringify(buildStateObject());
+}
+
+
+function normalizeRouteForDiff(route){
+  if(!route) return null;
+  const normalize = (part)=>{
+    if(!part) return null;
+    return {
+      hours:Number(part.hours||0),
+      start:part.start ? (part.start instanceof Date ? part.start.toISOString() : String(part.start)) : '',
+      end:part.end ? (part.end instanceof Date ? part.end.toISOString() : String(part.end)) : ''
+    };
+  };
+  return {
+    laser: normalize(route.laser||route.LASER),
+    bend:  normalize(route.bend||route.BEND),
+    draw:  normalize(route.draw||route.DRAW),
+    weld:  normalize(route.weld||route.WELD),
+    mech:  normalize(route.mech||route.MECH),
+    proc:  normalize(route.proc||route.PROC),
+    shear: normalize(route.shear||route.SHEAR),
+    pack:  normalize(route.pack||route.PACK),
+    ship:  normalize(route.ship||route.SHIP)
+  };
+}
+
+function normalizeTaskForDiff(task, idx, lockedSet){
+  return {
+    uid: task.uid,
+    orderId: task.orderId || '',
+    parentId: task.parentId || '',
+    childId: task.childId || '',
+    stage: task.stage || '',
+    hours: Number(task.hours||0),
+    extraHours: Number(task.extraHours||0),
+    start: task.startDate ? task.startDate.toISOString() : (task.start || ''),
+    end: task.endDate ? task.endDate.toISOString() : (task.end || ''),
+    progress: Number(task.progress||0),
+    state: task.state || '',
+    status: task.status || '',
+    useReserve: !!task.useReserve,
+    locked: lockedSet ? lockedSet.has(task.uid) : !!task.locked,
+    idx,
+    route: normalizeRouteForDiff(task.route)
+  };
+}
+
+function captureSnapshotFromTasks(stage, arr, lockedSet){
+  const list = [];
+  arr.forEach((task, index)=>{
+    if(task.stage !== stage) return;
+    list.push(normalizeTaskForDiff(task, list.length, lockedSet));
+  });
+  return list;
+}
+
+function captureSnapshotFromRaw(rawArr, stage, lockedSet){
+  const list = [];
+  rawArr.forEach((task)=>{
+    if(!task || task.stage !== stage) return;
+    const copy = {
+      uid: task.uid,
+      orderId: task.orderId,
+      parentId: task.parentId,
+      childId: task.childId,
+      stage: task.stage,
+      hours: task.hours,
+      extraHours: task.extraHours,
+      start: task.startDate || task.start || '',
+      end: task.endDate || task.end || '',
+      progress: task.progress,
+      state: task.state,
+      status: task.status,
+      useReserve: task.useReserve,
+      route: task.route
+    };
+    const normalized = normalizeTaskForDiff(copy, list.length, lockedSet);
+    list.push(normalized);
+  });
+  return list;
+}
+
+function computeDiff(before, after){
+  const beforeMap = new Map(before.map(x=>[x.uid, x]));
+  const afterMap = new Map(after.map(x=>[x.uid, x]));
+  const added = [];
+  const removed = [];
+  const changed = [];
+  afterMap.forEach((val, uid)=>{
+    if(!beforeMap.has(uid)){
+      added.push(val);
+      return;
+    }
+    const prev = beforeMap.get(uid);
+    const fields = [];
+    const keys = ['orderId','parentId','childId','hours','extraHours','start','end','progress','state','status','useReserve','locked','idx'];
+    keys.forEach(key=>{
+      if((prev[key] ?? null) !== (val[key] ?? null)){
+        fields.push({field:key,before:prev[key],after:val[key]});
+      }
+    });
+    const prevRoute = JSON.stringify(prev.route||{});
+    const nextRoute = JSON.stringify(val.route||{});
+    if(prevRoute !== nextRoute){
+      fields.push({field:'route',before:prev.route,after:val.route});
+    }
+    if(fields.length){
+      changed.push({uid, before:prev, after:val, fields});
+    }
+  });
+  beforeMap.forEach((val, uid)=>{ if(!afterMap.has(uid)) removed.push(val); });
+  return {added, removed, changed};
+}
+
+function diffHasChanges(diff){
+  return !!(diff && (diff.added.length || diff.removed.length || diff.changed.length));
+}
+
+function summarizeDiff(diff){
+  if(!diff) return '';
+  return `+${diff.added.length} ~${diff.changed.length} -${diff.removed.length}`;
+}
+
+function diffToHtml(diff){
+  if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
+  const block = (title, arr, formatter)=>{
+    if(!arr.length) return '';
+    return `<fieldset style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0">`+
+      `<legend style="padding:0 6px">${title} (${arr.length})</legend>`+
+      arr.map(formatter).join('')+
+      '</fieldset>';
+  };
+  const fmtTask = (label)=> (x)=>{
+    const name = x.orderId || x.after?.orderId || x.before?.orderId || x.uid;
+    return `<div><b>${name}</b> <span class="muted">[${x.uid}]</span></div>`;
+  };
+  const fmtChange = (x)=>{
+    const rows = x.fields.map(f=>{
+      const before = typeof f.before === 'object' ? JSON.stringify(f.before) : String(f.before ?? '—');
+      const after = typeof f.after === 'object' ? JSON.stringify(f.after) : String(f.after ?? '—');
+      return `<div><code>${f.field}</code>: <span class="muted">${before}</span> → <b>${after}</b></div>`;
+    }).join('');
+    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> <span class="muted">[${x.uid}]</span></div>`;
+    return `<div style="margin-bottom:6px">${header}${rows?`<div class="small" style="margin-left:8px">${rows}</div>`:''}</div>`;
+  };
+  return block('Добавлены', diff.added, fmtTask('added'))+
+         block('Удалены', diff.removed, fmtTask('removed'))+
+         block('Изменены', diff.changed, fmtChange);
+}
+
+
+function renderLogList(){
+  const container = $("#logList");
+  if(!container) return;
+  if(!activityLog.length){
+    container.innerHTML = '<div class="muted">Журнал пуст</div>';
+    return;
+  }
+  const rows = activityLog.slice().reverse().map(entry=>{
+    const stageName = STAGE_TITLE[entry.stage] || entry.stage;
+    const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
+    const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    return `<div class="log-entry" data-log-id="${entry.id}">`
+      + `<div><strong>${stageName}</strong> — ${summary}</div>`
+      + `<div class="meta">${meta}</div>`
+      + `<div style="display:flex;justify-content:flex-end;margin-top:6px">`
+      + `<button class="btn small ghost" data-log-detail="${entry.id}">Подробнее</button>`
+      + `</div>`
+      + `</div>`;
+  }).join('');
+  container.innerHTML = rows;
+}
+
+function showUpdateDetails(diff){
+  const box = $("#updateDetails");
+  if(box) box.innerHTML = diffToHtml(diff);
+  $("#updateDetailsDlg")?.showModal();
+}
+
+function showConflictDialog(diff, author){
+  const box = $("#conflictDetails");
+  if(box){
+    const who = author?.name || author?.session || 'другой пользователь';
+    const when = author?.at ? new Date(author.at).toLocaleString() : '';
+    const meta = when ? ` <span class="muted">(${when})</span>` : '';
+    box.innerHTML = `<p>Последним изменения сохранил <b>${who}</b>${meta}. Ваши изменения не были применены.</p>` + diffToHtml(diff);
+  }
+  $("#conflictDlg")?.showModal();
+}
+
+function showToast({title, message, actions=[]}){
+  const container = $("#toastContainer");
+  if(!container) return;
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = `<strong>${title}</strong><div>${message}</div>`;
+  if(actions.length){
+    const bar = document.createElement('div');
+    bar.className = 'toast-actions';
+    actions.forEach(action=>{
+      const btn = document.createElement('button');
+      btn.textContent = action.label;
+      btn.className = action.primary ? 'primary' : 'secondary';
+      btn.addEventListener('click', ()=>{ action.handler?.(el); el.remove(); });
+      bar.appendChild(btn);
+    });
+    el.appendChild(bar);
+  }
+  container.appendChild(el);
+  setTimeout(()=> el.classList.add('fade'), 3800);
+  setTimeout(()=>{ if(el.isConnected) el.remove(); }, 4500);
+}
+
+function announceStateUpdate(payload){
+  const msg = { type:'state-update', ...payload, alias:userAlias, session:SESSION_ID, timestamp:Date.now() };
+  if(broadcastChannel){
+    try{ broadcastChannel.postMessage(msg); }catch(_){ /* ignore */ }
+  }
+  try{ localStorage.setItem(SYNC_PING_KEY, JSON.stringify(msg)); }catch(_){ /* ignore */ }
+}
+
+function handleIncomingSyncMessage(msg){
+  if(!msg || msg.session === SESSION_ID) return;
+  if(msg.type === 'state-update'){
+    const raw = localStorage.getItem(LS_KEY);
+    if(raw && !suppressIncoming){
+      restoreState(raw, {preserveProcess:true});
+    }
+    if(msg.diff){
+      markLogAttention();
+      showToast({
+        title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
+        message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
+        actions:[
+          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
+          {label:'OK', handler:(el)=> el.remove()}
+        ]
+      });
+    }
+  }
+}
+
+function setupRealtimeSync(){
+  if('BroadcastChannel' in window){
+    try{
+      broadcastChannel = new BroadcastChannel('planner-sync-v1');
+      broadcastChannel.onmessage = ev => handleIncomingSyncMessage(ev.data);
+    }catch(_){ broadcastChannel = null; }
+  }
+  window.addEventListener('storage', ev=>{
+    if(ev.key === LS_KEY && !suppressIncoming){
+      if(ev.newValue) restoreState(ev.newValue, {preserveProcess:true});
+    }else if(ev.key === SYNC_PING_KEY){
+      try{ const data = JSON.parse(ev.newValue||'null'); handleIncomingSyncMessage(data); }catch(_){ }
+    }
+  });
+}
+
+function restoreState(json, opts={}){
   try{
-    const s=JSON.parse(json);
+    const preserveProcess = !!opts.preserveProcess;
+    const s = typeof json === 'string' ? JSON.parse(json) : json;
+    const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>({
       uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
       hours:x.hours, extraHours:x.extraHours,
@@ -3104,77 +3460,120 @@ function restoreState(json){
         bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
         draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
         weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
-        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null
+        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
+        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
+        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
+        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
+        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
       }
     }));
-	
-	allTasksFromState = tAll.slice();
-	const st0 = s.process || $("#process").value || 'bend';
-	tasks = tAll.filter(x => x.stage === st0);
 
-	doneTasks = (s.done||[]).map(x=>({
-	  uid:x.uid, orderId:x.orderId, stage:x.stage||'',
-	  parentId:x.parentId||'', childId:x.childId||'',
-	  hours:x.hours, extra:x.extra,
-	  start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
-	  when:x.when?new Date(x.when):null, source:x.source||''
-	}));
-	
-	trash = (s.trash||[]).map(x=>({
-	  uid:x.uid, orderId:x.orderId, stage:x.stage||'',
-	  parentId:x.parentId||'', childId:x.childId||'',
-	  hours:x.hours, extra:x.extra,
-	  start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
-	  when:x.when?new Date(x.when):null, source:x.source||''
-	}));
+    allTasksFromState = tAll.slice();
+    const desiredProcess = preserveProcess ? ($("#process")?.value || s.process || 'bend') : (s.process || $("#process")?.value || 'bend');
+    tasks = tAll.filter(x => x.stage === desiredProcess);
+
+    doneTasks = (s.done||[]).map(x=>({
+      uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+      parentId:x.parentId||'', childId:x.childId||'',
+      hours:x.hours, extra:x.extra,
+      start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
+      when:x.when?new Date(x.when):null, source:x.source||''
+    }));
+
+    trash = (s.trash||[]).map(x=>({
+      uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+      parentId:x.parentId||'', childId:x.childId||'',
+      hours:x.hours, extra:x.extra,
+      start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
+      when:x.when?new Date(x.when):null, source:x.source||''
+    }));
 
     exceptions = new Map(s.exc||[]);
     reserves   = new Map(s.res||[]);
-    lockedUids = new Set(s.locked||[]);
-	ordersByStage = new Map(s.orders || []);
-	// слияние с дефолтами + мягкая миграция старых значений
-	const savedCap = s.capByProc || {};
-	capByProc = { ...DEFAULT_CAP, ...savedCap };
-	
-	routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
-	  start: v.start ? new Date(v.start) : null,
-	  end:   v.end   ? new Date(v.end)   : null
-	}]) );
+    lockedUids = lockedSet;
+    ordersByStage = new Map(s.orders || []);
 
+    const savedCap = s.capByProc || {};
+    capByProc = { ...DEFAULT_CAP, ...savedCap };
 
-	// если видим старые «устаревшие» значения — обновим их на новые дефолты
-	let migrated = false;
-	if(savedCap.draw === 12 || savedCap.draw === 15 || savedCap.draw == null){ capByProc.draw = DEFAULT_CAP.draw; migrated = true; }
-	if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
-	if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
+    routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
+      start: v.start ? new Date(v.start) : null,
+      end:   v.end   ? new Date(v.end)   : null
+    }]) );
 
-	// восстановим UI
-	$("#process").value = s.process||'bend';
-	currentProc = $("#process").value;
-	$("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
-	
-	if(s.parallelByProc){
-	  Object.assign(parallelByProc, s.parallelByProc);
-	}
-	
-	// миграция/подстановка дефолтов, если в старом состоянии их не было
-	['proc','shear','pack','ship'].forEach(k=>{
-	  if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
-		parallelByProc[k] = (k==='pack' ? 3 : 5);
+    let migrated = false;
+    if(savedCap.draw === 12 || savedCap.draw === 15 || savedCap.draw == null){ capByProc.draw = DEFAULT_CAP.draw; migrated = true; }
+    if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
+    if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
+
+    if(s.parallelByProc){
+      Object.assign(parallelByProc, s.parallelByProc);
+    }
+    ['proc','shear','pack','ship'].forEach(k=>{
+      if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
+        parallelByProc[k] = (k==='pack' ? 3 : 5);
       }
-	});
+    });
 
-	// если что-то мигрировали — сразу сохраним новое состояние
-	if(migrated){ try{ persistNow(); }catch(_){ /* ignore */ } }
+    if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
+
+    const versionsRaw = (s.meta && s.meta.versions) || {};
+    lastKnownVersions = new Map(Object.entries(versionsRaw).map(([k,v])=>[k, Number(v)||0]));
+    stateMeta = {
+      versions: { ...versionsRaw },
+      lastAuthors: { ...(s.meta?.lastAuthors || {}) },
+      csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
+      manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
+      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
+    };
+    activityLog = stateMeta.history.slice(-LOG_LIMIT);
+    csvFreshnessStr = stateMeta.csvTimestamp || s.freshness || '—';
+    manualFreshnessStr = stateMeta.manualTimestamp || s.lastManualTime || '—';
+    lastImportTime = s.lastImportTime || csvFreshnessStr || '';
+    lastManualTime = s.lastManualTime || manualFreshnessStr || '';
+    updateFreshnessUI();
+
+    const grouped = new Map();
+    tAll.forEach(task=>{
+      const arr = grouped.get(task.stage) || [];
+      arr.push(normalizeTaskForDiff(task, arr.length, lockedSet));
+      grouped.set(task.stage, arr);
+    });
+    lastSyncedSnapshots = grouped;
+
+    if(preserveProcess){
+      $("#process").value = desiredProcess;
+    }else{
+      $("#process").value = s.process || 'bend';
+    }
+    currentProc = $("#process").value;
+    adjustUIForProcess(currentProc);
+    const capEl = $("#capacity");
+    if(capEl && !NOHOUR_STAGES.has(currentProc)){
+      capEl.value = capByProc[currentProc] || DEFAULT_CAP[currentProc] || 15;
+    }
+    if(NOHOUR_STAGES.has(currentProc) && $("#parallelOps")){
+      $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
+    }
 
     $("#ganttFilter").value = s.filter || 'all';
-    $("#freshness").textContent = s.freshness || '—';
-    lastImportTime = s.lastImportTime || '';
-    autosaveOn = !!s.autosaveOn;
+    if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
+    autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
     $("#autosave").checked = autosaveOn;
-    $("#shiftOnProgress").checked = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    $("#shiftOnProgress").checked = shiftOnProgress;
+    autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
+    $("#autoOptimize").checked = autoOptimizeOn;
+
+    if(preserveProcess){
+      tasks = tAll.filter(x=> x.stage === desiredProcess);
+    }else{
+      tasks = tAll.filter(x=> x.stage === $("#process").value);
+    }
+
+    sortBySavedOrder(tasks, $("#process").value);
     recompute();
-	updateTrashAttention?.();
+    updateTrashAttention?.();
   }catch(e){ console.warn('restoreState failed', e); }
 }
 
@@ -3216,60 +3615,180 @@ function loadStageFromLS(stage){
   }catch(_){ return null; }
 }
 
-function persistNow(stageOverride){
+function persistNow(stageOverride, opts={}){
+  const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
   try{
-    // 1) Текущее состояние только активного передела
-    const cur = JSON.parse(serializeState());
-    const curStage = stageOverride || cur.process || ($("#process")?.value || 'bend');
-    cur.process = curStage; // зафиксируем явным образом
+    const curStage = stageOverride || $("#process")?.value || 'bend';
+    const stateObj = buildStateObject();
+    stateObj.process = curStage;
 
-    // 2) Предыдущее состояние из LS (если было)
     const rawPrev = localStorage.getItem(LS_KEY);
-    if (rawPrev) {
+    let prev = null;
+    let prevTasks = [];
+    let prevOrders = [];
+    let prevMeta = {};
+    let prevLocked = new Set();
+    if(rawPrev){
       try{
-        const prev = JSON.parse(rawPrev);
-
-        // --- слить задачи: оставляем все предыдущие, КРОМЕ текущего передела, и добавляем текущие ---
-        const prevTasks = Array.isArray(prev.t) ? prev.t : [];
-        const others = prevTasks.filter(x => x && x.stage !== curStage);
-        cur.t = others.concat(cur.t || []);
-		
-		// де-дуп по uid (оставляем последнее вхождение)
-		const seen = new Set();
-		cur.t = cur.t.filter(x=>{
-		  if(!x || !x.uid) return false;
-		  if(seen.has(x.uid)) return false;
-		  seen.add(x.uid);
-		  return true;
-		});
-
-        // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
-        if (Array.isArray(prev.orders)) {
-          const map = new Map(prev.orders);
-          (cur.orders || []).forEach(([k,v])=> map.set(k, v));
-          cur.orders = [...map.entries()];
-        }
-
-        // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
-        if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
-        if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
-
-        // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
-      }catch(_){ /* если вдруг не распарсилось — просто перезапишем */ }
+        prev = JSON.parse(rawPrev);
+        prevTasks = Array.isArray(prev.t) ? prev.t : [];
+        prevOrders = Array.isArray(prev.orders) ? prev.orders : [];
+        prevMeta = prev.meta || {};
+        prevLocked = new Set(prev.locked || []);
+      }catch(_){ prev = null; }
     }
 
-    // 3) Запись в LS
-    localStorage.setItem(LS_KEY, JSON.stringify(cur));
+    const prevStageTasks = prevTasks.filter(x=>x && x.stage === curStage);
+    const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
+    const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
+    const prevVersion = Number((prevMeta.versions && prevMeta.versions[curStage]) || 0);
+    const knownVersion = lastKnownVersions.get(curStage) || 0;
+
+    if(prev && prevVersion > knownVersion){
+      const conflict = computeDiff(baseline, prevSnapshot);
+      if(diffHasChanges(conflict)){
+        lastKnownVersions.set(curStage, prevVersion);
+        lastSyncedSnapshots.set(curStage, prevSnapshot);
+        stateMeta.versions = { ...(prevMeta.versions||{}) };
+        stateMeta.lastAuthors = { ...(prevMeta.lastAuthors||{}) };
+        stateMeta.csvTimestamp = prevMeta.csvTimestamp || stateMeta.csvTimestamp;
+        stateMeta.manualTimestamp = prevMeta.manualTimestamp || stateMeta.manualTimestamp;
+        stateMeta.history = Array.isArray(prevMeta.history) ? prevMeta.history.slice(-LOG_LIMIT) : stateMeta.history;
+        activityLog = stateMeta.history.slice(-LOG_LIMIT);
+        updateFreshnessUI();
+        if(!silentOnConflict){
+          showConflictDialog(conflict, stateMeta.lastAuthors?.[curStage]);
+          if(prev){
+            restoreState(prev, {preserveProcess:true});
+          }
+        }
+        return;
+      }
+    }
+
+    const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
+    const diff = computeDiff(prevSnapshot, currentSnapshot);
+    const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+
+    // merge tasks from other стадий
+    if(prevTasks.length){
+      const others = prevTasks.filter(x=>x && x.stage !== curStage);
+      stateObj.t = others.concat(stateObj.t || []);
+      const seen = new Set();
+      stateObj.t = stateObj.t.filter(x=>{
+        if(!x || !x.uid) return false;
+        if(seen.has(x.uid)) return false;
+        seen.add(x.uid);
+        return true;
+      });
+    }
+
+    if(prevOrders.length){
+      const map = new Map(prevOrders);
+      (stateObj.orders || []).forEach(([k,v])=> map.set(k,v));
+      stateObj.orders = [...map.entries()];
+    }
+
+    if(prev && prev.parallelByProc && !stateObj.parallelByProc) stateObj.parallelByProc = prev.parallelByProc;
+    if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
+
+    const versions = { ...(stateMeta.versions || {}) };
+    const newVersion = (prevVersion || 0) + (hadChanges ? 1 : 0);
+    versions[curStage] = newVersion;
+    lastKnownVersions.set(curStage, newVersion);
+    stateMeta.versions = versions;
+
+    if(hadChanges){
+      const nowStr = new Date().toLocaleString();
+      if(source === 'csv'){
+        csvFreshnessStr = nowStr;
+        lastImportTime = nowStr;
+        stateMeta.csvTimestamp = nowStr;
+      } else if(source !== 'system'){
+        manualFreshnessStr = nowStr;
+        lastManualTime = nowStr;
+        stateMeta.manualTimestamp = nowStr;
+      }
+      updateFreshnessUI();
+
+      if(source !== 'system'){
+        const entry = {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+          time: nowStr,
+          stage: curStage,
+          user: userAlias,
+          session: SESSION_ID,
+          source,
+          summary: summarizeDiff(diff),
+          diff
+        };
+        activityLog.push(entry);
+        if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: { name:userAlias, session:SESSION_ID, at:nowStr, summary:entry.summary } };
+        markLogAttention();
+      } else {
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      }
+    }
+
+    stateObj.meta = {
+      versions: { ...versions },
+      lastAuthors: { ...(stateMeta.lastAuthors||{}) },
+      csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
+      manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
+      history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+    };
+
+    const payload = JSON.stringify(stateObj);
+    suppressIncoming = true;
+    try{
+      localStorage.setItem(LS_KEY, payload);
+    }finally{
+      suppressIncoming = false;
+    }
+
+    lastSyncedSnapshots.set(curStage, currentSnapshot);
+
+    if(hadChanges && announce){
+      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+    }
   }catch(e){
     console.warn('persist failed', e);
   }
 }
 
-function persistMaybe(){ if(autosaveOn) persistNow(); }
+function persistMaybe(reason='data', opts={}){ if(reason==='ui'){ saveUiPreferences(); return; } if(autosaveOn) persistNow(undefined, opts); }
 
 /* =========
    ПЕРЕСЧЁТ
 ========= */
+
+function saveUiPreferences(){
+  try{
+    const prefs = { filter: $("#ganttFilter")?.value || 'all' };
+    localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
+  }catch(_){ /* ignore */ }
+}
+
+function loadUiPreferences(){
+  try{
+    const raw = localStorage.getItem(UI_PREF_KEY);
+    if(!raw) return {};
+    return JSON.parse(raw);
+  }catch(_){ return {}; }
+}
+
+function updateFreshnessUI(){
+  const csvEl = $("#freshnessCsv");
+  const manualEl = $("#freshnessManual");
+  if(csvEl) csvEl.textContent = csvFreshnessStr || '—';
+  if(manualEl) manualEl.textContent = manualFreshnessStr || '—';
+}
+
+function markLogAttention(){ $("#logBtn")?.classList.add('attn'); }
+function clearLogAttention(){ $("#logBtn")?.classList.remove('attn'); }
+
 function recompute(){
 	tasks.forEach(t=>{
 	  // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
@@ -3421,6 +3940,7 @@ function switchProcess(newProc){
     recompute();
     rememberStageOrder(newProc);
   }
+  lastSyncedSnapshots.set(newProc, captureSnapshotFromTasks(newProc, tasks, lockedUids));
 }
 
 function syncProcessFS(){
@@ -3443,6 +3963,14 @@ $("#processFS").addEventListener('change', e=>{
    ОБРАБОТЧИКИ UI
 ========= */
 function wireHandlers(){
+  $("#userAlias").value = userAlias;
+  $("#userAlias").addEventListener('change', e=>{
+    const val = e.target.value.trim();
+    userAlias = val || userAlias;
+    localStorage.setItem(USER_ALIAS_KEY, userAlias);
+    e.target.value = userAlias;
+  });
+
   // импорт CSV
   $("#file").addEventListener('change', async e=>{
     const f=e.target.files[0];
@@ -3532,7 +4060,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     persistMaybe();
   });
   
-  $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe(); });
+  $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
   // очистка
   document.getElementById('clearAll')?.addEventListener('click', ()=>{
@@ -3550,7 +4078,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	trash = [];
 	localStorage.removeItem(LS_KEY);
 	lastImportTime = '';
-	$("#freshness").textContent = '—';
+	lastManualTime = '';
+	csvFreshnessStr = '—';
+	manualFreshnessStr = '—';
+	stateMeta.csvTimestamp = '';
+	stateMeta.manualTimestamp = '';
+	updateFreshnessUI();
 	updateTrashAttention?.();
 
 	capByProc      = { ...DEFAULT_CAP };
@@ -3570,9 +4103,9 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(); });
+  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false}); });
   $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
-  $("#saveBtn").addEventListener('click', ()=>{ persistNow(); alert('Состояние сохранено.'); });
+  $("#saveBtn").addEventListener('click', ()=>{ persistNow(undefined,{force:true}); alert('Состояние сохранено.'); });
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
@@ -3592,12 +4125,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     $("#process").value = $("#processFS").value;
     const ev=new Event('change'); $("#process").dispatchEvent(ev);
     renderGantt(true);
-    persistMaybe();
+    persistMaybe('ui');
   });
   $("#ganttFilterFS").addEventListener('change', ()=>{
     $("#ganttFilter").value = $("#ganttFilterFS").value;
     renderGantt(true);
-    persistMaybe();
+    persistMaybe('ui');
   });
 
   // маршрут диалог
@@ -3730,9 +4263,28 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	  alert('Изменения сохранены.');
 	  renderOverview();
 	});
-	$('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+        $('#logBtn').addEventListener('click', ()=>{ renderLogList(); clearLogAttention(); $('#logDlg').showModal(); });
+        $('#logClose').addEventListener('click', ()=> $('#logDlg').close());
+        $('#logClear').addEventListener('click', ()=>{
+          if(!confirm('Очистить журнал изменений?')) return;
+          activityLog = [];
+          stateMeta.history = [];
+          clearLogAttention();
+          renderLogList();
+          persistNow(undefined,{source:'system', force:true, announce:false});
+        });
+        $('#logList').addEventListener('click', e=>{
+          const id = e.target?.dataset?.logDetail;
+          if(!id) return;
+          const entry = activityLog.find(x=>x.id===id);
+          if(entry) showUpdateDetails(entry.diff);
+        });
+        $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
+        $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
 
-$("#autosave").checked = autosaveOn;
+        $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+
+        $("#autosave").checked = autosaveOn;
 }
 
 /* =========
@@ -3740,7 +4292,10 @@ $("#autosave").checked = autosaveOn;
 ========= */
 document.addEventListener('DOMContentLoaded', ()=>{
 
+  setupRealtimeSync();
   wireHandlers();
+  updateFreshnessUI();
+  try{ localStorage.setItem(USER_ALIAS_KEY, userAlias); }catch(_){ }
   const saved=localStorage.getItem(LS_KEY);
   if (saved) {
     restoreState(saved);
@@ -3753,6 +4308,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
     } else {
       $("#parallelOps").value = String(parallelByProc[st] ?? 3);
     }
+    const prefs = loadUiPreferences();
+    if(prefs.filter) $("#ganttFilter").value = prefs.filter;
     recompute();
   }
 });
