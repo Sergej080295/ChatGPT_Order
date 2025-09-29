@@ -70,6 +70,7 @@ h3{margin:0 0 10px;font-size:16px}
 }
 .btn:hover{ filter:brightness(.97) }
 .btn:active{ transform:translateY(1px) scale(.98) }
+.btn[disabled]{opacity:.55;cursor:not-allowed;pointer-events:none}
 .btn.primary{background:#2563eb;color:#fff;border-color:#1d4ed8}
 .btn.warn{background:#f59e0b;color:#111;border-color:#d97706}
 .btn.ghost{background:#fff}
@@ -530,6 +531,11 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
   </div>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:10px">
+    <div class="muted small">Права доступа:</div>
+    <label class="small"><input type="radio" name="accessMode" value="edit"> Редактирование</label>
+    <label class="small"><input type="radio" name="accessMode" value="view"> Только просмотр</label>
+  </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px">
     <div class="muted small">Сохранение данных:</div>
     <label class="small"><input type="checkbox" id="storageLocal" checked> Локально (браузер)</label>
@@ -859,6 +865,8 @@ function createRemoteBridge(){
   const adapterCleanups = new WeakMap();
   let adapterRef = null;
   let endpointRef = '';
+  let endpointMethodRef = 'PUT';
+  let endpointWrapPref = null;
   let lastAvailability = false;
 
   const normalize = (value)=>{
@@ -882,6 +890,16 @@ function createRemoteBridge(){
       try{ return new URL(value, window.location.origin).toString(); }
       catch(_2){ return value; }
     }
+  };
+
+  const parseBool = (value)=>{
+    if(typeof value === 'boolean') return value;
+    if(typeof value === 'string'){
+      const normalized = value.trim().toLowerCase();
+      if(['true','1','yes','on'].includes(normalized)) return true;
+      if(['false','0','no','off'].includes(normalized)) return false;
+    }
+    return null;
   };
 
   const readEndpoint = ()=>{
@@ -914,6 +932,51 @@ function createRemoteBridge(){
       }
     }
     return '';
+  };
+
+  const readEndpointMethod = ()=>{
+    const doc = typeof document !== 'undefined' ? document : null;
+    const root = doc?.documentElement;
+    const body = doc?.body;
+    const candidates = [
+      typeof window.PLANNER_STATE_METHOD === 'string' ? window.PLANNER_STATE_METHOD : '',
+      root?.dataset?.plannerStateMethod,
+      root?.dataset?.plannerMethod,
+      body?.dataset?.plannerStateMethod,
+      body?.dataset?.plannerMethod
+    ];
+    for(const raw of candidates){
+      if(typeof raw === 'string' && raw.trim()) return raw.trim().toUpperCase();
+    }
+    if(doc){
+      const meta = doc.querySelector('meta[name="planner-state-method" i], meta[name="planner-method" i]');
+      if(meta?.content && meta.content.trim()) return meta.content.trim().toUpperCase();
+    }
+    return 'PUT';
+  };
+
+  const readEndpointWrapPreference = ()=>{
+    const globalPref = parseBool(typeof window.PLANNER_STATE_WRAP !== 'undefined' ? window.PLANNER_STATE_WRAP : null);
+    if(globalPref !== null) return globalPref;
+    const doc = typeof document !== 'undefined' ? document : null;
+    const root = doc?.documentElement;
+    const body = doc?.body;
+    const candidates = [
+      root?.dataset?.plannerStateWrap,
+      root?.dataset?.plannerWrap,
+      body?.dataset?.plannerStateWrap,
+      body?.dataset?.plannerWrap
+    ];
+    for(const raw of candidates){
+      const parsed = parseBool(raw);
+      if(parsed !== null) return parsed;
+    }
+    if(doc){
+      const meta = doc.querySelector('meta[name="planner-state-wrap" i], meta[name="planner-wrap" i]');
+      const parsed = parseBool(meta?.content || null);
+      if(parsed !== null) return parsed;
+    }
+    return null;
   };
 
   const emit = (evt)=>{
@@ -968,6 +1031,8 @@ function createRemoteBridge(){
 
     const nextEndpoint = readEndpoint();
     endpointRef = nextEndpoint || '';
+    endpointMethodRef = readEndpointMethod();
+    endpointWrapPref = readEndpointWrapPreference();
 
     const hasRemoteNow = !!(adapterRef || endpointRef);
     if(hasRemoteNow !== lastAvailability){
@@ -1015,28 +1080,74 @@ function createRemoteBridge(){
   }
 
   async function push(payload, meta){
-    if(!payload) return false;
+    if(!payload) throw new Error('Empty payload');
     const adapter = getAdapter();
     const endpoint = getEndpoint();
+    let lastError = null;
     if(adapter){
       const saver = adapter.saveState || adapter.setState || adapter.pushState || adapter.write || adapter.put;
       if(typeof saver === 'function'){
         try{ await saver.call(adapter, payload, meta); return true; }
-        catch(err){ console.warn('remote save failed', err); }
+        catch(err){ lastError = err; console.warn('remote save failed', err); }
       }
     }
     if(endpoint){
-      try{
+      const normalizedMeta = meta && typeof meta === 'object' ? meta : null;
+      const attempt = async (body, contentType)=>{
+        const headers = { 'Accept':'application/json,text/plain' };
+        if(contentType) headers['Content-Type'] = contentType;
         const res = await fetch(endpoint, {
-          method:'PUT',
-          headers:{ 'Content-Type':'application/json' },
-          body: payload
+          method: endpointMethodRef || 'PUT',
+          headers,
+          body
         });
-        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        if(!res.ok){
+          let detail = '';
+          try{ detail = await res.text(); }catch(_){ detail=''; }
+          detail = detail ? detail.trim() : '';
+          const msg = detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`;
+          throw new Error(msg);
+        }
+      };
+      const guessContentType = (body)=>{
+        if(typeof body === 'string'){
+          const trimmed = body.trim();
+          if(trimmed.startsWith('{') || trimmed.startsWith('[')) return 'application/json';
+        }
+        return 'text/plain;charset=utf-8';
+      };
+      const shouldTryWrapped = (endpointWrapPref !== null ? endpointWrapPref : !!normalizedMeta);
+      if(shouldTryWrapped && normalizedMeta){
+        try{
+          let parsedState = null;
+          if(typeof payload === 'string'){
+            try{ parsedState = JSON.parse(payload); }
+            catch(_){ parsedState = null; }
+          }
+          const wrapper = {
+            state: parsedState && typeof parsedState === 'object' ? parsedState : payload,
+            meta: normalizedMeta
+          };
+          if(typeof payload === 'string'){
+            wrapper.hash = simpleHash(payload);
+          }
+          await attempt(JSON.stringify(wrapper), 'application/json');
+          return true;
+        }catch(err){
+          lastError = err;
+          console.warn('endpoint save failed (wrapped)', err);
+        }
+      }
+      try{
+        await attempt(payload, guessContentType(payload));
         return true;
-      }catch(err){ console.warn('endpoint save failed', err); }
+      }catch(err){
+        lastError = err;
+        console.warn('endpoint save failed', err);
+      }
     }
-    return false;
+    const fallbackErr = lastError || new Error('Удалённый сервер недоступен');
+    throw fallbackErr;
   }
 
   function subscribe(cb){
@@ -1104,6 +1215,70 @@ function refreshDataModeIndicator(){
 function setDataMode(mode){
   currentDataOrigin = mode || 'unknown';
   refreshDataModeIndicator();
+}
+
+function userCanEdit(){
+  return accessMode === ACCESS_MODES.edit;
+}
+
+function applyAccessMode(){
+  const canEdit = userCanEdit();
+  if(document.body){
+    document.body.classList.toggle('view-only', !canEdit);
+  }
+  const toggleSelectors = ['#addOrder','#optimizeBtn','#clearAll','#loadExample','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  toggleSelectors.forEach(sel=>{
+    const el = $(sel);
+    if(el && 'disabled' in el){
+      el.disabled = !canEdit;
+    }
+  });
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#capacity','#parallelOps'];
+  toggleInputs.forEach(sel=>{
+    const el = $(sel);
+    if(el){
+      if('disabled' in el) el.disabled = !canEdit;
+    }
+  });
+  ['#file','#stateFile'].forEach(sel=>{
+    const input = $(sel);
+    if(input){ input.disabled = !canEdit; }
+  });
+  const textareas = ['#exceptionsText','#reserveText'];
+  textareas.forEach(sel=>{
+    const el = $(sel);
+    if(el){ el.readOnly = !canEdit; }
+  });
+  $$('#tasksTable tbody tr').forEach(tr=>{ tr.draggable = canEdit; });
+  $$('#tasksTable [contenteditable]').forEach(cell=>{
+    cell.setAttribute('contenteditable', canEdit ? 'true' : 'false');
+  });
+  $$('#tasksTable input[data-reserve], #tasksTable input[data-done]').forEach(el=>{ el.disabled = !canEdit; });
+  $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !canEdit; });
+  $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
+  if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
+}
+
+function setAccessMode(mode, opts={}){
+  const next = mode === ACCESS_MODES.view ? ACCESS_MODES.view : ACCESS_MODES.edit;
+  const prev = accessMode;
+  accessMode = next;
+  try{ localStorage.setItem(ACCESS_MODE_KEY, accessMode); }catch(_){ /* ignore */ }
+  applyAccessMode();
+  if(opts.announce !== false && typeof showToast === 'function' && next !== prev){
+    showToast({
+      title:'Права доступа',
+      message: next === ACCESS_MODES.edit ? 'Режим редактирования активирован.' : 'Активирован режим только просмотра.'
+    });
+  }
+}
+
+function notifyReadOnly(){
+  if(typeof showToast === 'function'){
+    showToast({ title:'Режим только просмотра', message:'Изменения недоступны с текущими правами доступа.' });
+  }else{
+    alert('Режим только просмотра: изменения недоступны.');
+  }
 }
 
 function loadStoragePrefs(){
@@ -1294,6 +1469,11 @@ function applyStateFromExternal(raw, opts={}){
     }
     if(!parsed || typeof parsed !== 'object') return;
 
+    if(opts.meta && typeof opts.meta === 'object'){
+      const metaFromOpts = opts.meta;
+      parsed.meta = { ...(parsed.meta || {}), ...metaFromOpts };
+    }
+
     const lockedSet = new Set(parsed.locked || []);
     const grouped = new Map();
     (parsed.t || []).forEach(task=>{
@@ -1393,12 +1573,21 @@ const DEFAULT_PARALLEL = { proc:5, shear:5, pack:3, ship:5 };
 const USER_ALIAS_KEY = 'yougile_planner_user_alias_v2';
 const UI_PREF_KEY = 'yougile_planner_ui_v2';
 const SYNC_PING_KEY = 'yougile_planner_sync_ping_v1';
+const ACCESS_MODE_KEY = 'yougile_planner_access_mode_v1';
+const ACCESS_MODES = { edit:'edit', view:'view' };
 const LOG_LIMIT = 200;
 const REMOTE_POLL_INTERVAL = 4000;
 const SESSION_ID = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
   : ('sess-'+Math.random().toString(16).slice(2,12));
 let userAlias = localStorage.getItem(USER_ALIAS_KEY) || `User-${SESSION_ID.slice(0,5)}`;
+let accessMode = (()=>{
+  try{
+    const stored = localStorage.getItem(ACCESS_MODE_KEY);
+    if(stored === ACCESS_MODES.view || stored === ACCESS_MODES.edit) return stored;
+  }catch(_){ /* ignore */ }
+  return ACCESS_MODES.edit;
+})();
 
 let parallelByProc = { ...DEFAULT_PARALLEL };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
@@ -1999,6 +2188,7 @@ function optimizeQueue(){
    ТАБЛИЦА
 ========= */
 function applyEditImmediate(cell, task){
+  if(!userCanEdit()) return;
   const field=cell.dataset.field, val=cell.textContent.trim();
   if(field==='orderId'){ if(val) task.orderId=val; }
   else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; task.extraHours=Math.max(0.25,h*0.05); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
@@ -2055,136 +2245,152 @@ function applyEditImmediate(cell, task){
 }
 function renderTasksTable(){
   const tb=$("#tasksTable tbody"); tb.innerHTML='';
+  const canEdit = userCanEdit();
   tasks.forEach((t,i)=>{
     const st=statusForTask(t);
     const rest = Math.max(0, remainingTotal(t));
     const tr=document.createElement('tr');
-    tr.draggable=true; tr.dataset.index=i; if(t.isNew) tr.classList.add('newRow');
+    tr.draggable=canEdit; tr.dataset.index=i; if(t.isNew) tr.classList.add('newRow');
 
     const useRes   = t.useReserve ? 'checked' : '';
 
     tr.innerHTML=`
       <td>${i+1}</td>
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
-      <td><input type="checkbox" data-done></td>
+      <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
       <td class="eye" title="Маршрут заказа">👁</td>
-      <td class="drag-handle" ${t.isUserNew?'contenteditable="true" data-field="orderId"':''}>${t.orderId}</td>
-      <td contenteditable="true" data-field="progress">${String(t.progress||0).replace('.',',')}</td>
-      <td contenteditable="true" data-field="hours">${String(t.hours).replace('.',',')}</td>
-      <td contenteditable="true" data-field="extraHours">${String(t.extraHours??0.25).replace('.',',')}</td>
+      <td class="drag-handle" ${(canEdit && t.isUserNew)?'contenteditable="true" data-field="orderId"':''}>${t.orderId}</td>
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="progress">${String(t.progress||0).replace('.',',')}</td>
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="hours">${String(t.hours).replace('.',',')}</td>
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="extraHours">${String(t.extraHours??0.25).replace('.',',')}</td>
       <td class="rest-cell">${rest.toFixed(1).replace('.',',')}</td>
-      <td contenteditable="true" data-field="startDate" class="start-cell ${t.startMissing?'error':''}">
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="startDate" class="start-cell ${t.startMissing?'error':''}">
           ${fmtDate(t.startDate)}
           ${t.origStartDate && (+t.origStartDate!==+t.startDate) ? `<span class="orig">исх.: ${fmtDate(t.origStartDate)}</span>`:''}
       </td>
-      <td contenteditable="true" data-field="endDate"   class="${t.endMissing?'error':''}">${t.endDate?fmtDate(t.endDate):'—'}</td>
-      <td contenteditable="true" data-field="state">${t.state||''}</td>
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="endDate"   class="${t.endMissing?'error':''}">${t.endDate?fmtDate(t.endDate):'—'}</td>
+      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="state">${t.state||''}</td>
       <td class="${st.cls}">${st.text}</td>
-      <td><input type="checkbox" data-reserve ${useRes} title="Использовать Бронь"></td>
-      <td><button class="del-btn" title="Удалить" data-del>×</button></td>
+      <td><input type="checkbox" data-reserve ${useRes} title="Использовать Бронь" ${!canEdit?'disabled':''}></td>
+      <td><button class="del-btn" title="Удалить" data-del ${!canEdit?'disabled':''}>×</button></td>
     `;
 
-    // замок
-    tr.querySelector('.lock-btn').addEventListener('click', (e)=>{
-      if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
-      e.currentTarget.dataset.locked = lockedUids.has(t.uid);
-      e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
-      persistMaybe();
-    });
+    const lockBtn = tr.querySelector('.lock-btn');
+    if(lockBtn){
+      lockBtn.disabled = !canEdit;
+      if(canEdit){
+        lockBtn.addEventListener('click', (e)=>{
+          if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
+          e.currentTarget.dataset.locked = lockedUids.has(t.uid);
+          e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
+          persistMaybe();
+        });
+      }
+    }
 
-    // готово (в архив вручную)
-	tr.querySelector('input[data-done]').addEventListener('change', e=>{
-	  if(e.target.checked){
-		doneTasks.push({
-		  uid:t.uid, orderId:t.orderId, stage:t.stage,
-		  parentId:t.parentId, childId:t.childId,
-		  hours:t.hours, extra:t.extraHours,
-		  start:t.startDate, end:t.endDate,
-		  when:new Date(), source:'checkbox'
-		});
-		tasks.splice(i,1);
-		rememberStageOrder();
-		updateDoneAttention();
-		recompute();
-		persistMaybe();
-	  }
-	});
-
-	tr.querySelector('[data-del]').addEventListener('click', ()=>{
-	  if (!confirm('Удалить заказ из списка? Он будет перемещён в «Корзину».')) return;
-
-	  const idx = tasks.findIndex(x=>x.uid===t.uid);
-	  if(idx>-1){
-		// перемещаем в корзину
-		trash.push({
-		  uid: t.uid, orderId: t.orderId, stage: t.stage,
-		  parentId: t.parentId, childId: t.childId,
-		  hours: t.hours, extra: t.extraHours,
-		  start: t.startDate, end: t.endDate,
-		  when: new Date(), source: 'delete'
-		});
-
-		tasks.splice(idx,1);
-		rememberStageOrder();
-		updateTrashAttention?.(); // подсветим кнопку «Корзина», если функция уже определена
-		recompute();
-		persistMaybe();
-	  }
-	});
-
-    // маршрут
-    tr.querySelector('.eye').addEventListener('click', ()=> openRoute(t));
-
-    // edits
-    tr.querySelectorAll('[contenteditable]').forEach(cell=>{
-      const field=cell.dataset.field;
-      cell.addEventListener('keydown', e=>{
-        if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
-        else if(e.key==='Escape'){ e.preventDefault();
-          if(field==='orderId') cell.textContent=t.orderId;
-          if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
-          if(field==='extraHours') cell.textContent=String(t.extraHours??0.25).replace('.',',');
-          if(field==='startDate') cell.textContent=fmtDate(t.startDate);
-          if(field==='endDate') cell.textContent=t.endDate?fmtDate(t.endDate):'—';
-          if(field==='state') cell.textContent=t.state||'';
-          if(field==='progress') cell.textContent=String(t.progress||0).replace('.',',');
-          cell.blur();
+    const doneBox = tr.querySelector('input[data-done]');
+    if(canEdit && doneBox){
+      doneBox.addEventListener('change', e=>{
+        if(e.target.checked){
+          doneTasks.push({
+            uid:t.uid, orderId:t.orderId, stage:t.stage,
+            parentId:t.parentId, childId:t.childId,
+            hours:t.hours, extra:t.extraHours,
+            start:t.startDate, end:t.endDate,
+            when:new Date(), source:'checkbox'
+          });
+          tasks.splice(i,1);
+          rememberStageOrder();
+          updateDoneAttention();
+          recompute();
+          persistMaybe();
         }
       });
-      cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
+    }
+
+    const delBtn = tr.querySelector('[data-del]');
+    if(canEdit && delBtn){
+      delBtn.addEventListener('click', ()=>{
+        if (!confirm('Удалить заказ из списка? Он будет перемещён в «Корзину».')) return;
+
+        const idx = tasks.findIndex(x=>x.uid===t.uid);
+        if(idx>-1){
+          trash.push({
+            uid: t.uid, orderId: t.orderId, stage: t.stage,
+            parentId: t.parentId, childId: t.childId,
+            hours: t.hours, extra: t.extraHours,
+            start: t.startDate, end: t.endDate,
+            when: new Date(), source: 'delete'
+          });
+
+          tasks.splice(idx,1);
+          rememberStageOrder();
+          updateTrashAttention?.();
+          recompute();
+          persistMaybe();
+        }
+      });
+    }
+
+    tr.querySelector('.eye').addEventListener('click', ()=> openRoute(t));
+
+    tr.querySelectorAll('[contenteditable]').forEach(cell=>{
+      const editable = canEdit && cell.getAttribute('contenteditable') === 'true';
+      const field=cell.dataset.field;
+      if(editable){
+        cell.addEventListener('keydown', e=>{
+          if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
+          else if(e.key==='Escape'){ e.preventDefault();
+            if(field==='orderId') cell.textContent=t.orderId;
+            if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
+            if(field==='extraHours') cell.textContent=String(t.extraHours??0.25).replace('.',',');
+            if(field==='startDate') cell.textContent=fmtDate(t.startDate);
+            if(field==='endDate') cell.textContent=t.endDate?fmtDate(t.endDate):'—';
+            if(field==='state') cell.textContent=t.state||'';
+            if(field==='progress') cell.textContent=String(t.progress||0).replace('.',',');
+            cell.blur();
+          }
+        });
+        cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
+      }else{
+        cell.setAttribute('contenteditable','false');
+      }
     });
 
-    // флажок «Бронь»
-    tr.querySelector('input[data-reserve]').addEventListener('change', e=>{
-      t.useReserve = !!e.target.checked;
-      recompute();
-      persistMaybe();
-    });
+    const reserveBox = tr.querySelector('input[data-reserve]');
+    if(canEdit && reserveBox){
+      reserveBox.addEventListener('change', e=>{
+        t.useReserve = !!e.target.checked;
+        recompute();
+        persistMaybe();
+      });
+    }
 
-    // drag & drop
-    let dropAbove=true;
-    tr.addEventListener('dragstart', e=>{ tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; tr.dataset.dragIndex=i; });
-    tr.addEventListener('dragend', ()=>{ tr.classList.remove('dragging'); $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below')); persistMaybe(); });
-    tr.addEventListener('dragover', e=>{
-      e.preventDefault();
-      const rect=tr.getBoundingClientRect(); const mid=rect.top+rect.height/2;
-      dropAbove = e.clientY < mid;
-      $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below'));
-      tr.classList.add(dropAbove?'drop-above':'drop-below');
-    });
-    tr.addEventListener('drop', e=>{
-      e.preventDefault();
-      const dragIndex = Number(document.querySelector('tr.dragging')?.dataset.index ?? tr.dataset.index);
-      const targetIndex = Number(tr.dataset.index);
-      if(dragIndex===targetIndex) return;
-      const item = tasks.splice(dragIndex,1)[0];
-      let insertIndex = targetIndex + (dropAbove?0:1);
-      if(insertIndex<0) insertIndex=0; if(insertIndex>tasks.length) insertIndex=tasks.length;
-      tasks.splice(insertIndex,0,item);
-	  rememberStageOrder();
-      recompute();
-      persistMaybe();
-    });
+    if(canEdit){
+      let dropAbove=true;
+      tr.addEventListener('dragstart', e=>{ tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; tr.dataset.dragIndex=i; });
+      tr.addEventListener('dragend', ()=>{ tr.classList.remove('dragging'); $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below')); persistMaybe(); });
+      tr.addEventListener('dragover', e=>{
+        e.preventDefault();
+        const rect=tr.getBoundingClientRect(); const mid=rect.top+rect.height/2;
+        dropAbove = e.clientY < mid;
+        $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below'));
+        tr.classList.add(dropAbove?'drop-above':'drop-below');
+      });
+      tr.addEventListener('drop', e=>{
+        e.preventDefault();
+        const dragIndex = Number(document.querySelector('tr.dragging')?.dataset.index ?? tr.dataset.index);
+        const targetIndex = Number(tr.dataset.index);
+        if(dragIndex===targetIndex) return;
+        const item = tasks.splice(dragIndex,1)[0];
+        let insertIndex = targetIndex + (dropAbove?0:1);
+        if(insertIndex<0) insertIndex=0; if(insertIndex>tasks.length) insertIndex=tasks.length;
+        tasks.splice(insertIndex,0,item);
+        rememberStageOrder();
+        recompute();
+        persistMaybe();
+      });
+    }
 
     tb.appendChild(tr);
   });
@@ -2898,6 +3104,7 @@ function renderDoneList(){
   const tbl = $("#doneTable");
   const thead = tbl.querySelector('thead');
   const tbody = tbl.querySelector('tbody');
+  const canEdit = userCanEdit();
 
   // --- 1) Панель фильтра по переделам (создаём один раз) ---
   let bar = dlg.querySelector('#doneFilterBar');
@@ -2958,7 +3165,7 @@ function renderDoneList(){
 
     const stageKey = (d.stage||'');
     const stageTitle = STAGE_TITLE[stageKey] || '—';
-    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»">Вернуть в ${stageTitle}</button>`;
+    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»" ${canEdit?'':'disabled'}>Вернуть в ${stageTitle}</button>`;
 
     tr.innerHTML = `
       <td>${btn}</td>
@@ -2974,81 +3181,75 @@ function renderDoneList(){
   });
 
   // --- 4) Обработчики «Вернуть» — строго по uid (+stage) и с проверкой на текущий передел ---
-  tbody.querySelectorAll('button.restore').forEach(el=>{
-    el.addEventListener('click', e=>{
-      const btn  = e.currentTarget;
-      const tr   = btn.closest('tr');
-      const uid  = btn.dataset.uid;
-      const stg  = btn.dataset.stage || '';
-      const wrap = dlg.querySelector('.table-wrap');
-      const before = wrap ? wrap.scrollTop : 0;
-      const delta  = wrap && tr && tr.offsetTop < (before+1) ? (tr.offsetHeight||0) : 0;
+  if(canEdit){
+    tbody.querySelectorAll('button.restore').forEach(el=>{
+      el.addEventListener('click', e=>{
+        const btn  = e.currentTarget;
+        const tr   = btn.closest('tr');
+        const uid  = btn.dataset.uid;
+        const stg  = btn.dataset.stage || '';
+        const wrap = dlg.querySelector('.table-wrap');
+        const before = wrap ? wrap.scrollTop : 0;
+        const delta  = wrap && tr && tr.offsetTop < (before+1) ? (tr.offsetHeight||0) : 0;
 
-      // анимация исчезновения
-      tr.classList.add('fade-out');
+        // анимация исчезновения
+        tr.classList.add('fade-out');
 
-      setTimeout(()=>{
-        // 1) найдём запись именно по uid (+stage, если есть)
-        let realIdx = doneTasks.findIndex(x => x.uid===uid && (x.stage||'')===stg);
-        if(realIdx===-1) realIdx = doneTasks.findIndex(x => x.uid===uid); // фолбэк для старых записей без stage
-        if(realIdx===-1){ renderDoneList(); return; }
+        setTimeout(()=>{
+          let realIdx = doneTasks.findIndex(x => x.uid===uid && (x.stage||'')===stg);
+          if(realIdx===-1) realIdx = doneTasks.findIndex(x => x.uid===uid);
+          if(realIdx===-1){ renderDoneList(); return; }
 
-        // 2) проверяем совпадение с текущим переделом
-        const cur = $("#process").value;
-        const d0  = doneTasks[realIdx];
-        if((d0.stage||'') !== cur){
-          // не удаляем из архива; просто подсказываем куда перейти
-          tr.classList.remove('fade-out');
-          alert(`Этот заказ относится к переделу «${STAGE_TITLE[d0.stage||'']||d0.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
-          return;
-        }
+          const cur = $("#process").value;
+          const d0  = doneTasks[realIdx];
+          if((d0.stage||'') !== cur){
+            tr.classList.remove('fade-out');
+            alert(`Этот заказ относится к переделу «${STAGE_TITLE[d0.stage||'']||d0.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
+            return;
+          }
 
-		// 3) теперь безопасно вынимаем из «Готовых» и возвращаем в список
-		const d = doneTasks.splice(realIdx,1)[0];
+          const d = doneTasks.splice(realIdx,1)[0];
+          const parsed = splitUid(d.uid);
+          const childId = d.childId || (parsed ? parsed.childId : '');
+          const parentId = d.parentId || findParentIdByChild(childId);
+          const stage = d.stage || cur;
+          const start = d.start || today0();
+          const end   = d.end || null;
+          const route = {laser:null,bend:null,draw:null,weld:null,mech:null};
+          route[stage] = { hours: (+d.hours||0), start, end };
 
-		// восстановим childId из uid, а parentId — из сохранённого поля или по lastRows
-		const parsed = splitUid(d.uid);
-		const childId = d.childId || (parsed ? parsed.childId : '');
-		const parentId = d.parentId || findParentIdByChild(childId);
+          tasks.push({
+            uid: d.uid || ('restored::'+Date.now()),
+            orderId: d.orderId,
+            stage,
+            childId,
+            parentId,
+            hours: d.hours,
+            extraHours: Math.max(0.25,(+d.hours||0)*0.05),
+            startDate: start,
+            endDate: end,
+            startMissing: !d.start,
+            endMissing: !d.end,
+            state: '',
+            status: '',
+            useReserve: false,
+            progress: 0,
+            origStartDate: start,
+            route,
+            isNew: true
+          });
 
-		const stage = d.stage || cur;
-		const start = d.start || today0();
-		const end   = d.end || null;
+          if(typeof sortTasksByStart==='function') sortTasksByStart();
 
-		const route = {laser:null,bend:null,draw:null,weld:null,mech:null};
-		route[stage] = { hours: (+d.hours||0), start, end };
-
-		tasks.push({
-		  uid: d.uid || ('restored::'+Date.now()),
-		  orderId: d.orderId,
-		  stage,
-		  childId,
-		  parentId,
-		  hours: d.hours,
-		  extraHours: Math.max(0.25,(+d.hours||0)*0.05),
-		  startDate: start,
-		  endDate: end,
-		  startMissing: !d.start,
-		  endMissing: !d.end,
-		  state: '',
-		  status: '',
-		  useReserve: false,
-		  progress: 0,
-		  origStartDate: start,
-		  route,
-		  isNew: true
-		});
-
-        if(typeof sortTasksByStart==='function') sortTasksByStart();
-
-        updateDoneAttention();
-        recompute();
-        renderDoneList();
-        if(wrap) wrap.scrollTop = Math.max(0, before - delta);
-        persistMaybe();
-      }, 200);
+          updateDoneAttention();
+          recompute();
+          renderDoneList();
+          if(wrap) wrap.scrollTop = Math.max(0, before - delta);
+          persistMaybe();
+        }, 200);
+      });
     });
-  });
+  }
 }
 
 /* =========
@@ -3064,6 +3265,7 @@ function renderTrashList(){
   const tbl = $("#trashTable");
   const tbody = tbl.querySelector('tbody');
   tbody.innerHTML = '';
+  const canEdit = userCanEdit();
 
   // последние — сверху
   const rows = trash.slice().reverse();
@@ -3072,7 +3274,7 @@ function renderTrashList(){
 
     const stageKey = (d.stage||'');
     const stageTitle = STAGE_TITLE[stageKey] || '—';
-    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»">Вернуть в ${stageTitle}</button>`;
+    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»" ${canEdit?'':'disabled'}>Вернуть в ${stageTitle}</button>`;
 
     tr.innerHTML = `
       <td>${btn}</td>
@@ -3088,59 +3290,62 @@ function renderTrashList(){
   });
 
   // Восстановление из корзины
-  tbody.querySelectorAll('button.restore').forEach(el=>{
-    el.addEventListener('click', e=>{
-      const uid = e.currentTarget.dataset.uid;
-      const stg = e.currentTarget.dataset.stage || '';
-      const cur = $("#process").value;
+  if(canEdit){
+    tbody.querySelectorAll('button.restore').forEach(el=>{
+      el.addEventListener('click', e=>{
+        const uid = e.currentTarget.dataset.uid;
+        const stg = e.currentTarget.dataset.stage || '';
+        const cur = $("#process").value;
 
-      // можно возвращать только в соответствующий передел
-      const idx = trash.findIndex(x=> x.uid===uid && (x.stage||'')===stg);
-      if(idx===-1) return;
+        // можно возвращать только в соответствующий передел
+        const idx = trash.findIndex(x=> x.uid===uid && (x.stage||'')===stg);
+        if(idx===-1) return;
 
-      const rec = trash[idx];
-      if((rec.stage||'') !== cur){
-        alert(`Этот заказ относится к переделу «${STAGE_TITLE[rec.stage||'']||rec.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
-        return;
-      }
+        const rec = trash[idx];
+        if((rec.stage||'') !== cur){
+          alert(`Этот заказ относится к переделу «${STAGE_TITLE[rec.stage||'']||rec.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
+          return;
+        }
 
-      // достаём из корзины
-      trash.splice(idx,1);
+        // достаём из корзины
+        trash.splice(idx,1);
 
-      // восстановим childId/parentId как в «Готовых»
-      const parsed = splitUid(rec.uid);
-      const childId = rec.childId || (parsed ? parsed.childId : '');
-      const parentId = rec.parentId || findParentIdByChild(childId);
-      const stage = rec.stage || cur;
-      const start = rec.start || today0();
-      const end   = rec.end || null;
+        // восстановим childId/parentId как в «Готовых»
+        const parsed = splitUid(rec.uid);
+        const childId = rec.childId || (parsed ? parsed.childId : '');
+        const parentId = rec.parentId || findParentIdByChild(childId);
+        const stage = rec.stage || cur;
+        const start = rec.start || today0();
+        const end   = rec.end || null;
 
-      const route = {laser:null,bend:null,draw:null,weld:null,mech:null,proc:null,shear:null,pack:null,ship:null};
-      route[stage] = { hours: (+rec.hours||0), start, end };
+        const route = {laser:null,bend:null,draw:null,weld:null,mech:null,proc:null,shear:null,pack:null,ship:null};
+        route[stage] = { hours: (+rec.hours||0), start, end };
 
-      tasks.push({
-        uid: rec.uid || ('restored-trash::'+Date.now()),
-        orderId: rec.orderId,
-        stage, childId, parentId,
-        hours: rec.hours,
-        extraHours: Math.max(0.25,(+rec.hours||0)*0.05),
-        startDate: start, endDate: end,
-        startMissing: !rec.start, endMissing: !rec.end,
-        state: '', status: '', useReserve:false, progress:0,
-        origStartDate: start, route, isNew:true
+        tasks.push({
+          uid: rec.uid || ('restored-trash::'+Date.now()),
+          orderId: rec.orderId,
+          stage, childId, parentId,
+          hours: rec.hours,
+          extraHours: Math.max(0.25,(+rec.hours||0)*0.05),
+          startDate: start, endDate: end,
+          startMissing: !rec.start, endMissing: !rec.end,
+          state: '', status: '', useReserve:false, progress:0,
+          origStartDate: start, route, isNew:true
+        });
+
+        if(typeof sortTasksByStart==='function') sortTasksByStart();
+
+        updateTrashAttention();
+        recompute();
+        renderTrashList();
+        persistMaybe();
       });
-
-      if(typeof sortTasksByStart==='function') sortTasksByStart();
-
-      updateTrashAttention();
-      recompute();
-      renderTrashList();
-      persistMaybe();
     });
-  });
+  }
 
   // Кнопки «Очистить» и «Закрыть»
   $("#trashClear").onclick = ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); dlg.close(); return; }
     if(trash.length===0) { dlg.close(); return; }
     if(confirm('Очистить корзину без возможности восстановления?')){
       trash = [];
@@ -3772,6 +3977,14 @@ function buildStateObject(){
   const curStage = $("#process").value;
   const combined = new Map();
   tasks.forEach(x=>{ if(x && x.uid) combined.set(x.uid, x); });
+  if((!Array.isArray(allTasksFromState) || !allTasksFromState.length) && Array.isArray(lastRows) && lastRows.length){
+    const doneSet = new Set(doneTasks.map(d=>d.uid));
+    const aggregated = [];
+    STAGES.forEach(stage=>{
+      mapRows(lastRows, stage).forEach(rec=>{ if(rec && rec.uid && !doneSet.has(rec.uid)) aggregated.push(rec); });
+    });
+    allTasksFromState = aggregated;
+  }
   if(Array.isArray(allTasksFromState) && allTasksFromState.length){
     allTasksFromState.forEach(x=>{
       if(!x || !x.uid || x.stage === curStage) return;
@@ -4345,6 +4558,7 @@ function loadStageFromLS(stage){
 
 function persistNow(stageOverride, opts={}){
   const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
+  if(!userCanEdit() && source !== 'system') return;
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
     const stateObj = buildStateObject();
@@ -4492,12 +4706,18 @@ function persistNow(stageOverride, opts={}){
       remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID })
         .catch(err=>{
           console.warn('remote push failed', err);
+          const hadLocal = enableLocalStore;
+          if(!hadLocal){
+            applyStoragePrefs({ local:true });
+          }
+          const detail = err && err.message ? ` (${err.message})` : '';
           showToast({
             title:'Ошибка синхронизации',
-            message:'Не удалось сохранить изменения в базе данных. Проверь подключение и попробуйте снова.',
+            message:`Не удалось сохранить изменения в базе данных${detail}. SQL недоступна, включено локальное резервное сохранение.`,
             actions:[{label:'OK', handler:(el)=> el.remove()}]
           });
-          setDataMode(enableLocalStore ? 'hybrid' : 'session');
+          const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+          setDataMode(modeAfter);
         });
       setDataMode('remote');
     }else{
@@ -4512,7 +4732,11 @@ function persistNow(stageOverride, opts={}){
   }
 }
 
-function persistMaybe(reason='data', opts={}){ if(reason==='ui'){ saveUiPreferences(); return; } if(autosaveOn) persistNow(undefined, opts); }
+function persistMaybe(reason='data', opts={}){
+  if(reason==='ui'){ saveUiPreferences(); return; }
+  if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
+  if(autosaveOn || opts.force) persistNow(undefined, opts);
+}
 
 /* =========
    ПЕРЕСЧЁТ
@@ -4632,7 +4856,13 @@ function openExceptions(){
   $("#exceptionsText").value = lines;
   $("#exceptionsDlg").showModal();
 }
-function applyExceptions(){ exceptions = parseKVLines($("#exceptionsText").value,'exc'); $("#exceptionsDlg").close(); recompute(); persistMaybe(); }
+function applyExceptions(){
+  if(!userCanEdit()){ notifyReadOnly(); $("#exceptionsDlg").close(); return; }
+  exceptions = parseKVLines($("#exceptionsText").value,'exc');
+  $("#exceptionsDlg").close();
+  recompute();
+  persistMaybe();
+}
 
 function openReserve(){
   const lines = [...reserves.entries()].map(([ds,val])=> `${ds} (${String(val).replace('.',',')})`).join('\n');
@@ -4655,7 +4885,13 @@ function renderReserveDiag(text){
   }).filter(Boolean);
   $("#reserveDiag").innerHTML = arr.length? arr.map(x=>`<div>${x.ds}: Будет применено <b>${x.will}</b> ч (из ${x.want}), исключение: ${x.excl} ч, ёмкость: ${x.capDay} ч</div>`).join('') : '';
 }
-function applyReserve(){ reserves = parseKVLines($("#reserveText").value,'res'); $("#reserveDlg").close(); recompute(); persistMaybe(); }
+function applyReserve(){
+  if(!userCanEdit()){ notifyReadOnly(); $("#reserveDlg").close(); return; }
+  reserves = parseKVLines($("#reserveText").value,'res');
+  $("#reserveDlg").close();
+  recompute();
+  persistMaybe();
+}
 
 // Безопасное переключение передела c загрузкой сохранённого состояния
 function switchProcess(newProc){
@@ -4665,7 +4901,7 @@ function switchProcess(newProc){
   const prev = currentProc;
   if(prev && prev !== newProc){
     if(tasks.length) rememberStageOrder(prev);
-    persistNow(prev);
+    if(userCanEdit()) persistNow(prev);
   }
 
   // пытаемся загрузить задачи ИЗ localStorage для newProc
@@ -4698,7 +4934,7 @@ function switchProcess(newProc){
   sortBySavedOrder(tasks, newProc);
   currentProc = newProc;
   adjustUIForProcess(newProc);
-  if(!hadOrder && document.querySelector('#autoOptimize')?.checked){
+  if(userCanEdit() && !hadOrder && document.querySelector('#autoOptimize')?.checked){
     optimizeQueue();
   }else{
     recompute();
@@ -4752,8 +4988,18 @@ function wireHandlers(){
     });
   }
 
+  $$('input[name="accessMode"]').forEach(radio=>{
+    radio.checked = radio.value === accessMode;
+    radio.addEventListener('change', e=>{
+      if(e.target.checked){
+        setAccessMode(e.target.value, {announce:true});
+      }
+    });
+  });
+
   // импорт CSV
   $("#file").addEventListener('change', async e=>{
+    if(!userCanEdit()){ e.target.value=''; notifyReadOnly(); return; }
     const f=e.target.files[0];
     await importFile(f);
     e.target.value='';
@@ -4762,6 +5008,7 @@ function wireHandlers(){
   // экспорт / импорт состояния
   $("#exportCSV").addEventListener('click', exportStateCSV);
   $("#stateFile").addEventListener('change', async e=>{
+    if(!userCanEdit()){ e.target.value=''; notifyReadOnly(); return; }
     const f=e.target.files[0];
     if(f) await importStateFile(f);
     e.target.value='';
@@ -4775,12 +5022,13 @@ C2;P1;Гибка;—;—;—;—;ORD-001;0;10;0;0;0;—;Клиент А;07.09.20
 P2;;Родитель B;Производство;Ожидание;—;3;ORD-002;3;0;1;0;2;—;Клиент Б;09.09.2025;12.09.2025;2025-09-14 12:00
 C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.2025;10.09.2025;`;
   $("#loadExample").addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
     lastRows = parseCSVText(exampleCSV);
     const doneSet = new Set(doneTasks.map(d=> d.uid));
-	tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
-	sortTasksByStart();
-	rememberStageOrder();
-	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+        tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
+        sortTasksByStart();
+        rememberStageOrder();
+        if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
     $("#file").value='';
   });
 
@@ -4796,15 +5044,19 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   
   // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
   $("#parallelOps").addEventListener('input', e=>{
+    if(!userCanEdit()){ e.target.value = String(parallelByProc[$("#process").value] ?? DEFAULT_PARALLEL[$("#process").value] ?? 3); notifyReadOnly(); return; }
     const v = Math.max(1, parseInt(e.target.value, 10) || 1);
-    parallelByProc[$("#process").value] = v;  // сохраняем для текущего передела
-    recompute(); 
-    persistMaybe();                           // чтобы осталось после переключения вкладок
+    parallelByProc[$("#process").value] = v;
+    recompute();
+    persistMaybe();
   });
 
   // сортировка/оптимизация
   $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
-  $("#optimizeBtn").addEventListener('click', optimizeQueue);
+  $("#optimizeBtn").addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    optimizeQueue();
+  });
 
   // готовые
   $("#showDone").addEventListener('click', ()=>{ renderDoneList(); $("#doneDlg").showModal(); });
@@ -4815,17 +5067,19 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // добавить ручной заказ
   $("#addOrder").addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
     const uid='user-'+Date.now()+'::'+$("#process").value;
     const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     tasks.push(t);
-	rememberStageOrder();
-	recompute();
-	persistMaybe();
+        rememberStageOrder();
+        recompute();
+        persistMaybe();
 
   });
 
   // вместимость и фильтр
   $("#capacity").addEventListener('input', ()=>{
+    if(!userCanEdit()){ const p=$("#process").value; $("#capacity").value = String(capByProc[p] ?? DEFAULT_CAP[p] ?? 15); notifyReadOnly(); return; }
     const p=$("#process").value;
     const v=Number($("#capacity").value)|| capByProc[p] || 15;
     capByProc[p]=v;
@@ -4834,6 +5088,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
   
   document.getElementById('parallelOps').addEventListener('input', e=>{
+    if(!userCanEdit()){ e.target.value = String(parallelByProc[document.getElementById('process').value] ?? 3); notifyReadOnly(); return; }
     const p = document.getElementById('process').value;
     const v = Math.max(1, parseInt(e.target.value||'3',10));
     parallelByProc[p] = v;
@@ -4845,7 +5100,8 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // очистка
   document.getElementById('clearAll')?.addEventListener('click', ()=>{
-	if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+        if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
 
 	tasks = [];
 	doneTasks = [];
@@ -4888,12 +5144,25 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false}); });
-  $("#shiftOnProgress").addEventListener('change', e=>{ shiftOnProgress = !!e.target.checked; persistMaybe(); });
-  $("#saveBtn").addEventListener('click', ()=>{ persistNow(undefined,{force:true}); alert('Состояние сохранено.'); });
+  $("#autosave").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
+    autosaveOn = !!e.target.checked;
+    if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false});
+  });
+  $("#shiftOnProgress").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
+    shiftOnProgress = !!e.target.checked;
+    persistMaybe();
+  });
+  $("#saveBtn").addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    persistNow(undefined,{force:true});
+    alert('Состояние сохранено.');
+  });
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
     persistMaybe();
   });
@@ -4923,6 +5192,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // откат импорта — выборочно
   $("#undoImport").addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
     if(!lastSnapshotJson){ alert('Нет снимка для отката. Сначала примените импорт с изменениями.'); return; }
 
     const prev = lastDiffApplied;
@@ -5026,8 +5296,9 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	  renderOverview();
 	});
 	// Общий маршрут — Сохранить/Сброс
-	$('#ovApply').addEventListener('click', ()=>{
-	  // коммитим рабочие правки в постоянные overrides
+        $('#ovApply').addEventListener('click', ()=>{
+          if(!userCanEdit()){ notifyReadOnly(); return; }
+          // коммитим рабочие правки в постоянные overrides
 	  for(const [k,ov] of routeEditsWorking.entries()){
 		routeOverrides.set(k, {start:ov.start||null, end:('end' in ov)? (ov.end||null): null});
 		const [pid, st] = k.split('::');
@@ -5051,6 +5322,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         $('#logBtn').addEventListener('click', ()=>{ renderLogList(); clearLogAttention(); $('#logDlg').showModal(); });
         $('#logClose').addEventListener('click', ()=> $('#logDlg').close());
         $('#logClear').addEventListener('click', ()=>{
+          if(!userCanEdit()){ notifyReadOnly(); return; }
           if(!confirm('Очистить журнал изменений?')) return;
           activityLog = [];
           stateMeta.history = [];
@@ -5084,6 +5356,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
               remBox.disabled = !remoteBridge.hasRemote;
               remBox.parentElement?.classList.toggle('muted', remBox.disabled);
             }
+            $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             refreshDataModeIndicator();
             $('#settingsDlg').showModal();
           });
@@ -5103,6 +5376,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   setupRealtimeSync();
   wireHandlers();
+  applyAccessMode();
   refreshDataModeIndicator();
   updateFreshnessUI();
   try{ localStorage.setItem(USER_ALIAS_KEY, userAlias); }catch(_){ }
