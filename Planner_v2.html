@@ -795,6 +795,266 @@ function mergeStageIntoAll(stage, stageTasks){
 }
 
 /* =========
+   СИНХРОНИЗАЦИЯ С БАЗОЙ
+========= */
+function detectRemoteAdapter(){
+  const candidates = [
+    window.plannerRemote,
+    window.plannerDB,
+    window.plannerBridge,
+    window.plannerBackend,
+    window.PlannerBridge,
+    window.PlannerDB,
+    window.backend?.planner,
+    window.backend?.plannerBridge,
+    window.external?.planner,
+    window.external?.Planner
+  ];
+  for(const cand of candidates){
+    if(!cand || typeof cand !== 'object') continue;
+    const hasLoader = ['loadState','getState','pullState','read','pull'].some(fn=> typeof cand[fn] === 'function');
+    const hasSaver  = ['saveState','setState','pushState','write','put'].some(fn=> typeof cand[fn] === 'function');
+    if(hasLoader || hasSaver) return cand;
+  }
+  return null;
+}
+
+function createRemoteBridge(){
+  const adapter = detectRemoteAdapter();
+  const endpoint = typeof window.PLANNER_STATE_ENDPOINT === 'string' && window.PLANNER_STATE_ENDPOINT.trim()
+    ? window.PLANNER_STATE_ENDPOINT.trim()
+    : '';
+  const pollInterval = Number(window.PLANNER_SYNC_INTERVAL) > 0
+    ? Number(window.PLANNER_SYNC_INTERVAL)
+    : REMOTE_POLL_INTERVAL;
+  const listeners = new Set();
+
+  const normalize = (value)=>{
+    if(!value) return null;
+    if(typeof value === 'string') return value;
+    if(typeof value === 'object'){
+      if('state' in value){
+        const state = value.state;
+        if(typeof state === 'string') return state;
+        try{ return JSON.stringify(state); }catch(_){ return null; }
+      }
+      try{ return JSON.stringify(value); }catch(_){ return null; }
+    }
+    return null;
+  };
+
+  const emit = (evt)=>{
+    listeners.forEach(cb=>{
+      try{ cb(evt); }catch(err){ console.warn('remote listener failed', err); }
+    });
+  };
+
+  if(adapter){
+    if(typeof adapter.onRemoteUpdate === 'function'){
+      try{ adapter.onRemoteUpdate(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('onRemoteUpdate hook failed', err); }
+    }else if(typeof adapter.onUpdate === 'function'){
+      try{ adapter.onUpdate(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('onUpdate hook failed', err); }
+    }else if(typeof adapter.subscribe === 'function'){
+      try{ adapter.subscribe(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('subscribe hook failed', err); }
+    }else if(typeof adapter.addEventListener === 'function'){
+      try{ adapter.addEventListener('remote-update', ev=> emit({type:'remote-update', data:ev?.detail ?? ev?.data ?? ev})); }
+      catch(err){ console.warn('addEventListener hook failed', err); }
+    }
+  }
+
+  async function pull(){
+    if(adapter){
+      const loader = adapter.loadState || adapter.getState || adapter.pullState || adapter.read || adapter.pull;
+      if(typeof loader === 'function'){
+        try{ return normalize(await loader.call(adapter)); }catch(err){ console.warn('remote load failed', err); }
+      }
+    }
+    if(endpoint){
+      try{
+        const res = await fetch(endpoint, { method:'GET', headers:{ 'Accept':'application/json,text/plain' } });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        return text || null;
+      }catch(err){ console.warn('endpoint load failed', err); }
+    }
+    return null;
+  }
+
+  async function push(payload, meta){
+    if(!payload) return false;
+    if(adapter){
+      const saver = adapter.saveState || adapter.setState || adapter.pushState || adapter.write || adapter.put;
+      if(typeof saver === 'function'){
+        try{ await saver.call(adapter, payload, meta); return true; }
+        catch(err){ console.warn('remote save failed', err); }
+      }
+    }
+    if(endpoint){
+      try{
+        const res = await fetch(endpoint, {
+          method:'PUT',
+          headers:{ 'Content-Type':'application/json' },
+          body: payload
+        });
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        return true;
+      }catch(err){ console.warn('endpoint save failed', err); }
+    }
+    return false;
+  }
+
+  function subscribe(cb){
+    if(typeof cb !== 'function') return ()=>{};
+    listeners.add(cb);
+    return ()=> listeners.delete(cb);
+  }
+
+  return {
+    hasRemote: !!adapter || !!endpoint,
+    pull,
+    push,
+    subscribe,
+    pollInterval
+  };
+}
+
+function simpleHash(str){
+  if(!str) return '';
+  let hash = 0;
+  for(let i=0;i<str.length;i++){
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16);
+}
+
+function readLocalSnapshot(){
+  try{ return localStorage.getItem(LS_KEY); }catch(_){ return null; }
+}
+
+async function fetchLatestFromRemote(opts={}){
+  if(!remoteBridge.hasRemote) return;
+  try{
+    const raw = await remoteBridge.pull();
+    if(raw){
+      applyStateFromExternal(raw, opts);
+    }
+  }catch(err){ console.warn('fetchLatestFromRemote failed', err); }
+}
+
+function startRemotePolling(){
+  if(!remoteBridge.hasRemote) return;
+  const interval = remoteBridge.pollInterval || REMOTE_POLL_INTERVAL;
+  if(remotePollTimer) clearTimeout(remotePollTimer);
+  const tick = async()=>{
+    try{
+      const raw = await remoteBridge.pull();
+      if(raw){
+        const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+        const fingerprint = simpleHash(text);
+        if(fingerprint && fingerprint !== lastAppliedRemoteFingerprint){
+          applyStateFromExternal(raw, {preserveProcess:true});
+        }
+      }
+    }catch(err){ console.warn('remote poll tick failed', err); }
+    finally{
+      remotePollTimer = setTimeout(tick, interval);
+    }
+  };
+  tick();
+}
+
+function applyStateFromExternal(raw, opts={}){
+  try{
+    if(!raw) return;
+    let parsed = null;
+    if(typeof raw === 'string'){
+      parsed = JSON.parse(raw);
+    }else if(raw && typeof raw === 'object'){
+      if('state' in raw){
+        return applyStateFromExternal(raw.state, { ...opts, meta: raw.meta || opts.meta || null });
+      }
+      parsed = raw;
+    }
+    if(!parsed || typeof parsed !== 'object') return;
+
+    const lockedSet = new Set(parsed.locked || []);
+    const grouped = new Map();
+    (parsed.t || []).forEach(task=>{
+      if(!task || task.stage==null) return;
+      const arr = grouped.get(task.stage) || [];
+      arr.push(normalizeTaskForDiff(task, arr.length, lockedSet));
+      grouped.set(task.stage, arr);
+    });
+
+    const diffs = [];
+    grouped.forEach((snapshot, stage)=>{
+      const prev = lastSyncedSnapshots.get(stage) || [];
+      const diff = computeDiff(prev, snapshot);
+      if(diffHasChanges(diff)) diffs.push({stage, diff});
+    });
+
+    const jsonText = typeof raw === 'string' ? raw : JSON.stringify(parsed);
+    const fingerprint = simpleHash(jsonText);
+    const skipToasts = !!(opts.skipToasts || (fingerprint && fingerprint === lastPushedFingerprint));
+    lastAppliedRemoteFingerprint = fingerprint;
+    if(fingerprint && fingerprint === lastPushedFingerprint){
+      lastPushedFingerprint = '';
+    }
+
+    if(remoteBridge.hasRemote){
+      try{ localStorage.setItem(LS_KEY, jsonText); }catch(_){ /* ignore */ }
+    }
+
+    restoreState(parsed, { preserveProcess: opts.preserveProcess !== undefined ? opts.preserveProcess : true });
+
+    if(!skipToasts && diffs.length){
+      const authors = parsed.meta?.lastAuthors || {};
+      diffs.forEach(({stage, diff})=>{
+        const info = authors[stage];
+        const who = info?.name || info?.user || info?.session || 'Пользователь';
+        showToast({
+          title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
+          message: `${who}: ${summarizeDiff(diff)}`,
+          actions:[
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff)},
+            {label:'OK', handler:(el)=> el.remove()}
+          ]
+        });
+      });
+    }
+  }catch(err){ console.warn('applyStateFromExternal failed', err); }
+}
+
+async function bootstrapState(){
+  let loaded = null;
+  if(remoteBridge.hasRemote){
+    try{ loaded = await remoteBridge.pull(); }
+    catch(err){ console.warn('initial remote load failed', err); }
+  }
+  if(!loaded){
+    loaded = readLocalSnapshot();
+  }
+  if(loaded){
+    applyStateFromExternal(loaded, { skipToasts:true, preserveProcess:false });
+  }else{
+    const st = $("#process").value;
+    currentProc = st;
+    adjustUIForProcess(st);
+    if(!NOHOUR_STAGES.has(st)){
+      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
+    }else{
+      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
+    }
+    const prefs = loadUiPreferences();
+    if(prefs.filter) $("#ganttFilter").value = prefs.filter;
+    recompute();
+  }
+  if(remoteBridge.hasRemote){
+    startRemotePolling();
+  }
+}
+
+/* =========
    СОСТОЯНИЕ
 ========= */
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
@@ -803,6 +1063,7 @@ const USER_ALIAS_KEY = 'yougile_planner_user_alias_v2';
 const UI_PREF_KEY = 'yougile_planner_ui_v2';
 const SYNC_PING_KEY = 'yougile_planner_sync_ping_v1';
 const LOG_LIMIT = 200;
+const REMOTE_POLL_INTERVAL = 4000;
 const SESSION_ID = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
   : ('sess-'+Math.random().toString(16).slice(2,12));
@@ -834,6 +1095,10 @@ let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
 let broadcastChannel = null;
 let suppressIncoming = false;
+let remotePollTimer = null;
+let lastAppliedRemoteFingerprint = '';
+let lastPushedFingerprint = '';
+const remoteBridge = createRemoteBridge();
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -3477,9 +3742,13 @@ function announceStateUpdate(payload){
 function handleIncomingSyncMessage(msg){
   if(!msg || msg.session === SESSION_ID) return;
   if(msg.type === 'state-update'){
-    const raw = localStorage.getItem(LS_KEY);
-    if(raw && !suppressIncoming){
-      restoreState(raw, {preserveProcess:true});
+    if(remoteBridge.hasRemote){
+      fetchLatestFromRemote({preserveProcess:true});
+    }else{
+      const raw = readLocalSnapshot();
+      if(raw && !suppressIncoming){
+        restoreState(raw, {preserveProcess:true});
+      }
     }
     if(msg.diff){
       markLogAttention();
@@ -3504,11 +3773,25 @@ function setupRealtimeSync(){
   }
   window.addEventListener('storage', ev=>{
     if(ev.key === LS_KEY && !suppressIncoming){
-      if(ev.newValue) restoreState(ev.newValue, {preserveProcess:true});
+      if(remoteBridge.hasRemote){
+        fetchLatestFromRemote({preserveProcess:true});
+      }else if(ev.newValue){
+        restoreState(ev.newValue, {preserveProcess:true});
+      }
     }else if(ev.key === SYNC_PING_KEY){
       try{ const data = JSON.parse(ev.newValue||'null'); handleIncomingSyncMessage(data); }catch(_){ }
     }
   });
+  if(remoteBridge.hasRemote){
+    remoteBridge.subscribe(evt=>{
+      const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
+      if(payload){
+        applyStateFromExternal(payload, {preserveProcess:true});
+      }else{
+        fetchLatestFromRemote({preserveProcess:true});
+      }
+    });
+  }
 }
 
 function restoreState(json, opts={}){
@@ -3652,7 +3935,7 @@ function restoreState(json, opts={}){
 
 function loadStageFromLS(stage){
   try{
-    const raw = localStorage.getItem(LS_KEY);
+    const raw = readLocalSnapshot();
     if(!raw) return null;
     const s = JSON.parse(raw);
 	
@@ -3695,7 +3978,7 @@ function persistNow(stageOverride, opts={}){
     const stateObj = buildStateObject();
     stateObj.process = curStage;
 
-    const rawPrev = localStorage.getItem(LS_KEY);
+    const rawPrev = readLocalSnapshot();
     let prev = null;
     let prevTasks = [];
     let prevOrders = [];
@@ -3814,15 +4097,34 @@ function persistNow(stageOverride, opts={}){
     };
 
     const payload = JSON.stringify(stateObj);
+    const fingerprint = simpleHash(payload);
+    lastAppliedRemoteFingerprint = fingerprint;
+    lastPushedFingerprint = fingerprint;
     suppressIncoming = true;
     try{
-      localStorage.setItem(LS_KEY, payload);
+      if(!remoteBridge.hasRemote){
+        localStorage.setItem(LS_KEY, payload);
+      }else{
+        try{ localStorage.setItem(LS_KEY, payload); }catch(_){ /* ignore cache issues */ }
+      }
     }finally{
       suppressIncoming = false;
     }
 
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
+
+    if(remoteBridge.hasRemote){
+      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID })
+        .catch(err=>{
+          console.warn('remote push failed', err);
+          showToast({
+            title:'Ошибка синхронизации',
+            message:'Не удалось сохранить изменения в базе данных. Проверь подключение и попробуйте снова.',
+            actions:[{label:'OK', handler:(el)=> el.remove()}]
+          });
+        });
+    }
 
     if(hadChanges && announce){
       announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
@@ -4395,22 +4697,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   wireHandlers();
   updateFreshnessUI();
   try{ localStorage.setItem(USER_ALIAS_KEY, userAlias); }catch(_){ }
-  const saved=localStorage.getItem(LS_KEY);
-  if (saved) {
-    restoreState(saved);
-  } else {
-    const st = $("#process").value;
-	currentProc = st;
-    adjustUIForProcess(st);
-    if (!NOHOUR_STAGES.has(st)) {
-      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
-    } else {
-      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
-    }
-    const prefs = loadUiPreferences();
-    if(prefs.filter) $("#ganttFilter").value = prefs.filter;
-    recompute();
-  }
+  bootstrapState();
 });
 </script>
 </body>
