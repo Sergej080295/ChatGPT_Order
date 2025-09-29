@@ -777,6 +777,7 @@ const DATA_MODE_LABELS = {
 };
 let enableLocalStore = true;
 let enableRemoteStore = false;
+let remotePreferenceRequested = true;
 let currentDataOrigin = 'unknown';
 let lastSerializedState = '';
 let remoteSubscriptionStop = null;
@@ -853,14 +854,12 @@ function detectRemoteAdapter(){
 }
 
 function createRemoteBridge(){
-  const adapter = detectRemoteAdapter();
-  const endpoint = typeof window.PLANNER_STATE_ENDPOINT === 'string' && window.PLANNER_STATE_ENDPOINT.trim()
-    ? window.PLANNER_STATE_ENDPOINT.trim()
-    : '';
-  const pollInterval = Number(window.PLANNER_SYNC_INTERVAL) > 0
-    ? Number(window.PLANNER_SYNC_INTERVAL)
-    : REMOTE_POLL_INTERVAL;
   const listeners = new Set();
+  const availabilityListeners = new Set();
+  const adapterCleanups = new WeakMap();
+  let adapterRef = null;
+  let endpointRef = '';
+  let lastAvailability = false;
 
   const normalize = (value)=>{
     if(!value) return null;
@@ -876,26 +875,128 @@ function createRemoteBridge(){
     return null;
   };
 
+  const toAbsolute = (value)=>{
+    if(!value) return '';
+    try{ return new URL(value, window.location.href).toString(); }
+    catch(_){
+      try{ return new URL(value, window.location.origin).toString(); }
+      catch(_2){ return value; }
+    }
+  };
+
+  const readEndpoint = ()=>{
+    const globalVal = typeof window.PLANNER_STATE_ENDPOINT === 'string' ? window.PLANNER_STATE_ENDPOINT : '';
+    const doc = typeof document !== 'undefined' ? document : null;
+    const root = doc?.documentElement;
+    const body = doc?.body;
+    const candidates = [
+      globalVal,
+      root?.dataset?.plannerStateEndpoint,
+      root?.dataset?.plannerEndpoint,
+      body?.dataset?.plannerStateEndpoint,
+      body?.dataset?.plannerEndpoint
+    ];
+    for(const raw of candidates){
+      if(typeof raw === 'string' && raw.trim()) return toAbsolute(raw.trim());
+    }
+    if(doc){
+      const meta = doc.querySelector('meta[name="planner-state-endpoint" i], meta[name="planner-endpoint" i]');
+      if(meta?.content && meta.content.trim()) return toAbsolute(meta.content.trim());
+      const link = doc.querySelector('link[rel="planner-state" i], link[data-planner-state-endpoint], link[data-planner-endpoint]');
+      if(link){
+        const href = link.getAttribute('href');
+        if(typeof href === 'string' && href.trim()) return toAbsolute(href.trim());
+      }
+      const script = doc.querySelector('script[data-planner-state-endpoint], script[data-planner-endpoint]');
+      if(script){
+        const dataVal = script.dataset.plannerStateEndpoint || script.dataset.plannerEndpoint;
+        if(typeof dataVal === 'string' && dataVal.trim()) return toAbsolute(dataVal.trim());
+      }
+    }
+    return '';
+  };
+
   const emit = (evt)=>{
     listeners.forEach(cb=>{
       try{ cb(evt); }catch(err){ console.warn('remote listener failed', err); }
     });
   };
 
-  if(adapter){
-    if(typeof adapter.onRemoteUpdate === 'function'){
-      try{ adapter.onRemoteUpdate(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('onRemoteUpdate hook failed', err); }
-    }else if(typeof adapter.onUpdate === 'function'){
-      try{ adapter.onUpdate(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('onUpdate hook failed', err); }
-    }else if(typeof adapter.subscribe === 'function'){
-      try{ adapter.subscribe(data=> emit({type:'remote-update', data})); }catch(err){ console.warn('subscribe hook failed', err); }
-    }else if(typeof adapter.addEventListener === 'function'){
-      try{ adapter.addEventListener('remote-update', ev=> emit({type:'remote-update', data:ev?.detail ?? ev?.data ?? ev})); }
-      catch(err){ console.warn('addEventListener hook failed', err); }
+  const attachAdapter = (adapter)=>{
+    if(!adapter || adapterCleanups.has(adapter)) return;
+    const handler = data=> emit({ type:'remote-update', data });
+    let cleanup = null;
+    try{
+      if(typeof adapter.onRemoteUpdate === 'function'){
+        cleanup = adapter.onRemoteUpdate(handler);
+      }else if(typeof adapter.onUpdate === 'function'){
+        cleanup = adapter.onUpdate(handler);
+      }else if(typeof adapter.subscribe === 'function'){
+        cleanup = adapter.subscribe(handler);
+      }else if(typeof adapter.addEventListener === 'function'){
+        const fn = ev => handler(ev?.detail ?? ev?.data ?? ev);
+        adapter.addEventListener('remote-update', fn);
+        cleanup = ()=>{
+          try{ adapter.removeEventListener('remote-update', fn); }catch(_){ /* ignore */ }
+        };
+      }
+    }catch(err){ console.warn('remote listener wiring failed', err); }
+    if(typeof cleanup !== 'function') cleanup = null;
+    adapterCleanups.set(adapter, cleanup);
+  };
+
+  const detachAdapter = (adapter)=>{
+    if(!adapter) return;
+    const cleanup = adapterCleanups.get(adapter);
+    if(typeof cleanup === 'function'){
+      try{ cleanup(); }catch(err){ console.warn('remote listener cleanup failed', err); }
     }
-  }
+    adapterCleanups.delete(adapter);
+  };
+
+  const computeAvailability = ()=>{
+    const prevAdapter = adapterRef;
+
+    const nextAdapter = detectRemoteAdapter();
+    if(nextAdapter !== adapterRef){
+      if(adapterRef) detachAdapter(adapterRef);
+      adapterRef = nextAdapter;
+      if(nextAdapter) attachAdapter(nextAdapter);
+    }else if(nextAdapter){
+      attachAdapter(nextAdapter);
+    }
+
+    const nextEndpoint = readEndpoint();
+    endpointRef = nextEndpoint || '';
+
+    const hasRemoteNow = !!(adapterRef || endpointRef);
+    if(hasRemoteNow !== lastAvailability){
+      lastAvailability = hasRemoteNow;
+      availabilityListeners.forEach(cb=>{
+        try{ cb(hasRemoteNow); }catch(err){ console.warn('remote availability listener failed', err); }
+      });
+    }
+    return hasRemoteNow;
+  };
+
+  const getAdapter = ()=>{
+    computeAvailability();
+    return adapterRef;
+  };
+
+  const getEndpoint = ()=>{
+    computeAvailability();
+    return endpointRef;
+  };
+
+  const readPollInterval = ()=>{
+    const raw = Number(window.PLANNER_SYNC_INTERVAL);
+    return Number.isFinite(raw) && raw > 0 ? raw : REMOTE_POLL_INTERVAL;
+  };
 
   async function pull(){
+    const adapter = getAdapter();
+    const endpoint = getEndpoint();
     if(adapter){
       const loader = adapter.loadState || adapter.getState || adapter.pullState || adapter.read || adapter.pull;
       if(typeof loader === 'function'){
@@ -915,6 +1016,8 @@ function createRemoteBridge(){
 
   async function push(payload, meta){
     if(!payload) return false;
+    const adapter = getAdapter();
+    const endpoint = getEndpoint();
     if(adapter){
       const saver = adapter.saveState || adapter.setState || adapter.pushState || adapter.write || adapter.put;
       if(typeof saver === 'function'){
@@ -939,15 +1042,31 @@ function createRemoteBridge(){
   function subscribe(cb){
     if(typeof cb !== 'function') return ()=>{};
     listeners.add(cb);
+    computeAvailability();
     return ()=> listeners.delete(cb);
   }
 
+  function onAvailability(cb){
+    if(typeof cb !== 'function') return ()=>{};
+    availabilityListeners.add(cb);
+    try{ cb(computeAvailability()); }catch(err){ console.warn('remote availability listener failed', err); }
+    return ()=> availabilityListeners.delete(cb);
+  }
+
+  if(typeof window !== 'undefined' && typeof window.setInterval === 'function'){
+    window.setInterval(computeAvailability, 1500);
+    window.addEventListener('focus', computeAvailability);
+  }
+  computeAvailability();
+
   return {
-    hasRemote: !!adapter || !!endpoint,
+    get hasRemote(){ return computeAvailability(); },
     pull,
     push,
     subscribe,
-    pollInterval
+    onAvailability,
+    get pollInterval(){ return readPollInterval(); },
+    refresh: computeAvailability
   };
 }
 
@@ -988,19 +1107,18 @@ function setDataMode(mode){
 }
 
 function loadStoragePrefs(){
-  let pref = { local:true, remote:remoteBridge.hasRemote };
+  let pref = { local:true, remote: remoteBridge.hasRemote };
   try{
     const raw = localStorage.getItem(SAVE_PREF_KEY);
     if(raw){
       const parsed = JSON.parse(raw);
       if(typeof parsed.local === 'boolean') pref.local = parsed.local;
-      if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
+      if(typeof parsed.remotePreferred === 'boolean') pref.remote = parsed.remotePreferred;
+      else if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
     }
   }catch(_){ /* ignore */ }
-  if(!remoteBridge.hasRemote) pref.remote = false;
   if(!pref.local && !pref.remote){
-    if(remoteBridge.hasRemote){ pref.remote = true; }
-    else { pref.local = true; }
+    pref.local = true;
   }
   return pref;
 }
@@ -1009,15 +1127,26 @@ function applyStoragePrefs(changes={}){
   const prevLocal = enableLocalStore;
   const prevRemote = enableRemoteStore;
   if('local' in changes) enableLocalStore = !!changes.local;
-  if('remote' in changes) enableRemoteStore = !!changes.remote && remoteBridge.hasRemote;
-  if(!remoteBridge.hasRemote) enableRemoteStore = false;
-  if(!enableLocalStore && !enableRemoteStore){
+  if('remote' in changes) remotePreferenceRequested = !!changes.remote;
+
+  if(!enableLocalStore && !remotePreferenceRequested){
     if(prevLocal){ enableLocalStore = true; }
-    else if(remoteBridge.hasRemote){ enableRemoteStore = true; }
-    else { enableLocalStore = true; }
+    else { remotePreferenceRequested = true; }
   }
-  const pref = { local: enableLocalStore, remote: enableRemoteStore };
-  try{ localStorage.setItem(SAVE_PREF_KEY, JSON.stringify(pref)); }catch(_){ /* ignore */ }
+
+  if(!remoteBridge.hasRemote && !enableLocalStore){
+    enableLocalStore = true;
+  }
+
+  try{
+    const pref = {
+      local: enableLocalStore,
+      remotePreferred: remotePreferenceRequested,
+      remote: remotePreferenceRequested
+    };
+    localStorage.setItem(SAVE_PREF_KEY, JSON.stringify(pref));
+  }catch(_){ /* ignore */ }
+
   if(!enableLocalStore && prevLocal){
     try{
       const existing = localStorage.getItem(LS_KEY);
@@ -1027,21 +1156,41 @@ function applyStoragePrefs(changes={}){
   }else if(enableLocalStore && !prevLocal && lastSerializedState){
     try{ localStorage.setItem(LS_KEY, lastSerializedState); }catch(_){ /* ignore */ }
   }
+
   const localBox = $("#storageLocal");
   if(localBox) localBox.checked = enableLocalStore;
+
+  const changeInfo = handleRemoteAvailabilityChange(remoteBridge.hasRemote, prevRemote);
+
+  if(changeInfo.changed){
+    updateRealtimeMode();
+    if(changeInfo.becameActive){
+      fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+    }else if(changeInfo.becameInactive){
+      setDataMode(enableLocalStore ? 'local' : 'session');
+    }
+  }else{
+    updateRealtimeMode();
+  }
+}
+
+function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStore){
+  const desiredRemote = !!hasRemote && !!remotePreferenceRequested;
+  const changed = desiredRemote !== prevRemote;
+  const changeInfo = {
+    changed,
+    becameActive: desiredRemote && !prevRemote,
+    becameInactive: !desiredRemote && prevRemote
+  };
+  enableRemoteStore = desiredRemote;
   const remoteBox = $("#storageRemote");
   if(remoteBox){
     remoteBox.checked = enableRemoteStore;
-    remoteBox.disabled = !remoteBridge.hasRemote;
+    remoteBox.disabled = !hasRemote;
     remoteBox.parentElement?.classList.toggle('muted', remoteBox.disabled);
   }
   refreshDataModeIndicator();
-  updateRealtimeMode();
-  if(enableRemoteStore && !prevRemote){
-    fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
-  }else if(!enableRemoteStore && prevRemote){
-    setDataMode(enableLocalStore ? 'local' : 'session');
-  }
+  return changeInfo;
 }
 
 function handleRemoteBridgeEvent(evt){
@@ -1283,7 +1432,8 @@ let lastPushedFingerprint = '';
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
 enableLocalStore = storagePref.local;
-enableRemoteStore = storagePref.remote;
+remotePreferenceRequested = storagePref.remote;
+enableRemoteStore = remoteBridge.hasRemote && remotePreferenceRequested;
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -3980,6 +4130,33 @@ function setupRealtimeSync(){
       }
     }else if(ev.key === SYNC_PING_KEY){
       try{ const data = JSON.parse(ev.newValue||'null'); handleIncomingSyncMessage(data); }catch(_){ }
+    }
+  });
+  remoteBridge.onAvailability(hasRemote=>{
+    const prevRemote = enableRemoteStore;
+    const changeInfo = handleRemoteAvailabilityChange(hasRemote, prevRemote);
+    if(!hasRemote && !enableLocalStore){
+      enableLocalStore = true;
+      const localBox = $("#storageLocal");
+      if(localBox) localBox.checked = true;
+      try{
+        const pref = {
+          local: enableLocalStore,
+          remotePreferred: remotePreferenceRequested,
+          remote: remotePreferenceRequested
+        };
+        localStorage.setItem(SAVE_PREF_KEY, JSON.stringify(pref));
+      }catch(_){ /* ignore */ }
+    }
+    if(changeInfo.changed){
+      updateRealtimeMode();
+      if(changeInfo.becameActive){
+        fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+      }else if(changeInfo.becameInactive){
+        setDataMode(enableLocalStore ? 'local' : 'session');
+      }
+    }else{
+      refreshDataModeIndicator();
     }
   });
   updateRealtimeMode();
