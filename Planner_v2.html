@@ -12,7 +12,8 @@
 
   /* размеры */
   --leftWidth: 1160px;       /* Широкий список — влезают все колонки */
-  --labelW: 300px;           /* Левый столбец Ганта */
+  --orderPaneWidth: 320px;   /* Общий столбец «Заказ» */
+  --labelW: var(--orderPaneWidth);           /* Левый столбец Ганта */
   --dayWidth: 94px;          /* День в Ганте */
 
   /* цвета статусов */
@@ -187,7 +188,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 }
 
 #overview{border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.ov-wrap{display:grid;grid-template-columns:260px 1fr;max-height:min(calc(var(--gcell)*18+56px),calc(100vh - 260px))}
+.ov-wrap{display:grid;grid-template-columns:var(--orderPaneWidth) 1fr;max-height:min(calc(var(--gcell)*18+56px),calc(100vh - 260px))}
 .ov-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow:auto}
 .ov-right{display:flex;flex-direction:column;overflow:hidden}
 .ov-head{background:#fff;border-bottom:1px solid var(--line)}
@@ -330,18 +331,17 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
       <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
-      <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
       <label class="small session-label">Имя сеанса:
         <input id="userAlias" type="text" maxlength="48" placeholder="User">
       </label>
       <button id="saveBtn" class="btn small">Сохранить</button>
       <button id="logBtn" class="btn small ghost">Журнал</button>
+      <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
     </div>
     <div class="row small muted" id="freshnessRow" style="margin-left:auto;gap:16px">
       <span>CSV: <b id="freshnessCsv">—</b></span>
       <span>Ручные правки: <b id="freshnessManual">—</b></span>
     </div>
-        <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
   </div>
 </header>
 
@@ -510,6 +510,17 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 </div>
 
 <!-- Диалоги: Исключения / Бронь / Готовые / Маршрут / Превью дельты / Откат -->
+<dialog id="settingsDlg">
+  <h3 style="margin-top:0">Настройки</h3>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:8px">
+    <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
+    <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button id="settingsClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
 <dialog id="exceptionsDlg">
   <h3 style="margin:0 0 6px">Исключения календаря</h3>
   <p class="muted" style="margin-top:0">
@@ -735,6 +746,53 @@ const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
 
 const VERSION='v2025.09.22-rc2';
+const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
+
+function cloneTaskRecord(task){
+  if(!task) return null;
+  const copy = {
+    uid: task.uid,
+    orderId: task.orderId || '',
+    stage: task.stage || '',
+    childId: task.childId || '',
+    parentId: task.parentId || '',
+    hours: Number(task.hours)||0,
+    extraHours: Number(task.extraHours)||0,
+    startDate: task.startDate ? new Date(task.startDate) : null,
+    endDate: task.endDate ? new Date(task.endDate) : null,
+    startMissing: !!task.startMissing,
+    endMissing: !!task.endMissing,
+    state: task.state || '',
+    status: task.status || '',
+    useReserve: !!task.useReserve,
+    progress: Number(task.progress)||0,
+    origStartDate: task.origStartDate ? new Date(task.origStartDate) : null,
+    route: {},
+    isUserNew: !!task.isUserNew,
+    isNew: !!task.isNew
+  };
+  STAGES.forEach(st=>{
+    const seg = task.route?.[st];
+    if(seg){
+      copy.route[st] = {
+        hours: Number(seg.hours)||0,
+        start: seg.start ? new Date(seg.start) : null,
+        end: seg.end ? new Date(seg.end) : null
+      };
+    } else {
+      copy.route[st] = null;
+    }
+  });
+  return copy;
+}
+
+function mergeStageIntoAll(stage, stageTasks){
+  const others = Array.isArray(allTasksFromState)
+    ? allTasksFromState.filter(t=>t && t.stage !== stage)
+    : [];
+  const clones = stageTasks.map(cloneTaskRecord).filter(Boolean);
+  allTasksFromState = others.concat(clones);
+}
 
 /* =========
    СОСТОЯНИЕ
@@ -1381,7 +1439,7 @@ function applyEditImmediate(cell, task){
     const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
     if(safe!==task.progress){
       task.progress=safe;
-      if($('#shiftOnProgress').checked){
+      if(shiftOnProgress){
         if(!task.origStartDate) task.origStartDate = task.startDate;
         if(+task.origStartDate===+task.startDate) task.origStartDate = task.startDate;
         task.startDate=today0();
@@ -1994,11 +2052,15 @@ function renderOvStats(orders){
     }
   }
   const box=$("#ovStats");
-  box.innerHTML = STAGES.filter(s=>ovFilter.has(s)).map(s=>`
-    <div class="ov-stat"><span class="k ${STAGE_CLASS[s]} badge">${STAGE_TITLE[s]}</span>
-      <span>заказов: <b>${sums[s].cnt}</b></span>
-      <span>часов: <b>${sums[s].h.toFixed(1)}</b></span>
-    </div>`).join('');
+  box.innerHTML = STAGES.filter(s=>ovFilter.has(s)).map(s=>{
+    const parts = [`<div class="ov-stat"><span class="k ${STAGE_CLASS[s]} badge">${STAGE_TITLE[s]}</span>`,
+      `<span>заказов: <b>${sums[s].cnt}</b></span>`];
+    if(!PARALLEL_STAGES.has(s)){
+      parts.push(`<span>часов: <b>${sums[s].h.toFixed(1)}</b></span>`);
+    }
+    parts.push('</div>');
+    return parts.join(' ');
+  }).join('');
 }
 
 /* рендер общего маршрута */
@@ -2573,7 +2635,7 @@ function exportStateCSV(){
   lines.push(`process${sep}${$("#process").value}`);
   lines.push(`ganttFilter${sep}${$("#ganttFilter").value}`);
   lines.push(`autosaveOn${sep}${autosaveOn?1:0}`);
-  lines.push(`shiftOnProgress${sep}${$("#shiftOnProgress").checked?1:0}`);
+  lines.push(`shiftOnProgress${sep}${shiftOnProgress?1:0}`);
   STAGES.forEach(s=> lines.push(`cap.${s}${sep}${capByProc[s] ?? DEFAULT_CAP[s] ?? ''}`));
   
   // параллельные операции для безчасовых этапов
@@ -2867,7 +2929,8 @@ function importStateFromCSV(text){
   autoOptimizeOn = !!Number(meta.autoOptimizeOn);
   $("#autoOptimize").checked = autoOptimizeOn;
 
-  $("#shiftOnProgress").checked = !!Number(meta.shiftOnProgress);
+  shiftOnProgress = !!Number(meta.shiftOnProgress);
+  $("#shiftOnProgress").checked = shiftOnProgress;
 
   const capNew = { ...DEFAULT_CAP };
   STAGES.forEach(s=>{
@@ -3103,7 +3166,17 @@ async function importRows(rows){
 ========= */
 const LS_KEY='yougile_planner_state_v5';
 function buildStateObject(){
-  const t = tasks.map(x=>({
+  const curStage = $("#process").value;
+  const combined = new Map();
+  tasks.forEach(x=>{ if(x && x.uid) combined.set(x.uid, x); });
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    allTasksFromState.forEach(x=>{
+      if(!x || !x.uid || x.stage === curStage) return;
+      if(!combined.has(x.uid)) combined.set(x.uid, cloneTaskRecord(x));
+    });
+  }
+  const mergedTasks = [...combined.values()];
+  const t = mergedTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
     hours:x.hours, extraHours:x.extraHours,
     startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
@@ -3167,7 +3240,7 @@ function buildStateObject(){
     lastManualTime,
     autosaveOn,
     autoOptimizeOn,
-    shiftOnProgress: $("#shiftOnProgress").checked,
+    shiftOnProgress,
     meta: {
       versions: versionsObj,
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
@@ -3749,6 +3822,7 @@ function persistNow(stageOverride, opts={}){
     }
 
     lastSyncedSnapshots.set(curStage, currentSnapshot);
+    mergeStageIntoAll(curStage, tasks);
 
     if(hadChanges && announce){
       announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
@@ -3918,6 +3992,16 @@ function switchProcess(newProc){
   const saved = loadStageFromLS(newProc);
   if(saved && saved.length){
     tasks = saved;
+  }else if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    const cached = allTasksFromState.filter(t=> t && t.stage === newProc).map(cloneTaskRecord).filter(Boolean);
+    if(cached.length){
+      tasks = cached;
+    }else if(lastRows && lastRows.length){
+      const doneSet = new Set(doneTasks.map(d=>d.uid));
+      tasks = mapRows(lastRows, newProc).filter(t=> !doneSet.has(t.uid));
+    }else{
+      tasks = tasks.filter(t=> t.stage === newProc);
+    }
   }else if(lastRows && lastRows.length){
     // fallback — из исходной выгрузки, исключая уже «Готовые»
     const doneSet = new Set(doneTasks.map(d=>d.uid));
@@ -4104,7 +4188,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // автосохранение / ручное сохранение
   $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false}); });
-  $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
+  $("#shiftOnProgress").addEventListener('change', e=>{ shiftOnProgress = !!e.target.checked; persistMaybe(); });
   $("#saveBtn").addEventListener('click', ()=>{ persistNow(undefined,{force:true}); alert('Состояние сохранено.'); });
   
   // Авто оптимизация
@@ -4283,6 +4367,21 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
 
         $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+
+        const settingsBtn = $('#settingsBtn');
+        if(settingsBtn){
+          settingsBtn.addEventListener('click', ()=>{
+            const shiftBox = $('#shiftOnProgress');
+            if(shiftBox) shiftBox.checked = shiftOnProgress;
+            const autoBox = $('#autoOptimize');
+            if(autoBox) autoBox.checked = autoOptimizeOn;
+            $('#settingsDlg').showModal();
+          });
+        }
+        const settingsClose = $('#settingsClose');
+        if(settingsClose){
+          settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
+        }
 
         $("#autosave").checked = autosaveOn;
 }
