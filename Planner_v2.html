@@ -35,6 +35,16 @@ h3{margin:0 0 10px;font-size:16px}
 .small{font-size:12px}
 .session-label{display:flex;align-items:center;gap:6px}
 .session-label input{border:1px solid #d1d5db;border-radius:6px;padding:2px 6px;font-size:12px;min-width:120px}
+.mode-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid #d1d5db;background:#f8fafc;color:#0f172a;line-height:1}
+.mode-pill::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#94a3b8}
+.mode-pill[data-mode="remote"]{background:#ecfdf5;border-color:#bbf7d0;color:#065f46}
+.mode-pill[data-mode="remote"]::before{background:#22c55e}
+.mode-pill[data-mode="local"]{background:#fef3c7;border-color:#fcd34d;color:#854d0e}
+.mode-pill[data-mode="local"]::before{background:#f59e0b}
+.mode-pill[data-mode="session"]{background:#e0f2fe;border-color:#bae6fd;color:#0369a1}
+.mode-pill[data-mode="session"]::before{background:#0284c7}
+.mode-pill[data-mode="hybrid"]{background:#ede9fe;border-color:#c4b5fd;color:#5b21b6}
+.mode-pill[data-mode="hybrid"]::before{background:#7c3aed}
 
 #toastContainer{position:fixed;top:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:2000;pointer-events:none}
 .toast{background:#0f172a;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.2);display:flex;flex-direction:column;gap:8px;pointer-events:auto;min-width:240px;max-width:320px;transition:opacity .3s ease,transform .3s ease}
@@ -342,6 +352,10 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <span>CSV: <b id="freshnessCsv">—</b></span>
       <span>Ручные правки: <b id="freshnessManual">—</b></span>
     </div>
+    <div class="row small" id="dataModeRow" style="margin-left:auto;gap:8px;align-items:center">
+      <span class="muted">Источник данных:</span>
+      <span id="dataModeBadge" class="mode-pill" data-mode="unknown">—</span>
+    </div>
   </div>
 </header>
 
@@ -515,6 +529,12 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:8px">
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+  </div>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px">
+    <div class="muted small">Сохранение данных:</div>
+    <label class="small"><input type="checkbox" id="storageLocal" checked> Локально (браузер)</label>
+    <label class="small"><input type="checkbox" id="storageRemote" checked> SQL база</label>
+    <div class="small muted" id="storageModeHint">—</div>
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:12px">
     <button id="settingsClose" class="btn">Закрыть</button>
@@ -747,6 +767,19 @@ const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|
 
 const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
+const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
+const DATA_MODE_LABELS = {
+  remote:{label:'SQL база (онлайн)'},
+  local:{label:'Локальный кэш'},
+  session:{label:'Сеанс (память)'},
+  hybrid:{label:'Гибридные данные'},
+  unknown:{label:'—'}
+};
+let enableLocalStore = true;
+let enableRemoteStore = false;
+let currentDataOrigin = 'unknown';
+let lastSerializedState = '';
+let remoteSubscriptionStop = null;
 
 function cloneTaskRecord(task){
   if(!task) return null;
@@ -918,6 +951,127 @@ function createRemoteBridge(){
   };
 }
 
+function remoteSyncEnabled(){
+  return !!(remoteBridge.hasRemote && enableRemoteStore);
+}
+
+function refreshDataModeIndicator(){
+  const badge = $("#dataModeBadge");
+  const active = [];
+  if(enableLocalStore) active.push('локальный кэш');
+  if(remoteSyncEnabled()) active.push('SQL база');
+  else if(!remoteBridge.hasRemote) active.push('SQL (недоступно)');
+  else if(enableRemoteStore) active.push('SQL (отключено)');
+  if(!active.length) active.push('только текущий сеанс');
+  if(badge){
+    let mode = currentDataOrigin;
+    if((mode === 'remote' || mode === 'hybrid') && !remoteSyncEnabled()){
+      mode = enableLocalStore ? 'local' : 'session';
+    }
+    if(!mode || mode === 'unknown'){
+      mode = remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session');
+    }
+    const meta = DATA_MODE_LABELS[mode] || DATA_MODE_LABELS.unknown;
+    badge.dataset.mode = mode;
+    badge.textContent = meta.label;
+    badge.title = `${meta.label}. Активны: ${active.join(' + ')}`;
+  }
+  const hint = $("#storageModeHint");
+  if(hint){
+    hint.textContent = `Активны: ${active.join(' + ')}`;
+  }
+}
+
+function setDataMode(mode){
+  currentDataOrigin = mode || 'unknown';
+  refreshDataModeIndicator();
+}
+
+function loadStoragePrefs(){
+  let pref = { local:true, remote:remoteBridge.hasRemote };
+  try{
+    const raw = localStorage.getItem(SAVE_PREF_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(typeof parsed.local === 'boolean') pref.local = parsed.local;
+      if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
+    }
+  }catch(_){ /* ignore */ }
+  if(!remoteBridge.hasRemote) pref.remote = false;
+  if(!pref.local && !pref.remote){
+    if(remoteBridge.hasRemote){ pref.remote = true; }
+    else { pref.local = true; }
+  }
+  return pref;
+}
+
+function applyStoragePrefs(changes={}){
+  const prevLocal = enableLocalStore;
+  const prevRemote = enableRemoteStore;
+  if('local' in changes) enableLocalStore = !!changes.local;
+  if('remote' in changes) enableRemoteStore = !!changes.remote && remoteBridge.hasRemote;
+  if(!remoteBridge.hasRemote) enableRemoteStore = false;
+  if(!enableLocalStore && !enableRemoteStore){
+    if(prevLocal){ enableLocalStore = true; }
+    else if(remoteBridge.hasRemote){ enableRemoteStore = true; }
+    else { enableLocalStore = true; }
+  }
+  const pref = { local: enableLocalStore, remote: enableRemoteStore };
+  try{ localStorage.setItem(SAVE_PREF_KEY, JSON.stringify(pref)); }catch(_){ /* ignore */ }
+  if(!enableLocalStore && prevLocal){
+    try{
+      const existing = localStorage.getItem(LS_KEY);
+      if(existing){ lastSerializedState = existing; }
+      localStorage.removeItem(LS_KEY);
+    }catch(_){ /* ignore */ }
+  }else if(enableLocalStore && !prevLocal && lastSerializedState){
+    try{ localStorage.setItem(LS_KEY, lastSerializedState); }catch(_){ /* ignore */ }
+  }
+  const localBox = $("#storageLocal");
+  if(localBox) localBox.checked = enableLocalStore;
+  const remoteBox = $("#storageRemote");
+  if(remoteBox){
+    remoteBox.checked = enableRemoteStore;
+    remoteBox.disabled = !remoteBridge.hasRemote;
+    remoteBox.parentElement?.classList.toggle('muted', remoteBox.disabled);
+  }
+  refreshDataModeIndicator();
+  updateRealtimeMode();
+  if(enableRemoteStore && !prevRemote){
+    fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+  }else if(!enableRemoteStore && prevRemote){
+    setDataMode(enableLocalStore ? 'local' : 'session');
+  }
+}
+
+function handleRemoteBridgeEvent(evt){
+  const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
+  if(payload){
+    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote'});
+  }else{
+    fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+  }
+}
+
+function updateRealtimeMode(){
+  if(remoteSubscriptionStop){
+    if(!remoteSyncEnabled()){
+      try{ remoteSubscriptionStop(); }catch(_){ /* ignore */ }
+      remoteSubscriptionStop = null;
+    }
+  }
+  if(remoteSyncEnabled()){
+    if(!remoteSubscriptionStop){
+      try{ remoteSubscriptionStop = remoteBridge.subscribe(handleRemoteBridgeEvent); }
+      catch(_){ remoteSubscriptionStop = null; }
+    }
+    startRemotePolling();
+  }else{
+    if(remotePollTimer){ clearTimeout(remotePollTimer); remotePollTimer = null; }
+  }
+  refreshDataModeIndicator();
+}
+
 function simpleHash(str){
   if(!str) return '';
   let hash = 0;
@@ -928,36 +1082,50 @@ function simpleHash(str){
 }
 
 function readLocalSnapshot(){
-  try{ return localStorage.getItem(LS_KEY); }catch(_){ return null; }
+  if(enableLocalStore){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(raw){ lastSerializedState = raw; }
+      return raw;
+    }catch(_){
+      return lastSerializedState || null;
+    }
+  }
+  return lastSerializedState || null;
 }
 
 async function fetchLatestFromRemote(opts={}){
-  if(!remoteBridge.hasRemote) return;
+  if(!remoteSyncEnabled()) return;
   try{
     const raw = await remoteBridge.pull();
     if(raw){
-      applyStateFromExternal(raw, opts);
+      applyStateFromExternal(raw, { ...opts, origin:'remote' });
     }
   }catch(err){ console.warn('fetchLatestFromRemote failed', err); }
 }
 
 function startRemotePolling(){
-  if(!remoteBridge.hasRemote) return;
-  const interval = remoteBridge.pollInterval || REMOTE_POLL_INTERVAL;
   if(remotePollTimer) clearTimeout(remotePollTimer);
+  if(!remoteSyncEnabled()){ remotePollTimer = null; return; }
+  const interval = remoteBridge.pollInterval || REMOTE_POLL_INTERVAL;
   const tick = async()=>{
+    if(!remoteSyncEnabled()){ remotePollTimer = null; return; }
     try{
       const raw = await remoteBridge.pull();
       if(raw){
         const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
         const fingerprint = simpleHash(text);
         if(fingerprint && fingerprint !== lastAppliedRemoteFingerprint){
-          applyStateFromExternal(raw, {preserveProcess:true});
+          applyStateFromExternal(raw, {preserveProcess:true, origin:'remote'});
         }
       }
     }catch(err){ console.warn('remote poll tick failed', err); }
     finally{
-      remotePollTimer = setTimeout(tick, interval);
+      if(remoteSyncEnabled()){
+        remotePollTimer = setTimeout(tick, interval);
+      }else{
+        remotePollTimer = null;
+      }
     }
   };
   tick();
@@ -1001,11 +1169,20 @@ function applyStateFromExternal(raw, opts={}){
       lastPushedFingerprint = '';
     }
 
-    if(remoteBridge.hasRemote){
+    lastSerializedState = jsonText;
+    if(enableLocalStore){
       try{ localStorage.setItem(LS_KEY, jsonText); }catch(_){ /* ignore */ }
+    }else{
+      try{ localStorage.removeItem(LS_KEY); }catch(_){ /* ignore */ }
     }
 
     restoreState(parsed, { preserveProcess: opts.preserveProcess !== undefined ? opts.preserveProcess : true });
+
+    if(opts.origin){
+      setDataMode(opts.origin);
+    }else{
+      setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
+    }
 
     if(!skipToasts && diffs.length){
       const authors = parsed.meta?.lastAuthors || {};
@@ -1027,15 +1204,21 @@ function applyStateFromExternal(raw, opts={}){
 
 async function bootstrapState(){
   let loaded = null;
-  if(remoteBridge.hasRemote){
-    try{ loaded = await remoteBridge.pull(); }
+  let loadedFromRemote = false;
+  if(remoteSyncEnabled()){
+    try{ loaded = await remoteBridge.pull(); loadedFromRemote = !!loaded; }
     catch(err){ console.warn('initial remote load failed', err); }
   }
   if(!loaded){
     loaded = readLocalSnapshot();
+    if(loaded){ loadedFromRemote = false; }
   }
   if(loaded){
-    applyStateFromExternal(loaded, { skipToasts:true, preserveProcess:false });
+    applyStateFromExternal(loaded, {
+      skipToasts:true,
+      preserveProcess:false,
+      origin: loadedFromRemote ? 'remote' : (enableLocalStore ? 'local' : 'session')
+    });
   }else{
     const st = $("#process").value;
     currentProc = st;
@@ -1048,10 +1231,9 @@ async function bootstrapState(){
     const prefs = loadUiPreferences();
     if(prefs.filter) $("#ganttFilter").value = prefs.filter;
     recompute();
+    setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
   }
-  if(remoteBridge.hasRemote){
-    startRemotePolling();
-  }
+  updateRealtimeMode();
 }
 
 /* =========
@@ -1099,6 +1281,9 @@ let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
 const remoteBridge = createRemoteBridge();
+const storagePref = loadStoragePrefs();
+enableLocalStore = storagePref.local;
+enableRemoteStore = storagePref.remote;
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -3237,6 +3422,9 @@ function importStateFromCSV(text){
 
   recompute();
   persistMaybe();
+  if(!autosaveOn){
+    setDataMode(remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session'));
+  }
   alert('Состояние импортировано.');
 }
 
@@ -3488,13 +3676,22 @@ function buildStateObject(){
   lastKnownVersions.forEach((v,k)=>{ versionsObj[k] = v; });
   const history = activityLog.slice(-LOG_LIMIT);
 
+  const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
+  const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
+  const storageMeta = {
+    local: enableLocalStore,
+    remote: remoteSyncEnabled(),
+    remotePreferred: enableRemoteStore,
+    mode: currentDataOrigin
+  };
+
   return {
     routeOverrides: ro,
     t, done, trash: trashArr, exc, res,
 
     process: $("#process").value,
-    capByProc,
-    parallelByProc,
+    capByProc: capOut,
+    parallelByProc: parallelOut,
     filter: $("#ganttFilter").value,
     locked:[...lockedUids],
     orders:[...ordersByStage.entries()],
@@ -3511,7 +3708,8 @@ function buildStateObject(){
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history
+      history,
+      storage: storageMeta
     }
   };
 }
@@ -3742,12 +3940,13 @@ function announceStateUpdate(payload){
 function handleIncomingSyncMessage(msg){
   if(!msg || msg.session === SESSION_ID) return;
   if(msg.type === 'state-update'){
-    if(remoteBridge.hasRemote){
-      fetchLatestFromRemote({preserveProcess:true});
+    if(remoteSyncEnabled()){
+      fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
     }else{
       const raw = readLocalSnapshot();
       if(raw && !suppressIncoming){
         restoreState(raw, {preserveProcess:true});
+        setDataMode(enableLocalStore ? 'local' : 'session');
       }
     }
     if(msg.diff){
@@ -3773,25 +3972,17 @@ function setupRealtimeSync(){
   }
   window.addEventListener('storage', ev=>{
     if(ev.key === LS_KEY && !suppressIncoming){
-      if(remoteBridge.hasRemote){
-        fetchLatestFromRemote({preserveProcess:true});
-      }else if(ev.newValue){
+      if(remoteSyncEnabled()){
+        fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+      }else if(ev.newValue && enableLocalStore){
         restoreState(ev.newValue, {preserveProcess:true});
+        setDataMode('local');
       }
     }else if(ev.key === SYNC_PING_KEY){
       try{ const data = JSON.parse(ev.newValue||'null'); handleIncomingSyncMessage(data); }catch(_){ }
     }
   });
-  if(remoteBridge.hasRemote){
-    remoteBridge.subscribe(evt=>{
-      const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
-      if(payload){
-        applyStateFromExternal(payload, {preserveProcess:true});
-      }else{
-        fetchLatestFromRemote({preserveProcess:true});
-      }
-    });
-  }
+  updateRealtimeMode();
 }
 
 function restoreState(json, opts={}){
@@ -3882,6 +4073,9 @@ function restoreState(json, opts={}){
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
       history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
     };
+    if(s.meta?.storage?.mode){
+      currentDataOrigin = s.meta.storage.mode;
+    }
     activityLog = stateMeta.history.slice(-LOG_LIMIT);
     csvFreshnessStr = stateMeta.csvTimestamp || s.freshness || '—';
     manualFreshnessStr = stateMeta.manualTimestamp || s.lastManualTime || '—';
@@ -3931,6 +4125,7 @@ function restoreState(json, opts={}){
     recompute();
     updateTrashAttention?.();
   }catch(e){ console.warn('restoreState failed', e); }
+  refreshDataModeIndicator();
 }
 
 function loadStageFromLS(stage){
@@ -4016,6 +4211,7 @@ function persistNow(stageOverride, opts={}){
           showConflictDialog(conflict, stateMeta.lastAuthors?.[curStage]);
           if(prev){
             restoreState(prev, {preserveProcess:true});
+            setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
           }
         }
         return;
@@ -4102,10 +4298,11 @@ function persistNow(stageOverride, opts={}){
     lastPushedFingerprint = fingerprint;
     suppressIncoming = true;
     try{
-      if(!remoteBridge.hasRemote){
-        localStorage.setItem(LS_KEY, payload);
-      }else{
+      lastSerializedState = payload;
+      if(enableLocalStore){
         try{ localStorage.setItem(LS_KEY, payload); }catch(_){ /* ignore cache issues */ }
+      }else{
+        try{ localStorage.removeItem(LS_KEY); }catch(_){ /* ignore cache issues */ }
       }
     }finally{
       suppressIncoming = false;
@@ -4114,7 +4311,7 @@ function persistNow(stageOverride, opts={}){
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
 
-    if(remoteBridge.hasRemote){
+    if(remoteSyncEnabled()){
       remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID })
         .catch(err=>{
           console.warn('remote push failed', err);
@@ -4123,7 +4320,11 @@ function persistNow(stageOverride, opts={}){
             message:'Не удалось сохранить изменения в базе данных. Проверь подключение и попробуйте снова.',
             actions:[{label:'OK', handler:(el)=> el.remove()}]
           });
+          setDataMode(enableLocalStore ? 'hybrid' : 'session');
         });
+      setDataMode('remote');
+    }else{
+      setDataMode(enableLocalStore ? 'local' : 'session');
     }
 
     if(hadChanges && announce){
@@ -4357,6 +4558,23 @@ function wireHandlers(){
     e.target.value = userAlias;
   });
 
+  const storageLocal = $("#storageLocal");
+  if(storageLocal){
+    storageLocal.checked = enableLocalStore;
+    storageLocal.addEventListener('change', e=>{
+      applyStoragePrefs({ local: !!e.target.checked });
+    });
+  }
+  const storageRemote = $("#storageRemote");
+  if(storageRemote){
+    storageRemote.checked = enableRemoteStore;
+    storageRemote.disabled = !remoteBridge.hasRemote;
+    storageRemote.parentElement?.classList.toggle('muted', storageRemote.disabled);
+    storageRemote.addEventListener('change', e=>{
+      applyStoragePrefs({ remote: !!e.target.checked });
+    });
+  }
+
   // импорт CSV
   $("#file").addEventListener('change', async e=>{
     const f=e.target.files[0];
@@ -4462,12 +4680,13 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	lastRows = null;
 	allTasksFromState = null;
 	trash = [];
-	localStorage.removeItem(LS_KEY);
-	lastImportTime = '';
-	lastManualTime = '';
-	csvFreshnessStr = '—';
-	manualFreshnessStr = '—';
-	stateMeta.csvTimestamp = '';
+        localStorage.removeItem(LS_KEY);
+        lastSerializedState = '';
+        lastImportTime = '';
+        lastManualTime = '';
+        csvFreshnessStr = '—';
+        manualFreshnessStr = '—';
+        stateMeta.csvTimestamp = '';
 	stateMeta.manualTimestamp = '';
 	updateFreshnessUI();
 	updateTrashAttention?.();
@@ -4486,6 +4705,9 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
     persistNow();
     recompute();
+    if(!remoteSyncEnabled()){
+      setDataMode(enableLocalStore ? 'local' : 'session');
+    }
   });
 
   // автосохранение / ручное сохранение
@@ -4677,6 +4899,15 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
             if(shiftBox) shiftBox.checked = shiftOnProgress;
             const autoBox = $('#autoOptimize');
             if(autoBox) autoBox.checked = autoOptimizeOn;
+            const locBox = $('#storageLocal');
+            if(locBox) locBox.checked = enableLocalStore;
+            const remBox = $('#storageRemote');
+            if(remBox){
+              remBox.checked = enableRemoteStore;
+              remBox.disabled = !remoteBridge.hasRemote;
+              remBox.parentElement?.classList.toggle('muted', remBox.disabled);
+            }
+            refreshDataModeIndicator();
             $('#settingsDlg').showModal();
           });
         }
@@ -4695,6 +4926,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   setupRealtimeSync();
   wireHandlers();
+  refreshDataModeIndicator();
   updateFreshnessUI();
   try{ localStorage.setItem(USER_ALIAS_KEY, userAlias); }catch(_){ }
   bootstrapState();
