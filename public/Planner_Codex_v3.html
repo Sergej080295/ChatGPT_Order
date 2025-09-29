@@ -3,7 +3,107 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="planner-state-endpoint" content="/api/state"/>
+<meta name="planner-state-method" content="PUT"/>
+<meta name="planner-state-wrap" content="true"/>
 <title>Планировщик — CSV only</title>
+<script>
+(() => {
+  const STATE_ENDPOINT = '/api/state';
+  const EVENTS_ENDPOINT = '/api/events';
+  const listeners = new Set();
+  let source = null;
+
+  window.PLANNER_STATE_ENDPOINT = STATE_ENDPOINT;
+  window.PLANNER_STATE_METHOD = 'PUT';
+  window.PLANNER_STATE_WRAP = true;
+
+  const notify = (data) => {
+    listeners.forEach(cb => {
+      try {
+        cb(data);
+      } catch (err) {
+        console.warn('plannerRemote listener failed', err);
+      }
+    });
+  };
+
+  const reconnectDelay = 3000;
+  const connect = () => {
+    if (!('EventSource' in window)) return;
+    if (source) {
+      try { source.close(); } catch (err) { /* ignore */ }
+    }
+    source = new EventSource(EVENTS_ENDPOINT);
+    source.onmessage = (event) => {
+      if (!event?.data) {
+        notify(null);
+        return;
+      }
+      try {
+        const payload = JSON.parse(event.data);
+        notify(payload);
+      } catch (err) {
+        console.warn('plannerRemote event parse failed', err);
+        notify(null);
+      }
+    };
+    source.onerror = () => {
+      if (source) {
+        try { source.close(); } catch (err) { /* ignore */ }
+      }
+      source = null;
+      setTimeout(connect, reconnectDelay);
+    };
+  };
+
+  if ('EventSource' in window) {
+    connect();
+  }
+
+  const loadState = async () => {
+    const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    return await res.text();
+  };
+
+  const saveState = async (payload, meta) => {
+    const stateString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    const body = JSON.stringify({ state: stateString, meta: meta || null });
+    const res = await fetch(STATE_ENDPOINT, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json,text/plain'
+      },
+      body
+    });
+    const text = await res.text().catch(() => '');
+    if (!res.ok) {
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    if (!text) return true;
+    try {
+      return JSON.parse(text);
+    } catch (_err) {
+      return text;
+    }
+  };
+
+  window.plannerRemote = {
+    loadState,
+    saveState,
+    onRemoteUpdate(callback) {
+      if (typeof callback !== 'function') return () => {};
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    }
+  };
+})();
+</script>
 <style>
 :root{
   /* базовые */
