@@ -1645,12 +1645,16 @@ function applyStateFromExternal(raw, opts={}){
 
     if(!skipToasts && diffs.length){
       const authors = parsed.meta?.lastAuthors || {};
+      const ordersSummary = parsed.meta?.ordersSummary || null;
       diffs.forEach(({stage, diff})=>{
         const info = authors[stage];
         const who = info?.name || info?.user || info?.session || 'Пользователь';
+        const summaryText = info?.summary
+          || summarizeOrdersSummary(ordersSummary, { stage })
+          || summarizeDiff(diff);
         showToast({
           title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
-          message: `${who}: ${summarizeDiff(diff)}`,
+          message: `${who}: ${summaryText}`,
           actions:[
             {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff)},
             {label:'OK', handler:(el)=> el.remove()}
@@ -1739,7 +1743,7 @@ let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
-let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[] };
+let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[], ordersSummary:null, diff:null };
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -4349,6 +4353,126 @@ function summarizeDiff(diff){
   return `+${diff.added.length} ~${diff.changed.length} -${diff.removed.length}`;
 }
 
+function buildOrdersSummary(stage, diff){
+  const stageKeyFallback = stage || '';
+  const summary = {
+    total: { added:0, changed:0, removed:0, reserve:0 },
+    byStage: {},
+    byOrder: {}
+  };
+  if(!diff){
+    return summary;
+  }
+
+  const normStage = (value)=>{
+    if(value == null || value === '') return stageKeyFallback || 'unknown';
+    return String(value);
+  };
+
+  const normOrder = (task)=>{
+    const raw = typeof task?.orderId === 'string' ? task.orderId.trim() : '';
+    if(raw) return raw;
+    if(task?.uid) return `[${task.uid}]`;
+    return '—';
+  };
+
+  const ensureBucket = (container, key)=>{
+    if(!container[key]){
+      container[key] = { added:0, changed:0, removed:0, reserve:0 };
+    }
+    return container[key];
+  };
+
+  const increment = (orderId, stageKey, type, usesReserve)=>{
+    const stKey = stageKey || stageKeyFallback || 'unknown';
+    const stageBucket = ensureBucket(summary.byStage, stKey);
+    stageBucket[type] += 1;
+    if(usesReserve) stageBucket.reserve += 1;
+
+    const orderEntry = summary.byOrder[orderId] || { total:{ added:0, changed:0, removed:0, reserve:0 }, stages:{} };
+    summary.byOrder[orderId] = orderEntry;
+    orderEntry.total[type] += 1;
+    if(usesReserve) orderEntry.total.reserve += 1;
+    const orderStageBucket = ensureBucket(orderEntry.stages, stKey);
+    orderStageBucket[type] += 1;
+    if(usesReserve) orderStageBucket.reserve += 1;
+
+    summary.total[type] += 1;
+    if(usesReserve) summary.total.reserve += 1;
+  };
+
+  const processAdded = (task)=>{
+    if(!task) return;
+    const st = normStage(task.stage);
+    increment(normOrder(task), st, 'added', !!task.useReserve);
+  };
+
+  const processRemoved = (task)=>{
+    if(!task) return;
+    const st = normStage(task.stage);
+    increment(normOrder(task), st, 'removed', !!task.useReserve);
+  };
+
+  const processChanged = (change)=>{
+    if(!change) return;
+    const after = change.after || {};
+    const before = change.before || {};
+    const st = normStage(after.stage ?? before.stage);
+    const taskRef = Object.keys(after).length ? after : before;
+    const usesReserve = !!((after.useReserve ?? false) || (before.useReserve ?? false));
+    increment(normOrder(taskRef), st, 'changed', usesReserve);
+  };
+
+  (Array.isArray(diff.added) ? diff.added : []).forEach(processAdded);
+  (Array.isArray(diff.removed) ? diff.removed : []).forEach(processRemoved);
+  (Array.isArray(diff.changed) ? diff.changed : []).forEach(processChanged);
+
+  return summary;
+}
+
+function summarizeOrdersSummary(summary, opts={}){
+  if(!summary || typeof summary !== 'object') return '';
+  const stage = opts.stage != null ? String(opts.stage) : null;
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 5;
+
+  const formatCounts = (bucket)=>{
+    if(!bucket) return '';
+    const parts = [`+${bucket.added||0}`, `~${bucket.changed||0}`, `-${bucket.removed||0}`];
+    const suffix = bucket.reserve ? ` (Бронь:${bucket.reserve})` : '';
+    return parts.join(' ') + suffix;
+  };
+
+  const orderEntries = summary.byOrder || {};
+  const lines = [];
+  Object.keys(orderEntries).forEach(orderId=>{
+    const orderInfo = orderEntries[orderId];
+    if(!orderInfo) return;
+    const bucket = stage != null
+      ? orderInfo.stages?.[stage]
+      : orderInfo.total;
+    const formatted = formatCounts(bucket);
+    if(formatted) lines.push(`${orderId}: ${formatted}`);
+  });
+
+  if(lines.length){
+    if(lines.length > limit){
+      const visible = lines.slice(0, limit);
+      visible.push(`и ещё ${lines.length - limit}`);
+      return visible.join('; ');
+    }
+    return lines.join('; ');
+  }
+
+  if(stage != null){
+    const stageBucket = summary.byStage?.[stage];
+    const formattedStage = formatCounts(stageBucket);
+    if(formattedStage) return formattedStage;
+  }
+
+  const totalText = formatCounts(summary.total);
+  return totalText;
+}
+
 function diffToHtml(diff){
   if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
   const block = (title, arr, formatter)=>{
@@ -4387,7 +4511,9 @@ function renderLogList(){
   const rows = activityLog.slice().reverse().map(entry=>{
     const stageName = STAGE_TITLE[entry.stage] || entry.stage;
     const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
-    const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const summary = entry.summary
+      || summarizeOrdersSummary(entry.ordersSummary, { stage: entry.stage })
+      || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
     return `<div class="log-entry" data-log-id="${entry.id}">`
       + `<div><strong>${stageName}</strong> — ${summary}</div>`
       + `<div class="meta">${meta}</div>`
@@ -4459,15 +4585,20 @@ function handleIncomingSyncMessage(msg){
         setDataMode(enableLocalStore ? 'local' : 'session');
       }
     }
-    if(msg.diff){
+    const hasDiff = !!(msg && msg.diff);
+    const summaryText = msg?.summary
+      || summarizeOrdersSummary(msg?.ordersSummary, { stage: msg?.stage })
+      || (hasDiff ? summarizeDiff(msg.diff) : '');
+    if(hasDiff || summaryText){
       markLogAttention();
+      const actions = [
+        hasDiff ? {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)} : null,
+        {label:'OK', handler:(el)=> el.remove()}
+      ].filter(Boolean);
       showToast({
         title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
-        message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
-        actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
-          {label:'OK', handler:(el)=> el.remove()}
-        ]
+        message: `${msg.user || msg.alias || 'Пользователь'}: ${summaryText}`,
+        actions
       });
     }
   }
@@ -4608,7 +4739,9 @@ function restoreState(json, opts={}){
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
-      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
+      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
+      ordersSummary: s.meta?.ordersSummary || null,
+      diff: s.meta?.diff || null
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
@@ -4758,6 +4891,7 @@ function persistNow(stageOverride, opts={}){
 
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
+    const ordersSummary = buildOrdersSummary(curStage, diff);
     const hadChanges = diffHasChanges(diff) || force || !rawPrev;
 
     // merge tasks from other стадий
@@ -4790,7 +4924,8 @@ function persistNow(stageOverride, opts={}){
     let changeSummary = '';
 
     if(hadChanges){
-      changeSummary = summarizeDiff(diff);
+      const summaryFromOrders = summarizeOrdersSummary(ordersSummary, { stage:curStage });
+      changeSummary = summaryFromOrders || summarizeDiff(diff);
       const nowStr = new Date().toLocaleString();
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
@@ -4812,7 +4947,8 @@ function persistNow(stageOverride, opts={}){
           session: SESSION_ID,
           source,
           summary: changeSummary,
-          diff
+          diff,
+          ordersSummary
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -4824,12 +4960,20 @@ function persistNow(stageOverride, opts={}){
       }
     }
 
+    stateMeta.ordersSummary = ordersSummary;
+    stateMeta.diff = diff;
+
+    const storageMetaOut = stateObj.meta?.storage;
+
     stateObj.meta = {
       versions: { ...versions },
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+      history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+      diff,
+      ordersSummary,
+      ...(storageMetaOut ? { storage: storageMetaOut } : {})
     };
 
     const payload = JSON.stringify(stateObj);
@@ -4852,7 +4996,7 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
+      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined, ordersSummary })
         .then(()=> setDataMode('remote'))
         .catch(async err=>{
           if(err?.status === 409){
@@ -4912,7 +5056,7 @@ function persistNow(stageOverride, opts={}){
     }
 
     if(hadChanges && announce){
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias, summary: changeSummary || undefined, ordersSummary});
     }
   }catch(e){
     console.warn('persist failed', e);
