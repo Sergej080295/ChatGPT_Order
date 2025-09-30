@@ -403,6 +403,14 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   border-radius:8px; padding:0 8px; font-weight:700; color:#fff;
 }
 
+body:not(.show-ids) .uid-badge{ display:none; }
+body.show-ids .uid-badge{ display:inline-flex; align-items:center; gap:2px; font-size:0.85em; color:#94a3b8; }
+.diff-line{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.diff-line .stage-label{ color:#64748b; font-size:0.85em; }
+.diff-line .info-icon{ cursor:help; font-size:0.9em; color:#64748b; }
+.diff-line .info-icon:hover{ color:#334155; }
+.uid-badge code{ font-size:0.85em; color:inherit; background:none; padding:0; }
+
 /* плавное скрытие строки в «Готовых» при возврате */
 .fade-out{ opacity:.0; transition: opacity .2s ease }
 
@@ -643,6 +651,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:8px">
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+    <label class="small"><input type="checkbox" id="showIdsToggle"> Показывать ID</label>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:10px">
     <div class="muted small">Права доступа:</div>
@@ -883,6 +892,19 @@ const parseNum=(s)=>{ if(s==null) return NaN; const t=String(s).replace(/\s+/g,'
 const parseHours=s=>parseNum(s);
 const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
+const escapeHtml = (value)=>String(value ?? '').replace(/[&<>"']/g, ch=>({
+  '&':'&amp;',
+  '<':'&lt;',
+  '>':'&gt;',
+  '"':'&quot;',
+  "'":'&#39;'
+}[ch] || ch));
+const formatDateHuman = (value)=>{
+  if(!value) return '—';
+  const date = (value instanceof Date) ? value : new Date(value);
+  if(Number.isNaN(date.getTime())) return String(value);
+  return `${String(date.getDate()).padStart(2,'0')}.${String(date.getMonth()+1).padStart(2,'0')}.${date.getFullYear()}`;
+};
 
 const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
@@ -1733,6 +1755,7 @@ let autoOptimizeOn = true;
 let capByProc = { ...DEFAULT_CAP };   // вместимость по переделам
 let csvFreshnessStr='—';
 let manualFreshnessStr='—';
+let showIds=false;
 let lastRows=null;           // сырые строки последнего импорта
 let lastImportTime='';       // совместимость для CSV
 let lastManualTime='';
@@ -3921,122 +3944,368 @@ function buildDeltaPreview(current, incoming){
   const inBy  = new Map(incoming.map(t=>[t.uid,t]));
   const added=[], removed=[], changed=[], toDone=[];
 
+  const routesEqual = (a, b)=>{
+    const normA = JSON.stringify(normalizeRouteForDiff(a));
+    const normB = JSON.stringify(normalizeRouteForDiff(b));
+    return normA === normB;
+  };
+
+  const dateVal = (value)=>{
+    if(!value) return null;
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const pushField = (fields, field, before, after, comparator)=>{
+    const same = comparator ? comparator(before, after) : (before ?? null) === (after ?? null);
+    if(!same){
+      fields.push({ field, before, after });
+    }
+  };
+
   incoming.forEach(n=>{
     if(isDoneStatus(n.status)){ toDone.push(n); return; }
     if(!curBy.has(n.uid)){ added.push(n); }
     else{
-      const c=curBy.get(n.uid);
-      const diff = [];
-      if((c.hours||0)!==(n.hours||0)) diff.push('часы');
-      const sd1=c.startDate?+c.startDate:0, sd2=n.startDate?+n.startDate:0;
-      const ed1=c.endDate?+c.endDate:0, ed2=n.endDate?+n.endDate:0;
-      if(sd1!==sd2) diff.push('начало');
-      if(ed1!==ed2) diff.push('конец');
-      if((c.state||'')!==(n.state||'')) diff.push('состояние');
-      if((c.status||'')!==(n.status||'')) diff.push('статус');
-      if(diff.length) changed.push({from:c,to:n,fields:diff});
+      const c = curBy.get(n.uid);
+      const fields = [];
+      pushField(fields, 'hours', c.hours, n.hours, (a,b)=> Number(a||0) === Number(b||0));
+      pushField(fields, 'extraHours', c.extraHours, n.extraHours, (a,b)=> Number(a||0) === Number(b||0));
+      pushField(fields, 'start', dateVal(c.startDate), dateVal(n.startDate), (a,b)=>{
+        if(!a && !b) return true;
+        if(!a || !b) return false;
+        return a.getTime() === b.getTime();
+      });
+      pushField(fields, 'end', dateVal(c.endDate), dateVal(n.endDate), (a,b)=>{
+        if(!a && !b) return true;
+        if(!a || !b) return false;
+        return a.getTime() === b.getTime();
+      });
+      pushField(fields, 'progress', c.progress, n.progress, (a,b)=> Number(a||0) === Number(b||0));
+      pushField(fields, 'state', c.state, n.state);
+      pushField(fields, 'status', c.status, n.status);
+      pushField(fields, 'useReserve', c.useReserve, n.useReserve, (a,b)=> !!a === !!b);
+      pushField(fields, 'route', c.route, n.route, routesEqual);
+      if(fields.length){
+        changed.push({ stage:n.stage || c.stage, from:c, to:n, fields });
+      }
     }
   });
   current.forEach(c=>{ if(!inBy.has(c.uid)) removed.push(c); });
   return {added, removed, changed, toDone};
 }
 
+const FIELD_LABELS = {
+  hours:'часы',
+  extraHours:'доп. время',
+  start:'начало',
+  end:'конец',
+  progress:'прогресс',
+  state:'состояние',
+  status:'статус',
+  useReserve:'бронь',
+  locked:'замок',
+  idx:'позиция',
+  route:'маршрут'
+};
+
+function formatFieldValue(field, value){
+  if(field === 'route') return 'обновлён';
+  if(field === 'start' || field === 'end') return formatDateHuman(value);
+  if(field === 'hours' || field === 'extraHours'){
+    if(value == null || value === '') return '—';
+    const num = Number(value);
+    if(Number.isNaN(num)) return String(value);
+    return Number.isInteger(num) ? String(num) : num.toFixed(2);
+  }
+  if(field === 'progress'){
+    if(value == null || value === '') return '—';
+    const num = Number(value);
+    if(Number.isNaN(num)) return String(value);
+    return `${num}%`;
+  }
+  if(field === 'useReserve' || field === 'locked'){
+    return value ? 'вкл' : 'выкл';
+  }
+  if(field === 'idx'){
+    if(value == null) return '—';
+    const num = Number(value);
+    return Number.isNaN(num) ? String(value) : String(num + 1);
+  }
+  if(value == null || value === '') return '—';
+  return String(value);
+}
+
+function formatFieldChangeText(change){
+  if(!change) return '';
+  const { field, before, after } = change;
+  const label = FIELD_LABELS[field] || field;
+  if(field === 'route'){
+    return `${label}: обновлён`;
+  }
+  const beforeStr = formatFieldValue(field, before);
+  const afterStr = formatFieldValue(field, after);
+  if(beforeStr === afterStr) return '';
+  return `${label}: ${beforeStr} → ${afterStr}`;
+}
+
+function buildTaskInfoSummary(task){
+  if(!task) return '';
+  const parts = [];
+  const start = task.startDate || task.start;
+  const end = task.endDate || task.end;
+  if(start || end) parts.push(`начало: ${formatDateHuman(start)}`);
+  if(end) parts.push(`конец: ${formatDateHuman(end)}`);
+  if(task.hours != null && task.hours !== ''){
+    const num = Number(task.hours);
+    if(!Number.isNaN(num)) parts.push(`часы: ${Number.isInteger(num)?String(num):num.toFixed(2)}`);
+  }
+  if(task.extraHours != null && task.extraHours !== ''){
+    const num = Number(task.extraHours);
+    if(!Number.isNaN(num) && num !== 0) parts.push(`доп. время: ${Number.isInteger(num)?String(num):num.toFixed(2)}`);
+  }
+  if(task.progress != null && task.progress !== ''){
+    const num = Number(task.progress);
+    if(!Number.isNaN(num)) parts.push(`прогресс: ${num}%`);
+  }
+  if(task.status) parts.push(`статус: ${task.status}`);
+  if(task.state) parts.push(`состояние: ${task.state}`);
+  if(task.useReserve !== undefined) parts.push(`бронь: ${task.useReserve ? 'вкл' : 'выкл'}`);
+  return parts.join('; ');
+}
+
+function describeTaskName(task){
+  if(!task) return 'Неизвестная запись';
+  const order = task.orderId || task.after?.orderId || task.before?.orderId || task.uid || 'Без названия';
+  const stage = task.stage || task.after?.stage || task.before?.stage || '';
+  const stageName = stage ? (STAGE_TITLE[stage] || stage) : '';
+  return stageName ? `${order} (${stageName})` : String(order);
+}
+
+function buildDiffDescriptions(diff){
+  const items = [];
+  const byUid = new Map();
+  if(!diff) return {items, byUid};
+
+  const pushItem = (uid, data)=>{
+    const existing = byUid.get(uid);
+    if(existing){
+      byUid.set(uid, { ...existing, ...data });
+    }else{
+      byUid.set(uid, data);
+    }
+    items.push(data);
+  };
+
+  diff.added.forEach(task=>{
+    const label = describeTaskName(task);
+    const details = buildTaskInfoSummary(task);
+    const summary = details ? `Добавлен — ${details}` : 'Добавлен';
+    pushItem(task.uid, { type:'add', stage:task.stage, uid:task.uid, label, summary, details });
+  });
+
+  diff.changed.forEach(change=>{
+    const target = change.to || change.from;
+    const label = describeTaskName(target);
+    const explicitFields = (change.fields || []).map(formatFieldChangeText).filter(Boolean);
+    const info = explicitFields.join('; ');
+    const detailsParts = explicitFields.length ? explicitFields.slice() : [];
+    const snapshot = buildTaskInfoSummary(change.to || change.from);
+    if(snapshot) detailsParts.push(snapshot);
+    const details = detailsParts.join('; ');
+    const summary = info || 'Изменения';
+    pushItem(target.uid, { type:'change', stage:change.stage || target.stage, uid:target.uid, label, summary, details: details || summary });
+  });
+
+  diff.removed.forEach(task=>{
+    const label = describeTaskName(task);
+    const details = buildTaskInfoSummary(task);
+    const summary = details ? `Удалён — ${details}` : 'Удалён';
+    pushItem(task.uid, { type:'remove', stage:task.stage, uid:task.uid, label, summary, details });
+  });
+
+  (diff.toDone || []).forEach(task=>{
+    const label = describeTaskName(task);
+    const base = buildTaskInfoSummary(task);
+    const summary = base ? `В архив — ${base}` : 'В архив';
+    pushItem(task.uid, { type:'done', stage:task.stage, uid:task.uid, label, summary, details: summary });
+  });
+
+  return { items, byUid };
+}
+
 function renderDeltaDialog(diff){
   const el=$("#deltaContent");
-  const block = (key, arr, fmt) => `
-    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
-      <legend style="padding:0 6px">${key} (${arr.length})</legend>
-      ${arr.length? arr.map(fmt).join('') : '—'}
-    </fieldset>`;
+  const descriptions = buildDiffDescriptions(diff);
+  const byUid = descriptions.byUid;
 
-  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const labelHtml = (text, uid, details='')=>{
+    const infoHtml = details ? `<span class="info-icon" title="${escapeHtml(details)}">ⓘ</span>` : '';
+    const idValue = uid ? String(uid) : '';
+    const idHtml = idValue ? `<span class="uid-badge"><code>${escapeHtml(idValue)}</code></span>` : '';
+    return `<span class="diff-line"><span>${escapeHtml(text)}</span>${idHtml}${infoHtml}</span>`;
+  };
+
+  const renderGroup = (title, arr, type)=>{
+    if(!arr || !arr.length) return '';
+    const items = arr.map(entry=>{
+      const target = type==='chg' ? (entry.to || entry.from) : entry;
+      const uid = type==='chg' ? (entry.to?.uid || entry.from?.uid) : entry.uid;
+      const desc = uid ? byUid.get(uid) : null;
+      const text = desc?.label || describeTaskName(target);
+      const details = desc?.details || '';
+      const checkboxType = type==='add' ? 'add' : type==='del' ? 'del' : type==='done' ? 'done' : 'chg';
+      const safeUid = uid ? String(uid) : '';
+      const dataAttr = safeUid ? ` data-uid="${escapeHtml(safeUid)}"` : '';
+      return `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="${checkboxType}"${dataAttr} checked> ${labelHtml(text, uid, details)}</label>`;
+    }).join('');
+    return `<fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0"><legend style="padding:0 6px">${title} (${arr.length})</legend>${items || '—'}</fieldset>`;
+  };
 
   el.innerHTML =
-    block('Новые', diff.added, fmtAdd) +
-    block('Изменённые', diff.changed, fmtChg) +
-    block('Удаляемые', diff.removed, fmtDel) +
-    block('Статус = Готово', diff.toDone, fmtDone);
+    renderGroup('Новые', diff.added, 'add') +
+    renderGroup('Изменённые', diff.changed, 'chg') +
+    renderGroup('Удаляемые', diff.removed, 'del') +
+    renderGroup('Статус = Готово', diff.toDone, 'done');
 
   $("#deltaDlg").showModal();
 
   $("#deltaApply").onclick = ()=>{
-    lastSnapshotJson = serializeState(); // снимок для отката
-    // перед применением сняем старые подсветки «isNew»
+    lastSnapshotJson = serializeState();
     tasks.forEach(t=>{ t.isNew=false; });
 
-    const sel = new Map(); $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
+    const sel = new Map();
+    $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
       if(ch.checked) sel.set(ch.dataset.uid, ch.dataset.apply);
     });
 
-    const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    const stageArrays = new Map();
+    const ensureStageArray = (stage)=>{
+      const key = stage || currentProc;
+      if(stageArrays.has(key)) return stageArrays.get(key);
+      if(key === currentProc){
+        stageArrays.set(key, tasks);
+      }else{
+        const arr = Array.isArray(allTasksFromState)
+          ? allTasksFromState.filter(t=>t && t.stage === key).map(cloneTaskRecord)
+          : [];
+        stageArrays.set(key, arr);
+      }
+      return stageArrays.get(key);
+    };
+
+    const stageIndex = new Map();
+    const indexForStage = (stage)=>{
+      const key = stage || currentProc;
+      if(stageIndex.has(key)) return stageIndex.get(key);
+      const arr = ensureStageArray(key);
+      const map = new Map(arr.map((t,i)=>[t.uid,i]));
+      stageIndex.set(key, map);
+      return map;
+    };
+
+    const rebuildStageIndex = (stage)=>{
+      const key = stage || currentProc;
+      const arr = ensureStageArray(key);
+      stageIndex.set(key, new Map(arr.map((t,i)=>[t.uid,i])));
+    };
+
+    const touchedStages = new Set();
     const now = new Date();
 
-    // Удаления (только выбранные)
     diff.removed.forEach(r=>{
       if(!sel.has(r.uid) || sel.get(r.uid)!=='del') return;
-      const idx = byId.get(r.uid);
-      if(idx!=null){ tasks.splice(idx,1); byId.delete(r.uid); }
+      const stage = r.stage || currentProc;
+      const arr = ensureStageArray(stage);
+      const idx = indexForStage(stage).get(r.uid);
+      if(idx != null){
+        arr.splice(idx,1);
+        touchedStages.add(stage);
+        rebuildStageIndex(stage);
+      }
     });
 
-	// В архив (статус Готово)
-	diff.toDone.forEach(d=>{
-	  if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
-	  if(byId.has(d.uid)){
-		const old=tasks.splice(byId.get(d.uid),1)[0];
-		doneTasks.push({
-		  uid:old.uid, orderId:old.orderId, stage:old.stage,
-		  parentId:old.parentId, childId:old.childId,
-		  hours:old.hours, extra:old.extraHours,
-		  start:old.startDate, end:old.endDate,
-		  when:now, source:'csv_status'
-		});
-		byId.delete(d.uid);
-	  } else {
-		doneTasks.push({
-		  uid:d.uid, orderId:d.orderId, stage:d.stage||d.stage,  // d.stage есть у incoming
-		  parentId:d.parentId, childId:d.childId,
-		  hours:d.hours, extra:d.extraHours,
-		  start:d.startDate, end:d.endDate,
-		  when:now, source:'csv_status'
-		});
-	  }
-	});
+    diff.toDone.forEach(d=>{
+      if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
+      const stage = d.stage || currentProc;
+      const arr = ensureStageArray(stage);
+      const idx = indexForStage(stage).get(d.uid);
+      let sourceTask = d;
+      if(idx != null){
+        sourceTask = arr.splice(idx,1)[0];
+        touchedStages.add(stage);
+        rebuildStageIndex(stage);
+      }
+      doneTasks.push({
+        uid:sourceTask.uid,
+        orderId:sourceTask.orderId,
+        stage:stage,
+        parentId:sourceTask.parentId,
+        childId:sourceTask.childId,
+        hours:sourceTask.hours,
+        extra:sourceTask.extraHours,
+        start:sourceTask.startDate,
+        end:sourceTask.endDate,
+        when:now,
+        source:'csv_status'
+      });
+    });
 
-    // Изменения
-    diff.changed.forEach(({from,to})=>{
+    diff.changed.forEach(({from,to,stage})=>{
       if(!sel.has(to.uid) || sel.get(to.uid)!=='chg') return;
-      if(!byId.has(from.uid)) return;
-      const t=tasks[byId.get(from.uid)];
-      t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
-      t.startDate=to.startDate; t.endDate=to.endDate;
-      t.startMissing=to.startMissing; t.endMissing=to.endMissing;
-      t.state=to.state||t.state;
-      t.status=to.status||t.status;
-      t.orderId=to.orderId||t.orderId;
-      t.route=to.route||t.route;
-      if(!t.origStartDate) t.origStartDate = t.startDate;
-      t.isNew=true; // подсветим именно текущую волну изменений
+      const st = stage || to.stage || from.stage || currentProc;
+      const arr = ensureStageArray(st);
+      const idx = indexForStage(st).get(from.uid);
+      if(idx == null) return;
+      const target = arr[idx];
+      target.hours = to.hours;
+      target.extraHours = Math.max(0.25,(to.hours||0)*0.05);
+      target.startDate = to.startDate;
+      target.endDate = to.endDate;
+      target.startMissing = to.startMissing;
+      target.endMissing = to.endMissing;
+      target.state = to.state || target.state;
+      target.status = to.status || target.status;
+      target.orderId = to.orderId || target.orderId;
+      target.route = to.route || target.route;
+      if(!target.origStartDate) target.origStartDate = target.startDate;
+      if(st === currentProc){ target.isNew = true; }
+      touchedStages.add(st);
     });
 
-    // Новые
     diff.added.forEach(n=>{
       if(!sel.has(n.uid) || sel.get(n.uid)!=='add') return;
-      n.isNew=true; tasks.push(n);
+      const stage = n.stage || currentProc;
+      const arr = ensureStageArray(stage);
+      const clone = cloneTaskRecord(n);
+      clone.isNew = stage === currentProc;
+      arr.push(clone);
+      touchedStages.add(stage);
+      rebuildStageIndex(stage);
     });
 
-    lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
-    lastRows = pendingRows; // установим из глобалки (см. importRows)
+    touchedStages.forEach(stage=>{
+      const arr = ensureStageArray(stage);
+      mergeStageIntoAll(stage, arr);
+      lastSyncedSnapshots.set(stage, captureSnapshotFromRaw(arr, stage, lockedUids));
+      ordersByStage.set(stage, arr.map(t=>t.uid));
+    });
+
+    lastDiffApplied = diff;
+    lastRows = pendingRows;
     const stamp = new Date().toLocaleString();
     lastImportTime = stamp;
-    csvFreshnessStr = lastImportTime;
-    stateMeta.csvTimestamp = lastImportTime;
+    csvFreshnessStr = stamp;
+    stateMeta.csvTimestamp = stamp;
     updateFreshnessUI();
-	sortTasksByStart();
-	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
-	persistNow();
+
+    sortTasksByStart();
+    if(document.querySelector('#autoOptimize')?.checked){
+      optimizeQueue();
+    }else{
+      recompute();
+    }
+    persistNow();
 
     $("#deltaDlg").close();
   };
@@ -4055,34 +4324,68 @@ async function importFile(file){
   $("#file").value='';
 }
 async function importRows(rows){
-  const p=$("#process").value;
-  pendingRows = rows; // сохраним для выставления lastRows после применения
+  pendingRows = rows;
+  const currentStage = $("#process").value;
 
-  // первичный импорт
-  if(!lastRows && tasks.length===0){
+  const incomingByStage = new Map();
+  STAGES.forEach(stage=>{
+    const mapped = mapRows(rows, stage) || [];
+    incomingByStage.set(stage, mapped);
+  });
+  const incomingFlat = [];
+  incomingByStage.forEach(arr=>{ incomingFlat.push(...arr); });
+
+  const hasExistingData = lastRows || tasks.length || (Array.isArray(allTasksFromState) && allTasksFromState.length);
+
+  if(!hasExistingData){
     lastRows = rows;
-    const mapped = mapRows(rows, p);
-
-    // статусы -> «Готовые»
     const now = new Date();
-    const active = [];
-    mapped.forEach(t=>{
-	  if(isDoneStatus(t.status)){
-		doneTasks.push({
-		  uid:t.uid, orderId:t.orderId, stage:t.stage,
-		  parentId:t.parentId, childId:t.childId,
-		  hours:t.hours, extra:t.extraHours,
-		  start:t.startDate, end:t.endDate,
-		  when:now, source:'csv_status'
-		});
-	  } else {
-		active.push(t);
-	  }
+    const seenDone = new Set(doneTasks.map(d=>d.uid));
+    const activeByStage = new Map();
+
+    incomingByStage.forEach((arr, stage)=>{
+      const active = [];
+      arr.forEach(task=>{
+        if(isDoneStatus(task.status)){
+          if(task.uid && !seenDone.has(task.uid)){
+            doneTasks.push({
+              uid:task.uid, orderId:task.orderId, stage:task.stage,
+              parentId:task.parentId, childId:task.childId,
+              hours:task.hours, extra:task.extraHours,
+              start:task.startDate, end:task.endDate,
+              when:now, source:'csv_status'
+            });
+            seenDone.add(task.uid);
+          }
+        }else{
+          active.push(task);
+        }
+      });
+      activeByStage.set(stage, active);
     });
-	tasks = active;
-	sortTasksByStart();
-	rememberStageOrder();
-	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+
+    STAGES.forEach(stage=>{
+      const stageTasks = activeByStage.get(stage) || [];
+      if(stage === currentStage){
+        tasks = stageTasks.map(cloneTaskRecord);
+      }
+      mergeStageIntoAll(stage, stageTasks);
+      if(stageTasks.length){
+        ordersByStage.set(stage, stageTasks.map(t=>t.uid));
+      }
+      lastSyncedSnapshots.set(stage, captureSnapshotFromRaw(stageTasks, stage, lockedUids));
+    });
+
+    mergeStageIntoAll(currentStage, tasks);
+    lastSyncedSnapshots.set(currentStage, captureSnapshotFromTasks(currentStage, tasks, lockedUids));
+
+    sortTasksByStart();
+    rememberStageOrder();
+    if(autoOptimizeOn){
+      optimizeQueue();
+    }else{
+      recompute();
+    }
 
     const stamp = new Date().toLocaleString();
     lastImportTime = stamp;
@@ -4093,9 +4396,9 @@ async function importRows(rows){
     return;
   }
 
-  // дельта
-  const incoming = mapRows(rows, p);
-  const diff = buildDeltaPreview(tasks, incoming);
+  const currentAll = collectActiveTasksAllStages();
+  const diff = buildDeltaPreview(currentAll, incomingFlat);
+  diff._incomingByStage = incomingByStage;
   renderDeltaDialog(diff);
 }
 
@@ -4182,10 +4485,8 @@ function buildStateObject(){
     routeOverrides: ro,
     t, done, trash: trashArr, exc, res,
 
-    process: $("#process").value,
     capByProc: capOut,
     parallelByProc: parallelOut,
-    filter: $("#ganttFilter").value,
     locked:[...lockedUids],
     orders:[...ordersByStage.entries()],
     freshness: csvFreshnessStr,
@@ -4193,9 +4494,6 @@ function buildStateObject(){
     freshnessManual: manualFreshnessStr,
     lastImportTime,
     lastManualTime,
-    autosaveOn,
-    autoOptimizeOn,
-    shiftOnProgress,
     meta: {
       versions: versionsObj,
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
@@ -4209,6 +4507,23 @@ function buildStateObject(){
 
 function serializeState(){
   return JSON.stringify(buildStateObject());
+}
+
+function collectActiveTasksAllStages(){
+  const combined = new Map();
+  tasks.forEach(task=>{
+    if(task && task.uid && !combined.has(task.uid)){
+      combined.set(task.uid, cloneTaskRecord(task));
+    }
+  });
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    allTasksFromState.forEach(task=>{
+      if(task && task.uid && !combined.has(task.uid)){
+        combined.set(task.uid, cloneTaskRecord(task));
+      }
+    });
+  }
+  return [...combined.values()];
 }
 
 
@@ -4344,36 +4659,49 @@ function diffHasChanges(diff){
   return !!(diff && (diff.added.length || diff.removed.length || diff.changed.length));
 }
 
-function summarizeDiff(diff){
+function summarizeDiff(diff, limit=3){
   if(!diff) return '';
-  return `+${diff.added.length} ~${diff.changed.length} -${diff.removed.length}`;
+  const descriptions = buildDiffDescriptions(diff);
+  const symbols = { add:'+', change:'~', remove:'−', done:'↦' };
+  const lines = descriptions.items.map(item=>{
+    const prefix = symbols[item.type] || '';
+    const label = item.label || '';
+    const summary = item.summary || '';
+    const text = summary ? `${label}: ${summary}` : label;
+    return prefix ? `${prefix} ${text}` : text;
+  }).filter(Boolean);
+  if(!lines.length) return '';
+  if(lines.length > limit){
+    return `${lines.slice(0, limit).join('; ')}; +${lines.length - limit}`;
+  }
+  return lines.join('; ');
 }
 
 function diffToHtml(diff){
   if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
-  const block = (title, arr, formatter)=>{
-    if(!arr.length) return '';
-    return `<fieldset style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0">`+
-      `<legend style="padding:0 6px">${title} (${arr.length})</legend>`+
-      arr.map(formatter).join('')+
-      '</fieldset>';
+  const descriptions = buildDiffDescriptions(diff);
+  const byUid = descriptions.byUid;
+  const labelHtml = (text, uid, details='')=>{
+    const infoHtml = details ? `<span class=\"info-icon\" title=\"${escapeHtml(details)}\">ⓘ</span>` : '';
+    const idValue = uid ? String(uid) : '';
+    const idHtml = idValue ? `<span class=\"uid-badge\"><code>${escapeHtml(idValue)}</code></span>` : '';
+    return `<div class=\"diff-line\"><span>${escapeHtml(text)}</span>${idHtml}${infoHtml}</div>`;
   };
-  const fmtTask = (label)=> (x)=>{
-    const name = x.orderId || x.after?.orderId || x.before?.orderId || x.uid;
-    return `<div><b>${name}</b> <span class="muted">[${x.uid}]</span></div>`;
-  };
-  const fmtChange = (x)=>{
-    const rows = x.fields.map(f=>{
-      const before = typeof f.before === 'object' ? JSON.stringify(f.before) : String(f.before ?? '—');
-      const after = typeof f.after === 'object' ? JSON.stringify(f.after) : String(f.after ?? '—');
-      return `<div><code>${f.field}</code>: <span class="muted">${before}</span> → <b>${after}</b></div>`;
+  const renderGroup = (title, arr, type)=>{
+    if(!arr || !arr.length) return '';
+    const items = arr.map(entry=>{
+      const target = type==='chg' ? (entry.to || entry.from) : entry;
+      const uid = type==='chg' ? (entry.to?.uid || entry.from?.uid) : entry.uid;
+      const desc = uid ? byUid.get(uid) : null;
+      const text = desc?.label || describeTaskName(target);
+      const details = desc?.details || '';
+      return labelHtml(text, uid, details);
     }).join('');
-    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> <span class="muted">[${x.uid}]</span></div>`;
-    return `<div style="margin-bottom:6px">${header}${rows?`<div class="small" style="margin-left:8px">${rows}</div>`:''}</div>`;
+    return `<fieldset style=\"border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0\"><legend style=\"padding:0 6px\">${title} (${arr.length})</legend>${items || '—'}</fieldset>`;
   };
-  return block('Добавлены', diff.added, fmtTask('added'))+
-         block('Удалены', diff.removed, fmtTask('removed'))+
-         block('Изменены', diff.changed, fmtChange);
+  return renderGroup('Добавлены', diff.added, 'add') +
+         renderGroup('Удалены', diff.removed, 'del') +
+         renderGroup('Изменены', diff.changed, 'chg');
 }
 
 
@@ -4463,7 +4791,7 @@ function handleIncomingSyncMessage(msg){
       markLogAttention();
       showToast({
         title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
-        message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
+        message: `${msg.user || msg.alias || 'Пользователь'}: ${msg.summary || summarizeDiff(msg.diff)}`,
         actions:[
           {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
           {label:'OK', handler:(el)=> el.remove()}
@@ -4525,6 +4853,12 @@ function setupRealtimeSync(){
 function restoreState(json, opts={}){
   try{
     const preserveProcess = !!opts.preserveProcess;
+    const prefs = loadUiPreferences();
+    const prefProcess = (typeof prefs.process === 'string' && STAGES.includes(prefs.process)) ? prefs.process : null;
+    const prefFilter = typeof prefs.filter === 'string' ? prefs.filter : null;
+    const prefAutosave = prefs.autosave !== undefined ? !!prefs.autosave : null;
+    const prefAutoOptimize = prefs.autoOptimize !== undefined ? !!prefs.autoOptimize : null;
+    const prefShift = prefs.shiftOnProgress !== undefined ? !!prefs.shiftOnProgress : null;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>({
@@ -4553,7 +4887,9 @@ function restoreState(json, opts={}){
     }));
 
     allTasksFromState = tAll.slice();
-    const desiredProcess = preserveProcess ? ($("#process")?.value || s.process || 'bend') : (s.process || $("#process")?.value || 'bend');
+    const desiredProcess = preserveProcess
+      ? ($("#process")?.value || prefProcess || s.process || 'bend')
+      : (prefProcess || s.process || $("#process")?.value || 'bend');
     tasks = tAll.filter(x => x.stage === desiredProcess);
 
     doneTasks = (s.done||[]).map(x=>({
@@ -4628,11 +4964,7 @@ function restoreState(json, opts={}){
     });
     lastSyncedSnapshots = grouped;
 
-    if(preserveProcess){
-      $("#process").value = desiredProcess;
-    }else{
-      $("#process").value = s.process || 'bend';
-    }
+    $("#process").value = desiredProcess;
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
     const capEl = $("#capacity");
@@ -4643,14 +4975,37 @@ function restoreState(json, opts={}){
       $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
     }
 
-    $("#ganttFilter").value = s.filter || 'all';
-    if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
-    autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
-    $("#autosave").checked = autosaveOn;
-    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
-    $("#shiftOnProgress").checked = shiftOnProgress;
-    autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
-    $("#autoOptimize").checked = autoOptimizeOn;
+    const ganttFilterValue = prefFilter || s.filter || 'all';
+    const ganttFilterEl = $("#ganttFilter");
+    if(ganttFilterEl) ganttFilterEl.value = ganttFilterValue;
+    const ganttFilterFs = $("#ganttFilterFS");
+    if(ganttFilterFs) ganttFilterFs.value = ganttFilterValue;
+
+    if(prefAutosave !== null){
+      autosaveOn = prefAutosave;
+    }else if(s.autosaveOn !== undefined){
+      autosaveOn = !!s.autosaveOn;
+    }
+    const autosaveEl = $("#autosave");
+    if(autosaveEl) autosaveEl.checked = autosaveOn;
+
+    if(prefShift !== null){
+      shiftOnProgress = prefShift;
+    }else if(s.shiftOnProgress !== undefined){
+      shiftOnProgress = !!s.shiftOnProgress;
+    }else if(shiftOnProgress == null){
+      shiftOnProgress = true;
+    }
+    const shiftEl = $("#shiftOnProgress");
+    if(shiftEl) shiftEl.checked = shiftOnProgress;
+
+    if(prefAutoOptimize !== null){
+      autoOptimizeOn = prefAutoOptimize;
+    }else if(s.autoOptimizeOn !== undefined){
+      autoOptimizeOn = !!s.autoOptimizeOn;
+    }
+    const autoOptEl = $("#autoOptimize");
+    if(autoOptEl) autoOptEl.checked = autoOptimizeOn;
 
     if(preserveProcess){
       tasks = tAll.filter(x=> x.stage === desiredProcess);
@@ -4709,7 +5064,6 @@ function persistNow(stageOverride, opts={}){
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
     const stateObj = buildStateObject();
-    stateObj.process = curStage;
 
     const rawPrev = readLocalSnapshot();
     let prev = null;
@@ -4931,7 +5285,15 @@ function persistMaybe(reason='data', opts={}){
 
 function saveUiPreferences(){
   try{
-    const prefs = { filter: $("#ganttFilter")?.value || 'all' };
+    const prefs = {
+      filter: $("#ganttFilter")?.value || 'all',
+      process: $("#process")?.value || 'bend',
+      autosave: !!autosaveOn,
+      autoOptimize: !!autoOptimizeOn,
+      shiftOnProgress: !!shiftOnProgress,
+      showIds: !!showIds,
+      ovFilter: Array.from(ovFilter || [])
+    };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
 }
@@ -4940,8 +5302,69 @@ function loadUiPreferences(){
   try{
     const raw = localStorage.getItem(UI_PREF_KEY);
     if(!raw) return {};
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if(parsed && Array.isArray(parsed.ovFilter)){
+      parsed.ovFilter = parsed.ovFilter.filter(st=> STAGES.includes(st));
+    }
+    return parsed || {};
   }catch(_){ return {}; }
+}
+
+function updateUidVisibility(){
+  if(typeof document === 'undefined') return;
+  document.body?.classList.toggle('show-ids', !!showIds);
+}
+
+function applyInitialPreferences(){
+  const prefs = loadUiPreferences();
+  if(!prefs || typeof prefs !== 'object'){
+    updateUidVisibility();
+    return;
+  }
+  if(typeof prefs.autosave === 'boolean'){
+    autosaveOn = !!prefs.autosave;
+  }
+  const autosaveEl = $("#autosave");
+  if(autosaveEl) autosaveEl.checked = autosaveOn;
+
+  if(typeof prefs.autoOptimize === 'boolean'){
+    autoOptimizeOn = !!prefs.autoOptimize;
+  }
+  const autoOptEl = $("#autoOptimize");
+  if(autoOptEl) autoOptEl.checked = autoOptimizeOn;
+
+  if(typeof prefs.shiftOnProgress === 'boolean'){
+    shiftOnProgress = !!prefs.shiftOnProgress;
+  }
+  const shiftEl = $("#shiftOnProgress");
+  if(shiftEl) shiftEl.checked = shiftOnProgress;
+
+  if(typeof prefs.filter === 'string'){
+    const filterEl = $("#ganttFilter");
+    if(filterEl) filterEl.value = prefs.filter;
+    const filterFs = $("#ganttFilterFS");
+    if(filterFs) filterFs.value = prefs.filter;
+  }
+
+  if(Array.isArray(prefs.ovFilter) && prefs.ovFilter.length){
+    ovFilter = new Set(prefs.ovFilter.filter(st=> STAGES.includes(st)));
+  }
+  $$('.ov-filter').forEach(ch=>{ ch.checked = ovFilter.has(ch.value); });
+
+  const preferredStage = (typeof prefs.process === 'string' && STAGES.includes(prefs.process)) ? prefs.process : null;
+  if(preferredStage){
+    const procEl = $("#process");
+    if(procEl) procEl.value = preferredStage;
+    const procFs = $("#processFS");
+    if(procFs) procFs.value = preferredStage;
+    currentProc = preferredStage;
+    adjustUIForProcess(preferredStage);
+  }
+
+  showIds = !!prefs.showIds;
+  const showIdsEl = $("#showIdsToggle");
+  if(showIdsEl) showIdsEl.checked = showIds;
+  updateUidVisibility();
 }
 
 function updateFreshnessUI(){
@@ -5139,6 +5562,7 @@ function syncProcessFS(){
 $("#process").addEventListener('change', e=>{
   switchProcess(e.target.value);
   syncProcessFS();
+  saveUiPreferences();
 });
 
 $("#processFS").addEventListener('change', e=>{
@@ -5335,11 +5759,13 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
     autosaveOn = !!e.target.checked;
     if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false});
+    saveUiPreferences();
   });
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
     persistMaybe();
+    saveUiPreferences();
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -5352,7 +5778,18 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
     persistMaybe();
+    saveUiPreferences();
   });
+
+  const showIdsToggle = $("#showIdsToggle");
+  if(showIdsToggle){
+    showIdsToggle.checked = showIds;
+    showIdsToggle.addEventListener('change', e=>{
+      showIds = !!e.target.checked;
+      updateUidVisibility();
+      saveUiPreferences();
+    });
+  }
 
   // Гант — FS
   $("#toggleFS").addEventListener('click', ()=>{
@@ -5385,20 +5822,32 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     const prev = lastDiffApplied;
     const box=$("#undoContent");
     if(prev){
+      const descriptions = buildDiffDescriptions(prev);
+      const byUid = descriptions.byUid || new Map();
+      const renderUndoLine = (type)=> (entry)=>{
+        const source = type==='chg' ? (entry.to || entry.from || {}) : entry || {};
+        const uid = type==='chg' ? (entry.to?.uid || entry.from?.uid || source.uid) : (entry?.uid || source.uid);
+        const desc = uid ? byUid.get(uid) : null;
+        const label = desc?.label || describeTaskName(source);
+        const details = desc?.details || '';
+        const infoHtml = details ? `<span class="info-icon" title="${escapeHtml(details)}">ⓘ</span>` : '';
+        const idValue = uid ? String(uid) : '';
+        const idHtml = idValue ? `<span class="uid-badge"><code>${escapeHtml(idValue)}</code></span>` : '';
+        const checkboxType = type;
+        const safeUid = idValue;
+        const dataAttr = safeUid ? ` data-uid="${escapeHtml(safeUid)}"` : '';
+        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${checkboxType}"${dataAttr} checked> <span class="diff-line"><span>${escapeHtml(label)}</span>${idHtml}${infoHtml}</span></label>`;
+      };
       const block = (key, arr, fmt) => `
         <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
           <legend style="padding:0 6px">${key} (${arr.length})</legend>
           ${arr.length? arr.map(fmt).join('') : '—'}
         </fieldset>`;
-      const fmt = (type) => (x)=>{
-        const t = (type==='chg'? x.from : x);
-        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-      };
       box.innerHTML =
-        block('Добавленные — удалить', prev.added, fmt('add')) +
-        block('Удалённые — вернуть',  prev.removed, fmt('del')) +
-        block('Изменённые — откатить',prev.changed, fmt('chg')) +
-        block('Ушедшие в архив — вернуть', prev.toDone, fmt('done'));
+        block('Добавленные — удалить', prev.added, renderUndoLine('add')) +
+        block('Удалённые — вернуть',  prev.removed, renderUndoLine('del')) +
+        block('Изменённые — откатить',prev.changed, renderUndoLine('chg')) +
+        block('Ушедшие в архив — вернуть', prev.toDone, renderUndoLine('done'));
       $("#undoDlg").showModal();
 
       $("#undoApply").onclick = ()=>{
@@ -5468,12 +5917,13 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
 	// Общий маршрут — фильтры этапов
-	$$('.ov-filter').forEach(ch=>{
-	  ch.addEventListener('change', ()=>{
-		if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
-		renderOverview();
-	  });
-	});
+        $$('.ov-filter').forEach(ch=>{
+          ch.addEventListener('change', ()=>{
+                if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
+                renderOverview();
+                saveUiPreferences();
+          });
+        });
 	// Общий маршрут — переключатель вида
 	$('#ovMode').addEventListener('click', (e)=>{
 	  if(!(e.target instanceof HTMLButtonElement)) return;
@@ -5561,6 +6011,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 ========= */
 document.addEventListener('DOMContentLoaded', ()=>{
 
+  applyInitialPreferences();
   setupRealtimeSync();
   wireHandlers();
   applyAccessMode();
