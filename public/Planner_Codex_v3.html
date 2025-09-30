@@ -5466,8 +5466,18 @@ function persistNow(stageOverride, opts={}){
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
     const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+
+    if(!hadChanges){
+      lastSyncedSnapshots.set(curStage, currentSnapshot);
+      mergeStageIntoAll(curStage, tasks);
+      if(!remoteSyncEnabled()){
+        setDataMode(enableLocalStore ? 'local' : 'session');
+      }
+      return;
+    }
+
     const prevStageOrders = new Set(prevSnapshot.map(item=> item?.orderId ? String(item.orderId).trim() : '').filter(Boolean));
-    const ordersSummary = hadChanges ? buildOrderChangeSummary(diff, curStage, { prevStageOrders, prevAllOrders: prevAllOrdersSet }) : null;
+    const ordersSummary = buildOrderChangeSummary(diff, curStage, { prevStageOrders, prevAllOrders: prevAllOrdersSet });
 
     // merge tasks from other стадий
     if(prevTasks.length){
