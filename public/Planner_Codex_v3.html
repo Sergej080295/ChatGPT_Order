@@ -4526,6 +4526,7 @@ function restoreState(json, opts={}){
   try{
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
+    const uiPrefs = loadUiPreferences();
     const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>({
       uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
@@ -4579,6 +4580,12 @@ function restoreState(json, opts={}){
 
     const savedCap = s.capByProc || {};
     capByProc = { ...DEFAULT_CAP, ...savedCap };
+    if(uiPrefs?.capByProc && typeof uiPrefs.capByProc === 'object'){
+      Object.entries(uiPrefs.capByProc).forEach(([stage, val])=>{
+        const num = Number(val);
+        if(Number.isFinite(num)) capByProc[stage] = num;
+      });
+    }
 
     routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
       start: v.start ? new Date(v.start) : null,
@@ -4592,6 +4599,12 @@ function restoreState(json, opts={}){
 
     if(s.parallelByProc){
       Object.assign(parallelByProc, s.parallelByProc);
+    }
+    if(uiPrefs?.parallelByProc && typeof uiPrefs.parallelByProc === 'object'){
+      Object.entries(uiPrefs.parallelByProc).forEach(([stage, val])=>{
+        const num = Number(val);
+        if(Number.isFinite(num) && num>0) parallelByProc[stage] = num;
+      });
     }
     ['proc','shear','pack','ship'].forEach(k=>{
       if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
@@ -4643,13 +4656,25 @@ function restoreState(json, opts={}){
       $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
     }
 
-    $("#ganttFilter").value = s.filter || 'all';
-    if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
-    autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
+    const filterVal = s.filter || uiPrefs?.filter || 'all';
+    $("#ganttFilter").value = filterVal;
+    if(uiPrefs?.autosaveOn !== undefined){
+      autosaveOn = !!uiPrefs.autosaveOn;
+    }else{
+      autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
+    }
     $("#autosave").checked = autosaveOn;
-    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    if(uiPrefs?.shiftOnProgress !== undefined){
+      shiftOnProgress = !!uiPrefs.shiftOnProgress;
+    }else{
+      shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    }
     $("#shiftOnProgress").checked = shiftOnProgress;
-    autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
+    if(uiPrefs?.autoOptimizeOn !== undefined){
+      autoOptimizeOn = !!uiPrefs.autoOptimizeOn;
+    }else{
+      autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
+    }
     $("#autoOptimize").checked = autoOptimizeOn;
 
     if(preserveProcess){
@@ -4705,6 +4730,7 @@ function loadStageFromLS(stage){
 
 function persistNow(stageOverride, opts={}){
   const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
+  const uiOnly = !!opts.uiOnly;
   if(!userCanEdit() && source !== 'system') return;
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
@@ -4835,7 +4861,8 @@ function persistNow(stageOverride, opts={}){
     const payload = JSON.stringify(stateObj);
     const fingerprint = simpleHash(payload);
     lastAppliedRemoteFingerprint = fingerprint;
-    lastPushedFingerprint = fingerprint;
+    const shouldPushRemote = remoteSyncEnabled() && !uiOnly && (hadChanges || force);
+    lastPushedFingerprint = shouldPushRemote ? fingerprint : '';
     suppressIncoming = true;
     try{
       lastSerializedState = payload;
@@ -4851,7 +4878,7 @@ function persistNow(stageOverride, opts={}){
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
 
-    if(remoteSyncEnabled()){
+    if(shouldPushRemote){
       remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
         .then(()=> setDataMode('remote'))
         .catch(async err=>{
@@ -4908,7 +4935,7 @@ function persistNow(stageOverride, opts={}){
           setDataMode(modeAfter);
         });
     }else{
-      setDataMode(enableLocalStore ? 'local' : 'session');
+      setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
     }
 
     if(hadChanges && announce){
@@ -4920,7 +4947,7 @@ function persistNow(stageOverride, opts={}){
 }
 
 function persistMaybe(reason='data', opts={}){
-  if(reason==='ui'){ saveUiPreferences(); return; }
+  if(reason==='ui'){ saveUiPreferences(opts); return; }
   if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
   if(autosaveOn || opts.force) persistNow(undefined, opts);
 }
@@ -4929,10 +4956,22 @@ function persistMaybe(reason='data', opts={}){
    ПЕРЕСЧЁТ
 ========= */
 
-function saveUiPreferences(){
+function saveUiPreferences(extraPrefs){
   try{
-    const prefs = { filter: $("#ganttFilter")?.value || 'all' };
-    localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
+    const prev = loadUiPreferences();
+    const extras = (extraPrefs && typeof extraPrefs === 'object') ? extraPrefs : {};
+    const merged = { ...prev, ...extras };
+    if(extras.capByProc){
+      merged.capByProc = { ...(prev?.capByProc || {}), ...extras.capByProc };
+    }
+    if(extras.parallelByProc){
+      merged.parallelByProc = { ...(prev?.parallelByProc || {}), ...extras.parallelByProc };
+    }
+    const filterValue = ('filter' in extras)
+      ? extras.filter
+      : ($("#ganttFilter")?.value ?? merged.filter ?? 'all');
+    merged.filter = filterValue || 'all';
+    localStorage.setItem(UI_PREF_KEY, JSON.stringify(merged));
   }catch(_){ /* ignore */ }
 }
 
@@ -5231,11 +5270,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   
   // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
   $("#parallelOps").addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[$("#process").value] ?? DEFAULT_PARALLEL[$("#process").value] ?? 3); notifyReadOnly(); return; }
+    const stage = $("#process").value;
+    if(!userCanEdit()){ e.target.value = String(parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3); notifyReadOnly(); return; }
     const v = Math.max(1, parseInt(e.target.value, 10) || 1);
-    parallelByProc[$("#process").value] = v;
+    parallelByProc[stage] = v;
     recompute();
-    persistMaybe();
+    persistMaybe('ui',{ parallelByProc: { [stage]: v } });
   });
 
   // сортировка/оптимизация
@@ -5271,16 +5311,16 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     const v=Number($("#capacity").value)|| capByProc[p] || 15;
     capByProc[p]=v;
     recompute();
-    persistMaybe();
+    persistMaybe('ui',{ capByProc: { [p]: v } });
   });
-  
+
   document.getElementById('parallelOps').addEventListener('input', e=>{
     if(!userCanEdit()){ e.target.value = String(parallelByProc[document.getElementById('process').value] ?? 3); notifyReadOnly(); return; }
     const p = document.getElementById('process').value;
     const v = Math.max(1, parseInt(e.target.value||'3',10));
     parallelByProc[p] = v;
     recompute();
-    persistMaybe();
+    persistMaybe('ui',{ parallelByProc: { [p]: v } });
   });
   
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
@@ -5334,12 +5374,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autosave").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
     autosaveOn = !!e.target.checked;
-    if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false});
+    persistMaybe('ui',{ autosaveOn });
   });
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui',{ shiftOnProgress });
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -5351,7 +5391,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autoOptimize").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui',{ autoOptimizeOn });
   });
 
   // Гант — FS
