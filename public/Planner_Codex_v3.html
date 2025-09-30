@@ -152,6 +152,14 @@ h3{margin:0 0 10px;font-size:16px}
 .mode-pill::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:#94a3b8}
 .mode-pill[data-mode="remote"]{background:#ecfdf5;border-color:#bbf7d0;color:#065f46}
 .mode-pill[data-mode="remote"]::before{background:#22c55e}
+.system-settings{width:100%;display:flex;flex-direction:column;gap:10px;border:1px solid #e2e8f0;border-radius:12px;padding:12px;background:#f8fafc}
+.system-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.system-settings-row{border:1px solid #dbe3f1;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px;background:#fff;transition:box-shadow .15s ease,border-color .15s ease}
+.system-settings-row.active{border-color:#2563eb;box-shadow:0 0 0 2px #2563eb22}
+.system-settings-row .stage{font-weight:600;font-size:13px;color:#0f172a}
+.system-settings-row label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#475569}
+.system-settings-row input{border:1px solid #cbd5e1;border-radius:6px;padding:4px 6px;font-size:13px}
+.system-settings-row input[disabled]{background:#f1f5f9;color:#94a3b8;cursor:not-allowed}
 .mode-pill[data-mode="local"]{background:#fef3c7;border-color:#fcd34d;color:#854d0e}
 .mode-pill[data-mode="local"]::before{background:#f59e0b}
 .mode-pill[data-mode="session"]{background:#e0f2fe;border-color:#bae6fd;color:#0369a1}
@@ -414,28 +422,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <h1 id="pageTitle">Планировщик — <span id="procTitle">Гибка</span></h1>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
-	  <select id="process">
-		<option value="bend">Гибка</option>
-		<option value="laser">Лазер</option>
-		<option value="draw">Технологи: подготовка в работу</option>
-		<option value="weld">Сварка</option>
-		<option value="mech">Мехобработка</option>
-		<option value="proc">Закупка</option>
-		<option value="shear">Рубка</option>
-		<option value="pack">Упаковка</option>
-		<option value="ship">Отгрузка</option>
+          <select id="process">
+                <option value="bend">Гибка</option>
+                <option value="laser">Лазер</option>
+                <option value="draw">Технологи: подготовка в работу</option>
+                <option value="weld">Сварка</option>
+                <option value="mech">Мехобработка</option>
+                <option value="proc">Закупка</option>
+                <option value="shear">Рубка</option>
+                <option value="pack">Упаковка</option>
+                <option value="ship">Отгрузка</option>
 
-	  </select>
+          </select>
     </label>
-
-	<label id="parallelOpsBox" style="display:none">Параллельные операции:
-	  <input id="parallelOps" type="number" min="1" step="1" value="3" style="width:80px">
-	</label>
-	
-	<label>Вместимость, ч/день:
-	  <input id="capacity" type="number" min="0" step="0.25" value="15" style="width:80px">
-	</label>
-
 
     <div class="tools">
       <label class="btn">Импорт (.csv)
@@ -648,6 +647,13 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <div class="muted small">Права доступа:</div>
     <label class="small"><input type="radio" name="accessMode" value="edit"> Редактирование</label>
     <label class="small"><input type="radio" name="accessMode" value="view"> Только просмотр</label>
+  </div>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:12px;margin-top:14px;width:100%">
+    <div class="muted small">Системные параметры:</div>
+    <div id="systemSettingsSection" class="system-settings">
+      <div class="muted small">Настройки применяются ко всем пользователям. Изменения сохраняются сразу.</div>
+      <div id="systemSettingsGrid" class="system-settings-grid"></div>
+    </div>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px">
     <div class="muted small">Сохранение данных:</div>
@@ -1363,12 +1369,16 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#capacity','#parallelOps'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
       if('disabled' in el) el.disabled = !canEdit;
     }
+  });
+  $$('.system-setting-input').forEach(input=>{
+    input.disabled = !canEdit;
+    input.parentElement?.classList.toggle('muted', !canEdit);
   });
   ['#file','#stateFile'].forEach(sel=>{
     const input = $(sel);
@@ -1682,11 +1692,6 @@ async function bootstrapState(){
     const st = $("#process").value;
     currentProc = st;
     adjustUIForProcess(st);
-    if(!NOHOUR_STAGES.has(st)){
-      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
-    }else{
-      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
-    }
     const prefs = loadUiPreferences();
     if(prefs.filter) $("#ganttFilter").value = prefs.filter;
     recompute();
@@ -1739,7 +1744,17 @@ let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
-let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[] };
+let stateMeta = {
+  versions:{},
+  lastAuthors:{},
+  csvTimestamp:'',
+  manualTimestamp:'',
+  history:[],
+  settings:{
+    capByProc: { ...DEFAULT_CAP },
+    parallelByProc: { ...DEFAULT_PARALLEL }
+  }
+};
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -1792,7 +1807,8 @@ const STAGE_TITLE = {
   weld:'Сварка',
   mech:'Мехобработка',
   pack:'Упаковка',
-  ship:'Отгрузка' // на будущее
+  ship:'Отгрузка', // на будущее
+  'system-settings':'Системные настройки'
 };
 
 // буквы для полос
@@ -1832,60 +1848,191 @@ function adjustUIForProcess(p){
   document.getElementById('reserveBtn').style.display    = noHours ? 'none' : '';
   document.getElementById('exceptionsBtn').style.display = noHours ? 'none' : '';
   document.getElementById('detail7').style.display       = noHours ? 'none' : '';
-
-  // Вместимость vs Параллельность (безопасно, если #capacity вдруг отсутствует)
-  const capEl = document.getElementById('capacity');
-  const capBox = capEl ? capEl.parentElement : null;
-  const parBox = document.getElementById('parallelOpsBox');
-
   if(noHours){
-    if(capBox) capBox.style.display = 'none';
-    if(parBox) parBox.style.display = '';
-    const v = Math.max(1, parallelByProc[p] ?? DEFAULT_PARALLEL[p] ?? 3);
-    parallelByProc[p] = v;
-    const parEl = document.getElementById('parallelOps');
-    if(parEl) parEl.value = String(v);
-    if(capEl) capEl.dataset.stage = '';
+    ensureParallelForStage(p);
   }else{
-    if(capBox) capBox.style.display = '';
-    if(parBox) parBox.style.display = 'none';
-    if(capEl){
-      const stored = capByProc[p] ?? DEFAULT_CAP[p] ?? 15;
-      capEl.value = String(stored);
-      capEl.dataset.stage = p;
-    }
+    ensureCapacityForStage(p);
   }
-
+  updateSystemSettingsUI(p);
 }
-
-// Правка "Вместимость, ч/день" — только для часовых переделов
-document.getElementById('capacity')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (!NOHOUR_STAGES.has(cur)) {
-    const v = Number(e.target.value);
-    if (Number.isFinite(v) && v >= 0) {
-      capByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
-
-// Правка "Параллельные операции" — только для безчасовых переделов
-document.getElementById('parallelOps')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (NOHOUR_STAGES.has(cur)) {
-    const v = parseInt(String(e.target.value), 10);
-    if (Number.isFinite(v) && v > 0) {
-      parallelByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
+
+function ensureCapacityForStage(stage){
+  const fallback = DEFAULT_CAP[stage] ?? 0;
+  let raw = capByProc?.[stage];
+  if(typeof raw === 'string'){ raw = Number(raw.replace?.(',','.')); }
+  let val = Number(raw);
+  if(!Number.isFinite(val) || val < 0){
+    val = fallback;
+  }
+  capByProc[stage] = val;
+  return val;
+}
+
+function ensureParallelForStage(stage){
+  const fallback = DEFAULT_PARALLEL[stage] ?? 1;
+  let raw = parallelByProc?.[stage];
+  if(typeof raw === 'string'){ raw = Number(raw.replace?.(',','.')); }
+  let val = Number(raw);
+  if(!Number.isFinite(val) || val < 1){
+    val = fallback;
+  }
+  val = Math.max(1, Math.round(val));
+  parallelByProc[stage] = val;
+  return val;
+}
+
+function formatCapacityValue(value){
+  if(!Number.isFinite(value)) return '';
+  const fixed = value.toFixed(2);
+  return fixed.replace(/\.00$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+}
+
+function formatParallelValue(value){
+  if(!Number.isFinite(value)) return '';
+  return String(Math.max(1, Math.round(value)));
+}
+
+function syncSystemSettingsMeta(){
+  stateMeta.settings = {
+    capByProc: { ...DEFAULT_CAP, ...(capByProc || {}) },
+    parallelByProc: { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) }
+  };
+}
+
+function updateSystemSettingsUI(activeStage){
+  STAGES.forEach(stage=>{
+    if(NOHOUR_STAGES.has(stage)){
+      ensureParallelForStage(stage);
+    }else{
+      ensureCapacityForStage(stage);
+    }
+  });
+  syncSystemSettingsMeta();
+  const grid = document.getElementById('systemSettingsGrid');
+  if(!grid) return;
+  const currentStage = activeStage || $("#process")?.value || '';
+  grid.querySelectorAll('.system-settings-row').forEach(row=>{
+    const stage = row.dataset.stage;
+    row.classList.toggle('active', stage === currentStage);
+    row.querySelectorAll('input[data-kind="cap"]').forEach(input=>{
+      const val = ensureCapacityForStage(stage);
+      input.value = formatCapacityValue(val);
+    });
+    row.querySelectorAll('input[data-kind="parallel"]').forEach(input=>{
+      const val = ensureParallelForStage(stage);
+      input.value = formatParallelValue(val);
+    });
+  });
+}
+
+function buildSystemSettingsUI(){
+  const grid = document.getElementById('systemSettingsGrid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  STAGES.forEach(stage=>{
+    const row = document.createElement('div');
+    row.className = 'system-settings-row';
+    row.dataset.stage = stage;
+    const stageName = STAGE_TITLE[stage] || stage;
+    const header = document.createElement('div');
+    header.className = 'stage';
+    header.textContent = stageName;
+    row.appendChild(header);
+    if(!NOHOUR_STAGES.has(stage)){
+      const capLabel = document.createElement('label');
+      capLabel.innerHTML = '<span>Вместимость, ч/день</span>'+
+        `<input type="number" min="0" step="0.25" class="system-setting-input" data-kind="cap" data-stage="${stage}">`;
+      row.appendChild(capLabel);
+    }
+    if(NOHOUR_STAGES.has(stage)){
+      const parLabel = document.createElement('label');
+      parLabel.innerHTML = '<span>Параллельные операции</span>'+
+        `<input type="number" min="1" step="1" class="system-setting-input" data-kind="parallel" data-stage="${stage}">`;
+      row.appendChild(parLabel);
+    }
+    grid.appendChild(row);
+  });
+  grid.addEventListener('change', onSystemSettingChange);
+  updateSystemSettingsUI();
+}
+
+function onSystemSettingChange(event){
+  const input = event.target;
+  if(!(input instanceof HTMLInputElement)) return;
+  if(!input.classList.contains('system-setting-input')) return;
+  const stage = input.dataset.stage;
+  const kind = input.dataset.kind;
+  if(!stage || !kind){
+    updateSystemSettingsUI();
+    return;
+  }
+  if(!userCanEdit()){
+    updateSystemSettingsUI();
+    notifyReadOnly();
+    return;
+  }
+  const stageTitle = STAGE_TITLE[stage] || stage;
+  if(kind === 'cap'){
+    const prev = ensureCapacityForStage(stage);
+    let next = Number(String(input.value).replace(',','.'));
+    if(!Number.isFinite(next) || next < 0){
+      next = prev;
+    }
+    next = Math.max(0, Math.round(next * 100) / 100);
+    if(Math.abs(next - prev) < 1e-6){
+      updateSystemSettingsUI(stage);
+      return;
+    }
+    capByProc[stage] = next;
+    syncSystemSettingsMeta();
+    updateSystemSettingsUI(stage);
+    if(stage === $("#process")?.value){
+      recompute();
+    }
+    const prevText = formatCapacityValue(prev);
+    const nextText = formatCapacityValue(next);
+    const summary = `${stageTitle}: Вместимость, ч/день ${prevText} → ${nextText}`;
+    const details = `<div><strong>${stageTitle}</strong></div><div>Вместимость, ч/день: <code>${prevText}</code> → <code>${nextText}</code></div>`;
+    persistNow(undefined, {
+      source:'system-settings',
+      metaSummary: summary,
+      metaStage:'system-settings',
+      metaDetails: details
+    });
+    return;
+  }
+  if(kind === 'parallel'){
+    const prev = ensureParallelForStage(stage);
+    let next = parseInt(String(input.value).replace(',','.'), 10);
+    if(!Number.isFinite(next) || next < 1){
+      next = prev;
+    }
+    next = Math.max(1, Math.round(next));
+    if(next === prev){
+      updateSystemSettingsUI(stage);
+      return;
+    }
+    parallelByProc[stage] = next;
+    syncSystemSettingsMeta();
+    updateSystemSettingsUI(stage);
+    if(stage === $("#process")?.value){
+      recompute();
+    }
+    const prevText = formatParallelValue(prev);
+    const nextText = formatParallelValue(next);
+    const summary = `${stageTitle}: Параллельные операции ${prevText} → ${nextText}`;
+    const details = `<div><strong>${stageTitle}</strong></div><div>Параллельные операции: <code>${prevText}</code> → <code>${nextText}</code></div>`;
+    persistNow(undefined, {
+      source:'system-settings',
+      metaSummary: summary,
+      metaStage:'system-settings',
+      metaDetails: details
+    });
+  }
+}
 
 let ovFilter = new Set(STAGES);  // какие этапы показаны на «Общем маршруте»
 let ovModeCurrent = 'detailed';  // 'detailed' | 'compact'
@@ -2726,13 +2873,9 @@ function renderGantt(intoFS=false){
   const noHours = NOHOUR_STAGES.has(curProc);
   let baseCap;
   if(noHours){
-    baseCap = Math.max(1, parallelByProc[curProc] ?? DEFAULT_PARALLEL[curProc] ?? 3);
+    baseCap = ensureParallelForStage(curProc);
   } else {
-    const capEl = document.getElementById('capacity');
-    const capStage = capEl?.dataset?.stage;
-    const rawCap = capEl ? Number(capEl.value) : NaN;
-    const stored = capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15;
-    baseCap = (capStage === curProc && Number.isFinite(rawCap)) ? rawCap : stored;
+    baseCap = ensureCapacityForStage(curProc);
   }
 
   const filter = intoFS ? $("#ganttFilterFS").value : $("#ganttFilter").value;
@@ -3874,7 +4017,6 @@ function importStateFromCSV(text){
     }
   });
   capByProc = capNew;
-  $("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
 
   csvFreshnessStr = meta.freshness || meta.freshnessCsv || csvFreshnessStr;
   manualFreshnessStr = meta.freshnessManual || manualFreshnessStr;
@@ -3900,6 +4042,16 @@ function importStateFromCSV(text){
     pack: parallelByProc.pack || 3,
     ship: parallelByProc.ship || 5
   };
+
+  STAGES.forEach(stage=>{
+    if(NOHOUR_STAGES.has(stage)){
+      ensureParallelForStage(stage);
+    }else{
+      ensureCapacityForStage(stage);
+    }
+  });
+  syncSystemSettingsMeta();
+  updateSystemSettingsUI($("#process").value);
 
   trash = Array.isArray(importStateFromCSV._trash) ? importStateFromCSV._trash : [];
   delete importStateFromCSV._trash;
@@ -4202,6 +4354,10 @@ function buildStateObject(){
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
       history,
+      settings: {
+        capByProc: { ...DEFAULT_CAP, ...(stateMeta.settings?.capByProc || capOut) },
+        parallelByProc: { ...DEFAULT_PARALLEL, ...(stateMeta.settings?.parallelByProc || parallelOut) }
+      },
       storage: storageMeta
     }
   };
@@ -4388,12 +4544,15 @@ function renderLogList(){
     const stageName = STAGE_TITLE[entry.stage] || entry.stage;
     const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
     const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const hasDiff = diffHasChanges(entry.diff || {added:[],removed:[],changed:[]});
+    const hasDetails = !!entry.details;
+    const detailBtn = (hasDiff || hasDetails)
+      ? `<div style="display:flex;justify-content:flex-end;margin-top:6px"><button class="btn small ghost" data-log-detail="${entry.id}">Подробнее</button></div>`
+      : '';
     return `<div class="log-entry" data-log-id="${entry.id}">`
       + `<div><strong>${stageName}</strong> — ${summary}</div>`
       + `<div class="meta">${meta}</div>`
-      + `<div style="display:flex;justify-content:flex-end;margin-top:6px">`
-      + `<button class="btn small ghost" data-log-detail="${entry.id}">Подробнее</button>`
-      + `</div>`
+      + detailBtn
       + `</div>`;
   }).join('');
   container.innerHTML = rows;
@@ -4577,7 +4736,8 @@ function restoreState(json, opts={}){
     lockedUids = lockedSet;
     ordersByStage = new Map(s.orders || []);
 
-    const savedCap = s.capByProc || {};
+    const metaSettings = s.meta?.settings || {};
+    const savedCap = metaSettings.capByProc || s.capByProc || {};
     capByProc = { ...DEFAULT_CAP, ...savedCap };
 
     routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
@@ -4590,12 +4750,19 @@ function restoreState(json, opts={}){
     if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
     if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
 
-    if(s.parallelByProc){
-      Object.assign(parallelByProc, s.parallelByProc);
-    }
+    const savedParallel = metaSettings.parallelByProc || s.parallelByProc || {};
+    parallelByProc = { ...DEFAULT_PARALLEL, ...savedParallel };
     ['proc','shear','pack','ship'].forEach(k=>{
       if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
         parallelByProc[k] = (k==='pack' ? 3 : 5);
+      }
+    });
+
+    STAGES.forEach(stage=>{
+      if(NOHOUR_STAGES.has(stage)){
+        ensureParallelForStage(stage);
+      }else{
+        ensureCapacityForStage(stage);
       }
     });
 
@@ -4608,7 +4775,11 @@ function restoreState(json, opts={}){
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
-      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
+      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
+      settings: {
+        capByProc: { ...DEFAULT_CAP, ...capByProc },
+        parallelByProc: { ...DEFAULT_PARALLEL, ...parallelByProc }
+      }
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
@@ -4635,14 +4806,6 @@ function restoreState(json, opts={}){
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
-    const capEl = $("#capacity");
-    if(capEl && !NOHOUR_STAGES.has(currentProc)){
-      capEl.value = capByProc[currentProc] || DEFAULT_CAP[currentProc] || 15;
-    }
-    if(NOHOUR_STAGES.has(currentProc) && $("#parallelOps")){
-      $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
-    }
-
     $("#ganttFilter").value = s.filter || 'all';
     if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
     autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
@@ -4704,10 +4867,19 @@ function loadStageFromLS(stage){
 }
 
 function persistNow(stageOverride, opts={}){
-  const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
+  const {
+    source='manual',
+    force=false,
+    announce=true,
+    silentOnConflict=false,
+    metaSummary='',
+    metaStage='',
+    metaDetails=''
+  } = opts;
   if(!userCanEdit() && source !== 'system') return;
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
+    syncSystemSettingsMeta();
     const stateObj = buildStateObject();
     stateObj.process = curStage;
 
@@ -4822,6 +4994,27 @@ function persistNow(stageOverride, opts={}){
       } else {
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
       }
+    } else if(metaSummary){
+      changeSummary = metaSummary;
+      const nowStr = new Date().toLocaleString();
+      const stageKey = metaStage || 'system-settings';
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+        time: nowStr,
+        stage: stageKey,
+        user: userAlias,
+        session: SESSION_ID,
+        source,
+        summary: metaSummary
+      };
+      if(metaDetails) entry.details = metaDetails;
+      activityLog.push(entry);
+      if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [stageKey]: { name:userAlias, session:SESSION_ID, at:nowStr, summary:metaSummary } };
+      markLogAttention();
+    } else {
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
     }
 
     stateObj.meta = {
@@ -4829,7 +5022,8 @@ function persistNow(stageOverride, opts={}){
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+      history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+      settings: { ...(stateMeta.settings || { capByProc:{ ...DEFAULT_CAP }, parallelByProc:{ ...DEFAULT_PARALLEL } }) }
     };
 
     const payload = JSON.stringify(stateObj);
@@ -4851,8 +5045,20 @@ function persistNow(stageOverride, opts={}){
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
 
+    const announceStage = metaSummary ? (metaStage || 'system-settings') : curStage;
+    const pushMeta = {
+      stage: announceStage,
+      diff: hadChanges ? diff : undefined,
+      version: newVersion,
+      source,
+      user: userAlias,
+      session: SESSION_ID,
+      summary: (metaSummary || changeSummary) || undefined
+    };
+    if(metaDetails){ pushMeta.details = metaDetails; }
+
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
+      remoteBridge.push(payload, pushMeta)
         .then(()=> setDataMode('remote'))
         .catch(async err=>{
           if(err?.status === 409){
@@ -4911,8 +5117,18 @@ function persistNow(stageOverride, opts={}){
       setDataMode(enableLocalStore ? 'local' : 'session');
     }
 
-    if(hadChanges && announce){
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+    if(announce && (hadChanges || metaSummary)){
+      const announcePayload = {
+        stage: announceStage,
+        diff: hadChanges ? diff : undefined,
+        version: newVersion,
+        source,
+        user: userAlias
+      };
+      if(metaSummary || changeSummary){
+        announcePayload.summary = metaSummary || changeSummary;
+      }
+      announceStateUpdate(announcePayload);
     }
   }catch(e){
     console.warn('persist failed', e);
@@ -4983,31 +5199,13 @@ function recompute(){
     proc==='ship' ? 'Отгрузка' : '—';
   
 const noHours = NOHOUR_STAGES.has(proc);
-const capEl = document.getElementById('capacity');
 let cap;
 if (noHours) {
-  const storedParallel = Math.max(1, parallelByProc[proc] ?? DEFAULT_PARALLEL[proc] ?? 3);
-  parallelByProc[proc] = storedParallel;
-  const parEl = document.getElementById('parallelOps');
-  if(parEl && parEl.value !== String(storedParallel)){
-    parEl.value = String(storedParallel);
-  }
-  if(capEl) capEl.dataset.stage = '';
-  cap = storedParallel;
+  cap = ensureParallelForStage(proc);
 } else {
-  const capStage = capEl?.dataset?.stage;
-  const storedCap = capByProc[proc] ?? DEFAULT_CAP[proc] ?? 15;
-  let capVal = capEl ? Number(capEl.value) : NaN;
-  if(capStage !== proc || !Number.isFinite(capVal)){
-    capVal = storedCap;
-  }
-  cap = Math.max(0, capVal);
-  if(capEl){
-    capEl.dataset.stage = proc;
-    if(capEl.value !== String(cap)) capEl.value = String(cap);
-  }
-  capByProc[proc] = cap;
+  cap = ensureCapacityForStage(proc);
 }
+updateSystemSettingsUI(proc);
 
 // подготовим задачи для аллокатора
 let allocTasks = tasks;
@@ -5059,7 +5257,8 @@ function openReserve(){
 }
 function renderReserveDiag(text){
   const lines = String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  const base = Number($("#capacity").value) || capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+  const stage = $("#process").value;
+  const base = NOHOUR_STAGES.has(stage) ? ensureParallelForStage(stage) : ensureCapacityForStage(stage);
   const arr = lines.map(l=>{
     const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(l);
     if(!m) return null;
@@ -5150,6 +5349,7 @@ $("#processFS").addEventListener('change', e=>{
    ОБРАБОТЧИКИ UI
 ========= */
 function wireHandlers(){
+  buildSystemSettingsUI();
   $("#userAlias").value = userAlias;
   $("#userAlias").addEventListener('change', e=>{
     const val = e.target.value.trim();
@@ -5230,14 +5430,6 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#reserveText").addEventListener('input', e=> renderReserveDiag(e.target.value));
   
   // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
-  $("#parallelOps").addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[$("#process").value] ?? DEFAULT_PARALLEL[$("#process").value] ?? 3); notifyReadOnly(); return; }
-    const v = Math.max(1, parseInt(e.target.value, 10) || 1);
-    parallelByProc[$("#process").value] = v;
-    recompute();
-    persistMaybe();
-  });
-
   // сортировка/оптимизация
   $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
   $("#optimizeBtn").addEventListener('click', ()=>{
@@ -5264,25 +5456,6 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   });
 
-  // вместимость и фильтр
-  $("#capacity").addEventListener('input', ()=>{
-    if(!userCanEdit()){ const p=$("#process").value; $("#capacity").value = String(capByProc[p] ?? DEFAULT_CAP[p] ?? 15); notifyReadOnly(); return; }
-    const p=$("#process").value;
-    const v=Number($("#capacity").value)|| capByProc[p] || 15;
-    capByProc[p]=v;
-    recompute();
-    persistMaybe();
-  });
-  
-  document.getElementById('parallelOps').addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[document.getElementById('process').value] ?? 3); notifyReadOnly(); return; }
-    const p = document.getElementById('process').value;
-    const v = Math.max(1, parseInt(e.target.value||'3',10));
-    parallelByProc[p] = v;
-    recompute();
-    persistMaybe();
-  });
-  
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
   // очистка
@@ -5311,17 +5484,21 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	updateFreshnessUI();
 	updateTrashAttention?.();
 
-	capByProc      = { ...DEFAULT_CAP };
-	parallelByProc = { ...DEFAULT_PARALLEL };
+        capByProc      = { ...DEFAULT_CAP };
+        parallelByProc = { ...DEFAULT_PARALLEL };
 
-	// обновим UI под текущий выбранный передел
-	const cur = document.getElementById('process').value;
-	adjustUIForProcess(cur);
-	const capEl = document.getElementById('capacity');
-	if (capEl) capEl.value = capByProc[cur] ?? DEFAULT_CAP[cur] ?? 15;
-	if (NOHOUR_STAGES.has(cur) && document.getElementById('parallelOps')) {
-      document.getElementById('parallelOps').value = String(parallelByProc[cur] ?? 3);
-    }
+        // обновим UI под текущий выбранный передел
+        const cur = document.getElementById('process').value;
+        adjustUIForProcess(cur);
+        STAGES.forEach(stage=>{
+          if(NOHOUR_STAGES.has(stage)){
+            ensureParallelForStage(stage);
+          }else{
+            ensureCapacityForStage(stage);
+          }
+        });
+        syncSystemSettingsMeta();
+        updateSystemSettingsUI(cur);
 
     persistNow();
     recompute();
@@ -5521,7 +5698,14 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           const id = e.target?.dataset?.logDetail;
           if(!id) return;
           const entry = activityLog.find(x=>x.id===id);
-          if(entry) showUpdateDetails(entry.diff);
+          if(!entry) return;
+          if(entry.details){
+            const box = $('#updateDetails');
+            if(box) box.innerHTML = entry.details;
+            $('#updateDetailsDlg').showModal();
+          }else{
+            showUpdateDetails(entry.diff);
+          }
         });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
@@ -5545,6 +5729,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
             }
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             refreshDataModeIndicator();
+            updateSystemSettingsUI($('#process')?.value);
             $('#settingsDlg').showModal();
           });
         }
