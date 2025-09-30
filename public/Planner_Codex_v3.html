@@ -172,6 +172,12 @@ h3{margin:0 0 10px;font-size:16px}
 .log-entry{padding:8px 0;border-bottom:1px solid #e2e8f0;font-size:13px}
 .log-entry:last-child{border-bottom:none}
 .log-entry .meta{color:var(--muted);font-size:12px;margin-top:2px}
+.log-entry .summary-text{margin:4px 0;font-size:13px;line-height:1.35}
+.orders-section{margin:10px 0}
+.orders-section h4{margin:0 0 6px;font-size:14px}
+.orders-section ul{margin:0;padding-left:18px}
+.orders-section li{margin:4px 0}
+.orders-section .badge{display:inline-block;margin-right:6px;padding:2px 6px;background:#e2e8f0;border-radius:999px;font-size:11px;color:#0f172a}
 
 .btn{
   padding:6px 10px;
@@ -1665,20 +1671,43 @@ function applyStateFromExternal(raw, opts={}){
       setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
     }
 
-    if(!skipToasts && diffs.length){
-      const authors = parsed.meta?.lastAuthors || {};
-      diffs.forEach(({stage, diff})=>{
-        const info = authors[stage];
-        const who = info?.name || info?.user || info?.session || 'Пользователь';
-        showToast({
-          title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
-          message: `${who}: ${summarizeDiff(diff)}`,
-          actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff)},
-            {label:'OK', handler:(el)=> el.remove()}
-          ]
+    if(!skipToasts){
+      const metaInfo = parsed.meta || {};
+      const stageFromMeta = metaInfo.stage != null ? metaInfo.stage : (diffs.length === 1 ? diffs[0].stage : null);
+      const stageName = stageFromMeta ? (STAGE_TITLE[stageFromMeta] || stageFromMeta) : 'Обновление';
+      const actor = metaInfo.user || metaInfo.alias || 'Пользователь';
+      if(metaInfo.ordersSummary){
+        const notifications = composeOrderNotifications(metaInfo.ordersSummary, actor);
+        if(notifications.length){
+          const primaryDiff = stageFromMeta ? diffs.find(item=>item.stage === stageFromMeta)?.diff : diffs[0]?.diff;
+          notifications.forEach(note=>{
+            showToast({
+              title: stageFromMeta ? `${note.title} — ${stageName}` : note.title,
+              message: note.message,
+              actions:[
+                {label:'Подробнее', primary:true, handler:()=> showUpdateDetails({ ordersSummary: metaInfo.ordersSummary, diff: primaryDiff })},
+                {label:'OK', handler:(el)=> el.remove()}
+              ]
+            });
+          });
+          return;
+        }
+      }
+      if(diffs.length){
+        const authors = metaInfo.lastAuthors || {};
+        diffs.forEach(({stage, diff})=>{
+          const info = authors[stage];
+          const who = info?.name || info?.user || info?.session || actor;
+          showToast({
+            title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
+            message: `${who}: ${summarizeDiff(diff)}`,
+            actions:[
+              {label:'Подробнее', primary:true, handler:()=> showUpdateDetails({ diff })},
+              {label:'OK', handler:(el)=> el.remove()}
+            ]
+          });
         });
-      });
+      }
     }
   }catch(err){ console.warn('applyStateFromExternal failed', err); }
 }
@@ -4134,6 +4163,290 @@ function buildDiffDescriptions(diff){
   return { items, byUid };
 }
 
+function describeOrderLabel(task){
+  if(!task) return 'Неизвестный заказ';
+  const raw = task.orderId || task.label || '';
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if(trimmed) return trimmed;
+  const name = describeTaskName(task);
+  return name.replace(/\s*\([^)]*\)\s*$/, '') || name;
+}
+
+function buildOrderChangeSummary(diff, stage, context={}){
+  if(!diffHasChanges(diff)) return null;
+  const stageLetterDefault = STAGE_LETTER[stage] || '';
+  const prevStageOrders = context.prevStageOrders instanceof Set ? context.prevStageOrders : new Set(context.prevStageOrders || []);
+  const prevAllOrders = context.prevAllOrders instanceof Set ? context.prevAllOrders : new Set(context.prevAllOrders || []);
+  const byOrder = new Map();
+  const ensure = (task)=>{
+    const orderId = (task && task.orderId != null) ? String(task.orderId).trim() : '';
+    const key = orderId || String(task?.uid || task?.parentId || task?.childId || Math.random());
+    const label = orderId || describeOrderLabel(task);
+    let info = byOrder.get(key);
+    if(!info){
+      info = {
+        id: key,
+        label,
+        stageLetters: new Set(),
+        added: [],
+        removed: [],
+        changed: [],
+        wasKnownStage: orderId ? prevStageOrders.has(orderId) : false,
+        wasKnownGlobal: orderId ? prevAllOrders.has(orderId) : false
+      };
+      byOrder.set(key, info);
+    }
+    if(orderId){
+      if(prevStageOrders.has(orderId)) info.wasKnownStage = true;
+      if(prevAllOrders.has(orderId)) info.wasKnownGlobal = true;
+    }
+    return info;
+  };
+  const touchStage = (info, stageId)=>{
+    const letter = STAGE_LETTER[stageId] || stageLetterDefault || stageId;
+    if(letter) info.stageLetters.add(letter);
+    return letter;
+  };
+  const stageNameOf = (stageId)=> STAGE_TITLE[stageId] || stageId;
+
+  diff.added.forEach(task=>{
+    const targetStage = task.stage || stage;
+    const info = ensure(task);
+    const letter = touchStage(info, targetStage);
+    info.added.push({
+      stage: targetStage,
+      stageLetter: letter,
+      stageName: stageNameOf(targetStage),
+      details: buildTaskInfoSummary(task)
+    });
+  });
+
+  diff.removed.forEach(task=>{
+    const targetStage = task.stage || stage;
+    const info = ensure(task);
+    const letter = touchStage(info, targetStage);
+    info.removed.push({
+      stage: targetStage,
+      stageLetter: letter,
+      stageName: stageNameOf(targetStage),
+      details: buildTaskInfoSummary(task)
+    });
+  });
+
+  diff.changed.forEach(change=>{
+    const target = change.after || change.to || change.before || change.from;
+    if(!target) return;
+    const targetStage = change.stage || target.stage || stage;
+    const info = ensure(target);
+    const letter = touchStage(info, targetStage);
+    const fields = (change.fields || []).map(formatFieldChangeText).filter(Boolean);
+    info.changed.push({
+      stage: targetStage,
+      stageLetter: letter,
+      stageName: stageNameOf(targetStage),
+      fields,
+      hasExplicit: fields.length > 0
+    });
+  });
+
+  const addedOrders = [];
+  const removedOrders = [];
+  const changedOrders = [];
+
+  byOrder.forEach(info=>{
+    const stageLetters = Array.from(info.stageLetters).filter(Boolean).sort().join('');
+    const details = [];
+    info.added.forEach(part=>{
+      details.push({
+        stage: part.stageName,
+        stageLetter: part.stageLetter,
+        text: part.details ? `Добавлен этап — ${part.details}` : 'Добавлен этап'
+      });
+    });
+    info.changed.forEach(part=>{
+      const text = part.fields.length ? part.fields.join('; ') : 'Изменения';
+      details.push({
+        stage: part.stageName,
+        stageLetter: part.stageLetter,
+        text
+      });
+    });
+    info.removed.forEach(part=>{
+      details.push({
+        stage: part.stageName,
+        stageLetter: part.stageLetter,
+        text: part.details ? `Удалён этап — ${part.details}` : 'Удалён этап'
+      });
+    });
+    const orderRecord = {
+      id: info.id,
+      label: info.label,
+      stageLetters,
+      added: info.added,
+      removed: info.removed,
+      changed: info.changed,
+      details
+    };
+    const hasAdded = info.added.length > 0;
+    const hasRemoved = info.removed.length > 0;
+    const hasFieldChanges = info.changed.some(part=>part.hasExplicit);
+    const treatAsNew = hasAdded && !info.wasKnownGlobal && !hasRemoved && !hasFieldChanges;
+    const treatAsRemoved = hasRemoved && info.wasKnownGlobal && !hasAdded && !hasFieldChanges;
+    if(treatAsNew){
+      addedOrders.push(orderRecord);
+    }else if(treatAsRemoved){
+      removedOrders.push(orderRecord);
+    }else if(hasAdded || hasRemoved || hasFieldChanges){
+      changedOrders.push(orderRecord);
+    }
+  });
+
+  return {
+    stage,
+    stageLetter: stageLetterDefault,
+    stageName: STAGE_TITLE[stage] || stage,
+    orders: {
+      added: addedOrders,
+      changed: changedOrders,
+      removed: removedOrders
+    },
+    totals: {
+      added: addedOrders.length,
+      changed: changedOrders.length,
+      removed: removedOrders.length
+    }
+  };
+}
+
+function summarizeOrdersHeadline(summary){
+  if(!summary || !summary.orders) return '';
+  const parts = [];
+  const formatList = (list, withStages=false)=>{
+    if(!Array.isArray(list) || !list.length) return '';
+    if(list.length > 3){
+      return `${list.length}`;
+    }
+    return list.map(item=>{
+      const label = item.label || '—';
+      if(withStages && item.stageLetters){
+        return `${label} (${item.stageLetters})`;
+      }
+      return label;
+    }).join(', ');
+  };
+  if(summary.orders.added.length){
+    parts.push(`Добавлены: ${formatList(summary.orders.added)}`);
+  }
+  if(summary.orders.changed.length){
+    parts.push(`Изменены: ${formatList(summary.orders.changed, true)}`);
+  }
+  if(summary.orders.removed.length){
+    parts.push(`Удалены: ${formatList(summary.orders.removed)}`);
+  }
+  return parts.filter(Boolean).join(' • ');
+}
+
+function formatOrdersSummaryPreview(summary, user, opts={}){
+  if(!summary || !summary.orders) return '';
+  const limit = typeof opts.limit === 'number' ? opts.limit : 5;
+  const html = opts.html !== false;
+  const encode = (value)=> html ? escapeHtml(value) : value;
+  const joiner = html ? '<br>' : '\n';
+  const makeList = (list, withStages=false)=>{
+    if(list.length > limit){
+      return encode(`${withStages ? 'Всего' : 'Количество'}: ${list.length}`);
+    }
+    return list.map(item=>{
+      const label = encode(item.label || '—');
+      if(withStages){
+        const stages = encode(item.stageLetters || '');
+        return stages ? `${label} (${stages})` : label;
+      }
+      return label;
+    }).join(joiner);
+  };
+  const lines = [];
+  if(summary.orders.added.length){
+    lines.push(encode('Добавлены новые заказы:'));
+    lines.push(makeList(summary.orders.added));
+  }
+  if(summary.orders.changed.length){
+    lines.push(encode('Изменены заказы:'));
+    lines.push(makeList(summary.orders.changed, true));
+  }
+  if(summary.orders.removed.length){
+    lines.push(encode('Удалены заказы:'));
+    lines.push(makeList(summary.orders.removed));
+  }
+  if(user){
+    lines.push(encode(`Пользователь: ${user}`));
+  }
+  return lines.filter(Boolean).join(joiner);
+}
+
+function composeOrderNotifications(summary, user){
+  if(!summary || !summary.orders) return [];
+  const notifications = [];
+  const userLine = user ? `<br><span class="muted">Пользователь: ${escapeHtml(user)}</span>` : '';
+  const buildMessage = (title, list, options={})=>{
+    const { withStages=false, type='changed' } = options;
+    if(!list.length) return null;
+    if(list.length > 5){
+      const countText = type === 'added'
+        ? `Добавлено новых заказов: ${list.length}`
+        : type === 'removed'
+          ? `Удалено заказов: ${list.length}`
+          : `Изменено заказов: ${list.length}`;
+      return {
+        title,
+        message: `${countText}${userLine}`
+      };
+    }
+    const rows = list.map(item=>{
+      const label = escapeHtml(item.label || '—');
+      if(withStages && item.stageLetters){
+        return `${label} <span class="muted">(${escapeHtml(item.stageLetters)})</span>`;
+      }
+      return label;
+    }).join('<br>');
+    return {
+      title,
+      message: `${title}:<br>${rows}${userLine}`
+    };
+  };
+  const addedMsg = buildMessage('Добавлены новые заказы', summary.orders.added, { type:'added' });
+  if(addedMsg) notifications.push(addedMsg);
+  const changedMsg = buildMessage('Изменены заказы', summary.orders.changed, { withStages:true, type:'changed' });
+  if(changedMsg) notifications.push(changedMsg);
+  const removedMsg = buildMessage('Удалены заказы', summary.orders.removed, { type:'removed' });
+  if(removedMsg) notifications.push(removedMsg);
+  return notifications;
+}
+
+function renderOrdersSummaryDetails(summary){
+  if(!summary || !summary.orders) return '<div class="muted">Детали недоступны</div>';
+  const renderSection = (title, list)=>{
+    if(!list.length) return '';
+    const items = list.map(item=>{
+      const stages = item.stageLetters ? ` <span class="muted">(${escapeHtml(item.stageLetters)})</span>` : '';
+      const details = (item.details || []).map(detail=>{
+        const prefix = detail.stageLetter ? `<span class="badge">${escapeHtml(detail.stageLetter)}</span>` : '';
+        const stageName = detail.stage ? escapeHtml(detail.stage) : '';
+        const text = detail.text ? escapeHtml(detail.text) : '';
+        return `<div class="muted" style="margin-left:12px">${prefix} ${stageName}${text ? ` — ${text}` : ''}</div>`;
+      }).join('');
+      return `<li><strong>${escapeHtml(item.label || '—')}</strong>${stages}${details}</li>`;
+    }).join('');
+    return `<section class="orders-section"><h4>${escapeHtml(title)} (${list.length})</h4><ul>${items}</ul></section>`;
+  };
+  const sections = [
+    renderSection('Добавлены', summary.orders.added),
+    renderSection('Изменены', summary.orders.changed),
+    renderSection('Удалены', summary.orders.removed)
+  ].filter(Boolean);
+  return sections.length ? sections.join('') : '<div class="muted">Изменений нет</div>';
+}
+
 function renderDeltaDialog(diff){
   const el=$("#deltaContent");
   const descriptions = buildDiffDescriptions(diff);
@@ -4472,20 +4785,11 @@ function buildStateObject(){
   lastKnownVersions.forEach((v,k)=>{ versionsObj[k] = v; });
   const history = activityLog.slice(-LOG_LIMIT);
 
-  const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
-  const storageMeta = {
-    local: enableLocalStore,
-    remote: remoteSyncEnabled(),
-    remotePreferred: enableRemoteStore,
-    mode: currentDataOrigin
-  };
 
   return {
     routeOverrides: ro,
     t, done, trash: trashArr, exc, res,
-
-    capByProc: capOut,
     parallelByProc: parallelOut,
     locked:[...lockedUids],
     orders:[...ordersByStage.entries()],
@@ -4499,8 +4803,7 @@ function buildStateObject(){
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history,
-      storage: storageMeta
+      history
     }
   };
 }
@@ -4715,9 +5018,16 @@ function renderLogList(){
   const rows = activityLog.slice().reverse().map(entry=>{
     const stageName = STAGE_TITLE[entry.stage] || entry.stage;
     const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
-    const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const fallbackSummary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const summaryContent = entry.ordersSummary
+      ? formatOrdersSummaryPreview(entry.ordersSummary, entry.user || 'Неизвестный', { limit:5, html:true })
+      : escapeHtml(fallbackSummary);
+    const summaryBlock = summaryContent
+      ? `<div class="summary-text">${summaryContent}</div>`
+      : '';
     return `<div class="log-entry" data-log-id="${entry.id}">`
-      + `<div><strong>${stageName}</strong> — ${summary}</div>`
+      + `<div><strong>${stageName}</strong></div>`
+      + summaryBlock
       + `<div class="meta">${meta}</div>`
       + `<div style="display:flex;justify-content:flex-end;margin-top:6px">`
       + `<button class="btn small ghost" data-log-detail="${entry.id}">Подробнее</button>`
@@ -4727,9 +5037,17 @@ function renderLogList(){
   container.innerHTML = rows;
 }
 
-function showUpdateDetails(diff){
+function showUpdateDetails(entry){
   const box = $("#updateDetails");
-  if(box) box.innerHTML = diffToHtml(diff);
+  if(box){
+    if(entry && entry.ordersSummary){
+      box.innerHTML = renderOrdersSummaryDetails(entry.ordersSummary);
+    }else if(entry && entry.diff){
+      box.innerHTML = diffToHtml(entry.diff);
+    }else{
+      box.innerHTML = '<div class="muted">Детали недоступны</div>';
+    }
+  }
   $("#updateDetailsDlg")?.showModal();
 }
 
@@ -4787,13 +5105,32 @@ function handleIncomingSyncMessage(msg){
         setDataMode(enableLocalStore ? 'local' : 'session');
       }
     }
+    const stageName = STAGE_TITLE[msg.stage] || msg.stage;
+    const actor = msg.user || msg.alias || 'Пользователь';
+    if((msg.ordersSummary && (msg.ordersSummary.orders?.added?.length || msg.ordersSummary.orders?.changed?.length || msg.ordersSummary.orders?.removed?.length))){
+      markLogAttention();
+      const notifications = composeOrderNotifications(msg.ordersSummary, actor);
+      if(notifications.length){
+        notifications.forEach(note=>{
+          showToast({
+            title: `${note.title} — ${stageName}`,
+            message: note.message,
+            actions:[
+              {label:'Подробнее', primary:true, handler:()=> showUpdateDetails({ ordersSummary: msg.ordersSummary, diff: msg.diff })},
+              {label:'OK', handler:(el)=> el.remove()}
+            ]
+          });
+        });
+        return;
+      }
+    }
     if(msg.diff){
       markLogAttention();
       showToast({
-        title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
-        message: `${msg.user || msg.alias || 'Пользователь'}: ${msg.summary || summarizeDiff(msg.diff)}`,
+        title: `Изменения — ${stageName}`,
+        message: `${actor}: ${msg.summary || summarizeDiff(msg.diff)}`,
         actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
+          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails({ diff: msg.diff })},
           {label:'OK', handler:(el)=> el.remove()}
         ]
       });
@@ -5071,6 +5408,7 @@ function persistNow(stageOverride, opts={}){
     let prevOrders = [];
     let prevMeta = {};
     let prevLocked = new Set();
+    const prevAllOrdersSet = new Set();
     if(rawPrev){
       try{
         prev = JSON.parse(rawPrev);
@@ -5080,6 +5418,21 @@ function persistNow(stageOverride, opts={}){
         prevLocked = new Set(prev.locked || []);
       }catch(_){ prev = null; }
     }
+
+    if(Array.isArray(allTasksFromState)){
+      allTasksFromState.forEach(task=>{
+        if(task && task.orderId){
+          const key = String(task.orderId).trim();
+          if(key) prevAllOrdersSet.add(key);
+        }
+      });
+    }
+    prevTasks.forEach(task=>{
+      if(task && task.orderId){
+        const key = String(task.orderId).trim();
+        if(key) prevAllOrdersSet.add(key);
+      }
+    });
 
     const prevStageTasks = prevTasks.filter(x=>x && x.stage === curStage);
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
@@ -5113,6 +5466,8 @@ function persistNow(stageOverride, opts={}){
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
     const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+    const prevStageOrders = new Set(prevSnapshot.map(item=> item?.orderId ? String(item.orderId).trim() : '').filter(Boolean));
+    const ordersSummary = hadChanges ? buildOrderChangeSummary(diff, curStage, { prevStageOrders, prevAllOrders: prevAllOrdersSet }) : null;
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -5134,17 +5489,18 @@ function persistNow(stageOverride, opts={}){
     }
 
     if(prev && prev.parallelByProc && !stateObj.parallelByProc) stateObj.parallelByProc = prev.parallelByProc;
-    if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
 
     const versions = { ...(stateMeta.versions || {}) };
     const newVersion = (prevVersion || 0) + (hadChanges ? 1 : 0);
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
-    let changeSummary = '';
+    let changeSummary = ordersSummary ? summarizeOrdersHeadline(ordersSummary) : '';
 
     if(hadChanges){
-      changeSummary = summarizeDiff(diff);
+      if(!changeSummary){
+        changeSummary = summarizeDiff(diff);
+      }
       const nowStr = new Date().toLocaleString();
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
@@ -5166,7 +5522,8 @@ function persistNow(stageOverride, opts={}){
           session: SESSION_ID,
           source,
           summary: changeSummary,
-          diff
+          diff,
+          ordersSummary
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -5206,7 +5563,16 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
+      remoteBridge.push(payload, {
+        stage:curStage,
+        diff,
+        version:newVersion,
+        source,
+        user:userAlias,
+        session:SESSION_ID,
+        summary: changeSummary || undefined,
+        ordersSummary: ordersSummary || undefined
+      })
         .then(()=> setDataMode('remote'))
         .catch(async err=>{
           if(err?.status === 409){
@@ -5266,7 +5632,7 @@ function persistNow(stageOverride, opts={}){
     }
 
     if(hadChanges && announce){
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+      announceStateUpdate({ stage:curStage, diff, version:newVersion, source, user:userAlias, summary: changeSummary, ordersSummary });
     }
   }catch(e){
     console.warn('persist failed', e);
@@ -5971,7 +6337,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           const id = e.target?.dataset?.logDetail;
           if(!id) return;
           const entry = activityLog.find(x=>x.id===id);
-          if(entry) showUpdateDetails(entry.diff);
+          if(entry) showUpdateDetails(entry);
         });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());

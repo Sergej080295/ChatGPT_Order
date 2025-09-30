@@ -360,8 +360,11 @@ app.put('/api/state', async (req, res) => {
     summary: meta?.summary ?? null,
     ip: req.ip
   };
-  if (meta?.diff) {
-    logEntry.diff = meta.diff;
+  if (meta?.ordersSummary || meta?.diff) {
+    logEntry.diff = {
+      tasks: meta?.diff ?? null,
+      orders: meta?.ordersSummary ?? null
+    };
   }
   await appendLog(logEntry);
 
