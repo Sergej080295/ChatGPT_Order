@@ -4236,6 +4236,23 @@ function normalizeRouteForDiff(route){
 }
 
 function normalizeTaskForDiff(task, idx, lockedSet){
+  const toIso = (value, fallback='')=>{
+    if(!value) return fallback;
+    if(value instanceof Date){
+      return value.toISOString();
+    }
+    if(typeof value === 'string'){
+      const trimmed = value.trim();
+      if(!trimmed) return fallback;
+      const parsed = new Date(trimmed);
+      return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString();
+    }
+    if(typeof value === 'number'){
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+    }
+    return fallback;
+  };
   return {
     uid: task.uid,
     orderId: task.orderId || '',
@@ -4244,8 +4261,8 @@ function normalizeTaskForDiff(task, idx, lockedSet){
     stage: task.stage || '',
     hours: Number(task.hours||0),
     extraHours: Number(task.extraHours||0),
-    start: task.startDate ? task.startDate.toISOString() : (task.start || ''),
-    end: task.endDate ? task.endDate.toISOString() : (task.end || ''),
+    start: toIso(task.startDate, task.start || ''),
+    end: toIso(task.endDate, task.end || ''),
     progress: Number(task.progress||0),
     state: task.state || '',
     status: task.status || '',
