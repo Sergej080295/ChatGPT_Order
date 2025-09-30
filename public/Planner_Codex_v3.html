@@ -81,16 +81,29 @@
       },
       body
     });
-    const text = await res.text().catch(() => '');
+    const text = await res.text().catch(() => '') || '';
+    const trimmed = text.trim();
+    let parsed = null;
+    if (trimmed) {
+      try { parsed = JSON.parse(trimmed); }
+      catch (_err) { parsed = null; }
+    }
     if (!res.ok) {
-      throw new Error(text || `HTTP ${res.status}`);
+      const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
+      err.status = res.status;
+      if (parsed !== null) {
+        err.detail = parsed;
+      } else if (trimmed) {
+        err.detail = trimmed;
+      }
+      err.body = text;
+      if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+        err.name = 'PlannerConflictError';
+      }
+      throw err;
     }
-    if (!text) return true;
-    try {
-      return JSON.parse(text);
-    } catch (_err) {
-      return text;
-    }
+    if (!trimmed) return true;
+    return parsed ?? text;
   };
 
   window.plannerRemote = {
@@ -1201,13 +1214,30 @@ function createRemoteBridge(){
           headers,
           body
         });
-        if(!res.ok){
-          let detail = '';
-          try{ detail = await res.text(); }catch(_){ detail=''; }
-          detail = detail ? detail.trim() : '';
-          const msg = detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`;
-          throw new Error(msg);
+        let detailText = '';
+        try{ detailText = await res.text(); }
+        catch(_){ detailText = ''; }
+        const trimmedDetail = detailText.trim();
+        let parsedDetail = null;
+        if(trimmedDetail){
+          try{ parsedDetail = JSON.parse(trimmedDetail); }
+          catch(_){ parsedDetail = null; }
         }
+        if(!res.ok){
+          const err = new Error(parsedDetail?.error || trimmedDetail || `HTTP ${res.status}`);
+          err.status = res.status;
+          if(parsedDetail !== null){
+            err.detail = parsedDetail;
+          }else if(trimmedDetail){
+            err.detail = trimmedDetail;
+          }
+          err.body = detailText;
+          if(res.status === 409 && (parsedDetail?.error === 'Conflict' || parsedDetail?.error === 'CONFLICT')){
+            err.name = 'PlannerConflictError';
+          }
+          throw err;
+        }
+        return parsedDetail ?? trimmedDetail ?? '';
       };
       const guessContentType = (body)=>{
         if(typeof body === 'string'){
@@ -4740,8 +4770,10 @@ function persistNow(stageOverride, opts={}){
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
+    let changeSummary = '';
 
     if(hadChanges){
+      changeSummary = summarizeDiff(diff);
       const nowStr = new Date().toLocaleString();
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
@@ -4762,7 +4794,7 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
-          summary: summarizeDiff(diff),
+          summary: changeSummary,
           diff
         };
         activityLog.push(entry);
@@ -4803,23 +4835,61 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID })
-        .catch(err=>{
+      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
+        .then(()=> setDataMode('remote'))
+        .catch(async err=>{
+          if(err?.status === 409){
+            const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+            const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
+            const lastAuthor = detail?.lastAuthor;
+            const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+            const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+            if(authorName){
+              messageParts.push(`Последние правки: ${authorName}.`);
+            }
+            messageParts.push('Актуальные данные загружены заново.');
+            showToast({
+              title:'Конфликт синхронизации',
+              message: messageParts.join(' '),
+              actions:[{label:'OK', handler:(el)=> el.remove()}]
+            });
+            try{
+              const latest = await remoteBridge.pull();
+              if(latest){
+                applyStateFromExternal(latest, { origin:'remote' });
+              }
+            }catch(pullErr){
+              console.warn('failed to refresh after conflict', pullErr);
+            }
+            setDataMode('remote');
+            return;
+          }
           console.warn('remote push failed', err);
           const hadLocal = enableLocalStore;
           if(!hadLocal){
             applyStoragePrefs({ local:true });
           }
-          const detail = err && err.message ? ` (${err.message})` : '';
+          let detailText = '';
+          if(err){
+            if(typeof err.detail === 'string' && err.detail.trim()){
+              detailText = err.detail.trim();
+            }else if(err.detail && typeof err.detail === 'object'){
+              const extra = err.detail.message || err.detail.error || err.body || '';
+              if(extra) detailText = String(extra).trim();
+            }
+            if(!detailText && err.message){
+              detailText = err.message;
+            }
+          }
+          const detailSuffix = detailText ? ` (${detailText})` : '';
           showToast({
             title:'Ошибка синхронизации',
-            message:`Не удалось сохранить изменения в базе данных${detail}. SQL недоступна, включено локальное резервное сохранение.`,
+            message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
             actions:[{label:'OK', handler:(el)=> el.remove()}]
           });
           const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
           setDataMode(modeAfter);
         });
-      setDataMode('remote');
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
     }

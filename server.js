@@ -357,7 +357,7 @@ app.put('/api/state', async (req, res) => {
     user: meta?.user ?? null,
     session: meta?.session ?? null,
     source: meta?.source ?? null,
-    summary: meta?.diff ? undefined : meta?.summary ?? null,
+    summary: meta?.summary ?? null,
     ip: req.ip
   };
   if (meta?.diff) {
