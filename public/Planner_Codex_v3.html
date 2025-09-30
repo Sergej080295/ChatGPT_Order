@@ -146,6 +146,19 @@ h3{margin:0 0 10px;font-size:16px}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--muted)}
 .small{font-size:12px}
+.uid-badge{display:none;margin-left:6px;padding:0 6px;border-radius:999px;background:#e2e8f0;color:#0f172a;font-size:11px;line-height:1.6;font-weight:600}
+body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
+.delta-group{border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:6px 0;background:#f8fafc}
+.delta-group__header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px}
+.delta-group__title{font-weight:600;font-size:13px}
+.delta-group__author{font-size:11px;color:var(--muted)}
+.delta-group__items label{display:block;margin:4px 0}
+.delta-group__more{margin:4px 0 0 0}
+.delta-group__more summary{cursor:pointer;color:#2563eb;list-style:none}
+.delta-group__more summary::marker{display:none}
+.delta-group__more summary::-webkit-details-marker{display:none}
+.delta-group__more summary::before{content:"+ ";font-weight:600}
+.delta-group__more[open] summary::before{content:"− ";}
 .session-label{display:flex;align-items:center;gap:6px}
 .session-label input{border:1px solid #d1d5db;border-radius:6px;padding:2px 6px;font-size:12px;min-width:120px}
 .mode-pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid #d1d5db;background:#f8fafc;color:#0f172a;line-height:1}
@@ -3943,22 +3956,89 @@ function buildDeltaPreview(current, incoming){
 
 function renderDeltaDialog(diff){
   const el=$("#deltaContent");
-  const block = (key, arr, fmt) => `
-    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
-      <legend style="padding:0 6px">${key} (${arr.length})</legend>
-      ${arr.length? arr.map(fmt).join('') : '—'}
-    </fieldset>`;
+  const stageOrder = new Map(STAGES.map((s,i)=>[s,i]));
+  const escMap = {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"};
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => escMap[ch] || ch);
+  const getStage = item => item?.stage ?? item?.to?.stage ?? item?.from?.stage ?? '';
+  const getOrderId = item => item?.orderId ?? item?.to?.orderId ?? item?.from?.orderId ?? '';
+  const badge = uid => `<span class="uid-badge" data-uid="${esc(uid)}">${esc(uid)}</span>`;
+  const stageLetter = stage => {
+    if(!stage) return '?';
+    return (STAGE_LETTER && STAGE_LETTER[stage]) || stage.charAt(0).toUpperCase();
+  };
+  const formatAuthor = stage => {
+    const info = stateMeta?.lastAuthors?.[stage];
+    if(!info) return '';
+    const who = info.name || info.user || info.session || '';
+    if(!who) return '';
+    const when = info.at ? new Date(info.at).toLocaleString() : '';
+    const summary = info.summary ? ` — ${info.summary}` : '';
+    const tooltipParts = [when, info.summary].filter(Boolean);
+    const tooltip = tooltipParts.length ? esc(tooltipParts.join(' · ')) : '';
+    const title = tooltip ? ` title="${tooltip}"` : '';
+    return `<span class="delta-group__author"${title}>Автор: ${esc(who)}${summary ? esc(summary) : ''}</span>`;
+  };
 
-  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const groupEntries = entries => {
+    const groups = new Map();
+    entries.forEach(entry=>{
+      const stage = getStage(entry);
+      const orderId = getOrderId(entry) || '—';
+      const key = `${stage}::${orderId}`;
+      if(!groups.has(key)) groups.set(key, { stage, orderId, entries:[] });
+      groups.get(key).entries.push(entry);
+    });
+    return Array.from(groups.values()).sort((a,b)=>{
+      const sa = stageOrder.has(a.stage) ? stageOrder.get(a.stage) : Number.MAX_SAFE_INTEGER;
+      const sb = stageOrder.has(b.stage) ? stageOrder.get(b.stage) : Number.MAX_SAFE_INTEGER;
+      if(sa!==sb) return sa-sb;
+      return a.orderId.localeCompare(b.orderId, 'ru');
+    });
+  };
+
+  const renderItems = (items, apply) => {
+    if(!items.length) return '';
+    const LIMIT = 5;
+    const getUid = item => item?.uid ?? item?.to?.uid ?? item?.from?.uid ?? '';
+    const renderOne = item => {
+      const uid = getUid(item);
+      if(apply==='chg'){
+        const fields = Array.isArray(item.fields) ? item.fields.map(f=>esc(f)).join(', ') : '';
+        const detail = fields ? ` <i class="muted">(${fields})</i>` : '';
+        return `<label><input type="checkbox" data-apply="chg" data-uid="${esc(uid)}" checked> Изменить${detail} ${badge(uid)}</label>`;
+      }
+      if(apply==='del'){
+        return `<label><input type="checkbox" data-apply="del" data-uid="${esc(uid)}" checked> Удалить ${badge(uid)}</label>`;
+      }
+      if(apply==='done'){
+        return `<label><input type="checkbox" data-apply="done" data-uid="${esc(uid)}" checked> В архив ${badge(uid)}</label>`;
+      }
+      return `<label><input type="checkbox" data-apply="add" data-uid="${esc(uid)}" checked> Добавить ${badge(uid)}</label>`;
+    };
+
+    const visible = items.slice(0, LIMIT).map(renderOne).join('');
+    const hidden = items.length>LIMIT ? items.slice(LIMIT).map(renderOne).join('') : '';
+    if(!hidden) return visible;
+    const more = items.length - LIMIT;
+    return `${visible}<details class="delta-group__more"><summary>ещё ${more}</summary>${hidden}</details>`;
+  };
+
+  const renderBlock = (title, entries, apply) => {
+    const groups = groupEntries(entries);
+    const content = groups.length ? groups.map(group=>{
+      const letter = esc(stageLetter(group.stage));
+      const orderTitle = esc(group.orderId);
+      const author = formatAuthor(group.stage);
+      return `<div class="delta-group"><div class="delta-group__header"><div class="delta-group__title">${orderTitle} <span class="muted">(${letter})</span></div>${author}</div><div class="delta-group__items">${renderItems(group.entries, apply)}</div></div>`;
+    }).join('') : '—';
+    return `<fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0"><legend style="padding:0 6px">${title} (${entries.length})</legend>${content}</fieldset>`;
+  };
 
   el.innerHTML =
-    block('Новые', diff.added, fmtAdd) +
-    block('Изменённые', diff.changed, fmtChg) +
-    block('Удаляемые', diff.removed, fmtDel) +
-    block('Статус = Готово', diff.toDone, fmtDone);
+    renderBlock('Новые', diff.added, 'add') +
+    renderBlock('Изменённые', diff.changed, 'chg') +
+    renderBlock('Удаляемые', diff.removed, 'del') +
+    renderBlock('Статус = Готово', diff.toDone, 'done');
 
   $("#deltaDlg").showModal();
 
