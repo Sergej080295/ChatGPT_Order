@@ -247,9 +247,15 @@ td[data-field="progress"]{background:#fffef3}
 .orders-overview-controls label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .orders-overview-controls select{border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px;font-size:12px;min-width:140px}
 #ordersOverviewTable{width:100%;border-collapse:separate;border-spacing:0}
-#ordersOverviewTable thead th{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--line);padding:8px;font-size:12px;text-align:left;color:#1e293b;z-index:1}
+#ordersOverviewTable thead th{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--line);padding:8px;font-size:12px;text-align:center;color:#1e293b;z-index:1;font-weight:700}
 #ordersOverviewTable tbody td{border-bottom:1px solid var(--line);padding:10px 8px;vertical-align:middle;font-size:12px}
 #ordersOverviewTable tbody tr:nth-child(even){background:#f8fafc}
+.main.overview-mode{grid-template-columns:1fr}
+.main.overview-mode #ordersOverviewPanel{max-width:none}
+.main.overview-mode #ordersOverviewTable{min-width:100%}
+.main.overview-mode .card{width:100%}
+#ordersOverviewTable tfoot td{background:#f1f5f9;font-weight:600;font-size:12px;padding:10px 8px;text-align:center;border-top:1px solid var(--line)}
+#ordersOverviewTable tfoot td.orders-overview-total-label{text-align:left}
 .orders-overview-empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:12px}
 .order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
 .order-eye-btn:disabled{opacity:.4;cursor:default}
@@ -259,6 +265,9 @@ td[data-field="progress"]{background:#fffef3}
 .stage-check[data-state="missing"]{border-color:transparent;background:none;color:transparent}
 .stage-check[data-state="pending"]::after{content:''}
 .stage-check[data-state="done"]::after{content:'✔'}
+.stage-check[data-slip="true"]{border-color:#ef4444;background:#fee2e2;color:#b91c1c}
+.stage-check[data-slip="true"]::after{color:#b91c1c}
+.stage-check[data-slip="true"][data-state="done"]{background:#fee2e2;color:#b91c1c}
 .progress-cell{min-width:160px}
 .progress-wrap{display:flex;flex-direction:column;gap:6px}
 .progress-remaining{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted)}
@@ -269,6 +278,8 @@ td[data-field="progress"]{background:#fffef3}
 .progress-bar[data-state="done"] .progress-fill{background:#22c55e}
 .progress-bar[data-state="empty"]{background:#f1f5f9;color:#94a3b8}
 .progress-bar[data-state="empty"] .progress-fill{background:#cbd5e1}
+.progress-bar[data-slip="true"]{background:#fee2e2;color:#b91c1c}
+.progress-bar[data-slip="true"] .progress-fill{background:#ef4444}
 .status-ok{background:var(--ok);color:var(--okText);font-weight:600;border-radius:6px}
 .status-early{background:var(--early);color:var(--earlyText);font-weight:600;border-radius:6px}
 .status-late{background:var(--late);color:var(--lateText);font-weight:600;border-radius:6px}
@@ -564,6 +575,20 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
           </tr>
         </thead>
         <tbody></tbody>
+        <tfoot>
+          <tr id="ordersOverviewTotalsRow">
+            <td colspan="3" class="orders-overview-total-label" data-total="orders">Итого: 0</td>
+            <td data-total-stage="proc">0 шт</td>
+            <td data-total-stage="shear">0 шт</td>
+            <td data-total-stage="draw">00:00:00</td>
+            <td data-total-stage="laser">00:00:00</td>
+            <td data-total-stage="bend">00:00:00</td>
+            <td data-total-stage="weld">00:00:00</td>
+            <td data-total-stage="mech">00:00:00</td>
+            <td data-total-stage="pack">0 шт</td>
+            <td data-total-stage="ship">0 шт</td>
+          </tr>
+        </tfoot>
       </table>
     </div>
 
@@ -618,7 +643,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       </table>
     </div>
 
-    <div class="legend">
+    <div class="legend" id="statusLegend">
       <span><i class="chip green"></i> Точно в срок</span>
       <span><i class="chip amber"></i> 0- дн</span>
       <span><i class="chip red"></i> 0+дн</span>
@@ -2010,7 +2035,7 @@ function collectActiveTasksForOverview(){
     if(key) trashParentKeys.add(key);
   });
 
-  const shouldSkipOrder = key => key && (doneParentKeys.has(key) || trashParentKeys.has(key));
+  const shouldSkipOrder = key => key && trashParentKeys.has(key);
   const byUid = new Map();
 
   const pushTask = (source)=>{
@@ -2270,6 +2295,28 @@ function renderOrdersOverviewTable(){
   const { rows, stageTasks, doneStageSet } = collectOrdersForList(mode);
   const tbody = $("#ordersOverviewTable tbody");
   if(!tbody) return;
+  const totalsRow = document.getElementById('ordersOverviewTotalsRow');
+
+  const updateTotalsUI = totals => {
+    if(!totalsRow) return;
+    const labelCell = totalsRow.querySelector('[data-total="orders"]');
+    if(labelCell){ labelCell.textContent = `Итого: ${totals.orders}`; }
+    const setCell = (stage, text) => {
+      const cell = totalsRow.querySelector(`[data-total-stage="${stage}"]`);
+      if(cell) cell.textContent = text;
+    };
+    setCell('proc', `${totals.proc} шт`);
+    setCell('shear', `${totals.shear} шт`);
+    setCell('pack', `${totals.pack} шт`);
+    setCell('ship', `${totals.ship} шт`);
+    setCell('draw', formatHoursToHMS(totals.draw));
+    setCell('laser', formatHoursToHMS(totals.laser));
+    setCell('bend', formatHoursToHMS(totals.bend));
+    setCell('weld', formatHoursToHMS(totals.weld));
+    setCell('mech', formatHoursToHMS(totals.mech));
+  };
+
+  updateTotalsUI({ orders: 0, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 });
 
   tbody.innerHTML = '';
   if(!rows.length){
@@ -2283,6 +2330,10 @@ function renderOrdersOverviewTable(){
     return;
   }
 
+  const totals = { orders: rows.length, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const progressStages = ['draw','laser','bend','weld','mech'];
+  const indicatorStages = ['proc','shear','pack','ship'];
+
   rows.forEach(entry => {
     const tr = document.createElement('tr');
     const parts = parseOrderParts(entry.order.orderId);
@@ -2295,6 +2346,43 @@ function renderOrdersOverviewTable(){
       return 'pending';
     };
 
+    const detectStageSlip = stage => {
+      if(!schedule || !schedule.perTask) return false;
+      const tasksForStage = stageTasks.get(entry.key)?.get(stage) || [];
+      return tasksForStage.some(task => {
+        if(!task) return false;
+        const deadline = task.endDate instanceof Date ? task.endDate : (task.endDate ? new Date(task.endDate) : null);
+        if(!deadline || Number.isNaN(deadline.getTime())) return false;
+        const rec = schedule.perTask.get(task.uid);
+        if(!rec || !Array.isArray(rec.segments) || !rec.segments.length) return false;
+        let last = null;
+        rec.segments.forEach(seg => {
+          const raw = seg?.date;
+          if(!raw) return;
+          const date = raw instanceof Date ? new Date(raw) : new Date(raw);
+          if(Number.isNaN(date.getTime())) return;
+          if(!last || date > last) last = date;
+        });
+        return last && last > deadline;
+      });
+    };
+
+    const metricsCache = {};
+    const slipFlags = {};
+
+    progressStages.forEach(stage => {
+      const metrics = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
+      metricsCache[stage] = metrics;
+      totals[stage] += metrics.remaining;
+      slipFlags[stage] = detectStageSlip(stage);
+    });
+
+    indicatorStages.forEach(stage => {
+      const state = indicatorState(stage);
+      if(state !== 'missing'){ totals[stage] += 1; }
+      slipFlags[stage] = detectStageSlip(stage);
+    });
+
     const renderProgress = stage => {
       const seg = entry.order.stages?.[stage];
       const hasStage = !!(seg && (seg.start || seg.end || Number(seg.hours)));
@@ -2302,16 +2390,17 @@ function renderOrdersOverviewTable(){
       if(!hasStage && !tasksPresent){
         return '<span class="muted">—</span>';
       }
-      const metrics = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
+      const metrics = metricsCache[stage] || computeStageMetrics(entry, stage, stageTasks, doneStageSet);
       const pct = Math.round(metrics.percent);
       const remainingText = formatHoursToHMS(metrics.remaining);
       const totalText = metrics.totalHours > 0 ? metrics.totalHours.toFixed(1).replace('.',',') : '0,0';
       const state = pct >= 100 ? 'done' : (metrics.totalHours <= 0 ? 'empty' : 'active');
       const width = Math.max(0, Math.min(100, pct));
+      const slipAttr = slipFlags[stage] ? ' data-slip="true"' : '';
       return `
         <div class="progress-wrap">
           <div class="progress-remaining">${remainingText}</div>
-          <div class="progress-bar" data-state="${state}">
+          <div class="progress-bar" data-state="${state}"${slipAttr}>
             <div class="progress-fill" style="width:${width}%"></div>
             <span>${pct}% (${totalText}ч)</span>
           </div>
@@ -2319,19 +2408,25 @@ function renderOrdersOverviewTable(){
       `;
     };
 
+    const renderIndicator = stage => {
+      const state = indicatorState(stage);
+      const slipAttr = slipFlags[stage] ? ' data-slip="true"' : '';
+      return `<span class="stage-check" data-state="${state}"${slipAttr}></span>`;
+    };
+
     tr.innerHTML = `
       <td>${entry.order.number}</td>
       <td><button class="order-eye-btn" title="Маршрут заказа">👁</button></td>
       <td>${parts.display}</td>
-      <td><span class="stage-check" data-state="${indicatorState('proc')}"></span></td>
-      <td><span class="stage-check" data-state="${indicatorState('shear')}"></span></td>
+      <td>${renderIndicator('proc')}</td>
+      <td>${renderIndicator('shear')}</td>
       <td class="progress-cell">${renderProgress('draw')}</td>
       <td class="progress-cell">${renderProgress('laser')}</td>
       <td class="progress-cell">${renderProgress('bend')}</td>
       <td class="progress-cell">${renderProgress('weld')}</td>
       <td class="progress-cell">${renderProgress('mech')}</td>
-      <td><span class="stage-check" data-state="${indicatorState('pack')}"></span></td>
-      <td><span class="stage-check" data-state="${indicatorState('ship')}"></span></td>
+      <td>${renderIndicator('pack')}</td>
+      <td>${renderIndicator('ship')}</td>
     `;
 
     const eyeBtn = tr.querySelector('.order-eye-btn');
@@ -2342,6 +2437,8 @@ function renderOrdersOverviewTable(){
 
     tbody.appendChild(tr);
   });
+
+  updateTotalsUI(totals);
 }
 
 function toggleOverviewMode(enabled){
@@ -2351,6 +2448,26 @@ function toggleOverviewMode(enabled){
   if(panel){ panel.style.display = enabled ? '' : 'none'; }
   const controls = document.getElementById('ordersOverviewControls');
   if(controls){ controls.style.display = enabled ? '' : 'none'; }
+
+  const main = document.querySelector('.main');
+  if(main){ main.classList.toggle('overview-mode', !!enabled); }
+
+  const legend = document.getElementById('statusLegend');
+  if(legend){
+    if(enabled){
+      if(legend.dataset.prevDisplay === undefined){
+        legend.dataset.prevDisplay = legend.style.display || '';
+      }
+      legend.style.display = 'none';
+    } else {
+      if(legend.dataset.prevDisplay !== undefined){
+        legend.style.display = legend.dataset.prevDisplay;
+        delete legend.dataset.prevDisplay;
+      } else {
+        legend.style.display = '';
+      }
+    }
+  }
 
   const hideIds = ['detail7','overdueCard','ganttCard','overviewCard'];
   hideIds.forEach(id=>{
@@ -3075,26 +3192,63 @@ function sortTasksByStart(){
   rememberStageOrder();
 }
 
+function optimizeStageArray(list, stage){
+  if(!Array.isArray(list) || list.length <= 1){
+    return Array.isArray(list) ? list.slice() : [];
+  }
+  const stageId = stage || '';
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  const lockedSet = new Set();
+  if(stageId && stageId === currentStage){
+    lockedUids.forEach(uid => lockedSet.add(uid));
+  } else {
+    list.forEach(item => {
+      if(item && item.locked){ lockedSet.add(item.uid); }
+    });
+  }
+  const lockedPositions = [];
+  const freeTasks = [];
+  list.forEach((task, index)=>{
+    if(!task) return;
+    const isLocked = lockedSet.has(task.uid);
+    const isHidden = !!task.hiddenByState;
+    if(isLocked || isHidden){
+      lockedPositions.push({ pos:index, task });
+    } else {
+      freeTasks.push(task);
+    }
+  });
+  freeTasks.sort((a,b)=>{
+    const ea=a?.endDate?+a.endDate:Infinity;
+    const eb=b?.endDate?+b.endDate:Infinity;
+    if(ea!==eb) return ea-eb;
+    const sa=a?.startDate?+a.startDate:Infinity;
+    const sb=b?.startDate?+b.startDate:Infinity;
+    if(sa!==sb) return sa-sb;
+    const ao=String(a?.orderId||'');
+    const bo=String(b?.orderId||'');
+    return ao.localeCompare(bo);
+  });
+  const result = new Array(list.length).fill(null);
+  lockedPositions.forEach(entry=>{
+    const idx = Math.min(Math.max(entry.pos, 0), result.length - 1);
+    result[idx] = entry.task;
+  });
+  let cursor = 0;
+  freeTasks.forEach(task=>{
+    while(cursor < result.length && result[cursor]) cursor++;
+    if(cursor < result.length){
+      result[cursor++] = task;
+    }
+  });
+  return result.filter(Boolean);
+}
+
 function optimizeQueue(){
   if(!tasks.length) return;
-  const lockedPositions = [];
-  tasks.forEach((t,i)=>{
-    if(lockedUids.has(t.uid) || t.hiddenByState) lockedPositions.push({pos:i, task:t});
-  });
-  const freeTasks = tasks.filter(t=> !lockedUids.has(t.uid) && !t.hiddenByState);
-  freeTasks.sort((a,b)=>{
-    const ea=a.endDate?+a.endDate:Infinity, eb=b.endDate?+b.endDate:Infinity;
-    if(ea!==eb) return ea-eb;
-    const sa=+a.startDate, sb=+b.startDate;
-    if(sa!==sb) return sa-sb;
-    return a.orderId.localeCompare(b.orderId);
-  });
-  const N=tasks.length; const res=new Array(N).fill(null);
-  lockedPositions.forEach(lp=>{ res[lp.pos]=lp.task; });
-  let p=0; for(const t of freeTasks){ while(p<N && res[p]) p++; if(p<N) res[p++]=t; }
-  tasks = res.filter(Boolean);
-  recompute();
-  rememberStageOrder();
+  const stage = document.getElementById('process')?.value || currentProc || '';
+  tasks = optimizeStageArray(tasks, stage);
+  rememberStageOrder(stage);
   recompute();
   persistMaybe();
 }
@@ -4973,7 +5127,13 @@ function renderDeltaDialog(diffByStage, currentByStage){
     });
 
     STAGES.forEach(stage=>{
-      const list = updatedByStage.get(stage) || (currentByStage.get(stage) || []).map(cloneTaskRecord);
+      let list = updatedByStage.get(stage) || (currentByStage.get(stage) || []).map(cloneTaskRecord);
+      if(autoOptimizeOn){
+        list = optimizeStageArray(list, stage);
+        updatedByStage.set(stage, list);
+      } else {
+        updatedByStage.set(stage, list);
+      }
       ordersByStage.set(stage, list.map(t=>t.uid));
       if(stage === curStage){
         tasks = list;
@@ -5001,7 +5161,12 @@ function renderDeltaDialog(diffByStage, currentByStage){
     stateMeta.csvTimestamp = stamp;
     updateFreshnessUI();
 
-    sortTasksByStart();
+    if(!autoOptimizeOn){
+      sortTasksByStart();
+      ordersByStage.set(curStage, tasks.map(t=>t.uid));
+    } else {
+      rememberStageOrder(curStage);
+    }
     const csvTail = csvLockedAdds.get(curStage);
     if(csvTail && csvTail.length){
       const tailSet = new Set(csvTail);
@@ -5011,8 +5176,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
       lockedUids = new Set(tasks.filter(t=> t && t.locked).map(t=> t.uid));
       rememberStageOrder(curStage);
     }
-    if(document.querySelector('#autoOptimize')?.checked){ optimizeQueue(); }
-    else { recompute(); }
+    recompute();
 
     const meaningfulEntries = stageDiffEntries.filter(entry=> diffHasChanges(entry.diff));
     if(meaningfulEntries.length){
@@ -5085,10 +5249,16 @@ async function importRows(rows){
 		active.push(t);
 	  }
     });
-	tasks = active;
-	sortTasksByStart();
-	rememberStageOrder();
-	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+    tasks = active;
+    if (autoOptimizeOn) {
+      tasks = optimizeStageArray(tasks, p);
+      rememberStageOrder(p);
+      recompute();
+    } else {
+      sortTasksByStart();
+      rememberStageOrder(p);
+      recompute();
+    }
 
     const stamp = new Date().toLocaleString();
     lastImportTime = stamp;
@@ -7299,18 +7469,10 @@ function switchProcess(newProc){
   lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
 
   sortBySavedOrder(tasks, newProc); // восстановим пользовательский порядок, если сохранён
-
-  // Если для этого передела ещё не сохраняли порядок — применим автооптимизацию один раз
-  const hadOrder = ordersByStage.has(newProc);
-  sortBySavedOrder(tasks, newProc);
   currentProc = newProc;
   adjustUIForProcess(newProc);
-  if(userCanEdit() && !hadOrder && document.querySelector('#autoOptimize')?.checked){
-    optimizeQueue();
-  }else{
-    recompute();
-    rememberStageOrder(newProc);
-  }
+  recompute();
+  rememberStageOrder(newProc);
   if(document.getElementById('excludedDlg')?.open){
     renderExcludedList();
   }
