@@ -43,12 +43,14 @@ const DEFAULT_STATE = {
   t: [],
   orders: [],
   locked: [],
+  ignoredStates: [],
   meta: {
     versions: {},
     history: [],
     lastAuthors: {},
     csvTimestamp: '',
-    manualTimestamp: ''
+    manualTimestamp: '',
+    ignoredStates: []
   }
 };
 

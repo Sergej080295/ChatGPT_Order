@@ -433,13 +433,13 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
-                <option value="bend">Гибка</option>
-                <option value="laser">Лазер</option>
                 <option value="draw">Технологи: подготовка в работу</option>
-                <option value="weld">Сварка</option>
-                <option value="mech">Мехобработка</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
+                <option value="laser">Лазер</option>
+                <option value="bend" selected>Гибка</option>
+                <option value="weld">Сварка</option>
+                <option value="mech">Мехобработка</option>
                 <option value="pack">Упаковка</option>
                 <option value="ship">Отгрузка</option>
 
@@ -1842,7 +1842,8 @@ let stateMeta = {
   settings:{
     capacity: { ...DEFAULT_CAP },
     parallel: { ...DEFAULT_PARALLEL }
-  }
+  },
+  ignoredStates: []
 };
 
 let capByProc = { ...stateMeta.settings.capacity };
@@ -2165,6 +2166,7 @@ function setIgnoredStates(list, opts={}){
   const changed = next.length !== ignoredStates.length || next.some((value, idx)=> value !== ignoredStates[idx]);
   ignoredStates = next;
   ignoredStateSet = normalized;
+  stateMeta.ignoredStates = ignoredStates.slice();
   if(opts.updateTasks !== false){
     refreshIgnoredStateFlags();
   }else{
@@ -2180,7 +2182,11 @@ function setIgnoredStates(list, opts={}){
     renderIgnoredStatesDialog();
   }
   if(changed && opts.persist !== false){
-    persistMaybe('ui');
+    try{
+      persistNow(undefined, { source:'filters', force:true, announce:false });
+    }catch(err){
+      console.warn('failed to persist ignored states', err);
+    }
   }
   if(changed && opts.rerender !== false){
     recompute();
@@ -3106,9 +3112,12 @@ function renderGantt(intoFS=false){
 	cards.header.appendChild(c);
   });
 
+  let ganttRowIndex = 0;
   tasks.forEach(t=>{
     if(t.hiddenByState) return;
-    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=t.orderId;
+    ganttRowIndex += 1;
+    const labelText = `${ganttRowIndex}. ${t.orderId || '—'}`;
+    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=labelText;
     cards.leftBody.appendChild(lab);
 
     const row=document.createElement('div'); row.className='gantt-dates-row';
@@ -4778,6 +4787,7 @@ function buildStateObject(){
     autosaveOn,
     autoOptimizeOn,
     shiftOnProgress,
+    ignoredStates: ignoredStates.slice(),
     meta: {
       versions: versionsObj,
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
@@ -4789,6 +4799,7 @@ function buildStateObject(){
         parallel: { ...stateMeta.settings.parallel },
         updatedAt: stateMeta.settings.updatedAt || ''
       },
+      ignoredStates: ignoredStates.slice(),
       storage: storageMeta
     }
   };
@@ -5683,6 +5694,12 @@ function restoreState(json, opts={}){
 
     if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
 
+    const metaIgnored = Array.isArray(s.meta?.ignoredStates)
+      ? s.meta.ignoredStates.filter(item => typeof item === 'string')
+      : (Array.isArray(s.ignoredStates) ? s.ignoredStates.filter(item => typeof item === 'string') : []);
+    stateMeta.ignoredStates = metaIgnored.slice();
+    setIgnoredStates(metaIgnored, { persist:false, rerender:false });
+
     const versionsRaw = (s.meta && s.meta.versions) || {};
     lastKnownVersions = new Map(Object.entries(versionsRaw).map(([k,v])=>[k, Number(v)||0]));
     stateMeta = {
@@ -5690,7 +5707,8 @@ function restoreState(json, opts={}){
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
-      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
+      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
+      ignoredStates: stateMeta.ignoredStates.slice()
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
@@ -5916,6 +5934,7 @@ function persistNow(stageOverride, opts={}){
           parallel: { ...(stateMeta.settings?.parallel || {}) },
           updatedAt: stateMeta.settings?.updatedAt || ''
         },
+        ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
         ordersSummary: combinedSummary || null,
         lastChange: {
           stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
@@ -6243,6 +6262,7 @@ function persistNow(stageOverride, opts={}){
         parallel: { ...(stateMeta.settings?.parallel || {}) },
         updatedAt: stateMeta.settings?.updatedAt || ''
       },
+      ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
       ordersSummary: ordersSummary || null,
       lastChange: {
         stage: curStage,
@@ -6597,8 +6617,7 @@ function saveUiPreferences(){
       autoOptimizeOn: !!autoOptimizeOn,
       showIds: document.body ? document.body.classList.contains('show-ids') : false,
       lockNewOrders: !!lockNewOrders,
-      lockNewOrdersCsv: !!lockNewOrdersCsv,
-      ignoredStates: ignoredStates.slice()
+      lockNewOrdersCsv: !!lockNewOrdersCsv
     };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
@@ -6633,7 +6652,13 @@ function applyUiPreferences(prefs={}){
     lockNewOrdersCsv = prefs.lockNewOrdersCsv;
   }
   if(Array.isArray(prefs.ignoredStates)){
-    setIgnoredStates(prefs.ignoredStates, { persist:false, rerender:false, updateTasks:false });
+    const metaStates = Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates : [];
+    if(!metaStates.length){
+      setIgnoredStates(prefs.ignoredStates, { persist:false, rerender:false, updateTasks:false });
+    }else{
+      updateIgnoredStatesSummary();
+      updateExcludedAttention();
+    }
   } else {
     updateIgnoredStatesSummary();
     updateExcludedAttention();
