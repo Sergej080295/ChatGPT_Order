@@ -158,6 +158,15 @@ h3{margin:0 0 10px;font-size:16px}
 .mode-pill[data-mode="session"]::before{background:#0284c7}
 .mode-pill[data-mode="hybrid"]{background:#ede9fe;border-color:#c4b5fd;color:#5b21b6}
 .mode-pill[data-mode="hybrid"]::before{background:#7c3aed}
+.uid-badge{display:none;margin-left:6px;padding:0 6px;border-radius:999px;background:#e2e8f0;color:#475569;font-size:11px;font-weight:600;line-height:18px;vertical-align:middle}
+body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
+.change-group{margin-bottom:12px}
+.change-group:last-child{margin-bottom:0}
+.change-group-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px;font-weight:600;color:#1e293b}
+.change-group-head .change-stage{flex:0 0 auto}
+.change-author{flex:0 0 auto;color:var(--muted);font-size:12px;font-weight:500}
+.change-group-head .change-author{margin-left:auto}
+.change-counter{color:var(--muted);font-style:italic}
 
 #toastContainer{position:fixed;top:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:2000;pointer-events:none}
 .toast{background:#0f172a;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.2);display:flex;flex-direction:column;gap:8px;pointer-events:auto;min-width:240px;max-width:320px;transition:opacity .3s ease,transform .3s ease}
@@ -1668,7 +1677,7 @@ function applyStateFromExternal(raw, opts={}){
           title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
           message: `${who}: ${summarizeDiff(diff)}`,
           actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff)},
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff, { stage, authors })},
             {label:'OK', handler:(el)=> el.remove()}
           ]
         });
@@ -3967,10 +3976,10 @@ function renderDeltaDialog(diffByStage, currentByStage){
       + '</fieldset>';
   };
 
-  const fmtAdd = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-stage="${stage}" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-stage="${stage}" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = (stage)=>(x)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-stage="${stage}" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-stage="${stage}" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtAdd = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-stage="${stage}" data-uid="${t.uid}" checked> Добавить — ${t.orderId} ${uidBadge(t.uid)}</label>`;
+  const fmtDel = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-stage="${stage}" data-uid="${t.uid}" checked> Удалить — ${t.orderId} ${uidBadge(t.uid)}</label>`;
+  const fmtChg = (stage)=>(x)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-stage="${stage}" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} ${uidBadge(x.to.uid)} <i class="muted">(${x.fields.join(', ')})</i></label>`;
+  const fmtDone = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-stage="${stage}" data-uid="${t.uid}" checked> В архив — ${t.orderId} ${uidBadge(t.uid)}</label>`;
 
   const blocks = [];
   STAGES.forEach(stage=>{
@@ -3979,11 +3988,13 @@ function renderDeltaDialog(diffByStage, currentByStage){
     const total = diff.added.length + diff.changed.length + diff.removed.length + diff.toDone.length;
     if(!total) return;
     const title = STAGE_TITLE[stage] || stage;
+    const actorName = escapeHtml(userAlias || '');
+    const header = `<div class="change-group-head" style="margin:6px 0"><span class="change-stage">${title}</span>${actorName?`<span class="change-author">${actorName}</span>`:''}</div>`;
     const content = makeBlock('Новые', diff.added, fmtAdd(stage))
       + makeBlock('Изменённые', diff.changed, fmtChg(stage))
       + makeBlock('Удаляемые', diff.removed, fmtDel(stage))
       + makeBlock('Статус = Готово', diff.toDone, fmtDone(stage));
-    blocks.push(`<section style="margin-bottom:16px"><h3 style="margin:6px 0">${title}</h3>${content}</section>`);
+    blocks.push(`<section style="margin-bottom:16px">${header}${content}</section>`);
   });
 
   el.innerHTML = blocks.length ? blocks.join('') : '<div class="muted">Изменений не обнаружено.</div>';
@@ -4493,27 +4504,52 @@ function summarizeDiff(diff){
   return `+${(diff.added?.length)||0} ~${(diff.changed?.length)||0} -${(diff.removed?.length)||0}`;
 }
 
-function diffToHtml(diff){
+function escapeHtml(str){
+  return String(str ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function uidBadge(uid){
+  const text = escapeHtml(uid);
+  return `<span class="uid-badge">${text}</span>`;
+}
+
+function formatAuthorInfo(info){
+  if(!info || typeof info !== 'object') return '';
+  return escapeHtml(info.name || info.user || info.session || '');
+}
+
+function renderDiffList(arr, formatter, {mode='compact', limit=5}={}){
+  if(!Array.isArray(arr) || !arr.length) return '';
+  if(mode === 'detail' || arr.length <= limit){
+    return arr.map(formatter).join('');
+  }
+  return `<div class="change-counter">+${arr.length} заказов</div>`;
+}
+
+function diffToHtml(diff, opts={}){
+  const { mode='compact', limit=5, authors=null, stageKey=null } = opts;
   if(diff && diff.stages && typeof diff.stages === 'object'){
     const entries = Object.entries(diff.stages).filter(([,val])=> diffHasChanges(val));
     if(!entries.length) return '<div class="muted">Изменений нет</div>';
-    return entries.map(([stage,val])=>{
-      const title = STAGE_TITLE[stage] || stage;
-      const inner = diffToHtml(val);
-      return `<div style="margin-bottom:12px"><h4 style="margin:4px 0">${title}</h4>${inner}</div>`;
-    }).join('');
+    return entries.map(([stage,val])=> diffToHtml(val, { mode, limit, authors, stageKey: stage })).join('');
   }
   if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
   const block = (title, arr, formatter)=>{
     if(!arr.length) return '';
+    const body = renderDiffList(arr, formatter, { mode, limit });
     return `<fieldset style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0">`+
       `<legend style="padding:0 6px">${title} (${arr.length})</legend>`+
-      arr.map(formatter).join('')+
+      (body || '—')+
       '</fieldset>';
   };
   const fmtTask = (label)=> (x)=>{
     const name = x.orderId || x.after?.orderId || x.before?.orderId || x.uid;
-    return `<div><b>${name}</b> <span class="muted">[${x.uid}]</span></div>`;
+    return `<div><b>${name}</b> ${uidBadge(x.uid)}</div>`;
   };
   const fmtChange = (x)=>{
     const rows = x.fields.map(f=>{
@@ -4521,12 +4557,24 @@ function diffToHtml(diff){
       const after = typeof f.after === 'object' ? JSON.stringify(f.after) : String(f.after ?? '—');
       return `<div><code>${f.field}</code>: <span class="muted">${before}</span> → <b>${after}</b></div>`;
     }).join('');
-    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> <span class="muted">[${x.uid}]</span></div>`;
+    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> ${uidBadge(x.uid)}</div>`;
     return `<div style="margin-bottom:6px">${header}${rows?`<div class="small" style="margin-left:8px">${rows}</div>`:''}</div>`;
   };
-  return block('Добавлены', diff.added, fmtTask('added'))+
-         block('Удалены', diff.removed, fmtTask('removed'))+
-         block('Изменены', diff.changed, fmtChange);
+  let header = '';
+  if(stageKey){
+    const title = STAGE_TITLE[stageKey] || stageKey;
+    const authorName = formatAuthorInfo(authors?.[stageKey]);
+    if(title || authorName){
+      header = `<div class="change-group-head">`+
+        (title ? `<span class="change-stage">${title}</span>` : '')+
+        (authorName ? `<span class="change-author">${authorName}</span>` : '')+
+        `</div>`;
+    }
+  }
+  const content = block('Добавлены', diff.added || [], fmtTask('added'))+
+         block('Удалены', diff.removed || [], fmtTask('removed'))+
+         block('Изменены', diff.changed || [], fmtChange);
+  return `<div class="change-group">${header}${content || '<div class="muted">Изменений нет</div>'}</div>`;
 }
 
 
@@ -4552,9 +4600,9 @@ function renderLogList(){
   container.innerHTML = rows;
 }
 
-function showUpdateDetails(diff){
+function showUpdateDetails(diff, opts={}){
   const box = $("#updateDetails");
-  if(box) box.innerHTML = diffToHtml(diff);
+  if(box) box.innerHTML = diffToHtml(diff, { mode:'detail', authors: opts.authors || null, stageKey: opts.stage || null });
   $("#updateDetailsDlg")?.showModal();
 }
 
@@ -4564,7 +4612,10 @@ function showConflictDialog(diff, author){
     const who = author?.name || author?.session || 'другой пользователь';
     const when = author?.at ? new Date(author.at).toLocaleString() : '';
     const meta = when ? ` <span class="muted">(${when})</span>` : '';
-    box.innerHTML = `<p>Последним изменения сохранил <b>${who}</b>${meta}. Ваши изменения не были применены.</p>` + diffToHtml(diff);
+    const stageKey = author?.stage || null;
+    const authors = author ? { [stageKey || 'current']: author } : null;
+    box.innerHTML = `<p>Последним изменения сохранил <b>${who}</b>${meta}. Ваши изменения не были применены.</p>`
+      + diffToHtml(diff, { mode:'detail', authors, stageKey });
   }
   $("#conflictDlg")?.showModal();
 }
@@ -4618,7 +4669,7 @@ function handleIncomingSyncMessage(msg){
         title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
         message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
         actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
+          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff, { stage: msg.stage, authors: msg.authors || null })},
           {label:'OK', handler:(el)=> el.remove()}
         ]
       });
@@ -4905,6 +4956,7 @@ function persistNow(stageOverride, opts={}){
         ? { ...multiStage.combinedDiff, stages: { ...(multiStage.combinedDiff.stages||{}) } }
         : { stages:{} };
       meaningfulEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
+      const authorsMap = {};
 
       const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
       meaningfulEntries.forEach(entry=>{
@@ -4913,6 +4965,7 @@ function persistNow(stageOverride, opts={}){
         const newVersion = prevVersion + 1;
         versions[stage] = newVersion;
         lastKnownVersions.set(stage, newVersion);
+        authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: summarizeDiff(entry.diff) };
       });
       stateMeta.versions = versions;
 
@@ -4930,10 +4983,7 @@ function persistNow(stageOverride, opts={}){
       }
 
       if(hasChanges && source !== 'system'){
-        const lastAuthors = { ...(stateMeta.lastAuthors || {}) };
-        meaningfulEntries.forEach(entry=>{
-          lastAuthors[entry.stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: summarizeDiff(entry.diff) };
-        });
+        const lastAuthors = { ...(stateMeta.lastAuthors || {}), ...authorsMap };
         stateMeta.lastAuthors = lastAuthors;
         const logEntry = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
@@ -4943,7 +4993,8 @@ function persistNow(stageOverride, opts={}){
           session: SESSION_ID,
           source,
           summary: multiStage.summary || summaryParts.join('; '),
-          diff: combinedDiff
+          diff: combinedDiff,
+          authors: authorsMap
         };
         activityLog.push(logEntry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -4980,7 +5031,7 @@ function persistNow(stageOverride, opts={}){
       const targetStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
 
       if(remoteSyncEnabled()){
-        remoteBridge.push(payload, { stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, session:SESSION_ID, summary: (multiStage.summary || summaryParts.join('; ')) || undefined })
+        remoteBridge.push(payload, { stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, session:SESSION_ID, summary: (multiStage.summary || summaryParts.join('; ')) || undefined, authors: authorsMap })
           .then(()=> setDataMode('remote'))
           .catch(async err=>{
             if(err?.status === 409){
@@ -5042,7 +5093,7 @@ function persistNow(stageOverride, opts={}){
       }
 
       if(hasChanges && announce){
-        announceStateUpdate({stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias});
+        announceStateUpdate({stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, authors: authorsMap});
       }
     }catch(e){
       console.warn('persist failed', e);
@@ -5089,7 +5140,8 @@ function persistNow(stageOverride, opts={}){
         activityLog = stateMeta.history.slice(-LOG_LIMIT);
         updateFreshnessUI();
         if(!silentOnConflict){
-          showConflictDialog(conflict, stateMeta.lastAuthors?.[curStage]);
+          const authorInfo = stateMeta.lastAuthors?.[curStage];
+          showConflictDialog(conflict, authorInfo ? { ...authorInfo, stage: curStage } : null);
           if(prev){
             restoreState(prev, {preserveProcess:true});
             setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
@@ -5102,6 +5154,7 @@ function persistNow(stageOverride, opts={}){
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
     const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+    let authorsMap = null;
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -5147,6 +5200,8 @@ function persistNow(stageOverride, opts={}){
       updateFreshnessUI();
 
       if(source !== 'system'){
+        const authorDetails = { name:userAlias, session:SESSION_ID, at:nowStr, summary: changeSummary };
+        authorsMap = { [curStage]: authorDetails };
         const entry = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
           time: nowStr,
@@ -5155,12 +5210,13 @@ function persistNow(stageOverride, opts={}){
           session: SESSION_ID,
           source,
           summary: changeSummary,
-          diff
+          diff,
+          authors: authorsMap
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
-        stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: { name:userAlias, session:SESSION_ID, at:nowStr, summary:entry.summary } };
+        stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: authorDetails };
         markLogAttention();
       } else {
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
@@ -5195,7 +5251,7 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
+      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined, authors: authorsMap || undefined })
         .then(()=> setDataMode('remote'))
         .catch(async err=>{
           if(err?.status === 409){
@@ -5255,7 +5311,8 @@ function persistNow(stageOverride, opts={}){
     }
 
     if(hadChanges && announce){
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+      const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
+      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias, authors: payloadAuthors});
     }
   }catch(e){
     console.warn('persist failed', e);
@@ -5735,7 +5792,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         </fieldset>`;
       const fmt = (type) => (x)=>{
         const t = (type==='chg'? x.from : x);
-        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} ${uidBadge(t.uid)}</label>`;
       };
       box.innerHTML =
         block('Добавленные — удалить', prev.added, fmt('add')) +
@@ -5864,7 +5921,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           const id = e.target?.dataset?.logDetail;
           if(!id) return;
           const entry = activityLog.find(x=>x.id===id);
-          if(entry) showUpdateDetails(entry.diff);
+          if(entry) showUpdateDetails(entry.diff, { stage: entry.stage, authors: entry.authors || null });
         });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
