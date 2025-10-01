@@ -396,6 +396,15 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 .compact-legend{display:flex;gap:10px;font-size:12px;margin-top:8px;flex-wrap:wrap}
 .compact-legend .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
 
+.settings-system{display:flex;flex-direction:column;gap:6px;width:100%;}
+.settings-system-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid #e2e8f0;}
+.settings-system-row:last-child{border-bottom:none;}
+.settings-system-row .label{flex:1;display:flex;flex-direction:column;gap:2px;}
+.settings-system-row .label span{font-size:12px;color:var(--muted);}
+.settings-system-row .controls{display:flex;gap:6px;align-items:center;}
+.settings-system-row input{width:90px;padding:4px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
+.settings-system-note{font-size:12px;color:var(--muted);margin-top:4px;}
+
 /* статистика под графиком */
 .ov-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 .ov-stat{border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;background:#fff;display:flex;gap:10px;align-items:center}
@@ -423,28 +432,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <h1 id="pageTitle">Планировщик — <span id="procTitle">Гибка</span></h1>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
-	  <select id="process">
-		<option value="bend">Гибка</option>
-		<option value="laser">Лазер</option>
-		<option value="draw">Технологи: подготовка в работу</option>
-		<option value="weld">Сварка</option>
-		<option value="mech">Мехобработка</option>
-		<option value="proc">Закупка</option>
-		<option value="shear">Рубка</option>
-		<option value="pack">Упаковка</option>
-		<option value="ship">Отгрузка</option>
+          <select id="process">
+                <option value="bend">Гибка</option>
+                <option value="laser">Лазер</option>
+                <option value="draw">Технологи: подготовка в работу</option>
+                <option value="weld">Сварка</option>
+                <option value="mech">Мехобработка</option>
+                <option value="proc">Закупка</option>
+                <option value="shear">Рубка</option>
+                <option value="pack">Упаковка</option>
+                <option value="ship">Отгрузка</option>
 
-	  </select>
+          </select>
     </label>
-
-	<label id="parallelOpsBox" style="display:none">Параллельные операции:
-	  <input id="parallelOps" type="number" min="1" step="1" value="3" style="width:80px">
-	</label>
-	
-	<label>Вместимость, ч/день:
-	  <input id="capacity" type="number" min="0" step="0.25" value="15" style="width:80px">
-	</label>
-
 
     <div class="tools">
       <label class="btn">Импорт (.csv)
@@ -652,6 +652,10 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+  </div>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
+    <div class="muted small">Системные параметры:</div>
+    <div id="systemSettings" class="settings-system"></div>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:10px">
     <div class="muted small">Права доступа:</div>
@@ -1372,7 +1376,7 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#capacity','#parallelOps'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -1396,6 +1400,7 @@ function applyAccessMode(){
   $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !canEdit; });
   $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
+  refreshSystemSettingsAccess();
 }
 
 function setAccessMode(mode, opts={}){
@@ -1707,13 +1712,8 @@ async function bootstrapState(){
     const st = $("#process").value;
     currentProc = st;
     adjustUIForProcess(st);
-    if(!NOHOUR_STAGES.has(st)){
-      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
-    }else{
-      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
-    }
     const prefs = loadUiPreferences();
-    if(prefs.filter) $("#ganttFilter").value = prefs.filter;
+    applyUiPreferences(prefs);
     recompute();
     setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
   }
@@ -1744,7 +1744,20 @@ let accessMode = (()=>{
   return ACCESS_MODES.edit;
 })();
 
-let parallelByProc = { ...DEFAULT_PARALLEL };
+let stateMeta = {
+  versions:{},
+  lastAuthors:{},
+  csvTimestamp:'',
+  manualTimestamp:'',
+  history:[],
+  settings:{
+    capacity: { ...DEFAULT_CAP },
+    parallel: { ...DEFAULT_PARALLEL }
+  }
+};
+
+let capByProc = { ...stateMeta.settings.capacity };
+let parallelByProc = { ...stateMeta.settings.parallel };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -1755,7 +1768,6 @@ let lockedUids=new Set();    // замки на позициях (по uid)
 let autosaveOn=true;
 let shiftOnProgress=true;
 let autoOptimizeOn = true;
-let capByProc = { ...DEFAULT_CAP };   // вместимость по переделам
 let csvFreshnessStr='—';
 let manualFreshnessStr='—';
 let lastRows=null;           // сырые строки последнего импорта
@@ -1764,7 +1776,6 @@ let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
-let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[] };
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -1858,57 +1869,7 @@ function adjustUIForProcess(p){
   document.getElementById('reserveBtn').style.display    = noHours ? 'none' : '';
   document.getElementById('exceptionsBtn').style.display = noHours ? 'none' : '';
   document.getElementById('detail7').style.display       = noHours ? 'none' : '';
-
-  // Вместимость vs Параллельность (безопасно, если #capacity вдруг отсутствует)
-  const capEl = document.getElementById('capacity');
-  const capBox = capEl ? capEl.parentElement : null;
-  const parBox = document.getElementById('parallelOpsBox');
-
-  if(noHours){
-    if(capBox) capBox.style.display = 'none';
-    if(parBox) parBox.style.display = '';
-    const v = Math.max(1, parallelByProc[p] ?? DEFAULT_PARALLEL[p] ?? 3);
-    parallelByProc[p] = v;
-    const parEl = document.getElementById('parallelOps');
-    if(parEl) parEl.value = String(v);
-    if(capEl) capEl.dataset.stage = '';
-  }else{
-    if(capBox) capBox.style.display = '';
-    if(parBox) parBox.style.display = 'none';
-    if(capEl){
-      const stored = capByProc[p] ?? DEFAULT_CAP[p] ?? 15;
-      capEl.value = String(stored);
-      capEl.dataset.stage = p;
-    }
-  }
-
 }
-
-// Правка "Вместимость, ч/день" — только для часовых переделов
-document.getElementById('capacity')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (!NOHOUR_STAGES.has(cur)) {
-    const v = Number(e.target.value);
-    if (Number.isFinite(v) && v >= 0) {
-      capByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
-
-// Правка "Параллельные операции" — только для безчасовых переделов
-document.getElementById('parallelOps')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (NOHOUR_STAGES.has(cur)) {
-    const v = parseInt(String(e.target.value), 10);
-    if (Number.isFinite(v) && v > 0) {
-      parallelByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
@@ -2754,11 +2715,7 @@ function renderGantt(intoFS=false){
   if(noHours){
     baseCap = Math.max(1, parallelByProc[curProc] ?? DEFAULT_PARALLEL[curProc] ?? 3);
   } else {
-    const capEl = document.getElementById('capacity');
-    const capStage = capEl?.dataset?.stage;
-    const rawCap = capEl ? Number(capEl.value) : NaN;
-    const stored = capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15;
-    baseCap = (capStage === curProc && Number.isFinite(rawCap)) ? rawCap : stored;
+    baseCap = Math.max(0, capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15);
   }
 
   const filter = intoFS ? $("#ganttFilterFS").value : $("#ganttFilter").value;
@@ -3900,7 +3857,6 @@ function importStateFromCSV(text){
     }
   });
   capByProc = capNew;
-  $("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
 
   csvFreshnessStr = meta.freshness || meta.freshnessCsv || csvFreshnessStr;
   manualFreshnessStr = meta.freshnessManual || manualFreshnessStr;
@@ -4312,6 +4268,10 @@ function buildStateObject(){
 
   const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
+  stateMeta.settings = {
+    capacity: { ...capOut },
+    parallel: { ...parallelOut }
+  };
   const storageMeta = {
     local: enableLocalStore,
     remote: remoteSyncEnabled(),
@@ -4343,6 +4303,11 @@ function buildStateObject(){
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
       history,
+      settings: {
+        capacity: { ...stateMeta.settings.capacity },
+        parallel: { ...stateMeta.settings.parallel },
+        updatedAt: stateMeta.settings.updatedAt || ''
+      },
       storage: storageMeta
     }
   };
@@ -4781,7 +4746,8 @@ function restoreState(json, opts={}){
     lockedUids = lockedSet;
     ordersByStage = new Map(s.orders || []);
 
-    const savedCap = s.capByProc || {};
+    const metaSettings = s.meta?.settings || {};
+    const savedCap = metaSettings.capacity || s.capByProc || {};
     capByProc = { ...DEFAULT_CAP, ...savedCap };
 
     routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
@@ -4794,14 +4760,20 @@ function restoreState(json, opts={}){
     if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
     if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
 
-    if(s.parallelByProc){
-      Object.assign(parallelByProc, s.parallelByProc);
-    }
+    const savedParallel = metaSettings.parallel || s.parallelByProc || {};
+    parallelByProc = { ...DEFAULT_PARALLEL, ...savedParallel };
     ['proc','shear','pack','ship'].forEach(k=>{
       if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
         parallelByProc[k] = (k==='pack' ? 3 : 5);
       }
     });
+
+    stateMeta.settings = {
+      capacity: { ...capByProc },
+      parallel: { ...parallelByProc },
+      updatedAt: typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''
+    };
+    renderSystemSettingsUI();
 
     if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
 
@@ -4839,22 +4811,21 @@ function restoreState(json, opts={}){
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
-    const capEl = $("#capacity");
-    if(capEl && !NOHOUR_STAGES.has(currentProc)){
-      capEl.value = capByProc[currentProc] || DEFAULT_CAP[currentProc] || 15;
+    const loadedPrefs = loadUiPreferences();
+    if(!loadedPrefs.filter && typeof s.filter === 'string'){
+      loadedPrefs.filter = s.filter;
     }
-    if(NOHOUR_STAGES.has(currentProc) && $("#parallelOps")){
-      $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
+    if(typeof loadedPrefs.autosaveOn !== 'boolean' && s.autosaveOn !== undefined){
+      loadedPrefs.autosaveOn = !!s.autosaveOn;
     }
-
-    $("#ganttFilter").value = s.filter || 'all';
-    if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
-    autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
-    $("#autosave").checked = autosaveOn;
-    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
-    $("#shiftOnProgress").checked = shiftOnProgress;
-    autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
-    $("#autoOptimize").checked = autoOptimizeOn;
+    if(typeof loadedPrefs.shiftOnProgress !== 'boolean' && s.shiftOnProgress !== undefined){
+      loadedPrefs.shiftOnProgress = !!s.shiftOnProgress;
+    }
+    if(typeof loadedPrefs.autoOptimizeOn !== 'boolean' && s.autoOptimizeOn !== undefined){
+      loadedPrefs.autoOptimizeOn = !!s.autoOptimizeOn;
+    }
+    applyUiPreferences(loadedPrefs);
+    saveUiPreferences();
 
     if(preserveProcess){
       tasks = tAll.filter(x=> x.stage === desiredProcess);
@@ -4908,7 +4879,7 @@ function loadStageFromLS(stage){
 }
 
 function persistNow(stageOverride, opts={}){
-  const { source='manual', force=false, announce=true, silentOnConflict=false, multiStage=null } = opts;
+  const { source='manual', force=false, announce=true, silentOnConflict=false, multiStage=null, settingsChange=null, uiOnly=false } = opts;
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
     const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
@@ -5009,7 +4980,12 @@ function persistNow(stageOverride, opts={}){
         lastAuthors: { ...(stateMeta.lastAuthors || {}) },
         csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
         manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-        history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+        history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+        settings: {
+          capacity: { ...(stateMeta.settings?.capacity || {}) },
+          parallel: { ...(stateMeta.settings?.parallel || {}) },
+          updatedAt: stateMeta.settings?.updatedAt || ''
+        }
       };
 
       const payload = JSON.stringify(stateObj);
@@ -5153,8 +5129,12 @@ function persistNow(stageOverride, opts={}){
 
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
-    const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+    const diffChanged = diffHasChanges(diff);
+    const isSettingsChange = Array.isArray(settingsChange?.entries) && settingsChange.entries.length > 0;
+    const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
     let authorsMap = null;
+    let settingsSummary = '';
+    const nowStr = new Date().toLocaleString();
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -5179,15 +5159,14 @@ function persistNow(stageOverride, opts={}){
     if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
 
     const versions = { ...(stateMeta.versions || {}) };
-    const newVersion = (prevVersion || 0) + (hadChanges ? 1 : 0);
+    const newVersion = (prevVersion || 0) + (diffChanged ? 1 : 0);
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
     let changeSummary = '';
 
-    if(hadChanges){
+    if(diffChanged){
       changeSummary = summarizeDiff(diff);
-      const nowStr = new Date().toLocaleString();
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
         lastImportTime = nowStr;
@@ -5221,6 +5200,29 @@ function persistNow(stageOverride, opts={}){
       } else {
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
       }
+    } else if(force || !rawPrev){
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+    }
+
+    if(isSettingsChange){
+      settingsSummary = buildSettingsSummary(settingsChange.entries);
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+        time: nowStr,
+        stage: 'settings',
+        user: userAlias,
+        session: SESSION_ID,
+        source: 'settings',
+        summary: settingsSummary,
+        diff: null,
+        settings: {
+          entries: settingsChange.entries
+        }
+      };
+      activityLog.push(entry);
+      if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      markLogAttention();
     }
 
     stateObj.meta = {
@@ -5228,7 +5230,12 @@ function persistNow(stageOverride, opts={}){
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+      history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+      settings: {
+        capacity: { ...(stateMeta.settings?.capacity || {}) },
+        parallel: { ...(stateMeta.settings?.parallel || {}) },
+        updatedAt: stateMeta.settings?.updatedAt || ''
+      }
     };
 
     const payload = JSON.stringify(stateObj);
@@ -5250,69 +5257,97 @@ function persistNow(stageOverride, opts={}){
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
 
+    const skipRemote = uiOnly && !diffChanged && !isSettingsChange;
+
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined, authors: authorsMap || undefined })
-        .then(()=> setDataMode('remote'))
-        .catch(async err=>{
-          if(err?.status === 409){
-            const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
-            const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
-            const lastAuthor = detail?.lastAuthor;
-            const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-            const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-            if(authorName){
-              messageParts.push(`Последние правки: ${authorName}.`);
+      if(skipRemote){
+        setDataMode('remote');
+      }else{
+        const remoteStage = isSettingsChange && !diffChanged ? 'settings' : curStage;
+        const remoteSummary = isSettingsChange && !diffChanged ? settingsSummary : (changeSummary || undefined);
+        const remoteDiff = isSettingsChange && !diffChanged ? null : diff;
+        const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
+        const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
+        const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
+        remoteBridge.push(payload, { stage:remoteStage, diff:remoteDiff, version:remoteVersion, source, user:userAlias, session:SESSION_ID, summary: remoteSummary, authors: remoteAuthors, ...remoteExtras })
+          .then(()=> setDataMode('remote'))
+          .catch(async err=>{
+            if(err?.status === 409){
+              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+              const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
+              const lastAuthor = detail?.lastAuthor;
+              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+              if(authorName){
+                messageParts.push(`Последние правки: ${authorName}.`);
+              }
+              messageParts.push('Актуальные данные загружены заново.');
+              showToast({
+                title:'Конфликт синхронизации',
+                message: messageParts.join(' '),
+                actions:[{label:'OK', handler:(el)=> el.remove()}]
+              });
+              try{
+                const latest = await remoteBridge.pull();
+                if(latest){
+                  applyStateFromExternal(latest, { origin:'remote' });
+                }
+              }catch(pullErr){
+                console.warn('failed to refresh after conflict', pullErr);
+              }
+              setDataMode('remote');
+              return;
             }
-            messageParts.push('Актуальные данные загружены заново.');
+            console.warn('remote push failed', err);
+            const hadLocal = enableLocalStore;
+            if(!hadLocal){
+              applyStoragePrefs({ local:true });
+            }
+            let detailText = '';
+            if(err){
+              if(typeof err.detail === 'string' && err.detail.trim()){
+                detailText = err.detail.trim();
+              }else if(err.detail && typeof err.detail === 'object'){
+                const extra = err.detail.message || err.detail.error || err.body || '';
+                if(extra) detailText = String(extra).trim();
+              }
+              if(!detailText && err.message){
+                detailText = err.message;
+              }
+            }
+            const detailSuffix = detailText ? ` (${detailText})` : '';
             showToast({
-              title:'Конфликт синхронизации',
-              message: messageParts.join(' '),
+              title:'Ошибка синхронизации',
+              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
               actions:[{label:'OK', handler:(el)=> el.remove()}]
             });
-            try{
-              const latest = await remoteBridge.pull();
-              if(latest){
-                applyStateFromExternal(latest, { origin:'remote' });
-              }
-            }catch(pullErr){
-              console.warn('failed to refresh after conflict', pullErr);
-            }
-            setDataMode('remote');
-            return;
-          }
-          console.warn('remote push failed', err);
-          const hadLocal = enableLocalStore;
-          if(!hadLocal){
-            applyStoragePrefs({ local:true });
-          }
-          let detailText = '';
-          if(err){
-            if(typeof err.detail === 'string' && err.detail.trim()){
-              detailText = err.detail.trim();
-            }else if(err.detail && typeof err.detail === 'object'){
-              const extra = err.detail.message || err.detail.error || err.body || '';
-              if(extra) detailText = String(extra).trim();
-            }
-            if(!detailText && err.message){
-              detailText = err.message;
-            }
-          }
-          const detailSuffix = detailText ? ` (${detailText})` : '';
-          showToast({
-            title:'Ошибка синхронизации',
-            message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
-            actions:[{label:'OK', handler:(el)=> el.remove()}]
+            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+            setDataMode(modeAfter);
           });
-          const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
-          setDataMode(modeAfter);
-        });
+      }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
     }
 
-    if(hadChanges && announce){
-      const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias, authors: payloadAuthors});
+    if(announce){
+      if(isSettingsChange){
+        announceStateUpdate({
+          stage:'settings',
+          diff:null,
+          version:null,
+          source:'settings',
+          user:userAlias,
+          settings:{
+            entries: settingsChange.entries,
+            summary: settingsSummary,
+            updatedAt: stateMeta.settings?.updatedAt || nowStr
+          }
+        });
+      }
+      if(diffChanged){
+        const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
+        announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias, authors: payloadAuthors});
+      }
     }
   }catch(e){
     console.warn('persist failed', e);
@@ -5325,13 +5360,202 @@ function persistMaybe(reason='data', opts={}){
   if(autosaveOn || opts.force) persistNow(undefined, opts);
 }
 
+let pendingSettingsTimer = null;
+let pendingSettingsQueue = [];
+
+function formatSettingsValue(kind, value){
+  const num = Number(value);
+  if(kind === 'capacity'){
+    return Number.isFinite(num) ? num.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : String(value);
+  }
+  return Number.isFinite(num) ? String(Math.max(1, Math.round(num))) : String(value);
+}
+
+function buildSettingsSummary(changes){
+  if(!Array.isArray(changes) || !changes.length) return 'Системные настройки обновлены';
+  return changes.map(change=>{
+    const stageName = STAGE_TITLE[change.stage] || change.stage;
+    const label = change.kind === 'capacity' ? 'вместимость' : 'параллельные операции';
+    const suffix = change.kind === 'capacity' ? ' ч/день' : '';
+    return `${stageName}: ${label} ${formatSettingsValue(change.kind, change.to)}${suffix}`;
+  }).join('; ');
+}
+
+function persistSystemSettingsChange(entries){
+  if(!Array.isArray(entries) || !entries.length) return;
+  const normalized = entries
+    .map(entry=>{
+      if(!entry || !entry.stage || !entry.kind) return null;
+      return {
+        stage: entry.stage,
+        kind: entry.kind === 'capacity' ? 'capacity' : 'parallel',
+        from: entry.from,
+        to: entry.to
+      };
+    })
+    .filter(Boolean);
+  if(!normalized.length) return;
+  pendingSettingsQueue = pendingSettingsQueue.concat(normalized);
+  if(pendingSettingsTimer){
+    clearTimeout(pendingSettingsTimer);
+  }
+  pendingSettingsTimer = setTimeout(()=>{
+    const byKey = new Map();
+    pendingSettingsQueue.forEach(change=>{
+      const key = `${change.stage}:${change.kind}`;
+      if(byKey.has(key)){
+        const existing = byKey.get(key);
+        existing.to = change.to;
+      }else{
+        byKey.set(key, { ...change });
+      }
+    });
+    const merged = [...byKey.values()];
+    pendingSettingsQueue = [];
+    pendingSettingsTimer = null;
+    const timestamp = new Date().toLocaleString();
+    stateMeta.settings = {
+      capacity: { ...DEFAULT_CAP, ...capByProc },
+      parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
+      updatedAt: timestamp
+    };
+    persistNow(undefined, {
+      source:'settings',
+      force:true,
+      settingsChange:{ entries: merged, timestamp }
+    });
+  }, 150);
+}
+
+function renderSystemSettingsUI(){
+  const container = document.getElementById('systemSettings');
+  if(!container) return;
+  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  STAGES.forEach(stage=>{
+    const row = document.createElement('div');
+    row.className = 'settings-system-row';
+    const label = document.createElement('div');
+    label.className = 'label';
+    const title = document.createElement('strong');
+    title.textContent = STAGE_TITLE[stage] || stage;
+    const hint = document.createElement('span');
+    const isNoHours = NOHOUR_STAGES.has(stage);
+    hint.textContent = isNoHours ? 'Параллельные операции' : 'Вместимость, ч/день';
+    label.appendChild(title);
+    label.appendChild(hint);
+    const controls = document.createElement('div');
+    controls.className = 'controls';
+    const input = document.createElement('input');
+    input.dataset.stage = stage;
+    input.dataset.kind = isNoHours ? 'parallel' : 'capacity';
+    if(isNoHours){
+      input.type = 'number';
+      input.min = '1';
+      input.step = '1';
+      input.value = String(Math.max(1, parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3));
+    }else{
+      input.type = 'number';
+      input.min = '0';
+      input.step = '0.25';
+      input.value = String(capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
+    }
+    input.addEventListener('change', handleSystemSettingChange);
+    controls.appendChild(input);
+    const unit = document.createElement('span');
+    unit.className = 'small muted';
+    unit.textContent = isNoHours ? 'поз.' : 'ч/день';
+    controls.appendChild(unit);
+    row.appendChild(label);
+    row.appendChild(controls);
+    frag.appendChild(row);
+  });
+  container.appendChild(frag);
+  const note = document.createElement('div');
+  note.className = 'settings-system-note';
+  note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
+  container.appendChild(note);
+  refreshSystemSettingsAccess();
+}
+
+function refreshSystemSettingsAccess(){
+  const container = document.getElementById('systemSettings');
+  if(!container) return;
+  const disabled = !userCanEdit();
+  container.querySelectorAll('input[data-stage]').forEach(input=>{
+    input.disabled = disabled;
+  });
+}
+
+function handleSystemSettingChange(e){
+  const input = e.target;
+  if(!input || !input.dataset) return;
+  const stage = input.dataset.stage;
+  const kind = input.dataset.kind;
+  if(!stage || !kind) return;
+  const isNoHours = kind === 'parallel';
+  if(!userCanEdit()){
+    const fallback = isNoHours
+      ? (parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3)
+      : (capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
+    input.value = String(fallback);
+    notifyReadOnly();
+    return;
+  }
+  if(isNoHours){
+    let value = Number(input.value);
+    if(!Number.isFinite(value) || value <= 0){
+      value = parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3;
+    }
+    value = Math.max(1, Math.round(value));
+    const prev = parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3;
+    if(value === prev){
+      input.value = String(value);
+      return;
+    }
+    parallelByProc[stage] = value;
+    stateMeta.settings.parallel[stage] = value;
+    input.value = String(value);
+    persistMaybe('ui');
+    if(stage === $("#process").value){
+      recompute();
+    }
+    persistSystemSettingsChange([{ stage, kind:'parallel', from: prev, to: value }]);
+  }else{
+    let value = Number(input.value);
+    if(!Number.isFinite(value) || value < 0){
+      value = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
+    }
+    value = Math.max(0, value);
+    const prev = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
+    if(Math.abs(value - prev) < 0.0001){
+      input.value = String(prev);
+      return;
+    }
+    capByProc[stage] = value;
+    stateMeta.settings.capacity[stage] = value;
+    input.value = String(value);
+    persistMaybe('ui');
+    if(stage === $("#process").value){
+      recompute();
+    }
+    persistSystemSettingsChange([{ stage, kind:'capacity', from: prev, to: value }]);
+  }
+}
+
 /* =========
    ПЕРЕСЧЁТ
 ========= */
 
 function saveUiPreferences(){
   try{
-    const prefs = { filter: $("#ganttFilter")?.value || 'all' };
+    const prefs = {
+      filter: $("#ganttFilter")?.value || 'all',
+      autosaveOn: !!autosaveOn,
+      shiftOnProgress: !!shiftOnProgress,
+      autoOptimizeOn: !!autoOptimizeOn,
+      showIds: document.body ? document.body.classList.contains('show-ids') : false
+    };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
 }
@@ -5342,6 +5566,33 @@ function loadUiPreferences(){
     if(!raw) return {};
     return JSON.parse(raw);
   }catch(_){ return {}; }
+}
+
+function applyUiPreferences(prefs={}){
+  if(typeof prefs.filter === 'string'){
+    const filterEl = $("#ganttFilter");
+    if(filterEl) filterEl.value = prefs.filter;
+  }
+  if(typeof prefs.autosaveOn === 'boolean'){
+    autosaveOn = prefs.autosaveOn;
+  }
+  if(typeof prefs.shiftOnProgress === 'boolean'){
+    shiftOnProgress = prefs.shiftOnProgress;
+  }
+  if(typeof prefs.autoOptimizeOn === 'boolean'){
+    autoOptimizeOn = prefs.autoOptimizeOn;
+  }
+  const autosaveEl = $("#autosave");
+  if(autosaveEl) autosaveEl.checked = !!autosaveOn;
+  const shiftEl = $("#shiftOnProgress");
+  if(shiftEl) shiftEl.checked = !!shiftOnProgress;
+  const autoOptEl = $("#autoOptimize");
+  if(autoOptEl) autoOptEl.checked = !!autoOptimizeOn;
+  if(typeof prefs.showIds === 'boolean' && document.body){
+    document.body.classList.toggle('show-ids', prefs.showIds);
+    const toggle = document.getElementById('showIdsToggle');
+    if(toggle && 'checked' in toggle) toggle.checked = prefs.showIds;
+  }
 }
 
 function updateFreshnessUI(){
@@ -5383,29 +5634,14 @@ function recompute(){
     proc==='ship' ? 'Отгрузка' : '—';
   
 const noHours = NOHOUR_STAGES.has(proc);
-const capEl = document.getElementById('capacity');
-let cap;
+let cap = 0;
 if (noHours) {
   const storedParallel = Math.max(1, parallelByProc[proc] ?? DEFAULT_PARALLEL[proc] ?? 3);
   parallelByProc[proc] = storedParallel;
-  const parEl = document.getElementById('parallelOps');
-  if(parEl && parEl.value !== String(storedParallel)){
-    parEl.value = String(storedParallel);
-  }
-  if(capEl) capEl.dataset.stage = '';
   cap = storedParallel;
 } else {
-  const capStage = capEl?.dataset?.stage;
   const storedCap = capByProc[proc] ?? DEFAULT_CAP[proc] ?? 15;
-  let capVal = capEl ? Number(capEl.value) : NaN;
-  if(capStage !== proc || !Number.isFinite(capVal)){
-    capVal = storedCap;
-  }
-  cap = Math.max(0, capVal);
-  if(capEl){
-    capEl.dataset.stage = proc;
-    if(capEl.value !== String(cap)) capEl.value = String(cap);
-  }
+  cap = Math.max(0, storedCap);
   capByProc[proc] = cap;
 }
 
@@ -5459,7 +5695,8 @@ function openReserve(){
 }
 function renderReserveDiag(text){
   const lines = String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  const base = Number($("#capacity").value) || capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+  const stage = $("#process").value;
+  const base = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
   const arr = lines.map(l=>{
     const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(l);
     if(!m) return null;
@@ -5629,15 +5866,6 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#resApply").addEventListener('click', applyReserve);
   $("#reserveText").addEventListener('input', e=> renderReserveDiag(e.target.value));
   
-  // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
-  $("#parallelOps").addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[$("#process").value] ?? DEFAULT_PARALLEL[$("#process").value] ?? 3); notifyReadOnly(); return; }
-    const v = Math.max(1, parseInt(e.target.value, 10) || 1);
-    parallelByProc[$("#process").value] = v;
-    recompute();
-    persistMaybe();
-  });
-
   // сортировка/оптимизация
   $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
   $("#optimizeBtn").addEventListener('click', ()=>{
@@ -5664,25 +5892,6 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   });
 
-  // вместимость и фильтр
-  $("#capacity").addEventListener('input', ()=>{
-    if(!userCanEdit()){ const p=$("#process").value; $("#capacity").value = String(capByProc[p] ?? DEFAULT_CAP[p] ?? 15); notifyReadOnly(); return; }
-    const p=$("#process").value;
-    const v=Number($("#capacity").value)|| capByProc[p] || 15;
-    capByProc[p]=v;
-    recompute();
-    persistMaybe();
-  });
-  
-  document.getElementById('parallelOps').addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[document.getElementById('process').value] ?? 3); notifyReadOnly(); return; }
-    const p = document.getElementById('process').value;
-    const v = Math.max(1, parseInt(e.target.value||'3',10));
-    parallelByProc[p] = v;
-    recompute();
-    persistMaybe();
-  });
-  
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
   // очистка
@@ -5711,17 +5920,18 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	updateFreshnessUI();
 	updateTrashAttention?.();
 
-	capByProc      = { ...DEFAULT_CAP };
-	parallelByProc = { ...DEFAULT_PARALLEL };
+        capByProc      = { ...DEFAULT_CAP };
+        parallelByProc = { ...DEFAULT_PARALLEL };
+        stateMeta.settings = {
+          capacity: { ...capByProc },
+          parallel: { ...parallelByProc },
+          updatedAt: ''
+        };
 
-	// обновим UI под текущий выбранный передел
-	const cur = document.getElementById('process').value;
-	adjustUIForProcess(cur);
-	const capEl = document.getElementById('capacity');
-	if (capEl) capEl.value = capByProc[cur] ?? DEFAULT_CAP[cur] ?? 15;
-	if (NOHOUR_STAGES.has(cur) && document.getElementById('parallelOps')) {
-      document.getElementById('parallelOps').value = String(parallelByProc[cur] ?? 3);
-    }
+        // обновим UI под текущий выбранный передел
+        const cur = document.getElementById('process').value;
+        adjustUIForProcess(cur);
+        renderSystemSettingsUI();
 
     persistNow();
     recompute();
@@ -5734,12 +5944,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autosave").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
     autosaveOn = !!e.target.checked;
-    if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false});
+    persistMaybe('ui');
   });
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui');
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -5751,7 +5961,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autoOptimize").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui');
   });
 
   // Гант — FS
@@ -5948,6 +6158,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
               remBox.parentElement?.classList.toggle('muted', remBox.disabled);
             }
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
+            renderSystemSettingsUI();
             refreshDataModeIndicator();
             $('#settingsDlg').showModal();
           });
@@ -5958,6 +6169,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         }
 
         $("#autosave").checked = autosaveOn;
+        renderSystemSettingsUI();
 }
 
 /* =========
