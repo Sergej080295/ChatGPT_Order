@@ -935,7 +935,9 @@ function cloneTaskRecord(task){
     origStartDate: task.origStartDate ? new Date(task.origStartDate) : null,
     route: {},
     isUserNew: !!task.isUserNew,
-    isNew: !!task.isNew
+    isNew: !!task.isNew,
+    isDone: !!task.isDone,
+    isTrash: !!task.isTrash
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1857,6 +1859,70 @@ function sortBySavedOrder(arr, stage){
   return arr;
 }
 
+function collectActiveTasksForOverview(){
+  const doneSet = new Set(doneTasks.map(d=>d && d.uid).filter(Boolean));
+  const trashSet = new Set(trash.map(d=>d && d.uid).filter(Boolean));
+  const byUid = new Map();
+
+  const pushTask = (source)=>{
+    if(!source || !source.uid || !source.stage) return;
+    const clone = cloneTaskRecord(source);
+    clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
+    clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
+    if(clone.isDone || clone.isTrash) return;
+    byUid.set(clone.uid, clone);
+  };
+
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(pushTask);
+  }
+  tasks.forEach(pushTask);
+
+  const byStage = new Map();
+  [...byUid.values()].forEach(task=>{
+    if(!byStage.has(task.stage)) byStage.set(task.stage, []);
+    byStage.get(task.stage).push(task);
+  });
+
+  byStage.forEach((list, stage)=>{ sortBySavedOrder(list, stage); });
+
+  return { list:[...byUid.values()], byStage };
+}
+
+function buildOverviewOrderRanks(byStage){
+  const ranks = new Map();
+  const stageOrderMaps = new Map();
+  ordersByStage.forEach((uids, stage)=>{
+    if(Array.isArray(uids)){
+      stageOrderMaps.set(stage, new Map(uids.map((uid, idx)=>[uid, idx])));
+    }
+  });
+
+  byStage.forEach((tasksForStage, stage)=>{
+    const posMap = stageOrderMaps.get(stage);
+    if(!posMap || !tasksForStage.length) return;
+    const idxVal = STAGES.indexOf(stage);
+    const stageIdx = idxVal >= 0 ? idxVal : Number.MAX_SAFE_INTEGER;
+    tasksForStage.forEach(task=>{
+      const idx = posMap.get(task.uid);
+      if(idx == null) return;
+      const key = task.parentId || ('no-parent::'+task.orderId);
+      const current = ranks.get(key);
+      if(!current
+        || stageIdx < current.stageIdx
+        || (stageIdx === current.stageIdx && idx < current.pos)){
+        ranks.set(key, { stageIdx, pos: idx });
+      }
+    });
+  });
+
+  return ranks;
+}
+
+function rebuildAndRenderMasterRoute(){
+  renderOverview();
+}
+
 /* === Общий маршрут — состояние === */
 // этапы: добавлены безчасовые proc(Закупка), shear(Рубка), pack(Упаковка), ship (отгрузка)
 const STAGES = ['draw','proc','shear','laser','bend','weld','mech','pack','ship'];
@@ -2461,6 +2527,7 @@ function renderTasksTable(){
           rememberStageOrder();
           updateDoneAttention();
           recompute();
+          rebuildAndRenderMasterRoute();
           persistMaybe();
         }
       });
@@ -2485,6 +2552,7 @@ function renderTasksTable(){
           rememberStageOrder();
           updateTrashAttention?.();
           recompute();
+          rebuildAndRenderMasterRoute();
           persistMaybe();
         }
       });
@@ -2995,7 +3063,7 @@ function onBarDrop(){
     const ns = dragCtx.start0 ? addDays(dragCtx.start0, shift) : null;
     const ne = dragCtx.end0   ? addDays(dragCtx.end0,   shift) : null;
     routeEditsWorking.set(dragCtx.key, {start:ns, end:ne});
-    renderOverview();
+    rebuildAndRenderMasterRoute();
   }
   document.removeEventListener('mousemove', onBarDrag);
   dragCtx=null;
@@ -3025,16 +3093,22 @@ function renderOvStats(orders){
 
 /* рендер общего маршрута */
 function renderOverview(){
-  let orders;
-  if (lastRows && lastRows.length){
-    orders = mapAllProcessesFromRows(lastRows);
-  } else if (Array.isArray(allTasksFromState) && allTasksFromState.length){
-    // есть полный снимок всех переделов — используем его
-    orders = mapOrdersFromTasks(allTasksFromState);
-  } else {
-    // крайний случай — только активный передел
-    orders = mapOrdersFromTasks(tasks);
+  const { list: activeTasks, byStage } = collectActiveTasksForOverview();
+  let orders = mapOrdersFromTasks(activeTasks);
+
+  const rankByParent = buildOverviewOrderRanks(byStage);
+  if(rankByParent.size){
+    orders.sort((a,b)=>{
+      const aRank = rankByParent.get(a.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      const bRank = rankByParent.get(b.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      if(aRank.stageIdx !== bRank.stageIdx) return aRank.stageIdx - bRank.stageIdx;
+      if(aRank.pos !== bRank.pos) return aRank.pos - bRank.pos;
+      return a.orderId.localeCompare(b.orderId);
+    });
+  }else{
+    orders.sort((a,b)=> a.orderId.localeCompare(b.orderId));
   }
+  orders.forEach((o,i)=> o.number = i+1);
 
   // применим несохранённые правки поверх
   for(const [k,ov] of routeEditsWorking.entries()){
@@ -3397,6 +3471,7 @@ function renderDoneList(){
 
           updateDoneAttention();
           recompute();
+          rebuildAndRenderMasterRoute();
           renderDoneList();
           if(wrap) wrap.scrollTop = Math.max(0, before - delta);
           persistMaybe();
@@ -3491,6 +3566,7 @@ function renderTrashList(){
 
         updateTrashAttention();
         recompute();
+        rebuildAndRenderMasterRoute();
         renderTrashList();
         persistMaybe();
       });
@@ -6267,7 +6343,7 @@ schedule = allocate(allocTasks, cap, excMap, resMap);
   renderOverdue();
   renderGantt(false);
   updateDoneAttention();
-  renderOverview();
+  rebuildAndRenderMasterRoute();
 }
 
 /* =========
@@ -6487,6 +6563,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     tasks.push(t);
         rememberStageOrder();
         recompute();
+        rebuildAndRenderMasterRoute();
         persistMaybe();
 
   });
@@ -6677,20 +6754,20 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
 	// Общий маршрут — фильтры этапов
-	$$('.ov-filter').forEach(ch=>{
-	  ch.addEventListener('change', ()=>{
-		if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
-		renderOverview();
-	  });
-	});
+        $$('.ov-filter').forEach(ch=>{
+          ch.addEventListener('change', ()=>{
+            if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
+            rebuildAndRenderMasterRoute();
+          });
+        });
 	// Общий маршрут — переключатель вида
-	$('#ovMode').addEventListener('click', (e)=>{
-	  if(!(e.target instanceof HTMLButtonElement)) return;
-	  const m=e.target.dataset.mode; if(!m) return;
-	  ovModeCurrent=m;
-	  $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
-	  renderOverview();
-	});
+        $('#ovMode').addEventListener('click', (e)=>{
+          if(!(e.target instanceof HTMLButtonElement)) return;
+          const m=e.target.dataset.mode; if(!m) return;
+          ovModeCurrent=m;
+          $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
+          rebuildAndRenderMasterRoute();
+        });
 	// Общий маршрут — Сохранить/Сброс
         $('#ovApply').addEventListener('click', ()=>{
           if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -6710,11 +6787,11 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 		}
 	  }
 	  routeEditsWorking.clear();
-	  recompute();    // таблица/подетально/гант
-	  persistNow();   // и в localStorage
-	  alert('Изменения сохранены.');
-	  renderOverview();
-	});
+          recompute();    // таблица/подетально/гант
+          persistNow();   // и в localStorage
+          alert('Изменения сохранены.');
+          rebuildAndRenderMasterRoute();
+        });
         $('#logBtn').addEventListener('click', ()=>{ renderLogList(); clearLogAttention(); $('#logDlg').showModal(); });
         $('#logClose').addEventListener('click', ()=> $('#logDlg').close());
         $('#logClear').addEventListener('click', ()=>{
@@ -6744,7 +6821,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
 
-        $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+        $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); rebuildAndRenderMasterRoute(); });
 
         const settingsBtn = $('#settingsBtn');
         if(settingsBtn){
