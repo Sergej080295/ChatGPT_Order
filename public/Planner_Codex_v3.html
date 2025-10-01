@@ -1426,7 +1426,7 @@ function notifyReadOnly(){
 }
 
 function loadStoragePrefs(){
-  let pref = { local:true, remote: remoteBridge.hasRemote };
+  let pref = { local:true, remote:true };
   try{
     const raw = localStorage.getItem(SAVE_PREF_KEY);
     if(raw){
@@ -1436,6 +1436,7 @@ function loadStoragePrefs(){
       else if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
     }
   }catch(_){ /* ignore */ }
+  pref.remote = !!pref.remote;
   if(!pref.local && !pref.remote){
     pref.local = true;
   }
@@ -5256,6 +5257,17 @@ function restoreState(json, opts={}){
       currentDataOrigin = s.meta.storage.mode;
     }
     activityLog = stateMeta.history.slice(-LOG_LIMIT);
+    if(activityLog.length){
+      activityLog = activityLog.map(entry=>{
+        if(!entry) return entry;
+        if(entry.ordersSummary || !entry.diff || !diffHasChanges(entry.diff)) return entry;
+        const stageHint = (entry.stage && entry.stage !== 'multi' && entry.stage !== 'settings') ? entry.stage : null;
+        const summary = buildOrdersSummary(entry.diff, stageHint);
+        if(!summary) return entry;
+        return { ...entry, ordersSummary: summary };
+      });
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+    }
     csvFreshnessStr = stateMeta.csvTimestamp || s.freshness || '—';
     manualFreshnessStr = stateMeta.manualTimestamp || s.lastManualTime || '—';
     lastImportTime = s.lastImportTime || csvFreshnessStr || '';
