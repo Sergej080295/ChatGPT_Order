@@ -1,3 +1,5 @@
+'use strict';
+
 const fsp = require('fs/promises');
 const path = require('path');
 const express = require('express');
@@ -41,12 +43,14 @@ const DEFAULT_STATE = {
   t: [],
   orders: [],
   locked: [],
+  ignoredStates: [],
   meta: {
     versions: {},
     history: [],
     lastAuthors: {},
     csvTimestamp: '',
-    manualTimestamp: ''
+    manualTimestamp: '',
+    ignoredStates: []
   }
 };
 
@@ -112,12 +116,15 @@ const ensureDatabase = async () => {
       source TEXT,
       summary TEXT,
       diff JSONB,
+      orders_summary JSONB,
       ip TEXT
     )
   `);
 
   await pool.query('CREATE INDEX IF NOT EXISTS planner_activity_log_timestamp_idx ON planner_activity_log (timestamp)');
   await pool.query('CREATE INDEX IF NOT EXISTS planner_activity_log_stage_idx ON planner_activity_log (stage)');
+
+  await pool.query('ALTER TABLE planner_activity_log ADD COLUMN IF NOT EXISTS orders_summary JSONB');
 };
 
 const readStateFromDatabase = async () => {
@@ -195,8 +202,8 @@ const normalizeStoredState = async () => {
 
 const appendLog = async (entry) => {
   await pool.query(
-    `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, ip)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       entry.timestamp,
       entry.stage,
@@ -206,6 +213,7 @@ const appendLog = async (entry) => {
       entry.source,
       entry.summary,
       entry.diff ?? null,
+      entry.ordersSummary ?? null,
       entry.ip
     ]
   );
@@ -362,6 +370,9 @@ app.put('/api/state', async (req, res) => {
   };
   if (meta?.diff) {
     logEntry.diff = meta.diff;
+  }
+  if (meta?.ordersSummary) {
+    logEntry.ordersSummary = meta.ordersSummary;
   }
   await appendLog(logEntry);
 

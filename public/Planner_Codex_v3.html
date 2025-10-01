@@ -158,6 +158,15 @@ h3{margin:0 0 10px;font-size:16px}
 .mode-pill[data-mode="session"]::before{background:#0284c7}
 .mode-pill[data-mode="hybrid"]{background:#ede9fe;border-color:#c4b5fd;color:#5b21b6}
 .mode-pill[data-mode="hybrid"]::before{background:#7c3aed}
+.uid-badge{display:none;margin-left:6px;padding:0 6px;border-radius:999px;background:#e2e8f0;color:#475569;font-size:11px;font-weight:600;line-height:18px;vertical-align:middle}
+body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
+.change-group{margin-bottom:12px}
+.change-group:last-child{margin-bottom:0}
+.change-group-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px;font-weight:600;color:#1e293b}
+.change-group-head .change-stage{flex:0 0 auto}
+.change-author{flex:0 0 auto;color:var(--muted);font-size:12px;font-weight:500}
+.change-group-head .change-author{margin-left:auto}
+.change-counter{color:var(--muted);font-style:italic}
 
 #toastContainer{position:fixed;top:20px;right:20px;display:flex;flex-direction:column;gap:10px;z-index:2000;pointer-events:none}
 .toast{background:#0f172a;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 10px 30px rgba(15,23,42,.2);display:flex;flex-direction:column;gap:8px;pointer-events:auto;min-width:240px;max-width:320px;transition:opacity .3s ease,transform .3s ease}
@@ -387,6 +396,15 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 .compact-legend{display:flex;gap:10px;font-size:12px;margin-top:8px;flex-wrap:wrap}
 .compact-legend .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
 
+.settings-system{display:flex;flex-direction:column;gap:6px;width:100%;}
+.settings-system-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid #e2e8f0;}
+.settings-system-row:last-child{border-bottom:none;}
+.settings-system-row .label{flex:1;display:flex;flex-direction:column;gap:2px;}
+.settings-system-row .label span{font-size:12px;color:var(--muted);}
+.settings-system-row .controls{display:flex;gap:6px;align-items:center;}
+.settings-system-row input{width:90px;padding:4px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
+.settings-system-note{font-size:12px;color:var(--muted);margin-top:4px;}
+
 /* статистика под графиком */
 .ov-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 .ov-stat{border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;background:#fff;display:flex;gap:10px;align-items:center}
@@ -414,28 +432,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <h1 id="pageTitle">Планировщик — <span id="procTitle">Гибка</span></h1>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
-	  <select id="process">
-		<option value="bend">Гибка</option>
-		<option value="laser">Лазер</option>
-		<option value="draw">Технологи: подготовка в работу</option>
-		<option value="weld">Сварка</option>
-		<option value="mech">Мехобработка</option>
-		<option value="proc">Закупка</option>
-		<option value="shear">Рубка</option>
-		<option value="pack">Упаковка</option>
-		<option value="ship">Отгрузка</option>
+          <select id="process">
+                <option value="draw">Технологи: подготовка в работу</option>
+                <option value="proc">Закупка</option>
+                <option value="shear">Рубка</option>
+                <option value="laser">Лазер</option>
+                <option value="bend" selected>Гибка</option>
+                <option value="weld">Сварка</option>
+                <option value="mech">Мехобработка</option>
+                <option value="pack">Упаковка</option>
+                <option value="ship">Отгрузка</option>
 
-	  </select>
+          </select>
     </label>
-
-	<label id="parallelOpsBox" style="display:none">Параллельные операции:
-	  <input id="parallelOps" type="number" min="1" step="1" value="3" style="width:80px">
-	</label>
-	
-	<label>Вместимость, ч/день:
-	  <input id="capacity" type="number" min="0" step="0.25" value="15" style="width:80px">
-	</label>
-
 
     <div class="tools">
       <label class="btn">Импорт (.csv)
@@ -455,9 +464,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
       <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
-      <label class="small session-label">Имя сеанса:
-        <input id="userAlias" type="text" maxlength="48" placeholder="User">
-      </label>
       <button id="saveBtn" class="btn small">Сохранить</button>
       <button id="logBtn" class="btn small ghost">Журнал</button>
       <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
@@ -482,7 +488,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <h3>Список заказов</h3>
       <div class="row">
         <button id="showDone" class="btn ghost">Готовые</button>
-		<button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="showExcluded" class="btn ghost">Не учтённые</button>
         <button id="addOrder" class="btn">Добавить</button>
       </div>
     </div>
@@ -641,8 +648,21 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 <dialog id="settingsDlg">
   <h3 style="margin-top:0">Настройки</h3>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:8px">
+    <label class="small session-label">Имя пользователя:
+      <input id="userAlias" type="text" maxlength="48" placeholder="User">
+    </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+    <label class="small"><input type="checkbox" id="lockNewOrders"> Все новые заказы создавать с замком и ставить в конец списка</label>
+    <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
+    <div class="row" style="gap:8px;align-items:center">
+      <button id="ignoredStatesBtn" class="btn small ghost" type="button">Исключить состояния…</button>
+      <span id="ignoredStatesSummary" class="small muted">Все состояния учитываются</span>
+    </div>
+  </div>
+  <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
+    <div class="muted small">Системные параметры:</div>
+    <div id="systemSettings" class="settings-system"></div>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:10px">
     <div class="muted small">Права доступа:</div>
@@ -657,6 +677,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:12px">
     <button id="settingsClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="ignoredStatesDlg">
+  <h3 style="margin:0 0 6px">Не учитывать состояния</h3>
+  <p class="muted small" style="margin:0 0 8px">Укажите статусы из поля «Состояние», которые следует исключить из планирования и отчетов.</p>
+  <div id="ignoredStatesList" class="small" style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;padding:6px"></div>
+  <div class="row" style="margin-top:10px;gap:8px">
+    <input id="ignoredStateInput" type="text" class="small" placeholder="Например: Отгружено" style="flex:1;min-width:200px">
+    <button id="ignoredStateAdd" class="btn primary" type="button">Добавить</button>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button id="ignoredStatesClose" class="btn" type="button">Готово</button>
   </div>
 </dialog>
 
@@ -718,6 +751,26 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="justify-content:flex-end;margin-top:10px">
     <button id="trashClear" class="btn attn">Очистить корзину</button>
     <button id="trashClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="excludedDlg">
+  <h3 style="margin:0 0 6px">Не учтённые заказы</h3>
+  <div class="table-wrap" style="max-height:55vh">
+    <table id="excludedTable" style="table-layout:auto">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Номер</th>
+          <th>Заказчик</th>
+          <th>Состояние</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="excludedClose" class="btn" type="button">Закрыть</button>
   </div>
 </dialog>
 
@@ -922,7 +975,11 @@ function cloneTaskRecord(task){
     origStartDate: task.origStartDate ? new Date(task.origStartDate) : null,
     route: {},
     isUserNew: !!task.isUserNew,
-    isNew: !!task.isNew
+    isNew: !!task.isNew,
+    isDone: !!task.isDone,
+    isTrash: !!task.isTrash,
+    locked: !!task.locked || lockedUids.has(task.uid),
+    hiddenByState: !!task.hiddenByState
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1363,11 +1420,14 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#capacity','#parallelOps'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#lockNewOrders','#lockNewOrdersCsv'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
       if('disabled' in el) el.disabled = !canEdit;
+      if(el.id === 'lockNewOrders' || el.id === 'lockNewOrdersCsv'){
+        el.dataset.accessDisabled = !canEdit ? '1' : '0';
+      }
     }
   });
   ['#file','#stateFile'].forEach(sel=>{
@@ -1387,6 +1447,8 @@ function applyAccessMode(){
   $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !canEdit; });
   $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
+  refreshSystemSettingsAccess();
+  refreshNewOrderPrefUI();
 }
 
 function setAccessMode(mode, opts={}){
@@ -1412,7 +1474,7 @@ function notifyReadOnly(){
 }
 
 function loadStoragePrefs(){
-  let pref = { local:true, remote: remoteBridge.hasRemote };
+  let pref = { local:true, remote:true };
   try{
     const raw = localStorage.getItem(SAVE_PREF_KEY);
     if(raw){
@@ -1422,6 +1484,7 @@ function loadStoragePrefs(){
       else if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
     }
   }catch(_){ /* ignore */ }
+  pref.remote = !!pref.remote;
   if(!pref.local && !pref.remote){
     pref.local = true;
   }
@@ -1501,9 +1564,19 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
   if(payload){
-    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote'});
+    const skip = skipRealtimeToastOnce;
+    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
+    if(skipRealtimeToastOnce){
+      skipRealtimeToastOnce = false;
+    }
   }else{
-    fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+    const skip = skipRealtimeToastOnce;
+    fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
+      .then(applied=>{
+        if(applied && skipRealtimeToastOnce){
+          skipRealtimeToastOnce = false;
+        }
+      });
   }
 }
 
@@ -1549,13 +1622,19 @@ function readLocalSnapshot(){
 }
 
 async function fetchLatestFromRemote(opts={}){
-  if(!remoteSyncEnabled()) return;
+  if(!remoteSyncEnabled()) return false;
   try{
     const raw = await remoteBridge.pull();
     if(raw){
-      applyStateFromExternal(raw, { ...opts, origin:'remote' });
+      const params = { ...opts };
+      if(!params.origin){
+        params.origin = 'remote';
+      }
+      applyStateFromExternal(raw, params);
+      return true;
     }
   }catch(err){ console.warn('fetchLatestFromRemote failed', err); }
+  return false;
 }
 
 function startRemotePolling(){
@@ -1643,20 +1722,60 @@ function applyStateFromExternal(raw, opts={}){
       setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
     }
 
-    if(!skipToasts && diffs.length){
+    if(!skipToasts){
       const authors = parsed.meta?.lastAuthors || {};
-      diffs.forEach(({stage, diff})=>{
-        const info = authors[stage];
-        const who = info?.name || info?.user || info?.session || 'Пользователь';
+      const metaLastChange = parsed.meta?.lastChange || {};
+      let summaryCandidate = opts.meta?.ordersSummary || metaLastChange.ordersSummary || parsed.meta?.ordersSummary || null;
+      let summaryText = opts.meta?.summary || metaLastChange.summary || summarizeOrdersSummary(summaryCandidate);
+      const stageMap = {};
+      if(diffs.length){
+        diffs.forEach(({stage, diff})=>{ stageMap[stage] = diff; });
+      }
+      if(!summaryCandidate && diffs.length){
+        summaryCandidate = buildOrdersSummary({ stages: stageMap });
+      }
+      if(!summaryText && summaryCandidate){
+        summaryText = summarizeOrdersSummary(summaryCandidate);
+      }
+      if(summaryText){
+        const who = opts.meta?.user || metaLastChange.user || opts.meta?.alias || userAlias || 'Пользователь';
+        let stageCandidates = Array.isArray(summaryCandidate?.stages) && summaryCandidate.stages.length ? summaryCandidate.stages : [];
+        if(!stageCandidates.length && Array.isArray(metaLastChange.stages)){
+          stageCandidates = metaLastChange.stages;
+        }
+        if(!stageCandidates.length && diffs.length === 1){
+          stageCandidates = [diffs[0].stage];
+        }
+        let stageLabel = opts.meta?.stage ? (STAGE_TITLE[opts.meta.stage] || opts.meta.stage) : 'Несколько переделов';
+        if(stageCandidates.length > 1){
+          stageLabel = 'Несколько переделов';
+        }else if(stageCandidates.length === 1){
+          const singleStage = stageCandidates[0];
+          stageLabel = STAGE_TITLE[singleStage] || singleStage;
+        }else if(!opts.meta?.stage || opts.meta?.stage === 'multi'){
+          stageLabel = 'Несколько переделов';
+        }
+        const detailDiff = diffs.length
+          ? (diffs.length === 1 ? diffs[0].diff : { stages: { ...stageMap } })
+          : null;
+        const detailStage = stageCandidates.length > 1 ? null : (stageCandidates[0] || opts.meta?.stage || null);
+        const detailPayload = {
+          ordersSummary: summaryCandidate || null,
+          diff: detailDiff,
+          stage: detailStage,
+          authors,
+          user: who,
+          time: metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '')
+        };
         showToast({
-          title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
-          message: `${who}: ${summarizeDiff(diff)}`,
+          title: `Обновление — ${stageLabel}`,
+          message: `${who}: ${summaryText}`,
           actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff)},
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
             {label:'OK', handler:(el)=> el.remove()}
           ]
         });
-      });
+      }
     }
   }catch(err){ console.warn('applyStateFromExternal failed', err); }
 }
@@ -1682,13 +1801,8 @@ async function bootstrapState(){
     const st = $("#process").value;
     currentProc = st;
     adjustUIForProcess(st);
-    if(!NOHOUR_STAGES.has(st)){
-      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
-    }else{
-      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
-    }
     const prefs = loadUiPreferences();
-    if(prefs.filter) $("#ganttFilter").value = prefs.filter;
+    applyUiPreferences(prefs);
     recompute();
     setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
   }
@@ -1719,7 +1833,21 @@ let accessMode = (()=>{
   return ACCESS_MODES.edit;
 })();
 
-let parallelByProc = { ...DEFAULT_PARALLEL };
+let stateMeta = {
+  versions:{},
+  lastAuthors:{},
+  csvTimestamp:'',
+  manualTimestamp:'',
+  history:[],
+  settings:{
+    capacity: { ...DEFAULT_CAP },
+    parallel: { ...DEFAULT_PARALLEL }
+  },
+  ignoredStates: []
+};
+
+let capByProc = { ...stateMeta.settings.capacity };
+let parallelByProc = { ...stateMeta.settings.parallel };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -1730,7 +1858,10 @@ let lockedUids=new Set();    // замки на позициях (по uid)
 let autosaveOn=true;
 let shiftOnProgress=true;
 let autoOptimizeOn = true;
-let capByProc = { ...DEFAULT_CAP };   // вместимость по переделам
+let lockNewOrders = false;
+let lockNewOrdersCsv = false;
+let ignoredStates = [];
+let ignoredStateSet = new Set();
 let csvFreshnessStr='—';
 let manualFreshnessStr='—';
 let lastRows=null;           // сырые строки последнего импорта
@@ -1739,7 +1870,6 @@ let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
-let stateMeta = { versions:{}, lastAuthors:{}, csvTimestamp:'', manualTimestamp:'', history:[] };
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -1748,6 +1878,7 @@ let suppressIncoming = false;
 let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
+let skipRealtimeToastOnce = true;
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
 enableLocalStore = storagePref.local;
@@ -1777,6 +1908,94 @@ function sortBySavedOrder(arr, stage){
     return (a.startDate?.getTime()||0) - (b.startDate?.getTime()||0) || a.uid.localeCompare(b.uid);
   });
   return arr;
+}
+
+function collectActiveTasksForOverview(){
+  const doneSet = new Set(doneTasks.map(d=>d && d.uid).filter(Boolean));
+  const trashSet = new Set(trash.map(d=>d && d.uid).filter(Boolean));
+
+  const doneParentKeys = new Set();
+  const trashParentKeys = new Set();
+
+  const recordParentKey = rec => {
+    if(!rec) return '';
+    if(rec.parentId) return rec.parentId;
+    const orderId = rec.orderId ? String(rec.orderId).trim() : '';
+    return orderId ? `no-parent::${orderId}` : '';
+  };
+
+  doneTasks.forEach(rec => {
+    const key = recordParentKey(rec);
+    if(key) doneParentKeys.add(key);
+  });
+  trash.forEach(rec => {
+    const key = recordParentKey(rec);
+    if(key) trashParentKeys.add(key);
+  });
+
+  const shouldSkipOrder = key => key && (doneParentKeys.has(key) || trashParentKeys.has(key));
+  const byUid = new Map();
+
+  const pushTask = (source)=>{
+    if(!source || !source.uid || !source.stage) return;
+    if(source.hiddenByState) return;
+    const clone = cloneTaskRecord(source);
+    clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
+    clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
+    if(clone.isDone || clone.isTrash) return;
+    const orderKey = clone.parentId || (clone.orderId ? `no-parent::${clone.orderId}` : '');
+    if(shouldSkipOrder(orderKey)) return;
+    byUid.set(clone.uid, clone);
+  };
+
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(pushTask);
+  }
+  tasks.forEach(pushTask);
+
+  const byStage = new Map();
+  [...byUid.values()].forEach(task=>{
+    if(!byStage.has(task.stage)) byStage.set(task.stage, []);
+    byStage.get(task.stage).push(task);
+  });
+
+  byStage.forEach((list, stage)=>{ sortBySavedOrder(list, stage); });
+
+  return { list:[...byUid.values()], byStage };
+}
+
+function buildOverviewOrderRanks(byStage){
+  const ranks = new Map();
+  const stageOrderMaps = new Map();
+  ordersByStage.forEach((uids, stage)=>{
+    if(Array.isArray(uids)){
+      stageOrderMaps.set(stage, new Map(uids.map((uid, idx)=>[uid, idx])));
+    }
+  });
+
+  byStage.forEach((tasksForStage, stage)=>{
+    const posMap = stageOrderMaps.get(stage);
+    if(!posMap || !tasksForStage.length) return;
+    const idxVal = STAGES.indexOf(stage);
+    const stageIdx = idxVal >= 0 ? idxVal : Number.MAX_SAFE_INTEGER;
+    tasksForStage.forEach(task=>{
+      const idx = posMap.get(task.uid);
+      if(idx == null) return;
+      const key = task.parentId || ('no-parent::'+task.orderId);
+      const current = ranks.get(key);
+      if(!current
+        || stageIdx < current.stageIdx
+        || (stageIdx === current.stageIdx && idx < current.pos)){
+        ranks.set(key, { stageIdx, pos: idx });
+      }
+    });
+  });
+
+  return ranks;
+}
+
+function rebuildAndRenderMasterRoute(){
+  renderOverview();
 }
 
 /* === Общий маршрут — состояние === */
@@ -1832,57 +2051,7 @@ function adjustUIForProcess(p){
   document.getElementById('reserveBtn').style.display    = noHours ? 'none' : '';
   document.getElementById('exceptionsBtn').style.display = noHours ? 'none' : '';
   document.getElementById('detail7').style.display       = noHours ? 'none' : '';
-
-  // Вместимость vs Параллельность (безопасно, если #capacity вдруг отсутствует)
-  const capEl = document.getElementById('capacity');
-  const capBox = capEl ? capEl.parentElement : null;
-  const parBox = document.getElementById('parallelOpsBox');
-
-  if(noHours){
-    if(capBox) capBox.style.display = 'none';
-    if(parBox) parBox.style.display = '';
-    const v = Math.max(1, parallelByProc[p] ?? DEFAULT_PARALLEL[p] ?? 3);
-    parallelByProc[p] = v;
-    const parEl = document.getElementById('parallelOps');
-    if(parEl) parEl.value = String(v);
-    if(capEl) capEl.dataset.stage = '';
-  }else{
-    if(capBox) capBox.style.display = '';
-    if(parBox) parBox.style.display = 'none';
-    if(capEl){
-      const stored = capByProc[p] ?? DEFAULT_CAP[p] ?? 15;
-      capEl.value = String(stored);
-      capEl.dataset.stage = p;
-    }
-  }
-
 }
-
-// Правка "Вместимость, ч/день" — только для часовых переделов
-document.getElementById('capacity')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (!NOHOUR_STAGES.has(cur)) {
-    const v = Number(e.target.value);
-    if (Number.isFinite(v) && v >= 0) {
-      capByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
-
-// Правка "Параллельные операции" — только для безчасовых переделов
-document.getElementById('parallelOps')?.addEventListener('change', (e)=>{
-  const cur = document.getElementById('process').value;
-  if (NOHOUR_STAGES.has(cur)) {
-    const v = parseInt(String(e.target.value), 10);
-    if (Number.isFinite(v) && v > 0) {
-      parallelByProc[cur] = v;
-      persistMaybe();
-      recompute();
-    }
-  }
-});
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
@@ -1931,6 +2100,192 @@ function fitSliceText(el, label, hours, pct){
     el.textContent = txt; if(el.scrollWidth <= el.clientWidth) return;
   }
   el.textContent = suffix.trimStart();
+}
+
+/* =========
+   Исключение состояний
+========= */
+function normalizeStateName(value){
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function applyIgnoredStateToTask(task){
+  if(!task) return false;
+  const normalized = normalizeStateName(task.state);
+  const hidden = normalized && ignoredStateSet.has(normalized);
+  task.hiddenByState = hidden;
+  return hidden;
+}
+
+function refreshIgnoredStateFlags(){
+  const mark = task => applyIgnoredStateToTask(task);
+  tasks.forEach(mark);
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(mark);
+  }
+  updateExcludedAttention();
+  if(document.getElementById('excludedDlg')?.open){
+    renderExcludedList();
+  }
+}
+
+function updateIgnoredStatesSummary(){
+  const summary = document.getElementById('ignoredStatesSummary');
+  if(!summary) return;
+  if(!ignoredStates.length){
+    summary.textContent = 'Все состояния учитываются';
+    return;
+  }
+  if(ignoredStates.length <= 3){
+    summary.textContent = `Не учитывать: ${ignoredStates.join(', ')}`;
+    return;
+  }
+  summary.textContent = `Не учитывать ${ignoredStates.length} состояний`;
+}
+
+function updateExcludedAttention(){
+  const btn = document.getElementById('showExcluded');
+  if(!btn) return;
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  const count = tasks.filter(t=> t && (!currentStage || t.stage === currentStage) && t.hiddenByState).length;
+  btn.classList.toggle('attn', count > 0);
+}
+
+function setIgnoredStates(list, opts={}){
+  const source = Array.isArray(list) ? list : [];
+  const next = [];
+  const normalized = new Set();
+  source.forEach(item=>{
+    const raw = typeof item === 'string' ? item.trim() : String(item ?? '').trim();
+    if(!raw) return;
+    const norm = normalizeStateName(raw);
+    if(!norm || normalized.has(norm)) return;
+    normalized.add(norm);
+    next.push(raw);
+  });
+  const changed = next.length !== ignoredStates.length || next.some((value, idx)=> value !== ignoredStates[idx]);
+  ignoredStates = next;
+  ignoredStateSet = normalized;
+  stateMeta.ignoredStates = ignoredStates.slice();
+  if(opts.updateTasks !== false){
+    refreshIgnoredStateFlags();
+  }else{
+    updateExcludedAttention();
+  }
+  updateIgnoredStatesSummary();
+  const excludedDlg = document.getElementById('excludedDlg');
+  if(excludedDlg?.open){
+    renderExcludedList();
+  }
+  const editorDlg = document.getElementById('ignoredStatesDlg');
+  if(editorDlg?.open){
+    renderIgnoredStatesDialog();
+  }
+  if(changed && opts.persist !== false){
+    try{
+      persistNow(undefined, { source:'filters', force:true, announce:false });
+    }catch(err){
+      console.warn('failed to persist ignored states', err);
+    }
+  }
+  if(changed && opts.rerender !== false){
+    recompute();
+  }
+}
+
+function collectExcludedForStage(stage){
+  const key = stage || document.getElementById('process')?.value || currentProc || '';
+  return tasks.filter(task=> task && task.stage === key && task.hiddenByState);
+}
+
+function renderIgnoredStatesDialog(){
+  const listEl = document.getElementById('ignoredStatesList');
+  if(!listEl) return;
+  listEl.innerHTML = '';
+  if(!ignoredStates.length){
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'Список пуст. Добавьте состояние в поле ниже.';
+    listEl.appendChild(empty);
+    return;
+  }
+  ignoredStates.forEach((state, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.cssText = 'justify-content:space-between;align-items:center;padding:4px 0;gap:8px';
+    const label = document.createElement('span');
+    label.textContent = state;
+    label.style.flex = '1';
+    const remove = document.createElement('button');
+    remove.className = 'btn small ghost';
+    remove.type = 'button';
+    remove.dataset.remove = String(idx);
+    remove.textContent = 'Убрать';
+    remove.addEventListener('click', ()=>{
+      const next = ignoredStates.slice();
+      next.splice(idx,1);
+      setIgnoredStates(next);
+    });
+    row.appendChild(label);
+    row.appendChild(remove);
+    listEl.appendChild(row);
+  });
+}
+
+function addIgnoredStateFromInput(){
+  const input = document.getElementById('ignoredStateInput');
+  if(!input) return;
+  const value = input.value.trim();
+  if(!value) return;
+  setIgnoredStates(ignoredStates.concat([value]));
+  input.value = '';
+  input.focus();
+}
+
+function openIgnoredStatesDialog(){
+  const dlg = document.getElementById('ignoredStatesDlg');
+  if(!dlg) return;
+  renderIgnoredStatesDialog();
+  dlg.showModal();
+  const input = document.getElementById('ignoredStateInput');
+  if(input){
+    input.value = '';
+    input.focus();
+  }
+}
+
+function renderExcludedList(){
+  const tbody = document.querySelector('#excludedTable tbody');
+  if(!tbody) return;
+  tbody.innerHTML = '';
+  const stage = document.getElementById('process')?.value || currentProc || '';
+  const list = collectExcludedForStage(stage);
+  if(!list.length){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'muted';
+    td.textContent = 'Список пуст.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  list.forEach((task, idx)=>{
+    const parts = parseOrderParts(task.orderId || '');
+    const tr = document.createElement('tr');
+    const cells = [
+      String(idx + 1),
+      parts.number || parts.display || task.orderId || '—',
+      parts.customer || '',
+      task.state || '—'
+    ];
+    cells.forEach(text=>{
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
 }
 
 /* =========
@@ -2046,20 +2401,21 @@ function mapRows(rows, process='bend'){
       const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:Math.max(0.25,(isFinite(hours)?hours:0)*0.05),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
 
 	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
-	  if(rec.parentId){
-	    const ovr = routeOverrides.get(`${rec.parentId}::${process}`);
-	    if(ovr){
-	  	  if(ovr.start){ rec.startDate = new Date(ovr.start); rec.startMissing=false; }
-		  if('end' in ovr){ rec.endDate = ovr.end ? new Date(ovr.end) : null; rec.endMissing = !ovr.end; }
-		  if(rec.route && rec.route[process]){
-		    if(ovr.start) rec.route[process].start = new Date(ovr.start);
-		    if('end' in ovr) rec.route[process].end = ovr.end ? new Date(ovr.end) : null;
-		  }
-	    }
-	  }
+          if(rec.parentId){
+            const ovr = routeOverrides.get(`${rec.parentId}::${process}`);
+            if(ovr){
+                  if(ovr.start){ rec.startDate = new Date(ovr.start); rec.startMissing=false; }
+                  if('end' in ovr){ rec.endDate = ovr.end ? new Date(ovr.end) : null; rec.endMissing = !ovr.end; }
+                  if(rec.route && rec.route[process]){
+                    if(ovr.start) rec.route[process].start = new Date(ovr.start);
+                    if('end' in ovr) rec.route[process].end = ovr.end ? new Date(ovr.end) : null;
+                  }
+            }
+          }
 
-	  
-	  rec.startDate.setHours(0,0,0,0);
+
+          rec.startDate.setHours(0,0,0,0);
+          applyIgnoredStateToTask(rec);
       return rec;
     }).filter(Boolean);
   }
@@ -2168,6 +2524,7 @@ function mapRows(rows, process='bend'){
       route
     };
     rec.startDate.setHours(0,0,0,0);
+    applyIgnoredStateToTask(rec);
     out.push(rec);
   }
   return out;
@@ -2295,8 +2652,11 @@ function sortTasksByStart(){
 
 function optimizeQueue(){
   if(!tasks.length) return;
-  const lockedPositions = []; tasks.forEach((t,i)=>{ if(lockedUids.has(t.uid)) lockedPositions.push({pos:i, task:t}); });
-  const freeTasks = tasks.filter(t=>!lockedUids.has(t.uid));
+  const lockedPositions = [];
+  tasks.forEach((t,i)=>{
+    if(lockedUids.has(t.uid) || t.hiddenByState) lockedPositions.push({pos:i, task:t});
+  });
+  const freeTasks = tasks.filter(t=> !lockedUids.has(t.uid) && !t.hiddenByState);
   freeTasks.sort((a,b)=>{
     const ea=a.endDate?+a.endDate:Infinity, eb=b.endDate?+b.endDate:Infinity;
     if(ea!==eb) return ea-eb;
@@ -2353,7 +2713,7 @@ function applyEditImmediate(cell, task){
   
   
   else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null}; }
-  else if(field==='state'){ task.state = val; }
+  else if(field==='state'){ task.state = val; applyIgnoredStateToTask(task); }
   else if(field==='progress'){
     const p=parseHours(val);
     const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
@@ -2376,7 +2736,8 @@ function applyEditImmediate(cell, task){
 function renderTasksTable(){
   const tb=$("#tasksTable tbody"); tb.innerHTML='';
   const canEdit = userCanEdit();
-  tasks.forEach((t,i)=>{
+  const visibleTasks = tasks.map((task, index)=>({ task, index })).filter(entry=> !entry.task.hiddenByState);
+  visibleTasks.forEach(({ task: t, index: i }, visibleIndex)=>{
     const st=statusForTask(t);
     const rest = Math.max(0, remainingTotal(t));
     const tr=document.createElement('tr');
@@ -2385,7 +2746,7 @@ function renderTasksTable(){
     const useRes   = t.useReserve ? 'checked' : '';
 
     tr.innerHTML=`
-      <td>${i+1}</td>
+      <td>${visibleIndex+1}</td>
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
       <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
       <td class="eye" title="Маршрут заказа">👁</td>
@@ -2413,6 +2774,7 @@ function renderTasksTable(){
           if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
           e.currentTarget.dataset.locked = lockedUids.has(t.uid);
           e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
+          t.locked = lockedUids.has(t.uid);
           persistMaybe();
         });
       }
@@ -2433,6 +2795,7 @@ function renderTasksTable(){
           rememberStageOrder();
           updateDoneAttention();
           recompute();
+          rebuildAndRenderMasterRoute();
           persistMaybe();
         }
       });
@@ -2457,6 +2820,7 @@ function renderTasksTable(){
           rememberStageOrder();
           updateTrashAttention?.();
           recompute();
+          rebuildAndRenderMasterRoute();
           persistMaybe();
         }
       });
@@ -2526,9 +2890,9 @@ function renderTasksTable(){
   });
 
   // ИТОГИ
-  const sHours = tasks.reduce((s,x)=>s+(+x.hours||0),0);
-  const sExtra = tasks.reduce((s,x)=>s+(+x.extraHours||0),0);
-  const sRest  = tasks.reduce((s,x)=>s+Math.max(0, remainingTotal(x)),0);
+  const sHours = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
+  const sExtra = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
+  const sRest  = visibleTasks.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
   $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
@@ -2592,9 +2956,10 @@ function renderDetail(){
 
   const totalDays=daysBetween(schedule.minD,schedule.maxD)+1;
   const days=[...Array(totalDays)].map((_,i)=>addDays(schedule.minD,i));
-  const totalBy=new Map(tasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
+  const stageTasks = tasks.filter(t=> !t.hiddenByState);
+  const totalBy=new Map(stageTasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
   const cumBy=new Map([...totalBy.keys()].map(k=>[k,0]));
-  const labelByUid = new Map(tasks.map(t=>[t.uid,t.orderId]));
+  const labelByUid = new Map(stageTasks.map(t=>[t.uid,t.orderId]));
 
   // есть ли вообще Бронь
   let anyReserve = false;
@@ -2680,6 +3045,7 @@ function renderOverdue(){
   const box=$("#overDays"); if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
   const items=[];
   for(const t of tasks){
+    if(t.hiddenByState) continue;
     const rec=schedule.perTask.get(t.uid);
     if(!rec||!t.endDate) continue;
     let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); }
@@ -2728,11 +3094,7 @@ function renderGantt(intoFS=false){
   if(noHours){
     baseCap = Math.max(1, parallelByProc[curProc] ?? DEFAULT_PARALLEL[curProc] ?? 3);
   } else {
-    const capEl = document.getElementById('capacity');
-    const capStage = capEl?.dataset?.stage;
-    const rawCap = capEl ? Number(capEl.value) : NaN;
-    const stored = capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15;
-    baseCap = (capStage === curProc && Number.isFinite(rawCap)) ? rawCap : stored;
+    baseCap = Math.max(0, capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15);
   }
 
   const filter = intoFS ? $("#ganttFilterFS").value : $("#ganttFilter").value;
@@ -2750,8 +3112,12 @@ function renderGantt(intoFS=false){
 	cards.header.appendChild(c);
   });
 
+  let ganttRowIndex = 0;
   tasks.forEach(t=>{
-    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=t.orderId;
+    if(t.hiddenByState) return;
+    ganttRowIndex += 1;
+    const labelText = `${ganttRowIndex}. ${t.orderId || '—'}`;
+    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=labelText;
     cards.leftBody.appendChild(lab);
 
     const row=document.createElement('div'); row.className='gantt-dates-row';
@@ -2890,26 +3256,76 @@ function mapAllProcessesFromRows(rows){
 // fallback: когда нет lastRows (работаем только по текущим tasks)
 function mapOrdersFromTasks(ts){
   const orders = new Map(); // key = parentId || 'no-parent::<orderId>'
+  const fallbackByOrder = new Map(); // key -> Map(stage -> [routeSeg,...])
 
   for(const t of ts){
+    if(!t) continue;
     const key = t.parentId || ('no-parent::'+t.orderId);
     if(!orders.has(key)) orders.set(key, { parentId:key, orderId:t.orderId, stages:{}, number:0 });
+    const order = orders.get(key);
 
-    // берём часы и даты по каждому этапу из route; если по текущему переделу route пуст — подставим start/end самого таска
-    for(const s of STAGES){
-      let info = t.route?.[s] || null;
-      if(!info && t.stage===s){
-        info = { hours:(+t.hours||0)+(+t.extraHours||0), start:t.startDate||null, end:t.endDate||null };
+    if(t.stage){
+      const stage = t.stage;
+      const seg = order.stages[stage] || { start:null, end:null, hours:0, _direct:false };
+      const baseHours = (+t.hours||0) + (+t.extraHours||0);
+      seg.hours += baseHours;
+
+      const routeSeg = t.route?.[stage] || null;
+      const startCandidate = t.startDate || (routeSeg?.start ? new Date(routeSeg.start) : null);
+      const endCandidate   = t.endDate   || (routeSeg?.end   ? new Date(routeSeg.end)   : null);
+      if(startCandidate && (!seg.start || startCandidate < seg.start)) seg.start = new Date(startCandidate);
+      if(endCandidate   && (!seg.end   || endCandidate   > seg.end))   seg.end   = new Date(endCandidate);
+      seg._direct = true;
+      order.stages[stage] = seg;
+    }
+
+    if(t.route){
+      let stageMap = fallbackByOrder.get(key);
+      if(!stageMap){ stageMap = new Map(); fallbackByOrder.set(key, stageMap); }
+      for(const [otherStage, routeSeg] of Object.entries(t.route)){
+        if(!routeSeg || otherStage === t.stage) continue;
+        if(!stageMap.has(otherStage)) stageMap.set(otherStage, []);
+        stageMap.get(otherStage).push(routeSeg);
       }
-      if(!info) continue;
-
-      const agg = orders.get(key).stages[s] || {start:null,end:null,hours:0};
-      agg.hours += (+info.hours||0);
-      if(info.start && (!agg.start || info.start < agg.start)) agg.start = new Date(info.start);
-      if(info.end   && (!agg.end   || info.end   > agg.end))   agg.end   = new Date(info.end);
-      orders.get(key).stages[s] = agg;
+      if(stageMap.size === 0) fallbackByOrder.delete(key);
     }
   }
+
+  fallbackByOrder.forEach((stageMap, key)=>{
+    const order = orders.get(key);
+    if(!order) return;
+    stageMap.forEach((segments, stage)=>{
+      if(!Array.isArray(segments) || !segments.length) return;
+      const target = order.stages[stage];
+      if(target && target._direct) return; // прямые данные приоритетны
+
+      let start=null, end=null, hours=target ? target.hours||0 : 0;
+      segments.forEach(seg=>{
+        if(!seg) return;
+        const h = Number(seg.hours)||0;
+        hours = Math.max(hours, h);
+        const s = seg.start ? new Date(seg.start) : null;
+        const e = seg.end   ? new Date(seg.end)   : null;
+        if(s && (!start || s < start)) start = new Date(s);
+        if(e && (!end   || e > end))   end   = new Date(e);
+      });
+      if(!hours && !start && !end) return;
+
+      const record = target || { start:null, end:null, hours:0, _direct:false };
+      record.hours = Math.max(record.hours||0, hours);
+      if(start && (!record.start || start < record.start)) record.start = start;
+      if(end   && (!record.end   || end   > record.end))   record.end   = end;
+      order.stages[stage] = record;
+    });
+  });
+
+  orders.forEach(order=>{
+    Object.keys(order.stages).forEach(stage=>{
+      if(order.stages[stage] && Object.prototype.hasOwnProperty.call(order.stages[stage], '_direct')){
+        delete order.stages[stage]._direct;
+      }
+    });
+  });
 
   const arr = [...orders.values()].sort((a,b)=> a.orderId.localeCompare(b.orderId));
   arr.forEach((o,i)=> o.number=i+1);
@@ -2971,7 +3387,7 @@ function onBarDrop(){
     const ns = dragCtx.start0 ? addDays(dragCtx.start0, shift) : null;
     const ne = dragCtx.end0   ? addDays(dragCtx.end0,   shift) : null;
     routeEditsWorking.set(dragCtx.key, {start:ns, end:ne});
-    renderOverview();
+    rebuildAndRenderMasterRoute();
   }
   document.removeEventListener('mousemove', onBarDrag);
   dragCtx=null;
@@ -3001,16 +3417,22 @@ function renderOvStats(orders){
 
 /* рендер общего маршрута */
 function renderOverview(){
-  let orders;
-  if (lastRows && lastRows.length){
-    orders = mapAllProcessesFromRows(lastRows);
-  } else if (Array.isArray(allTasksFromState) && allTasksFromState.length){
-    // есть полный снимок всех переделов — используем его
-    orders = mapOrdersFromTasks(allTasksFromState);
-  } else {
-    // крайний случай — только активный передел
-    orders = mapOrdersFromTasks(tasks);
+  const { list: activeTasks, byStage } = collectActiveTasksForOverview();
+  let orders = mapOrdersFromTasks(activeTasks);
+
+  const rankByParent = buildOverviewOrderRanks(byStage);
+  if(rankByParent.size){
+    orders.sort((a,b)=>{
+      const aRank = rankByParent.get(a.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      const bRank = rankByParent.get(b.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      if(aRank.stageIdx !== bRank.stageIdx) return aRank.stageIdx - bRank.stageIdx;
+      if(aRank.pos !== bRank.pos) return aRank.pos - bRank.pos;
+      return a.orderId.localeCompare(b.orderId);
+    });
+  }else{
+    orders.sort((a,b)=> a.orderId.localeCompare(b.orderId));
   }
+  orders.forEach((o,i)=> o.number = i+1);
 
   // применим несохранённые правки поверх
   for(const [k,ov] of routeEditsWorking.entries()){
@@ -3348,7 +3770,7 @@ function renderDoneList(){
           const route = {laser:null,bend:null,draw:null,weld:null,mech:null};
           route[stage] = { hours: (+d.hours||0), start, end };
 
-          tasks.push({
+          const restored = {
             uid: d.uid || ('restored::'+Date.now()),
             orderId: d.orderId,
             stage,
@@ -3367,12 +3789,15 @@ function renderDoneList(){
             origStartDate: start,
             route,
             isNew: true
-          });
+          };
+          applyIgnoredStateToTask(restored);
+          tasks.push(restored);
 
           if(typeof sortTasksByStart==='function') sortTasksByStart();
 
           updateDoneAttention();
           recompute();
+          rebuildAndRenderMasterRoute();
           renderDoneList();
           if(wrap) wrap.scrollTop = Math.max(0, before - delta);
           persistMaybe();
@@ -3451,7 +3876,7 @@ function renderTrashList(){
         const route = {laser:null,bend:null,draw:null,weld:null,mech:null,proc:null,shear:null,pack:null,ship:null};
         route[stage] = { hours: (+rec.hours||0), start, end };
 
-        tasks.push({
+        const restored = {
           uid: rec.uid || ('restored-trash::'+Date.now()),
           orderId: rec.orderId,
           stage, childId, parentId,
@@ -3461,12 +3886,15 @@ function renderTrashList(){
           startMissing: !rec.start, endMissing: !rec.end,
           state: '', status: '', useReserve:false, progress:0,
           origStartDate: start, route, isNew:true
-        });
+        };
+        applyIgnoredStateToTask(restored);
+        tasks.push(restored);
 
         if(typeof sortTasksByStart==='function') sortTasksByStart();
 
         updateTrashAttention();
         recompute();
+        rebuildAndRenderMasterRoute();
         renderTrashList();
         persistMaybe();
       });
@@ -3874,7 +4302,6 @@ function importStateFromCSV(text){
     }
   });
   capByProc = capNew;
-  $("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
 
   csvFreshnessStr = meta.freshness || meta.freshnessCsv || csvFreshnessStr;
   manualFreshnessStr = meta.freshnessManual || manualFreshnessStr;
@@ -3941,102 +4368,240 @@ function buildDeltaPreview(current, incoming){
   return {added, removed, changed, toDone};
 }
 
-function renderDeltaDialog(diff){
+function renderDeltaDialog(diffByStage, currentByStage){
   const el=$("#deltaContent");
-  const block = (key, arr, fmt) => `
-    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
-      <legend style="padding:0 6px">${key} (${arr.length})</legend>
-      ${arr.length? arr.map(fmt).join('') : '—'}
-    </fieldset>`;
+  const makeBlock = (title, arr, fmt)=>{
+    return `<fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">`
+      + `<legend style="padding:0 6px">${title} (${arr.length})</legend>`
+      + (arr.length ? arr.map(fmt).join('') : '—')
+      + '</fieldset>';
+  };
 
-  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtAdd = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-stage="${stage}" data-uid="${t.uid}" checked> Добавить — ${t.orderId} ${uidBadge(t.uid)}</label>`;
+  const fmtDel = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-stage="${stage}" data-uid="${t.uid}" checked> Удалить — ${t.orderId} ${uidBadge(t.uid)}</label>`;
+  const fmtChg = (stage)=>(x)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-stage="${stage}" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} ${uidBadge(x.to.uid)} <i class="muted">(${x.fields.join(', ')})</i></label>`;
+  const fmtDone = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-stage="${stage}" data-uid="${t.uid}" checked> В архив — ${t.orderId} ${uidBadge(t.uid)}</label>`;
 
-  el.innerHTML =
-    block('Новые', diff.added, fmtAdd) +
-    block('Изменённые', diff.changed, fmtChg) +
-    block('Удаляемые', diff.removed, fmtDel) +
-    block('Статус = Готово', diff.toDone, fmtDone);
+  const blocks = [];
+  STAGES.forEach(stage=>{
+    const diff = diffByStage.get(stage);
+    if(!diff) return;
+    const total = diff.added.length + diff.changed.length + diff.removed.length + diff.toDone.length;
+    if(!total) return;
+    const title = STAGE_TITLE[stage] || stage;
+    const actorName = escapeHtml(userAlias || '');
+    const header = `<div class="change-group-head" style="margin:6px 0"><span class="change-stage">${title}</span>${actorName?`<span class="change-author">${actorName}</span>`:''}</div>`;
+    const content = makeBlock('Новые', diff.added, fmtAdd(stage))
+      + makeBlock('Изменённые', diff.changed, fmtChg(stage))
+      + makeBlock('Удаляемые', diff.removed, fmtDel(stage))
+      + makeBlock('Статус = Готово', diff.toDone, fmtDone(stage));
+    blocks.push(`<section style="margin-bottom:16px">${header}${content}</section>`);
+  });
+
+  el.innerHTML = blocks.length ? blocks.join('') : '<div class="muted">Изменений не обнаружено.</div>';
 
   $("#deltaDlg").showModal();
 
   $("#deltaApply").onclick = ()=>{
-    lastSnapshotJson = serializeState(); // снимок для отката
-    // перед применением сняем старые подсветки «isNew»
+    lastSnapshotJson = serializeState();
     tasks.forEach(t=>{ t.isNew=false; });
 
-    const sel = new Map(); $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
-      if(ch.checked) sel.set(ch.dataset.uid, ch.dataset.apply);
+    const sel = new Map();
+    $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
+      if(!ch.checked) return;
+      sel.set(ch.dataset.uid, { stage: ch.dataset.stage, action: ch.dataset.apply });
     });
 
-    const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    if(sel.size===0){
+      $("#deltaDlg").close();
+      return;
+    }
+
     const now = new Date();
+    const curStage = $("#process").value;
+    const stageSnapshots = new Map();
+    const stageDiffEntries = [];
+    const updatedByStage = new Map();
+    const appliedDiff = { added:[], removed:[], changed:[], toDone:[] };
+    const csvLockedAdds = new Map();
 
-    // Удаления (только выбранные)
-    diff.removed.forEach(r=>{
-      if(!sel.has(r.uid) || sel.get(r.uid)!=='del') return;
-      const idx = byId.get(r.uid);
-      if(idx!=null){ tasks.splice(idx,1); byId.delete(r.uid); }
+    STAGES.forEach(stage=>{
+      const baseline = (currentByStage.get(stage) || []).map(cloneTaskRecord).filter(Boolean);
+      const diff = diffByStage.get(stage) || { added:[], removed:[], changed:[], toDone:[] };
+      const stageSel = new Map();
+      sel.forEach((info, uid)=>{ if(info.stage===stage) stageSel.set(uid, info.action); });
+      if(!stageSel.size){
+        updatedByStage.set(stage, baseline);
+        stageSnapshots.set(stage, captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined));
+        stageDiffEntries.push({ stage, diff: computeDiff(stageSnapshots.get(stage), stageSnapshots.get(stage)) });
+        return;
+      }
+
+      let stageTasks = baseline.map(cloneTaskRecord).filter(Boolean);
+      const removeSet = new Set();
+      diff.removed.forEach(item=>{
+        if(stageSel.get(item.uid) === 'del'){
+          removeSet.add(item.uid);
+          if(stage === curStage) appliedDiff.removed.push(cloneTaskRecord(item));
+        }
+      });
+      const archiveMap = new Map();
+      diff.toDone.forEach(item=>{
+        if(stageSel.get(item.uid) === 'done'){
+          archiveMap.set(item.uid, item);
+          if(stage === curStage) appliedDiff.toDone.push(cloneTaskRecord(item));
+        }
+      });
+
+      const survivors = [];
+      stageTasks.forEach(task=>{
+        if(archiveMap.has(task.uid)){
+          doneTasks.push({
+            uid:task.uid, orderId:task.orderId, stage:task.stage,
+            parentId:task.parentId, childId:task.childId,
+            hours:task.hours, extra:task.extraHours,
+            start:task.startDate, end:task.endDate,
+            when:now, source:'csv_status'
+          });
+          archiveMap.delete(task.uid);
+          return;
+        }
+        if(removeSet.has(task.uid)) return;
+        survivors.push(task);
+      });
+      stageTasks = survivors;
+
+      archiveMap.forEach(item=>{
+        doneTasks.push({
+          uid:item.uid, orderId:item.orderId, stage:item.stage || stage,
+          parentId:item.parentId, childId:item.childId,
+          hours:item.hours, extra:item.extraHours,
+          start:item.startDate, end:item.endDate,
+          when:now, source:'csv_status'
+        });
+      });
+
+      const byId = new Map(stageTasks.map(t=>[t.uid, t]));
+      diff.changed.forEach(({from,to,fields})=>{
+        if(stageSel.get(to.uid) !== 'chg') return;
+        if(!byId.has(from.uid)) return;
+        const target = byId.get(from.uid);
+        target.hours = to.hours;
+        target.extraHours = Math.max(0.25,(to.hours||0)*0.05);
+        target.startDate = to.startDate;
+        target.endDate = to.endDate;
+        target.startMissing = to.startMissing;
+        target.endMissing = to.endMissing;
+        target.state = to.state || target.state;
+        target.status = to.status || target.status;
+        target.orderId = to.orderId || target.orderId;
+        target.route = to.route || target.route;
+        applyIgnoredStateToTask(target);
+        if(!target.origStartDate) target.origStartDate = target.startDate;
+        target.isNew = true;
+        if(stage === curStage){
+          appliedDiff.changed.push({ from: cloneTaskRecord(from), to: cloneTaskRecord(to), fields: Array.isArray(fields) ? fields.slice() : [] });
+        }
+      });
+
+      const csvLockOrder = (lockNewOrders && lockNewOrdersCsv) ? new Map() : null;
+      diff.added.forEach(item=>{
+        if(stageSel.get(item.uid) !== 'add') return;
+        const clone = cloneTaskRecord(item);
+        clone.isNew = true;
+        if(csvLockOrder){
+          clone.locked = true;
+          csvLockOrder.set(clone.uid, csvLockOrder.size);
+          if(stage === curStage){
+            lockedUids.add(clone.uid);
+          }
+        }
+        applyIgnoredStateToTask(clone);
+        stageTasks.push(clone);
+        if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
+      });
+
+      stageTasks.sort((a,b)=>{
+        if(csvLockOrder && csvLockOrder.size){
+          const aLocked = csvLockOrder.has(a.uid);
+          const bLocked = csvLockOrder.has(b.uid);
+          if(aLocked !== bLocked) return aLocked ? 1 : -1;
+          if(aLocked && bLocked){
+            return csvLockOrder.get(a.uid) - csvLockOrder.get(b.uid);
+          }
+        }
+        const aStart = a.startDate ? +a.startDate : 0;
+        const bStart = b.startDate ? +b.startDate : 0;
+        if(aStart !== bStart) return aStart - bStart;
+        return a.uid.localeCompare(b.uid);
+      });
+
+      if(csvLockOrder && csvLockOrder.size){
+        csvLockedAdds.set(stage, [...csvLockOrder.keys()]);
+      }
+
+      const beforeSnapshot = captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined);
+      const afterSnapshot = captureSnapshotFromRaw(stageTasks, stage, stage === curStage ? lockedUids : undefined);
+      stageSnapshots.set(stage, afterSnapshot);
+      stageDiffEntries.push({ stage, diff: computeDiff(beforeSnapshot, afterSnapshot) });
+      updatedByStage.set(stage, stageTasks);
     });
 
-	// В архив (статус Готово)
-	diff.toDone.forEach(d=>{
-	  if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
-	  if(byId.has(d.uid)){
-		const old=tasks.splice(byId.get(d.uid),1)[0];
-		doneTasks.push({
-		  uid:old.uid, orderId:old.orderId, stage:old.stage,
-		  parentId:old.parentId, childId:old.childId,
-		  hours:old.hours, extra:old.extraHours,
-		  start:old.startDate, end:old.endDate,
-		  when:now, source:'csv_status'
-		});
-		byId.delete(d.uid);
-	  } else {
-		doneTasks.push({
-		  uid:d.uid, orderId:d.orderId, stage:d.stage||d.stage,  // d.stage есть у incoming
-		  parentId:d.parentId, childId:d.childId,
-		  hours:d.hours, extra:d.extraHours,
-		  start:d.startDate, end:d.endDate,
-		  when:now, source:'csv_status'
-		});
-	  }
-	});
-
-    // Изменения
-    diff.changed.forEach(({from,to})=>{
-      if(!sel.has(to.uid) || sel.get(to.uid)!=='chg') return;
-      if(!byId.has(from.uid)) return;
-      const t=tasks[byId.get(from.uid)];
-      t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
-      t.startDate=to.startDate; t.endDate=to.endDate;
-      t.startMissing=to.startMissing; t.endMissing=to.endMissing;
-      t.state=to.state||t.state;
-      t.status=to.status||t.status;
-      t.orderId=to.orderId||t.orderId;
-      t.route=to.route||t.route;
-      if(!t.origStartDate) t.origStartDate = t.startDate;
-      t.isNew=true; // подсветим именно текущую волну изменений
+    STAGES.forEach(stage=>{
+      const list = updatedByStage.get(stage) || (currentByStage.get(stage) || []).map(cloneTaskRecord);
+      ordersByStage.set(stage, list.map(t=>t.uid));
+      if(stage === curStage){
+        tasks = list;
+        lockedUids = new Set(list.filter(t=> t && t.locked).map(t=> t.uid));
+      }
     });
 
-    // Новые
-    diff.added.forEach(n=>{
-      if(!sel.has(n.uid) || sel.get(n.uid)!=='add') return;
-      n.isNew=true; tasks.push(n);
+    const aggregated = [];
+    STAGES.forEach(stage=>{
+      const list = updatedByStage.get(stage) || (currentByStage.get(stage) || []);
+      list.forEach(task=> aggregated.push(cloneTaskRecord(task)) );
+    });
+    allTasksFromState = aggregated;
+
+    lastSyncedSnapshots = new Map(lastSyncedSnapshots);
+    stageSnapshots.forEach((snapshot, stage)=>{
+      if(snapshot) lastSyncedSnapshots.set(stage, snapshot);
     });
 
-    lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
-    lastRows = pendingRows; // установим из глобалки (см. importRows)
+    lastDiffApplied = appliedDiff;
+    lastRows = pendingRows;
     const stamp = new Date().toLocaleString();
     lastImportTime = stamp;
-    csvFreshnessStr = lastImportTime;
-    stateMeta.csvTimestamp = lastImportTime;
+    csvFreshnessStr = stamp;
+    stateMeta.csvTimestamp = stamp;
     updateFreshnessUI();
-	sortTasksByStart();
-	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
-	persistNow();
+
+    sortTasksByStart();
+    const csvTail = csvLockedAdds.get(curStage);
+    if(csvTail && csvTail.length){
+      const tailSet = new Set(csvTail);
+      const others = tasks.filter(t=> !tailSet.has(t.uid));
+      const tail = tasks.filter(t=> tailSet.has(t.uid));
+      tasks = others.concat(tail);
+      lockedUids = new Set(tasks.filter(t=> t && t.locked).map(t=> t.uid));
+      rememberStageOrder(curStage);
+    }
+    if(document.querySelector('#autoOptimize')?.checked){ optimizeQueue(); }
+    else { recompute(); }
+
+    const meaningfulEntries = stageDiffEntries.filter(entry=> diffHasChanges(entry.diff));
+    if(meaningfulEntries.length){
+      const combined = { stages:{} };
+      meaningfulEntries.forEach(entry=>{ combined.stages[entry.stage] = entry.diff; });
+      const combinedSummary = buildOrdersSummary(combined);
+      const stageSummaries = meaningfulEntries.map(entry=>{
+        const stageSummary = buildOrdersSummary(entry.diff, entry.stage);
+        const summaryText = summarizeOrdersSummary(stageSummary) || summarizeDiffLike(entry.diff, entry.stage);
+        return `${STAGE_TITLE[entry.stage] || entry.stage}: ${summaryText}`;
+      });
+      const summaryText = summarizeOrdersSummary(combinedSummary) || stageSummaries.join('; ');
+      persistNow(undefined,{ source:'csv', multiStage:{ entries: meaningfulEntries, summary: summaryText, combinedDiff: combined, ordersSummary: combinedSummary || null } });
+    }
 
     $("#deltaDlg").close();
   };
@@ -4044,6 +4609,22 @@ function renderDeltaDialog(diff){
 }
 
 let pendingRows=null;
+
+function collectStageTasksSnapshot(){
+  const snapshot = new Map();
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(task=>{
+      if(!task || !task.stage) return;
+      if(!snapshot.has(task.stage)) snapshot.set(task.stage, []);
+      snapshot.get(task.stage).push(cloneTaskRecord(task));
+    });
+  }
+  const curStage = $("#process")?.value || currentProc || 'bend';
+  const currentList = tasks.map(cloneTaskRecord).filter(Boolean);
+  snapshot.set(curStage, currentList);
+  STAGES.forEach(stage=>{ if(!snapshot.has(stage)) snapshot.set(stage, []); });
+  return snapshot;
+}
 
 async function importFile(file){
   if(!file) return;
@@ -4093,10 +4674,15 @@ async function importRows(rows){
     return;
   }
 
-  // дельта
-  const incoming = mapRows(rows, p);
-  const diff = buildDeltaPreview(tasks, incoming);
-  renderDeltaDialog(diff);
+  // дельта по всем переделам
+  const currentByStage = collectStageTasksSnapshot();
+  const diffByStage = new Map();
+  STAGES.forEach(stage=>{
+    const incoming = mapRows(rows, stage);
+    const currentStageTasks = currentByStage.get(stage) || [];
+    diffByStage.set(stage, buildDeltaPreview(currentStageTasks, incoming));
+  });
+  renderDeltaDialog(diffByStage, currentByStage);
 }
 
 /* =========
@@ -4140,7 +4726,8 @@ function buildStateObject(){
       shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
       pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'', end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
       ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'', end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-    }
+    },
+    locked: !!x.locked || lockedUids.has(x.uid)
   }));
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
@@ -4171,6 +4758,10 @@ function buildStateObject(){
 
   const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
+  stateMeta.settings = {
+    capacity: { ...capOut },
+    parallel: { ...parallelOut }
+  };
   const storageMeta = {
     local: enableLocalStore,
     remote: remoteSyncEnabled(),
@@ -4196,12 +4787,19 @@ function buildStateObject(){
     autosaveOn,
     autoOptimizeOn,
     shiftOnProgress,
+    ignoredStates: ignoredStates.slice(),
     meta: {
       versions: versionsObj,
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
       history,
+      settings: {
+        capacity: { ...stateMeta.settings.capacity },
+        parallel: { ...stateMeta.settings.parallel },
+        updatedAt: stateMeta.settings.updatedAt || ''
+      },
+      ignoredStates: ignoredStates.slice(),
       storage: storageMeta
     }
   };
@@ -4341,26 +4939,453 @@ function computeDiff(before, after){
 }
 
 function diffHasChanges(diff){
-  return !!(diff && (diff.added.length || diff.removed.length || diff.changed.length));
+  if(!diff) return false;
+  if(diff.stages && typeof diff.stages === 'object'){
+    return Object.values(diff.stages).some(stageDiff=> diffHasChanges(stageDiff));
+  }
+  return !!((diff.added && diff.added.length) || (diff.removed && diff.removed.length) || (diff.changed && diff.changed.length));
 }
 
-function summarizeDiff(diff){
-  if(!diff) return '';
-  return `+${diff.added.length} ~${diff.changed.length} -${diff.removed.length}`;
+const STAGE_ORDER_INDEX = new Map(STAGES.map((name, idx)=>[name, idx]));
+
+function parseOrderParts(orderId){
+  const raw = String(orderId || '').trim();
+  if(!raw){
+    return { raw:'', number:'', customer:'', display:'Без номера' };
+  }
+  const match = raw.match(/^([^\s]+)\s+(.*)$/);
+  if(match){
+    const number = match[1].replace(/^№+/i,'').trim();
+    const customer = match[2].trim();
+    const prefix = number ? (raw.startsWith('№') ? `№${number}` : `№${number}`) : raw;
+    const display = customer ? `${prefix} ${customer}` : prefix;
+    return { raw, number, customer, display };
+  }
+  const normalized = raw.startsWith('№') ? raw : `№${raw}`;
+  return { raw, number:raw, customer:'', display:normalized };
 }
 
-function diffToHtml(diff){
+function parseDiffDate(value){
+  if(!value) return null;
+  if(value instanceof Date) return value;
+  const str = String(value).trim();
+  if(!str) return null;
+  const parsed = new Date(str);
+  if(Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0,0,0,0);
+  return parsed;
+}
+
+function formatDiffDate(value){
+  const date = parseDiffDate(value);
+  return date ? fmtDate(date) : '—';
+}
+
+function formatDiffNumber(value, { suffix='', precision=1 }={}){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return '—';
+  const rounded = Math.abs(num % 1) < 1e-9 ? num.toFixed(0) : num.toFixed(precision);
+  return `${rounded.replace('.',',')}${suffix}`;
+}
+
+function formatDiffProgress(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return '—';
+  const clamped = Math.max(0, Math.min(100, Math.round(num)));
+  return `${clamped}%`;
+}
+
+function formatReserve(value){
+  return value ? 'вкл' : 'выкл';
+}
+
+function routeSnapshotText(info){
+  if(!info || typeof info !== 'object') return '—';
+  const parts = [];
+  if(info.start) parts.push(`с ${formatDiffDate(info.start)}`);
+  if(info.end) parts.push(`по ${formatDiffDate(info.end)}`);
+  if(info.hours !== undefined && info.hours !== null){
+    const hoursText = formatDiffNumber(info.hours, { suffix:' ч', precision:1 });
+    if(hoursText !== '— ч') parts.push(hoursText);
+  }
+  return parts.length ? parts.join(', ') : '—';
+}
+
+function describeFieldChange(field, before, after){
+  const labels = {
+    start:'Начало',
+    end:'Окончание',
+    hours:'Часы',
+    extraHours:'Доп.часы',
+    progress:'Прогресс',
+    useReserve:'Бронь',
+    state:'Статус',
+    status:'Состояние',
+    locked:'Блокировка',
+    idx:'Позиция'
+  };
+  if(field === 'route'){
+    return describeRouteChange(before, after);
+  }
+  const label = labels[field] || field;
+  const detail = { field, label, beforeRaw: before, afterRaw: after, before: '', after: '' };
+  if(field === 'start' || field === 'end'){
+    detail.before = formatDiffDate(before);
+    detail.after = formatDiffDate(after);
+  }else if(field === 'hours' || field === 'extraHours'){
+    detail.before = formatDiffNumber(before, { suffix:' ч', precision:1 });
+    detail.after = formatDiffNumber(after, { suffix:' ч', precision:1 });
+  }else if(field === 'progress'){
+    detail.before = formatDiffProgress(before);
+    detail.after = formatDiffProgress(after);
+  }else if(field === 'useReserve'){
+    detail.before = formatReserve(!!before);
+    detail.after = formatReserve(!!after);
+  }else if(field === 'locked'){
+    detail.before = before ? 'вкл' : 'выкл';
+    detail.after = after ? 'вкл' : 'выкл';
+  }else if(field === 'idx'){
+    detail.before = before === undefined || before === null ? '—' : String(before);
+    detail.after = after === undefined || after === null ? '—' : String(after);
+  }else{
+    const safe = val => {
+      if(val === undefined || val === null || val === '') return '—';
+      return String(val);
+    };
+    detail.before = safe(before);
+    detail.after = safe(after);
+  }
+  return [detail];
+}
+
+function describeRouteChange(before, after){
+  const keys = new Set([
+    ...Object.keys(before || {}),
+    ...Object.keys(after || {})
+  ]);
+  const details = [];
+  keys.forEach(key=>{
+    const prev = before?.[key] || null;
+    const next = after?.[key] || null;
+    if(!prev && !next) return;
+    const changed = (
+      (prev?.start || null) !== (next?.start || null)
+      || (prev?.end || null) !== (next?.end || null)
+      || Number(prev?.hours ?? null) !== Number(next?.hours ?? null)
+    );
+    if(!changed) return;
+    const label = `Маршрут ${STAGE_LETTER[key] || key}`;
+    details.push({
+      field:`route.${key}`,
+      label,
+      beforeRaw: prev,
+      afterRaw: next,
+      before: routeSnapshotText(prev),
+      after: routeSnapshotText(next)
+    });
+  });
+  return details;
+}
+
+function collectSnapshotDetails(before, after){
+  const fields = ['start','end','hours','extraHours','progress','useReserve','state','status'];
+  const details = [];
+  fields.forEach(field=>{
+    const beforeVal = before ? before[field] : undefined;
+    const afterVal = after ? after[field] : undefined;
+    if(beforeVal === undefined && afterVal === undefined) return;
+    details.push(...(describeFieldChange(field, beforeVal, afterVal) || []));
+  });
+  details.push(...describeRouteChange(before?.route || null, after?.route || null));
+  return details;
+}
+
+function buildChangeSummaryEntry(type, stageLetter, details){
+  const prefix = stageLetter || '';
+  if(type === 'added'){
+    const bits = [];
+    const start = details.find(d=>d.field==='start');
+    const end = details.find(d=>d.field==='end');
+    const hours = details.find(d=>d.field==='hours');
+    if(start && start.after && start.after !== '—') bits.push(`начало ${start.after}`);
+    if(end && end.after && end.after !== '—') bits.push(`окончание ${end.after}`);
+    if(hours && hours.after && hours.after !== '— ч') bits.push(`часы ${hours.after}`);
+    const reserve = details.find(d=>d.field==='useReserve' && d.after === 'вкл');
+    if(reserve) bits.push('бронь вкл');
+    return `+${prefix}${bits.length ? ` (${bits.join(', ')})` : ''}`;
+  }
+  if(type === 'removed'){
+    return `-${prefix}`;
+  }
+  const primary = [];
+  details.forEach(detail=>{
+    if(detail.field === 'start'){
+      primary.push(`начало ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'end'){
+      primary.push(`окончание ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'hours'){
+      primary.push(`часы ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'progress'){
+      primary.push(`прогресс ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'useReserve'){
+      primary.push(`бронь ${detail.before} → ${detail.after}`);
+    }else if(detail.field?.startsWith('route.')){
+      primary.push(`${detail.label.toLowerCase()} ${detail.before} → ${detail.after}`);
+    }
+  });
+  const tail = primary.length ? primary.slice(0,3).join(', ') : 'обновлено';
+  return `${prefix}: ${tail}`;
+}
+
+function finalizeOrdersSummary(ordersMap, totals, stagesSet){
+  const orders = [];
+  ordersMap.forEach(order=>{
+    const stageList = Array.from(order.stageNames.values()).sort((a,b)=>{
+      const ia = STAGE_ORDER_INDEX.has(a) ? STAGE_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
+      const ib = STAGE_ORDER_INDEX.has(b) ? STAGE_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
+      return ia-ib;
+    });
+    const letters = stageList.map(name=> STAGE_LETTER[name] || name[0] || '').join('');
+    const changes = order.changes.map(change=>({
+      type: change.type,
+      stage: change.stage,
+      stageTitle: change.stageTitle,
+      stageLetter: change.stageLetter,
+      uid: change.uid,
+      summary: change.summary,
+      details: change.details
+    }));
+    const summaryText = changes.map(ch=>ch.summary).filter(Boolean).join('; ');
+    orders.push({
+      key: order.key,
+      orderId: order.orderId,
+      display: order.display,
+      number: order.number,
+      customer: order.customer,
+      stages: stageList,
+      stageLetters: letters,
+      summary: summaryText,
+      changes
+    });
+  });
+  orders.sort((a,b)=>{
+    const locale = (Intl && Intl.Collator) ? new Intl.Collator('ru', { numeric:true, sensitivity:'base' }) : null;
+    if(locale) return locale.compare(a.display, b.display);
+    return a.display.localeCompare(b.display);
+  });
+  const stages = Array.from(stagesSet.values()).sort((a,b)=>{
+    const ia = STAGE_ORDER_INDEX.has(a) ? STAGE_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
+    const ib = STAGE_ORDER_INDEX.has(b) ? STAGE_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
+    return ia-ib;
+  });
+  return { totals, orders, stages };
+}
+
+function buildOrdersSummary(diff, stageHint){
+  if(!diff) return null;
+  const stageEntries = [];
+  if(diff.stages && typeof diff.stages === 'object'){
+    Object.entries(diff.stages).forEach(([stage, stageDiff])=>{
+      if(stageDiff && diffHasChanges(stageDiff)){
+        stageEntries.push([stage, stageDiff]);
+      }
+    });
+  }else if(diffHasChanges(diff)){
+    stageEntries.push([stageHint || 'current', diff]);
+  }
+  if(!stageEntries.length) return null;
+  const totals = { added:0, removed:0, changed:0 };
+  const ordersMap = new Map();
+  const stagesSet = new Set();
+  const ensureOrder = (orderId, fallbackKey)=>{
+    const key = orderId || fallbackKey || `uid:${Math.random().toString(16).slice(2)}`;
+    if(ordersMap.has(key)) return ordersMap.get(key);
+    const parsed = parseOrderParts(orderId || '');
+    const entry = {
+      key,
+      orderId: orderId || '',
+      number: parsed.number,
+      customer: parsed.customer,
+      display: parsed.display,
+      changes: [],
+      stageNames: new Set()
+    };
+    ordersMap.set(key, entry);
+    return entry;
+  };
+  stageEntries.forEach(([stage, stageDiff])=>{
+    const stageTitle = STAGE_TITLE[stage] || stage;
+    const stageLetter = STAGE_LETTER[stage] || stage.slice(0,1).toUpperCase();
+    stagesSet.add(stage);
+    (stageDiff.added || []).forEach(task=>{
+      if(!task) return;
+      totals.added += 1;
+      const order = ensureOrder(task.orderId, task.uid);
+      order.stageNames.add(stage);
+      const details = collectSnapshotDetails(null, task);
+      const summary = buildChangeSummaryEntry('added', stageLetter, details);
+      order.changes.push({
+        type:'added',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: task.uid,
+        summary,
+        details
+      });
+    });
+    (stageDiff.removed || []).forEach(task=>{
+      if(!task) return;
+      totals.removed += 1;
+      const order = ensureOrder(task.orderId, task.uid);
+      order.stageNames.add(stage);
+      const details = collectSnapshotDetails(task, null);
+      const summary = buildChangeSummaryEntry('removed', stageLetter, details);
+      order.changes.push({
+        type:'removed',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: task.uid,
+        summary,
+        details
+      });
+    });
+    (stageDiff.changed || []).forEach(change=>{
+      if(!change) return;
+      totals.changed += 1;
+      const order = ensureOrder(change.after?.orderId || change.before?.orderId, change.uid);
+      order.stageNames.add(stage);
+      const fields = Array.isArray(change.fields) ? change.fields : [];
+      const details = fields.flatMap(field=> describeFieldChange(field.field, field.before, field.after) || []);
+      if(!details.length){
+        details.push(...collectSnapshotDetails(change.before || null, change.after || null));
+      }
+      const summary = buildChangeSummaryEntry('changed', stageLetter, details);
+      order.changes.push({
+        type:'changed',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: change.uid,
+        summary,
+        details
+      });
+    });
+  });
+  if(!ordersMap.size) return null;
+  return finalizeOrdersSummary(ordersMap, totals, stagesSet);
+}
+
+function summarizeOrdersSummary(summary, opts={}){
+  if(!summary || !Array.isArray(summary.orders) || !summary.orders.length) return '';
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 3;
+  const lines = [];
+  for(let i=0; i<summary.orders.length && i<limit; i+=1){
+    const order = summary.orders[i];
+    const letters = order.stageLetters ? ` [${order.stageLetters}]` : '';
+    const changeText = order.summary ? `: ${order.summary}` : '';
+    lines.push(`${order.display}${letters}${changeText}`.trim());
+  }
+  if(summary.orders.length > limit){
+    lines.push(`+${summary.orders.length - limit} заказов`);
+  }
+  return lines.join('; ');
+}
+
+function summarizeDiffLike(diff, stageHint){
+  if(!diff || !diffHasChanges(diff)) return '';
+  const summary = buildOrdersSummary(diff, stageHint);
+  return summarizeOrdersSummary(summary);
+}
+
+function renderOrdersSummaryDetails(summary, opts={}){
+  if(!summary || !Array.isArray(summary.orders) || !summary.orders.length){
+    return '<div class="muted">Изменений нет</div>';
+  }
+  const parts = [];
+  if(opts.user || opts.time){
+    const who = escapeHtml(opts.user || '—');
+    const when = escapeHtml(opts.time || '');
+    parts.push(`<div class="muted small" style="margin-bottom:8px">Автор: <strong>${who}</strong>${when ? ` • ${when}` : ''}</div>`);
+  }
+  summary.orders.forEach(order=>{
+    const headerLetters = order.stageLetters ? ` <span class="muted">[${escapeHtml(order.stageLetters)}]</span>` : '';
+    parts.push(`<div class="change-group">`);
+    parts.push(`<div class="change-group-head"><span class="change-stage">${escapeHtml(order.display)}</span>${headerLetters}</div>`);
+    order.changes.forEach(change=>{
+      const typeLabel = change.type === 'added'
+        ? 'Добавлено'
+        : (change.type === 'removed' ? 'Удалено' : 'Изменено');
+      parts.push(`<div style="margin-bottom:8px">`);
+      const uidHtml = change.uid ? ` ${uidBadge(change.uid)}` : '';
+      parts.push(`<div class="small muted">${escapeHtml(typeLabel)} • ${escapeHtml(change.stageTitle)}${uidHtml}</div>`);
+      if(Array.isArray(change.details) && change.details.length){
+        const rows = change.details.map(detail=>{
+          const before = escapeHtml(detail.before ?? '—');
+          const after = escapeHtml(detail.after ?? '—');
+          return `<div class="small" style="margin-left:8px;margin-top:4px">`+
+            `<span class="muted">${escapeHtml(detail.label)}:</span> `+
+            `${before} → <strong>${after}</strong>`+
+            `</div>`;
+        }).join('');
+        parts.push(rows);
+      }else{
+        parts.push(`<div class="small" style="margin-left:8px">Подробности отсутствуют</div>`);
+      }
+      parts.push(`</div>`);
+    });
+    parts.push(`</div>`);
+  });
+  return parts.join('');
+}
+
+function escapeHtml(str){
+  return String(str ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
+function uidBadge(uid){
+  const text = escapeHtml(uid);
+  return `<span class="uid-badge">${text}</span>`;
+}
+
+function formatAuthorInfo(info){
+  if(!info || typeof info !== 'object') return '';
+  return escapeHtml(info.name || info.user || info.session || '');
+}
+
+function renderDiffList(arr, formatter, {mode='compact', limit=5}={}){
+  if(!Array.isArray(arr) || !arr.length) return '';
+  if(mode === 'detail' || arr.length <= limit){
+    return arr.map(formatter).join('');
+  }
+  return `<div class="change-counter">+${arr.length} заказов</div>`;
+}
+
+function diffToHtml(diff, opts={}){
+  const { mode='compact', limit=5, authors=null, stageKey=null } = opts;
+  if(diff && diff.stages && typeof diff.stages === 'object'){
+    const entries = Object.entries(diff.stages).filter(([,val])=> diffHasChanges(val));
+    if(!entries.length) return '<div class="muted">Изменений нет</div>';
+    return entries.map(([stage,val])=> diffToHtml(val, { mode, limit, authors, stageKey: stage })).join('');
+  }
   if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
   const block = (title, arr, formatter)=>{
     if(!arr.length) return '';
+    const body = renderDiffList(arr, formatter, { mode, limit });
     return `<fieldset style="border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0">`+
       `<legend style="padding:0 6px">${title} (${arr.length})</legend>`+
-      arr.map(formatter).join('')+
+      (body || '—')+
       '</fieldset>';
   };
   const fmtTask = (label)=> (x)=>{
     const name = x.orderId || x.after?.orderId || x.before?.orderId || x.uid;
-    return `<div><b>${name}</b> <span class="muted">[${x.uid}]</span></div>`;
+    return `<div><b>${name}</b> ${uidBadge(x.uid)}</div>`;
   };
   const fmtChange = (x)=>{
     const rows = x.fields.map(f=>{
@@ -4368,12 +5393,24 @@ function diffToHtml(diff){
       const after = typeof f.after === 'object' ? JSON.stringify(f.after) : String(f.after ?? '—');
       return `<div><code>${f.field}</code>: <span class="muted">${before}</span> → <b>${after}</b></div>`;
     }).join('');
-    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> <span class="muted">[${x.uid}]</span></div>`;
+    const header = `<div><b>${x.after.orderId || x.before.orderId || x.uid}</b> ${uidBadge(x.uid)}</div>`;
     return `<div style="margin-bottom:6px">${header}${rows?`<div class="small" style="margin-left:8px">${rows}</div>`:''}</div>`;
   };
-  return block('Добавлены', diff.added, fmtTask('added'))+
-         block('Удалены', diff.removed, fmtTask('removed'))+
-         block('Изменены', diff.changed, fmtChange);
+  let header = '';
+  if(stageKey){
+    const title = STAGE_TITLE[stageKey] || stageKey;
+    const authorName = formatAuthorInfo(authors?.[stageKey]);
+    if(title || authorName){
+      header = `<div class="change-group-head">`+
+        (title ? `<span class="change-stage">${title}</span>` : '')+
+        (authorName ? `<span class="change-author">${authorName}</span>` : '')+
+        `</div>`;
+    }
+  }
+  const content = block('Добавлены', diff.added || [], fmtTask('added'))+
+         block('Удалены', diff.removed || [], fmtTask('removed'))+
+         block('Изменены', diff.changed || [], fmtChange);
+  return `<div class="change-group">${header}${content || '<div class="muted">Изменений нет</div>'}</div>`;
 }
 
 
@@ -4385,9 +5422,18 @@ function renderLogList(){
     return;
   }
   const rows = activityLog.slice().reverse().map(entry=>{
-    const stageName = STAGE_TITLE[entry.stage] || entry.stage;
+    const stageCandidates = Array.isArray(entry.ordersSummary?.stages) ? entry.ordersSummary.stages : [];
+    let stageName = STAGE_TITLE[entry.stage] || entry.stage;
+    if(stageCandidates.length > 1){
+      stageName = 'Несколько переделов';
+    }else if(stageCandidates.length === 1){
+      const singleStage = stageCandidates[0];
+      stageName = STAGE_TITLE[singleStage] || singleStage;
+    }
     const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
-    const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const summary = entry.summary
+      || summarizeOrdersSummary(entry.ordersSummary)
+      || summarizeDiffLike(entry.diff, entry.stage);
     return `<div class="log-entry" data-log-id="${entry.id}">`
       + `<div><strong>${stageName}</strong> — ${summary}</div>`
       + `<div class="meta">${meta}</div>`
@@ -4399,9 +5445,18 @@ function renderLogList(){
   container.innerHTML = rows;
 }
 
-function showUpdateDetails(diff){
+function showUpdateDetails(context={}){
+  const { ordersSummary=null, diff=null, authors=null, stage=null, user=null, time=null } = context || {};
   const box = $("#updateDetails");
-  if(box) box.innerHTML = diffToHtml(diff);
+  if(box){
+    if(ordersSummary && Array.isArray(ordersSummary.orders) && ordersSummary.orders.length){
+      box.innerHTML = renderOrdersSummaryDetails(ordersSummary, { user, time });
+    }else if(diff){
+      box.innerHTML = diffToHtml(diff, { mode:'detail', authors: authors || null, stageKey: stage || null });
+    }else{
+      box.innerHTML = '<div class="muted">Изменений нет</div>';
+    }
+  }
   $("#updateDetailsDlg")?.showModal();
 }
 
@@ -4411,7 +5466,10 @@ function showConflictDialog(diff, author){
     const who = author?.name || author?.session || 'другой пользователь';
     const when = author?.at ? new Date(author.at).toLocaleString() : '';
     const meta = when ? ` <span class="muted">(${when})</span>` : '';
-    box.innerHTML = `<p>Последним изменения сохранил <b>${who}</b>${meta}. Ваши изменения не были применены.</p>` + diffToHtml(diff);
+    const stageKey = author?.stage || null;
+    const authors = author ? { [stageKey || 'current']: author } : null;
+    box.innerHTML = `<p>Последним изменения сохранил <b>${who}</b>${meta}. Ваши изменения не были применены.</p>`
+      + diffToHtml(diff, { mode:'detail', authors, stageKey });
   }
   $("#conflictDlg")?.showModal();
 }
@@ -4459,13 +5517,36 @@ function handleIncomingSyncMessage(msg){
         setDataMode(enableLocalStore ? 'local' : 'session');
       }
     }
-    if(msg.diff){
+    const summaryText = msg.summary
+      || summarizeOrdersSummary(msg.ordersSummary)
+      || summarizeDiffLike(msg.diff, msg.stage);
+    if(summaryText){
       markLogAttention();
+      const stageCandidates = Array.isArray(msg.ordersSummary?.stages) ? msg.ordersSummary.stages : [];
+      let stageLabel = STAGE_TITLE[msg.stage] || msg.stage;
+      if(stageCandidates.length > 1){
+        stageLabel = 'Несколько переделов';
+      }else if(stageCandidates.length === 1){
+        const singleStage = stageCandidates[0];
+        stageLabel = STAGE_TITLE[singleStage] || singleStage;
+      }else if(!msg.stage || msg.stage === 'multi'){
+        stageLabel = 'Несколько переделов';
+      }
+      const who = msg.user || msg.alias || 'Пользователь';
+      const detailStage = stageCandidates.length > 1 ? null : (stageCandidates[0] || msg.stage || null);
+      const detailPayload = {
+        ordersSummary: msg.ordersSummary || null,
+        diff: msg.diff || null,
+        stage: detailStage,
+        authors: msg.authors || null,
+        user: who,
+        time: msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '')
+      };
       showToast({
-        title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
-        message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
+        title: `Изменения — ${stageLabel}`,
+        message: `${who}: ${summaryText}`,
         actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff)},
+          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
           {label:'OK', handler:(el)=> el.remove()}
         ]
       });
@@ -4527,30 +5608,35 @@ function restoreState(json, opts={}){
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     const lockedSet = new Set(s.locked || []);
-    const tAll = (s.t||[]).map(x=>({
-      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-      hours:x.hours, extraHours:x.extraHours,
-      startDate: x.startDate? new Date(x.startDate): today0(),
-      endDate: x.endDate? new Date(x.endDate): null,
-      startMissing: !!x.startMissing,
-      endMissing: !!x.endMissing,
-      state: x.state||'',
-      status: x.status||'',
-      useReserve: !!x.useReserve,
-      progress: x.progress||0,
-      origStartDate: x.origStartDate?new Date(x.origStartDate):null,
-      route:{
-        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
-        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
-        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
-        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
-        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
-        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
-        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
-        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
-        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
-      }
-    }));
+    const tAll = (s.t||[]).map(x=>{
+      const rec = {
+        uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+        hours:x.hours, extraHours:x.extraHours,
+        startDate: x.startDate? new Date(x.startDate): today0(),
+        endDate: x.endDate? new Date(x.endDate): null,
+        startMissing: !!x.startMissing,
+        endMissing: !!x.endMissing,
+        state: x.state||'',
+        status: x.status||'',
+        useReserve: !!x.useReserve,
+        progress: x.progress||0,
+        origStartDate: x.origStartDate?new Date(x.origStartDate):null,
+        route:{
+          laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
+          bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
+          draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
+          weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
+          mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
+          proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
+          shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
+          pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
+          ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
+        },
+        locked: lockedSet.has(x.uid) || !!x.locked
+      };
+      applyIgnoredStateToTask(rec);
+      return rec;
+    });
 
     allTasksFromState = tAll.slice();
     const desiredProcess = preserveProcess ? ($("#process")?.value || s.process || 'bend') : (s.process || $("#process")?.value || 'bend');
@@ -4577,7 +5663,8 @@ function restoreState(json, opts={}){
     lockedUids = lockedSet;
     ordersByStage = new Map(s.orders || []);
 
-    const savedCap = s.capByProc || {};
+    const metaSettings = s.meta?.settings || {};
+    const savedCap = metaSettings.capacity || s.capByProc || {};
     capByProc = { ...DEFAULT_CAP, ...savedCap };
 
     routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
@@ -4590,16 +5677,28 @@ function restoreState(json, opts={}){
     if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
     if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
 
-    if(s.parallelByProc){
-      Object.assign(parallelByProc, s.parallelByProc);
-    }
+    const savedParallel = metaSettings.parallel || s.parallelByProc || {};
+    parallelByProc = { ...DEFAULT_PARALLEL, ...savedParallel };
     ['proc','shear','pack','ship'].forEach(k=>{
       if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
         parallelByProc[k] = (k==='pack' ? 3 : 5);
       }
     });
 
+    stateMeta.settings = {
+      capacity: { ...capByProc },
+      parallel: { ...parallelByProc },
+      updatedAt: typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''
+    };
+    renderSystemSettingsUI();
+
     if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
+
+    const metaIgnored = Array.isArray(s.meta?.ignoredStates)
+      ? s.meta.ignoredStates.filter(item => typeof item === 'string')
+      : (Array.isArray(s.ignoredStates) ? s.ignoredStates.filter(item => typeof item === 'string') : []);
+    stateMeta.ignoredStates = metaIgnored.slice();
+    setIgnoredStates(metaIgnored, { persist:false, rerender:false });
 
     const versionsRaw = (s.meta && s.meta.versions) || {};
     lastKnownVersions = new Map(Object.entries(versionsRaw).map(([k,v])=>[k, Number(v)||0]));
@@ -4608,12 +5707,24 @@ function restoreState(json, opts={}){
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
-      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : []
+      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
+      ignoredStates: stateMeta.ignoredStates.slice()
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
     }
     activityLog = stateMeta.history.slice(-LOG_LIMIT);
+    if(activityLog.length){
+      activityLog = activityLog.map(entry=>{
+        if(!entry) return entry;
+        if(entry.ordersSummary || !entry.diff || !diffHasChanges(entry.diff)) return entry;
+        const stageHint = (entry.stage && entry.stage !== 'multi' && entry.stage !== 'settings') ? entry.stage : null;
+        const summary = buildOrdersSummary(entry.diff, stageHint);
+        if(!summary) return entry;
+        return { ...entry, ordersSummary: summary };
+      });
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+    }
     csvFreshnessStr = stateMeta.csvTimestamp || s.freshness || '—';
     manualFreshnessStr = stateMeta.manualTimestamp || s.lastManualTime || '—';
     lastImportTime = s.lastImportTime || csvFreshnessStr || '';
@@ -4635,22 +5746,21 @@ function restoreState(json, opts={}){
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
-    const capEl = $("#capacity");
-    if(capEl && !NOHOUR_STAGES.has(currentProc)){
-      capEl.value = capByProc[currentProc] || DEFAULT_CAP[currentProc] || 15;
+    const loadedPrefs = loadUiPreferences();
+    if(!loadedPrefs.filter && typeof s.filter === 'string'){
+      loadedPrefs.filter = s.filter;
     }
-    if(NOHOUR_STAGES.has(currentProc) && $("#parallelOps")){
-      $("#parallelOps").value = String(parallelByProc[currentProc] ?? DEFAULT_PARALLEL[currentProc] ?? 3);
+    if(typeof loadedPrefs.autosaveOn !== 'boolean' && s.autosaveOn !== undefined){
+      loadedPrefs.autosaveOn = !!s.autosaveOn;
     }
-
-    $("#ganttFilter").value = s.filter || 'all';
-    if(!s.filter){ const prefs = loadUiPreferences(); if(prefs.filter) $("#ganttFilter").value = prefs.filter; }
-    autosaveOn = s.autosaveOn!==undefined ? !!s.autosaveOn : autosaveOn;
-    $("#autosave").checked = autosaveOn;
-    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
-    $("#shiftOnProgress").checked = shiftOnProgress;
-    autoOptimizeOn = s.autoOptimizeOn!==undefined ? !!s.autoOptimizeOn : autoOptimizeOn;
-    $("#autoOptimize").checked = autoOptimizeOn;
+    if(typeof loadedPrefs.shiftOnProgress !== 'boolean' && s.shiftOnProgress !== undefined){
+      loadedPrefs.shiftOnProgress = !!s.shiftOnProgress;
+    }
+    if(typeof loadedPrefs.autoOptimizeOn !== 'boolean' && s.autoOptimizeOn !== undefined){
+      loadedPrefs.autoOptimizeOn = !!s.autoOptimizeOn;
+    }
+    applyUiPreferences(loadedPrefs);
+    saveUiPreferences();
 
     if(preserveProcess){
       tasks = tAll.filter(x=> x.stage === desiredProcess);
@@ -4670,11 +5780,13 @@ function loadStageFromLS(stage){
     const raw = readLocalSnapshot();
     if(!raw) return null;
     const s = JSON.parse(raw);
-	
-	// поднимем сохранённый порядок строк по переделам
-	if (Array.isArray(s.orders)) {
-	  ordersByStage = new Map(s.orders);
-	}
+
+        // поднимем сохранённый порядок строк по переделам
+        if (Array.isArray(s.orders)) {
+          ordersByStage = new Map(s.orders);
+        }
+
+    const lockedSet = new Set(Array.isArray(s.locked) ? s.locked : []);
 
     const arr = (s.t||[]).filter(x=> x.stage===stage).map(x=>({
       uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
@@ -4695,7 +5807,8 @@ function loadStageFromLS(stage){
         shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
         pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null}   : null,
         ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null}   : null
-      }
+      },
+      locked: lockedSet.has(x.uid) || !!x.locked
     }));
     const seen = new Set();
 	return arr.filter(x => !seen.has(x.uid) && (seen.add(x.uid), true));
@@ -4704,8 +5817,246 @@ function loadStageFromLS(stage){
 }
 
 function persistNow(stageOverride, opts={}){
-  const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
+  const { source='manual', force=false, announce=true, silentOnConflict=false, multiStage=null, settingsChange=null, uiOnly=false } = opts;
   if(!userCanEdit() && source !== 'system') return;
+  if(multiStage && Array.isArray(multiStage.entries)){
+    const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
+    if(!entriesRaw.length && !force) return;
+    try{
+      const curStage = stageOverride || $("#process")?.value || 'bend';
+      const stateObj = buildStateObject();
+      stateObj.process = curStage;
+
+      const rawPrev = readLocalSnapshot();
+      let prev = null;
+      let prevTasks = [];
+      let prevOrders = [];
+      let prevMeta = {};
+      if(rawPrev){
+        try{
+          prev = JSON.parse(rawPrev);
+          prevTasks = Array.isArray(prev.t) ? prev.t : [];
+          prevOrders = Array.isArray(prev.orders) ? prev.orders : [];
+          prevMeta = prev.meta || {};
+        }catch(_){ prev = null; }
+      }
+
+      if(prevTasks.length){
+        const merged = new Map();
+        prevTasks.forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        (stateObj.t || []).forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        stateObj.t = [...merged.values()];
+      }
+
+      if(prevOrders.length){
+        const map = new Map(prevOrders);
+        (stateObj.orders || []).forEach(([k,v])=> map.set(k,v));
+        stateObj.orders = [...map.entries()];
+      }
+
+      if(prev && prev.parallelByProc && !stateObj.parallelByProc) stateObj.parallelByProc = prev.parallelByProc;
+      if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
+
+      const meaningfulEntries = entriesRaw.filter(entry=> diffHasChanges(entry.diff));
+      const hasChanges = meaningfulEntries.length > 0 || force || !rawPrev;
+      const nowStr = new Date().toLocaleString();
+      const combinedDiff = (multiStage.combinedDiff && typeof multiStage.combinedDiff === 'object')
+        ? { ...multiStage.combinedDiff, stages: { ...(multiStage.combinedDiff.stages||{}) } }
+        : { stages:{} };
+      meaningfulEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
+      const authorsMap = {};
+      const stageSummaryParts = [];
+
+      const combinedSummary = (multiStage.ordersSummary && typeof multiStage.ordersSummary === 'object')
+        ? multiStage.ordersSummary
+        : buildOrdersSummary(combinedDiff);
+      const combinedSummaryText = summarizeOrdersSummary(combinedSummary);
+
+      const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
+      meaningfulEntries.forEach(entry=>{
+        const stage = entry.stage;
+        const prevVersion = Number((prevMeta.versions && prevMeta.versions[stage]) || lastKnownVersions.get(stage) || 0);
+        const newVersion = prevVersion + 1;
+        versions[stage] = newVersion;
+        lastKnownVersions.set(stage, newVersion);
+        const stageSummaryObj = buildOrdersSummary(entry.diff, stage);
+        const stageSummaryText = summarizeOrdersSummary(stageSummaryObj)
+          || summarizeDiffLike(entry.diff, stage);
+        authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: stageSummaryText };
+        stageSummaryParts.push(`${STAGE_TITLE[stage] || stage}: ${stageSummaryText}`);
+      });
+      stateMeta.versions = versions;
+
+      if(hasChanges){
+        if(source === 'csv'){
+          csvFreshnessStr = nowStr;
+          lastImportTime = nowStr;
+          stateMeta.csvTimestamp = nowStr;
+        }else if(source !== 'system'){
+          manualFreshnessStr = nowStr;
+          lastManualTime = nowStr;
+          stateMeta.manualTimestamp = nowStr;
+        }
+        updateFreshnessUI();
+      }
+
+      if(hasChanges && source !== 'system'){
+        const lastAuthors = { ...(stateMeta.lastAuthors || {}), ...authorsMap };
+        stateMeta.lastAuthors = lastAuthors;
+        const logEntry = {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+          time: nowStr,
+          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
+          user: userAlias,
+          session: SESSION_ID,
+          source,
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          diff: combinedDiff,
+          authors: authorsMap,
+          ordersSummary: combinedSummary || null
+        };
+        activityLog.push(logEntry);
+        if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        markLogAttention();
+      }else{
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      }
+
+      stateObj.meta = {
+        versions: { ...(stateMeta.versions || {}) },
+        lastAuthors: { ...(stateMeta.lastAuthors || {}) },
+        csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
+        manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
+        history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+        settings: {
+          capacity: { ...(stateMeta.settings?.capacity || {}) },
+          parallel: { ...(stateMeta.settings?.parallel || {}) },
+          updatedAt: stateMeta.settings?.updatedAt || ''
+        },
+        ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
+        ordersSummary: combinedSummary || null,
+        lastChange: {
+          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
+          stages: Array.from(new Set(meaningfulEntries.map(entry=> entry.stage))),
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          diff: hasChanges ? combinedDiff : null,
+          user: userAlias,
+          source,
+          time: nowStr,
+          ordersSummary: combinedSummary || null
+        }
+      };
+
+      const payload = JSON.stringify(stateObj);
+      const fingerprint = simpleHash(payload);
+      lastAppliedRemoteFingerprint = fingerprint;
+      lastPushedFingerprint = fingerprint;
+      suppressIncoming = true;
+      try{
+        lastSerializedState = payload;
+        if(enableLocalStore){
+          try{ localStorage.setItem(LS_KEY, payload); }catch(_){ /* ignore cache issues */ }
+        }else{
+          try{ localStorage.removeItem(LS_KEY); }catch(_){ /* ignore cache issues */ }
+        }
+      }finally{
+        suppressIncoming = false;
+      }
+
+      const targetStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
+
+      if(remoteSyncEnabled()){
+        remoteBridge.push(payload, {
+          stage: targetStageLabel,
+          diff: combinedDiff,
+          version:null,
+          source,
+          user:userAlias,
+          session:SESSION_ID,
+          summary: (combinedSummaryText || multiStage.summary || stageSummaryParts.join('; ')) || undefined,
+          authors: authorsMap,
+          ordersSummary: combinedSummary || null,
+          time: nowStr
+        })
+          .then(()=> setDataMode('remote'))
+          .catch(async err=>{
+            if(err?.status === 409){
+              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+              const stageName = meaningfulEntries.length>1
+                ? 'несколько переделов'
+                : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
+              const lastAuthor = detail?.lastAuthor;
+              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+              if(authorName){
+                messageParts.push(`Последние правки: ${authorName}.`);
+              }
+              messageParts.push('Актуальные данные загружены заново.');
+              showToast({
+                title:'Конфликт синхронизации',
+                message: messageParts.join(' '),
+                actions:[{label:'OK', handler:(el)=> el.remove()}]
+              });
+              try{
+                const latest = await remoteBridge.pull();
+                if(latest){
+                  applyStateFromExternal(latest, { origin:'remote' });
+                }
+              }catch(pullErr){
+                console.warn('failed to refresh after conflict', pullErr);
+              }
+              setDataMode('remote');
+              return;
+            }
+            console.warn('remote push failed', err);
+            const hadLocal = enableLocalStore;
+            if(!hadLocal){
+              applyStoragePrefs({ local:true });
+            }
+            let detailText = '';
+            if(err){
+              if(typeof err.detail === 'string' && err.detail.trim()){
+                detailText = err.detail.trim();
+              }else if(err.detail && typeof err.detail === 'object'){
+                const extra = err.detail.message || err.detail.error || err.body || '';
+                if(extra) detailText = String(extra).trim();
+              }
+              if(!detailText && err.message){
+                detailText = err.message;
+              }
+            }
+            const detailSuffix = detailText ? ` (${detailText})` : '';
+            showToast({
+              title:'Ошибка синхронизации',
+              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+              actions:[{label:'OK', handler:(el)=> el.remove()}]
+            });
+            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+            setDataMode(modeAfter);
+          });
+      }else{
+        setDataMode(enableLocalStore ? 'local' : 'session');
+      }
+
+      if(hasChanges && announce){
+        announceStateUpdate({
+          stage: targetStageLabel,
+          diff: combinedDiff,
+          version:null,
+          source,
+          user:userAlias,
+          authors: authorsMap,
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          ordersSummary: combinedSummary || null,
+          time: nowStr
+        });
+      }
+    }catch(e){
+      console.warn('persist failed', e);
+    }
+    return;
+  }
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
     const stateObj = buildStateObject();
@@ -4728,6 +6079,48 @@ function persistNow(stageOverride, opts={}){
     }
 
     const prevStageTasks = prevTasks.filter(x=>x && x.stage === curStage);
+    if(prevStageTasks.length > 1){
+      let savedOrder = null;
+      if(Array.isArray(prevOrders) && prevOrders.length){
+        for(const tuple of prevOrders){
+          if(!Array.isArray(tuple) || tuple[0] !== curStage) continue;
+          const orderList = tuple[1];
+          if(Array.isArray(orderList) && orderList.length){
+            savedOrder = orderList;
+            break;
+          }
+        }
+      }
+      if(!savedOrder){
+        const currentOrder = ordersByStage.get(curStage);
+        if(Array.isArray(currentOrder) && currentOrder.length){
+          savedOrder = currentOrder;
+        }
+      }
+      if(savedOrder){
+        const pos = new Map(savedOrder.map((uid, index)=>[uid, index]));
+        const getStartTime = (task)=>{
+          if(task.startDate instanceof Date){
+            const time = task.startDate.getTime();
+            return Number.isNaN(time) ? 0 : time;
+          }
+          if(task.start){
+            const parsed = new Date(task.start).getTime();
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+          return 0;
+        };
+        prevStageTasks.sort((a,b)=>{
+          const ia = pos.has(a.uid) ? pos.get(a.uid) : Number.MAX_SAFE_INTEGER;
+          const ib = pos.has(b.uid) ? pos.get(b.uid) : Number.MAX_SAFE_INTEGER;
+          if(ia !== ib) return ia - ib;
+          const aStart = getStartTime(a);
+          const bStart = getStartTime(b);
+          if(aStart !== bStart) return aStart - bStart;
+          return String(a.uid || '').localeCompare(String(b.uid || ''));
+        });
+      }
+    }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
     const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const prevVersion = Number((prevMeta.versions && prevMeta.versions[curStage]) || 0);
@@ -4746,7 +6139,8 @@ function persistNow(stageOverride, opts={}){
         activityLog = stateMeta.history.slice(-LOG_LIMIT);
         updateFreshnessUI();
         if(!silentOnConflict){
-          showConflictDialog(conflict, stateMeta.lastAuthors?.[curStage]);
+          const authorInfo = stateMeta.lastAuthors?.[curStage];
+          showConflictDialog(conflict, authorInfo ? { ...authorInfo, stage: curStage } : null);
           if(prev){
             restoreState(prev, {preserveProcess:true});
             setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
@@ -4758,7 +6152,15 @@ function persistNow(stageOverride, opts={}){
 
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
-    const hadChanges = diffHasChanges(diff) || force || !rawPrev;
+    const diffChanged = diffHasChanges(diff);
+    const isSettingsChange = Array.isArray(settingsChange?.entries) && settingsChange.entries.length > 0;
+    const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
+    let authorsMap = null;
+    let settingsSummary = '';
+    const nowStr = new Date().toLocaleString();
+    const ordersSummary = diffChanged ? buildOrdersSummary(diff, curStage) : null;
+    const changeSummaryText = summarizeOrdersSummary(ordersSummary)
+      || summarizeDiffLike(diff, curStage);
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -4783,15 +6185,11 @@ function persistNow(stageOverride, opts={}){
     if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
 
     const versions = { ...(stateMeta.versions || {}) };
-    const newVersion = (prevVersion || 0) + (hadChanges ? 1 : 0);
+    const newVersion = (prevVersion || 0) + (diffChanged ? 1 : 0);
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
-    let changeSummary = '';
-
-    if(hadChanges){
-      changeSummary = summarizeDiff(diff);
-      const nowStr = new Date().toLocaleString();
+    if(diffChanged){
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
         lastImportTime = nowStr;
@@ -4804,6 +6202,8 @@ function persistNow(stageOverride, opts={}){
       updateFreshnessUI();
 
       if(source !== 'system'){
+        const authorDetails = { name:userAlias, session:SESSION_ID, at:nowStr, summary: changeSummaryText };
+        authorsMap = { [curStage]: authorDetails };
         const entry = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
           time: nowStr,
@@ -4811,25 +6211,69 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
-          summary: changeSummary,
-          diff
+          summary: changeSummaryText,
+          diff,
+          authors: authorsMap,
+          ordersSummary: ordersSummary || null
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
-        stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: { name:userAlias, session:SESSION_ID, at:nowStr, summary:entry.summary } };
+        stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: authorDetails };
         markLogAttention();
       } else {
         stateMeta.history = activityLog.slice(-LOG_LIMIT);
       }
+    } else if(force || !rawPrev){
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
     }
+
+    if(isSettingsChange){
+      settingsSummary = buildSettingsSummary(settingsChange.entries);
+      const entry = {
+        id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+        time: nowStr,
+        stage: 'settings',
+        user: userAlias,
+        session: SESSION_ID,
+        source: 'settings',
+        summary: settingsSummary,
+        diff: null,
+        settings: {
+          entries: settingsChange.entries
+        }
+      };
+      activityLog.push(entry);
+      if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      markLogAttention();
+    }
+
+    const summaryForMeta = isSettingsChange && !diffChanged ? settingsSummary : changeSummaryText;
 
     stateObj.meta = {
       versions: { ...versions },
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+      history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+      settings: {
+        capacity: { ...(stateMeta.settings?.capacity || {}) },
+        parallel: { ...(stateMeta.settings?.parallel || {}) },
+        updatedAt: stateMeta.settings?.updatedAt || ''
+      },
+      ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
+      ordersSummary: ordersSummary || null,
+      lastChange: {
+        stage: curStage,
+        stages: [curStage],
+        summary: summaryForMeta,
+        diff: diffChanged ? diff : null,
+        user: userAlias,
+        source,
+        time: nowStr,
+        ordersSummary: diffChanged ? (ordersSummary || null) : null
+      }
     };
 
     const payload = JSON.stringify(stateObj);
@@ -4851,68 +6295,120 @@ function persistNow(stageOverride, opts={}){
     lastSyncedSnapshots.set(curStage, currentSnapshot);
     mergeStageIntoAll(curStage, tasks);
 
+    const skipRemote = uiOnly && !diffChanged && !isSettingsChange;
+
     if(remoteSyncEnabled()){
-      remoteBridge.push(payload, { stage:curStage, diff, version:newVersion, source, user:userAlias, session:SESSION_ID, summary: changeSummary || undefined })
-        .then(()=> setDataMode('remote'))
-        .catch(async err=>{
-          if(err?.status === 409){
-            const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
-            const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
-            const lastAuthor = detail?.lastAuthor;
-            const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-            const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-            if(authorName){
-              messageParts.push(`Последние правки: ${authorName}.`);
+      if(skipRemote){
+        setDataMode('remote');
+      }else{
+        const remoteStage = isSettingsChange && !diffChanged ? 'settings' : curStage;
+        const remoteSummary = summaryForMeta || undefined;
+        const remoteDiff = isSettingsChange && !diffChanged ? null : diff;
+        const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
+        const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
+        const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
+        const remoteOrdersSummary = diffChanged ? (ordersSummary || null) : null;
+        remoteBridge.push(payload, {
+          stage:remoteStage,
+          diff:remoteDiff,
+          version:remoteVersion,
+          source,
+          user:userAlias,
+          session:SESSION_ID,
+          summary: remoteSummary,
+          authors: remoteAuthors,
+          ordersSummary: remoteOrdersSummary,
+          time: nowStr,
+          ...remoteExtras
+        })
+          .then(()=> setDataMode('remote'))
+          .catch(async err=>{
+            if(err?.status === 409){
+              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+              const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
+              const lastAuthor = detail?.lastAuthor;
+              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+              if(authorName){
+                messageParts.push(`Последние правки: ${authorName}.`);
+              }
+              messageParts.push('Актуальные данные загружены заново.');
+              showToast({
+                title:'Конфликт синхронизации',
+                message: messageParts.join(' '),
+                actions:[{label:'OK', handler:(el)=> el.remove()}]
+              });
+              try{
+                const latest = await remoteBridge.pull();
+                if(latest){
+                  applyStateFromExternal(latest, { origin:'remote' });
+                }
+              }catch(pullErr){
+                console.warn('failed to refresh after conflict', pullErr);
+              }
+              setDataMode('remote');
+              return;
             }
-            messageParts.push('Актуальные данные загружены заново.');
+            console.warn('remote push failed', err);
+            const hadLocal = enableLocalStore;
+            if(!hadLocal){
+              applyStoragePrefs({ local:true });
+            }
+            let detailText = '';
+            if(err){
+              if(typeof err.detail === 'string' && err.detail.trim()){
+                detailText = err.detail.trim();
+              }else if(err.detail && typeof err.detail === 'object'){
+                const extra = err.detail.message || err.detail.error || err.body || '';
+                if(extra) detailText = String(extra).trim();
+              }
+              if(!detailText && err.message){
+                detailText = err.message;
+              }
+            }
+            const detailSuffix = detailText ? ` (${detailText})` : '';
             showToast({
-              title:'Конфликт синхронизации',
-              message: messageParts.join(' '),
+              title:'Ошибка синхронизации',
+              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
               actions:[{label:'OK', handler:(el)=> el.remove()}]
             });
-            try{
-              const latest = await remoteBridge.pull();
-              if(latest){
-                applyStateFromExternal(latest, { origin:'remote' });
-              }
-            }catch(pullErr){
-              console.warn('failed to refresh after conflict', pullErr);
-            }
-            setDataMode('remote');
-            return;
-          }
-          console.warn('remote push failed', err);
-          const hadLocal = enableLocalStore;
-          if(!hadLocal){
-            applyStoragePrefs({ local:true });
-          }
-          let detailText = '';
-          if(err){
-            if(typeof err.detail === 'string' && err.detail.trim()){
-              detailText = err.detail.trim();
-            }else if(err.detail && typeof err.detail === 'object'){
-              const extra = err.detail.message || err.detail.error || err.body || '';
-              if(extra) detailText = String(extra).trim();
-            }
-            if(!detailText && err.message){
-              detailText = err.message;
-            }
-          }
-          const detailSuffix = detailText ? ` (${detailText})` : '';
-          showToast({
-            title:'Ошибка синхронизации',
-            message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
-            actions:[{label:'OK', handler:(el)=> el.remove()}]
+            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+            setDataMode(modeAfter);
           });
-          const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
-          setDataMode(modeAfter);
-        });
+      }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
     }
 
-    if(hadChanges && announce){
-      announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias});
+    if(announce){
+      if(isSettingsChange){
+        announceStateUpdate({
+          stage:'settings',
+          diff:null,
+          version:null,
+          source:'settings',
+          user:userAlias,
+          settings:{
+            entries: settingsChange.entries,
+            summary: settingsSummary,
+            updatedAt: stateMeta.settings?.updatedAt || nowStr
+          }
+        });
+      }
+      if(diffChanged){
+        const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
+        announceStateUpdate({
+          stage:curStage,
+          diff,
+          version:newVersion,
+          source,
+          user:userAlias,
+          authors: payloadAuthors,
+          summary: summaryForMeta,
+          ordersSummary: ordersSummary || null,
+          time: nowStr
+        });
+      }
     }
   }catch(e){
     console.warn('persist failed', e);
@@ -4925,13 +6421,204 @@ function persistMaybe(reason='data', opts={}){
   if(autosaveOn || opts.force) persistNow(undefined, opts);
 }
 
+let pendingSettingsTimer = null;
+let pendingSettingsQueue = [];
+
+function formatSettingsValue(kind, value){
+  const num = Number(value);
+  if(kind === 'capacity'){
+    return Number.isFinite(num) ? num.toLocaleString('ru-RU', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : String(value);
+  }
+  return Number.isFinite(num) ? String(Math.max(1, Math.round(num))) : String(value);
+}
+
+function buildSettingsSummary(changes){
+  if(!Array.isArray(changes) || !changes.length) return 'Системные настройки обновлены';
+  return changes.map(change=>{
+    const stageName = STAGE_TITLE[change.stage] || change.stage;
+    const label = change.kind === 'capacity' ? 'вместимость' : 'параллельные операции';
+    const suffix = change.kind === 'capacity' ? ' ч/день' : '';
+    return `${stageName}: ${label} ${formatSettingsValue(change.kind, change.to)}${suffix}`;
+  }).join('; ');
+}
+
+function persistSystemSettingsChange(entries){
+  if(!Array.isArray(entries) || !entries.length) return;
+  const normalized = entries
+    .map(entry=>{
+      if(!entry || !entry.stage || !entry.kind) return null;
+      return {
+        stage: entry.stage,
+        kind: entry.kind === 'capacity' ? 'capacity' : 'parallel',
+        from: entry.from,
+        to: entry.to
+      };
+    })
+    .filter(Boolean);
+  if(!normalized.length) return;
+  pendingSettingsQueue = pendingSettingsQueue.concat(normalized);
+  if(pendingSettingsTimer){
+    clearTimeout(pendingSettingsTimer);
+  }
+  pendingSettingsTimer = setTimeout(()=>{
+    const byKey = new Map();
+    pendingSettingsQueue.forEach(change=>{
+      const key = `${change.stage}:${change.kind}`;
+      if(byKey.has(key)){
+        const existing = byKey.get(key);
+        existing.to = change.to;
+      }else{
+        byKey.set(key, { ...change });
+      }
+    });
+    const merged = [...byKey.values()];
+    pendingSettingsQueue = [];
+    pendingSettingsTimer = null;
+    const timestamp = new Date().toLocaleString();
+    stateMeta.settings = {
+      capacity: { ...DEFAULT_CAP, ...capByProc },
+      parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
+      updatedAt: timestamp
+    };
+    persistNow(undefined, {
+      source:'settings',
+      force:true,
+      settingsChange:{ entries: merged, timestamp }
+    });
+  }, 150);
+}
+
+function renderSystemSettingsUI(){
+  const container = document.getElementById('systemSettings');
+  if(!container) return;
+  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  STAGES.forEach(stage=>{
+    const row = document.createElement('div');
+    row.className = 'settings-system-row';
+    const label = document.createElement('div');
+    label.className = 'label';
+    const title = document.createElement('strong');
+    title.textContent = STAGE_TITLE[stage] || stage;
+    const hint = document.createElement('span');
+    const isNoHours = NOHOUR_STAGES.has(stage);
+    hint.textContent = isNoHours ? 'Параллельные операции' : 'Вместимость, ч/день';
+    label.appendChild(title);
+    label.appendChild(hint);
+    const controls = document.createElement('div');
+    controls.className = 'controls';
+    const input = document.createElement('input');
+    input.dataset.stage = stage;
+    input.dataset.kind = isNoHours ? 'parallel' : 'capacity';
+    if(isNoHours){
+      input.type = 'number';
+      input.min = '1';
+      input.step = '1';
+      input.value = String(Math.max(1, parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3));
+    }else{
+      input.type = 'number';
+      input.min = '0';
+      input.step = '0.25';
+      input.value = String(capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
+    }
+    input.addEventListener('change', handleSystemSettingChange);
+    controls.appendChild(input);
+    const unit = document.createElement('span');
+    unit.className = 'small muted';
+    unit.textContent = isNoHours ? 'поз.' : 'ч/день';
+    controls.appendChild(unit);
+    row.appendChild(label);
+    row.appendChild(controls);
+    frag.appendChild(row);
+  });
+  container.appendChild(frag);
+  const note = document.createElement('div');
+  note.className = 'settings-system-note';
+  note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
+  container.appendChild(note);
+  refreshSystemSettingsAccess();
+}
+
+function refreshSystemSettingsAccess(){
+  const container = document.getElementById('systemSettings');
+  if(!container) return;
+  const disabled = !userCanEdit();
+  container.querySelectorAll('input[data-stage]').forEach(input=>{
+    input.disabled = disabled;
+  });
+}
+
+function handleSystemSettingChange(e){
+  const input = e.target;
+  if(!input || !input.dataset) return;
+  const stage = input.dataset.stage;
+  const kind = input.dataset.kind;
+  if(!stage || !kind) return;
+  const isNoHours = kind === 'parallel';
+  if(!userCanEdit()){
+    const fallback = isNoHours
+      ? (parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3)
+      : (capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
+    input.value = String(fallback);
+    notifyReadOnly();
+    return;
+  }
+  if(isNoHours){
+    let value = Number(input.value);
+    if(!Number.isFinite(value) || value <= 0){
+      value = parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3;
+    }
+    value = Math.max(1, Math.round(value));
+    const prev = parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3;
+    if(value === prev){
+      input.value = String(value);
+      return;
+    }
+    parallelByProc[stage] = value;
+    stateMeta.settings.parallel[stage] = value;
+    input.value = String(value);
+    persistMaybe('ui');
+    if(stage === $("#process").value){
+      recompute();
+    }
+    persistSystemSettingsChange([{ stage, kind:'parallel', from: prev, to: value }]);
+  }else{
+    let value = Number(input.value);
+    if(!Number.isFinite(value) || value < 0){
+      value = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
+    }
+    value = Math.max(0, value);
+    const prev = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
+    if(Math.abs(value - prev) < 0.0001){
+      input.value = String(prev);
+      return;
+    }
+    capByProc[stage] = value;
+    stateMeta.settings.capacity[stage] = value;
+    input.value = String(value);
+    persistMaybe('ui');
+    if(stage === $("#process").value){
+      recompute();
+    }
+    persistSystemSettingsChange([{ stage, kind:'capacity', from: prev, to: value }]);
+  }
+}
+
 /* =========
    ПЕРЕСЧЁТ
 ========= */
 
 function saveUiPreferences(){
   try{
-    const prefs = { filter: $("#ganttFilter")?.value || 'all' };
+    const prefs = {
+      filter: $("#ganttFilter")?.value || 'all',
+      autosaveOn: !!autosaveOn,
+      shiftOnProgress: !!shiftOnProgress,
+      autoOptimizeOn: !!autoOptimizeOn,
+      showIds: document.body ? document.body.classList.contains('show-ids') : false,
+      lockNewOrders: !!lockNewOrders,
+      lockNewOrdersCsv: !!lockNewOrdersCsv
+    };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
 }
@@ -4942,6 +6629,73 @@ function loadUiPreferences(){
     if(!raw) return {};
     return JSON.parse(raw);
   }catch(_){ return {}; }
+}
+
+function applyUiPreferences(prefs={}){
+  if(typeof prefs.filter === 'string'){
+    const filterEl = $("#ganttFilter");
+    if(filterEl) filterEl.value = prefs.filter;
+  }
+  if(typeof prefs.autosaveOn === 'boolean'){
+    autosaveOn = prefs.autosaveOn;
+  }
+  if(typeof prefs.shiftOnProgress === 'boolean'){
+    shiftOnProgress = prefs.shiftOnProgress;
+  }
+  if(typeof prefs.autoOptimizeOn === 'boolean'){
+    autoOptimizeOn = prefs.autoOptimizeOn;
+  }
+  if(typeof prefs.lockNewOrders === 'boolean'){
+    lockNewOrders = prefs.lockNewOrders;
+  }
+  if(typeof prefs.lockNewOrdersCsv === 'boolean'){
+    lockNewOrdersCsv = prefs.lockNewOrdersCsv;
+  }
+  if(Array.isArray(prefs.ignoredStates)){
+    const metaStates = Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates : [];
+    if(!metaStates.length){
+      setIgnoredStates(prefs.ignoredStates, { persist:false, rerender:false, updateTasks:false });
+    }else{
+      updateIgnoredStatesSummary();
+      updateExcludedAttention();
+    }
+  } else {
+    updateIgnoredStatesSummary();
+    updateExcludedAttention();
+  }
+  const autosaveEl = $("#autosave");
+  if(autosaveEl) autosaveEl.checked = !!autosaveOn;
+  const shiftEl = $("#shiftOnProgress");
+  if(shiftEl) shiftEl.checked = !!shiftOnProgress;
+  const autoOptEl = $("#autoOptimize");
+  if(autoOptEl) autoOptEl.checked = !!autoOptimizeOn;
+  const lockNewOrdersEl = $("#lockNewOrders");
+  if(lockNewOrdersEl) lockNewOrdersEl.checked = !!lockNewOrders;
+  const lockNewOrdersCsvEl = $("#lockNewOrdersCsv");
+  if(lockNewOrdersCsvEl) lockNewOrdersCsvEl.checked = !!lockNewOrdersCsv;
+  if(typeof prefs.showIds === 'boolean' && document.body){
+    document.body.classList.toggle('show-ids', prefs.showIds);
+    const toggle = document.getElementById('showIdsToggle');
+    if(toggle && 'checked' in toggle) toggle.checked = prefs.showIds;
+  }
+  refreshNewOrderPrefUI();
+}
+
+function refreshNewOrderPrefUI(){
+  const csvBox = document.getElementById('lockNewOrdersCsv');
+  const csvWrap = document.getElementById('lockNewOrdersCsvWrap');
+  const shouldDisable = !lockNewOrders;
+  if(csvBox){
+    const accessDisabled = csvBox.dataset.accessDisabled === '1';
+    const disableNow = shouldDisable || accessDisabled;
+    csvBox.disabled = disableNow;
+    csvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
+    if(csvWrap){
+      csvWrap.classList.toggle('muted', disableNow);
+    }
+  }else if(csvWrap){
+    csvWrap.classList.toggle('muted', shouldDisable);
+  }
 }
 
 function updateFreshnessUI(){
@@ -4955,8 +6709,9 @@ function markLogAttention(){ $("#logBtn")?.classList.add('attn'); }
 function clearLogAttention(){ $("#logBtn")?.classList.remove('attn'); }
 
 function recompute(){
-	tasks.forEach(t=>{
-	  // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
+  refreshIgnoredStateFlags();
+        tasks.forEach(t=>{
+          // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
 	  // Это сохраняет дату начала, которую ты только что установил (в т.ч. "сегодня").
 	  if(t.endDate && t.startDate && t.endDate < t.startDate){
 		t.endDate = new Date(t.startDate);
@@ -4983,37 +6738,23 @@ function recompute(){
     proc==='ship' ? 'Отгрузка' : '—';
   
 const noHours = NOHOUR_STAGES.has(proc);
-const capEl = document.getElementById('capacity');
-let cap;
+let cap = 0;
 if (noHours) {
   const storedParallel = Math.max(1, parallelByProc[proc] ?? DEFAULT_PARALLEL[proc] ?? 3);
   parallelByProc[proc] = storedParallel;
-  const parEl = document.getElementById('parallelOps');
-  if(parEl && parEl.value !== String(storedParallel)){
-    parEl.value = String(storedParallel);
-  }
-  if(capEl) capEl.dataset.stage = '';
   cap = storedParallel;
 } else {
-  const capStage = capEl?.dataset?.stage;
   const storedCap = capByProc[proc] ?? DEFAULT_CAP[proc] ?? 15;
-  let capVal = capEl ? Number(capEl.value) : NaN;
-  if(capStage !== proc || !Number.isFinite(capVal)){
-    capVal = storedCap;
-  }
-  cap = Math.max(0, capVal);
-  if(capEl){
-    capEl.dataset.stage = proc;
-    if(capEl.value !== String(cap)) capEl.value = String(cap);
-  }
+  cap = Math.max(0, storedCap);
   capByProc[proc] = cap;
 }
 
 // подготовим задачи для аллокатора
-let allocTasks = tasks;
+const visibleTasks = tasks.filter(t=> !t.hiddenByState);
+let allocTasks = visibleTasks;
 if (noHours) {
   // вес = количество календарных дней в интервале, чтобы полоса заполняла весь диапазон
-  allocTasks = tasks.map(t => {
+  allocTasks = visibleTasks.map(t => {
     const s = t.startDate || today0();
     const e = t.endDate || t.startDate || today0();
     const days = Math.max(1, Math.round((e - s) / 86400000) + 1);
@@ -5032,7 +6773,7 @@ schedule = allocate(allocTasks, cap, excMap, resMap);
   renderOverdue();
   renderGantt(false);
   updateDoneAttention();
-  renderOverview();
+  rebuildAndRenderMasterRoute();
 }
 
 /* =========
@@ -5059,7 +6800,8 @@ function openReserve(){
 }
 function renderReserveDiag(text){
   const lines = String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  const base = Number($("#capacity").value) || capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+  const stage = $("#process").value;
+  const base = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
   const arr = lines.map(l=>{
     const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(l);
     if(!m) return null;
@@ -5114,8 +6856,10 @@ function switchProcess(newProc){
     tasks = tasks.filter(t=> t.stage === newProc);
   }
 
+  lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
+
   sortBySavedOrder(tasks, newProc); // восстановим пользовательский порядок, если сохранён
-  
+
   // Если для этого передела ещё не сохраняли порядок — применим автооптимизацию один раз
   const hadOrder = ordersByStage.has(newProc);
   sortBySavedOrder(tasks, newProc);
@@ -5126,6 +6870,9 @@ function switchProcess(newProc){
   }else{
     recompute();
     rememberStageOrder(newProc);
+  }
+  if(document.getElementById('excludedDlg')?.open){
+    renderExcludedList();
   }
   lastSyncedSnapshots.set(newProc, captureSnapshotFromTasks(newProc, tasks, lockedUids));
 }
@@ -5157,6 +6904,28 @@ function wireHandlers(){
     localStorage.setItem(USER_ALIAS_KEY, userAlias);
     e.target.value = userAlias;
   });
+
+  const ignoredBtn = document.getElementById('ignoredStatesBtn');
+  if(ignoredBtn){
+    ignoredBtn.addEventListener('click', openIgnoredStatesDialog);
+  }
+  const ignoredAdd = document.getElementById('ignoredStateAdd');
+  if(ignoredAdd){
+    ignoredAdd.addEventListener('click', addIgnoredStateFromInput);
+  }
+  const ignoredInput = document.getElementById('ignoredStateInput');
+  if(ignoredInput){
+    ignoredInput.addEventListener('keydown', e=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        addIgnoredStateFromInput();
+      }
+    });
+  }
+  const ignoredClose = document.getElementById('ignoredStatesClose');
+  if(ignoredClose){
+    ignoredClose.addEventListener('click', ()=> document.getElementById('ignoredStatesDlg')?.close());
+  }
 
   const storageLocal = $("#storageLocal");
   if(storageLocal){
@@ -5229,15 +6998,6 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#resApply").addEventListener('click', applyReserve);
   $("#reserveText").addEventListener('input', e=> renderReserveDiag(e.target.value));
   
-  // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
-  $("#parallelOps").addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[$("#process").value] ?? DEFAULT_PARALLEL[$("#process").value] ?? 3); notifyReadOnly(); return; }
-    const v = Math.max(1, parseInt(e.target.value, 10) || 1);
-    parallelByProc[$("#process").value] = v;
-    recompute();
-    persistMaybe();
-  });
-
   // сортировка/оптимизация
   $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
   $("#optimizeBtn").addEventListener('click', ()=>{
@@ -5250,39 +7010,31 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   document.getElementById('showTrash')?.addEventListener('click', ()=>{
     renderTrashList();
   });
+  document.getElementById('showExcluded')?.addEventListener('click', ()=>{
+    renderExcludedList();
+    document.getElementById('excludedDlg')?.showModal();
+  });
   $("#doneClose").addEventListener('click', ()=>$("#doneDlg").close());
+  document.getElementById('excludedClose')?.addEventListener('click', ()=> document.getElementById('excludedDlg')?.close());
 
   // добавить ручной заказ
   $("#addOrder").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
     const uid='user-'+Date.now()+'::'+$("#process").value;
     const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
+    applyIgnoredStateToTask(t);
     tasks.push(t);
+    if(lockNewOrders){
+      lockedUids.add(uid);
+      t.locked = true;
+    }
         rememberStageOrder();
         recompute();
+        rebuildAndRenderMasterRoute();
         persistMaybe();
 
   });
 
-  // вместимость и фильтр
-  $("#capacity").addEventListener('input', ()=>{
-    if(!userCanEdit()){ const p=$("#process").value; $("#capacity").value = String(capByProc[p] ?? DEFAULT_CAP[p] ?? 15); notifyReadOnly(); return; }
-    const p=$("#process").value;
-    const v=Number($("#capacity").value)|| capByProc[p] || 15;
-    capByProc[p]=v;
-    recompute();
-    persistMaybe();
-  });
-  
-  document.getElementById('parallelOps').addEventListener('input', e=>{
-    if(!userCanEdit()){ e.target.value = String(parallelByProc[document.getElementById('process').value] ?? 3); notifyReadOnly(); return; }
-    const p = document.getElementById('process').value;
-    const v = Math.max(1, parseInt(e.target.value||'3',10));
-    parallelByProc[p] = v;
-    recompute();
-    persistMaybe();
-  });
-  
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
   // очистка
@@ -5311,17 +7063,18 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	updateFreshnessUI();
 	updateTrashAttention?.();
 
-	capByProc      = { ...DEFAULT_CAP };
-	parallelByProc = { ...DEFAULT_PARALLEL };
+        capByProc      = { ...DEFAULT_CAP };
+        parallelByProc = { ...DEFAULT_PARALLEL };
+        stateMeta.settings = {
+          capacity: { ...capByProc },
+          parallel: { ...parallelByProc },
+          updatedAt: ''
+        };
 
-	// обновим UI под текущий выбранный передел
-	const cur = document.getElementById('process').value;
-	adjustUIForProcess(cur);
-	const capEl = document.getElementById('capacity');
-	if (capEl) capEl.value = capByProc[cur] ?? DEFAULT_CAP[cur] ?? 15;
-	if (NOHOUR_STAGES.has(cur) && document.getElementById('parallelOps')) {
-      document.getElementById('parallelOps').value = String(parallelByProc[cur] ?? 3);
-    }
+        // обновим UI под текущий выбранный передел
+        const cur = document.getElementById('process').value;
+        adjustUIForProcess(cur);
+        renderSystemSettingsUI();
 
     persistNow();
     recompute();
@@ -5334,12 +7087,24 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autosave").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
     autosaveOn = !!e.target.checked;
-    if(autosaveOn) persistNow(undefined,{source:'system', force:true, announce:false});
+    persistMaybe('ui');
   });
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui');
+  });
+  $("#lockNewOrders").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = lockNewOrders; notifyReadOnly(); return; }
+    lockNewOrders = !!e.target.checked;
+    refreshNewOrderPrefUI();
+    persistMaybe('ui');
+  });
+  $("#lockNewOrdersCsv").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = lockNewOrdersCsv; notifyReadOnly(); return; }
+    lockNewOrdersCsv = !!e.target.checked;
+    refreshNewOrderPrefUI();
+    persistMaybe('ui');
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -5351,7 +7116,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#autoOptimize").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
-    persistMaybe();
+    persistMaybe('ui');
   });
 
   // Гант — FS
@@ -5392,7 +7157,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         </fieldset>`;
       const fmt = (type) => (x)=>{
         const t = (type==='chg'? x.from : x);
-        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} ${uidBadge(t.uid)}</label>`;
       };
       box.innerHTML =
         block('Добавленные — удалить', prev.added, fmt('add')) +
@@ -5416,7 +7181,11 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           // добавленные в импорте — добавим обратно, если пользователь НЕ отметил их удалять
           prev.added.forEach(n=>{
             if(keep.has(n.uid) && keep.get(n.uid)==='add') return; // пользователь хочет удалить — уже удалено restoreState-ом
-            if(!byId.has(n.uid)){ tasks.push(n); byId.set(n.uid, tasks.length-1); }
+            if(!byId.has(n.uid)){
+              applyIgnoredStateToTask(n);
+              tasks.push(n);
+              byId.set(n.uid, tasks.length-1);
+            }
           });
           // удалённые в импорте — удалим снова, если пользователь НЕ отметил возвращать
           prev.removed.forEach(r=>{
@@ -5437,6 +7206,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
               t.status=to.status||t.status;
               t.orderId=to.orderId||t.orderId;
               t.route=to.route||t.route;
+              applyIgnoredStateToTask(t);
             }
           });
           // toDone — опять увести в архив, если пользователь не отметил «вернуть»
@@ -5468,20 +7238,20 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
 	// Общий маршрут — фильтры этапов
-	$$('.ov-filter').forEach(ch=>{
-	  ch.addEventListener('change', ()=>{
-		if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
-		renderOverview();
-	  });
-	});
+        $$('.ov-filter').forEach(ch=>{
+          ch.addEventListener('change', ()=>{
+            if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
+            rebuildAndRenderMasterRoute();
+          });
+        });
 	// Общий маршрут — переключатель вида
-	$('#ovMode').addEventListener('click', (e)=>{
-	  if(!(e.target instanceof HTMLButtonElement)) return;
-	  const m=e.target.dataset.mode; if(!m) return;
-	  ovModeCurrent=m;
-	  $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
-	  renderOverview();
-	});
+        $('#ovMode').addEventListener('click', (e)=>{
+          if(!(e.target instanceof HTMLButtonElement)) return;
+          const m=e.target.dataset.mode; if(!m) return;
+          ovModeCurrent=m;
+          $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
+          rebuildAndRenderMasterRoute();
+        });
 	// Общий маршрут — Сохранить/Сброс
         $('#ovApply').addEventListener('click', ()=>{
           if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -5501,11 +7271,11 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 		}
 	  }
 	  routeEditsWorking.clear();
-	  recompute();    // таблица/подетально/гант
-	  persistNow();   // и в localStorage
-	  alert('Изменения сохранены.');
-	  renderOverview();
-	});
+          recompute();    // таблица/подетально/гант
+          persistNow();   // и в localStorage
+          alert('Изменения сохранены.');
+          rebuildAndRenderMasterRoute();
+        });
         $('#logBtn').addEventListener('click', ()=>{ renderLogList(); clearLogAttention(); $('#logDlg').showModal(); });
         $('#logClose').addEventListener('click', ()=> $('#logDlg').close());
         $('#logClear').addEventListener('click', ()=>{
@@ -5521,20 +7291,37 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           const id = e.target?.dataset?.logDetail;
           if(!id) return;
           const entry = activityLog.find(x=>x.id===id);
-          if(entry) showUpdateDetails(entry.diff);
+          if(entry){
+            showUpdateDetails({
+              ordersSummary: entry.ordersSummary || null,
+              diff: entry.diff || null,
+              stage: entry.stage || null,
+              authors: entry.authors || null,
+              user: entry.user || '',
+              time: entry.time || ''
+            });
+          }
         });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
 
-        $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+        $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); rebuildAndRenderMasterRoute(); });
 
         const settingsBtn = $('#settingsBtn');
         if(settingsBtn){
           settingsBtn.addEventListener('click', ()=>{
+            const aliasInput = $('#userAlias');
+            if(aliasInput){
+              aliasInput.value = userAlias;
+            }
             const shiftBox = $('#shiftOnProgress');
             if(shiftBox) shiftBox.checked = shiftOnProgress;
             const autoBox = $('#autoOptimize');
             if(autoBox) autoBox.checked = autoOptimizeOn;
+            const lockBox = $('#lockNewOrders');
+            if(lockBox) lockBox.checked = lockNewOrders;
+            const lockCsvBox = $('#lockNewOrdersCsv');
+            if(lockCsvBox) lockCsvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
             const locBox = $('#storageLocal');
             if(locBox) locBox.checked = enableLocalStore;
             const remBox = $('#storageRemote');
@@ -5544,7 +7331,9 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
               remBox.parentElement?.classList.toggle('muted', remBox.disabled);
             }
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
+            renderSystemSettingsUI();
             refreshDataModeIndicator();
+            refreshNewOrderPrefUI();
             $('#settingsDlg').showModal();
           });
         }
@@ -5554,6 +7343,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         }
 
         $("#autosave").checked = autosaveOn;
+        renderSystemSettingsUI();
 }
 
 /* =========
