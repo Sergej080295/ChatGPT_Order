@@ -243,19 +243,24 @@ td[data-field="progress"]{background:#fffef3}
 .chip.green{background:#22c55e}
 .chip.amber{background:#f59e0b}
 .chip.red{background:#ef4444}
-.orders-overview-controls{display:flex;align-items:center;gap:12px;margin:12px 0 10px}
+.orders-search-row{display:flex;align-items:center;gap:8px;margin:12px 0}
+.orders-search-row input{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:13px;color:#0f172a;background:#fff}
+.orders-search-row input:focus{outline:2px solid #bfdbfe;outline-offset:1px}
+.orders-search-clear{width:32px;height:32px;border-radius:999px;border:1px solid #cbd5e1;background:#f1f5f9;color:#475569;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1}
+.orders-search-clear[disabled]{opacity:.4;cursor:default}
+.orders-overview-controls{display:flex;align-items:center;gap:12px;margin:0 0 10px}
 .orders-overview-controls label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
 .orders-overview-controls select{border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px;font-size:12px;min-width:140px}
-#ordersOverviewTable{width:100%;border-collapse:separate;border-spacing:0}
+#ordersOverviewTable{border-collapse:separate;border-spacing:0;width:auto;min-width:max-content}
 #ordersOverviewTable thead th{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--line);padding:8px;font-size:12px;text-align:center;color:#1e293b;z-index:1;font-weight:700}
 #ordersOverviewTable tbody td{border-bottom:1px solid var(--line);padding:10px 8px;vertical-align:middle;font-size:12px}
 #ordersOverviewTable tbody tr:nth-child(even){background:#f8fafc}
 .main.overview-mode{grid-template-columns:1fr}
 .main.overview-mode #ordersOverviewPanel{max-width:none}
-.main.overview-mode #ordersOverviewTable{min-width:100%}
+.main.overview-mode #ordersOverviewTable{min-width:max-content;width:auto}
 .main.overview-mode .card{width:100%}
-#ordersOverviewTable tfoot td{background:#f1f5f9;font-weight:600;font-size:12px;padding:10px 8px;text-align:center;border-top:1px solid var(--line)}
-#ordersOverviewTable tfoot td.orders-overview-total-label{text-align:left}
+.orders-overview-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;font-size:12px;font-weight:600;color:#1f2937}
+.orders-overview-totals .orders-total{grid-column:1/-1;font-weight:700}
 .orders-overview-empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:12px}
 .order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
 .order-eye-btn:disabled{opacity:.4;cursor:default}
@@ -488,7 +493,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <label class="btn">Импорт (.csv)
         <input id="file" type="file" accept=".csv" style="display:none">
       </label>
-      <button id="loadExample" class="btn">Загрузить пример</button>
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
       <button id="optimizeBtn" class="btn warn">Оптимизация</button>
@@ -532,6 +536,11 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       </div>
     </div>
 
+    <div class="orders-search-row" id="ordersSearchRow">
+      <input id="orderSearchInput" type="search" placeholder="Поиск заказа" autocomplete="off" spellcheck="false">
+      <button id="orderSearchClear" class="orders-search-clear" type="button" aria-label="Сбросить поиск">✕</button>
+    </div>
+
     <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
       <label>Фильтр:
         <select id="ordersOverviewFilter">
@@ -545,18 +554,18 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <div class="table-wrap" id="ordersOverviewPanel" style="display:none">
       <table id="ordersOverviewTable">
         <colgroup>
-          <col style="width:44px">
-          <col style="width:48px">
-          <col>
-          <col style="width:90px">
-          <col style="width:90px">
-          <col style="width:160px">
-          <col style="width:160px">
-          <col style="width:160px">
-          <col style="width:160px">
-          <col style="width:160px">
-          <col style="width:90px">
-          <col style="width:90px">
+          <col style="width:56px">
+          <col style="width:52px">
+          <col style="width:240px">
+          <col style="width:92px">
+          <col style="width:92px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:92px">
+          <col style="width:92px">
         </colgroup>
         <thead>
           <tr>
@@ -575,21 +584,20 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
           </tr>
         </thead>
         <tbody></tbody>
-        <tfoot>
-          <tr id="ordersOverviewTotalsRow">
-            <td colspan="3" class="orders-overview-total-label" data-total="orders">Итого: 0</td>
-            <td data-total-stage="proc">0 шт</td>
-            <td data-total-stage="shear">0 шт</td>
-            <td data-total-stage="draw">00:00:00</td>
-            <td data-total-stage="laser">00:00:00</td>
-            <td data-total-stage="bend">00:00:00</td>
-            <td data-total-stage="weld">00:00:00</td>
-            <td data-total-stage="mech">00:00:00</td>
-            <td data-total-stage="pack">0 шт</td>
-            <td data-total-stage="ship">0 шт</td>
-          </tr>
-        </tfoot>
       </table>
+    </div>
+
+    <div class="orders-overview-totals" id="ordersOverviewTotals" style="display:none">
+      <span class="orders-total" data-total="orders">Итого: 0</span>
+      <span data-total-stage="proc">Закупка: 0 шт</span>
+      <span data-total-stage="shear">Рубка: 0 шт</span>
+      <span data-total-stage="draw">Технологи: 00:00:00</span>
+      <span data-total-stage="laser">Лазер: 00:00:00</span>
+      <span data-total-stage="bend">Гибка: 00:00:00</span>
+      <span data-total-stage="weld">Сварка: 00:00:00</span>
+      <span data-total-stage="mech">Мехобр.: 00:00:00</span>
+      <span data-total-stage="pack">Упаковка: 0 шт</span>
+      <span data-total-stage="ship">Отгрузка: 0 шт</span>
     </div>
 
     <div class="table-wrap" id="ordersScroller">
@@ -597,7 +605,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
         <colgroup>
           <col style="width:42px">   <!-- № -->
           <col style="width:34px">   <!-- замок -->
-          <col style="width:34px">   <!-- готово -->
           <col style="width:34px">   <!-- глаз -->
           <col id="colOrderId" style="width:340px">
           <col id="colProg"    style="width:110px">  <!-- Прогресс, % -->
@@ -609,13 +616,13 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
           <col id="colState"   style="width:180px">
           <col id="colDelta"   style="width:120px">
           <col id="colReserve" style="width:74px">   <!-- Бронь -->
+          <col style="width:34px">   <!-- готово -->
           <col style="width:54px">   <!-- 🗑 -->
         </colgroup>
         <thead>
           <tr>
             <th>№</th>
             <th>🔐</th>
-            <th>✔</th>
             <th>👁</th>
             <th>Заказ</th>
             <th>Прогресс, %</th>
@@ -627,6 +634,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
             <th>Состояние</th>
             <th>Статус</th>
             <th title="Использовать Бронь">Бронь</th>
+            <th>✔</th>
             <th>🗑</th>
           </tr>
         </thead>
@@ -1511,7 +1519,7 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#optimizeBtn','#clearAll','#loadExample','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#optimizeBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -1985,6 +1993,83 @@ enableRemoteStore = remoteBridge.hasRemote && remotePreferenceRequested;
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
+let orderSearchRaw = '';
+let orderSearchNormalized = '';
+
+function normalizeOrderSearch(value){
+  return String(value ?? '').replace(/\s+/g,' ').trim().toLowerCase();
+}
+
+function orderSearchMatchesTexts(texts){
+  if(!orderSearchNormalized) return true;
+  for(const text of texts){
+    if(text == null) continue;
+    const str = String(text).toLowerCase();
+    if(str.includes(orderSearchNormalized)) return true;
+  }
+  return false;
+}
+
+function taskMatchesSearch(task){
+  if(!orderSearchNormalized) return true;
+  const parts = parseOrderParts(task?.orderId || '');
+  return orderSearchMatchesTexts([
+    task?.orderId || '',
+    parts.display,
+    parts.number,
+    parts.customer,
+    task?.state || '',
+    task?.status || ''
+  ]);
+}
+
+function overviewMatchesSearch(order, parts){
+  if(!orderSearchNormalized) return true;
+  return orderSearchMatchesTexts([
+    order?.orderId || '',
+    parts?.display || '',
+    parts?.number || '',
+    parts?.customer || ''
+  ]);
+}
+
+function updateOrderSearchControls(){
+  const input = document.getElementById('orderSearchInput');
+  if(input && input !== document.activeElement){
+    input.value = orderSearchRaw;
+  }
+  const clearBtn = document.getElementById('orderSearchClear');
+  if(clearBtn){
+    clearBtn.disabled = !orderSearchNormalized;
+  }
+}
+
+function rerenderForSearch(){
+  const processSelect = document.getElementById('process');
+  const stage = processSelect ? processSelect.value : currentProc;
+  if(stage === OVERVIEW_STAGE){
+    renderOrdersOverviewTable();
+  }else{
+    renderTasksTable();
+  }
+}
+
+function setOrderSearch(rawValue){
+  const normalized = normalizeOrderSearch(rawValue);
+  if(normalized === orderSearchNormalized && rawValue === orderSearchRaw) return;
+  orderSearchRaw = rawValue;
+  orderSearchNormalized = normalized;
+  rerenderForSearch();
+  updateOrderSearchControls();
+}
+
+function clearOrderSearch(){
+  if(!orderSearchNormalized && !orderSearchRaw) return;
+  orderSearchRaw = '';
+  orderSearchNormalized = '';
+  rerenderForSearch();
+  updateOrderSearchControls();
+}
 
 
 // Зафиксировать текущий порядок видимого передела
@@ -2161,13 +2246,11 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
   baseTasks.forEach(registerTask);
 
   const doneStageSet = new Set();
-  const doneOrderKeys = new Set();
   const donePseudoTasks = [];
 
   doneTasks.forEach(rec => {
     const key = orderKeyForRecord(rec);
     if(!key) return;
-    doneOrderKeys.add(key);
     const stage = rec.stage || '';
     const start = safeDateValue(rec.start);
     const end = safeDateValue(rec.end);
@@ -2212,11 +2295,14 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
     const key = orderKeyForRecord(order);
     if(!key || trashKeys.has(key)) return;
     const isActive = activeKeys.has(key);
-    const isDone = doneOrderKeys.has(key) && !isActive;
+    const shipDone = doneStageSet.has(`${key}::ship`);
+    const isDone = shipDone && !isActive;
+    const parts = parseOrderParts(order.orderId);
+    if(!overviewMatchesSearch(order, parts)) return;
     if(mode === 'current' && !isActive) return;
     if(mode === 'done' && !isDone) return;
     if(mode === 'all' && !isActive && !isDone) return;
-    rows.push({ order, key, isActive, isDone });
+    rows.push({ order, key, isActive, isDone, parts });
   });
 
   rows.sort(compareOrdersForOverview);
@@ -2295,14 +2381,14 @@ function renderOrdersOverviewTable(){
   const { rows, stageTasks, doneStageSet } = collectOrdersForList(mode);
   const tbody = $("#ordersOverviewTable tbody");
   if(!tbody) return;
-  const totalsRow = document.getElementById('ordersOverviewTotalsRow');
+  const totalsBox = document.getElementById('ordersOverviewTotals');
 
   const updateTotalsUI = totals => {
-    if(!totalsRow) return;
-    const labelCell = totalsRow.querySelector('[data-total="orders"]');
+    if(!totalsBox) return;
+    const labelCell = totalsBox.querySelector('[data-total="orders"]');
     if(labelCell){ labelCell.textContent = `Итого: ${totals.orders}`; }
     const setCell = (stage, text) => {
-      const cell = totalsRow.querySelector(`[data-total-stage="${stage}"]`);
+      const cell = totalsBox.querySelector(`[data-total-stage="${stage}"]`);
       if(cell) cell.textContent = text;
     };
     setCell('proc', `${totals.proc} шт`);
@@ -2327,6 +2413,9 @@ function renderOrdersOverviewTable(){
     td.textContent = 'Нет заказов для отображения';
     tr.appendChild(td);
     tbody.appendChild(tr);
+    if(totalsBox){ totalsBox.style.display = ''; }
+    updateOrderSearchControls();
+    adjustOrdersOverviewHeight();
     return;
   }
 
@@ -2336,7 +2425,7 @@ function renderOrdersOverviewTable(){
 
   rows.forEach(entry => {
     const tr = document.createElement('tr');
-    const parts = parseOrderParts(entry.order.orderId);
+    const parts = entry.parts || parseOrderParts(entry.order.orderId);
 
     const indicatorState = stage => {
       const seg = entry.order.stages?.[stage];
@@ -2439,15 +2528,42 @@ function renderOrdersOverviewTable(){
   });
 
   updateTotalsUI(totals);
+  if(totalsBox){ totalsBox.style.display = ''; }
+  updateOrderSearchControls();
+  adjustOrdersOverviewHeight();
+}
+
+function adjustOrdersOverviewHeight(){
+  const panel = document.getElementById('ordersOverviewPanel');
+  if(!panel) return;
+  if(panel.style.display === 'none' || panel.offsetParent === null){
+    panel.style.height = '';
+    panel.style.maxHeight = '';
+    return;
+  }
+  const rect = panel.getBoundingClientRect();
+  if(!rect || Number.isNaN(rect.top)) return;
+  const bottomGap = 32;
+  const available = Math.max(240, window.innerHeight - rect.top - bottomGap);
+  panel.style.maxHeight = `${available}px`;
+  panel.style.height = `${available}px`;
 }
 
 function toggleOverviewMode(enabled){
   const scroller = document.getElementById('ordersScroller');
   if(scroller){ scroller.style.display = enabled ? 'none' : ''; }
   const panel = document.getElementById('ordersOverviewPanel');
-  if(panel){ panel.style.display = enabled ? '' : 'none'; }
+  if(panel){
+    panel.style.display = enabled ? '' : 'none';
+    if(!enabled){
+      panel.style.height = '';
+      panel.style.maxHeight = '';
+    }
+  }
   const controls = document.getElementById('ordersOverviewControls');
   if(controls){ controls.style.display = enabled ? '' : 'none'; }
+  const totals = document.getElementById('ordersOverviewTotals');
+  if(totals){ totals.style.display = enabled ? '' : 'none'; }
 
   const main = document.querySelector('.main');
   if(main){ main.classList.toggle('overview-mode', !!enabled); }
@@ -2487,6 +2603,9 @@ function toggleOverviewMode(enabled){
       }
     }
   });
+  if(enabled){
+    adjustOrdersOverviewHeight();
+  }
 }
 
 function buildOverviewOrderRanks(byStage){
@@ -3315,8 +3434,9 @@ function applyEditImmediate(cell, task){
 function renderTasksTable(){
   const tb=$("#tasksTable tbody"); tb.innerHTML='';
   const canEdit = userCanEdit();
-  const visibleTasks = tasks.map((task, index)=>({ task, index })).filter(entry=> !entry.task.hiddenByState);
-  visibleTasks.forEach(({ task: t, index: i }, visibleIndex)=>{
+  const visibleEntries = tasks.map((task, index)=>({ task, index })).filter(entry=> !entry.task.hiddenByState);
+  const filteredEntries = orderSearchNormalized ? visibleEntries.filter(({ task })=> taskMatchesSearch(task)) : visibleEntries;
+  filteredEntries.forEach(({ task: t, index: i }, visibleIndex)=>{
     const st=statusForTask(t);
     const rest = Math.max(0, remainingTotal(t));
     const tr=document.createElement('tr');
@@ -3327,7 +3447,6 @@ function renderTasksTable(){
     tr.innerHTML=`
       <td>${visibleIndex+1}</td>
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
-      <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
       <td class="eye" title="Маршрут заказа">👁</td>
       <td class="drag-handle" ${(canEdit && t.isUserNew)?'contenteditable="true" data-field="orderId"':''}>${t.orderId}</td>
       <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="progress">${String(t.progress||0).replace('.',',')}</td>
@@ -3342,6 +3461,7 @@ function renderTasksTable(){
       <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="state">${t.state||''}</td>
       <td class="${st.cls}">${st.text}</td>
       <td><input type="checkbox" data-reserve ${useRes} title="Использовать Бронь" ${!canEdit?'disabled':''}></td>
+      <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
       <td><button class="del-btn" title="Удалить" data-del ${!canEdit?'disabled':''}>×</button></td>
     `;
 
@@ -3469,9 +3589,9 @@ function renderTasksTable(){
   });
 
   // ИТОГИ
-  const sHours = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
-  const sExtra = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
-  const sRest  = visibleTasks.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
+  const sHours = filteredEntries.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
+  const sExtra = filteredEntries.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
+  const sRest  = filteredEntries.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
   $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
@@ -3480,6 +3600,7 @@ function renderTasksTable(){
     const w=Math.min(2200,Math.max(960,$("#tasksTable").offsetWidth+24));
     document.documentElement.style.setProperty('--leftWidth', w+'px');
   });
+  updateOrderSearchControls();
 }
 
 /* =========
@@ -7553,6 +7674,17 @@ function wireHandlers(){
     overviewFilter.addEventListener('change', ()=> renderOrdersOverviewTable());
   }
 
+  const orderSearchInput = document.getElementById('orderSearchInput');
+  if(orderSearchInput){
+    orderSearchInput.value = orderSearchRaw;
+    orderSearchInput.addEventListener('input', e=> setOrderSearch(e.target.value));
+    orderSearchInput.addEventListener('search', e=> setOrderSearch(e.target.value));
+  }
+  const orderSearchClear = document.getElementById('orderSearchClear');
+  if(orderSearchClear){
+    orderSearchClear.addEventListener('click', ()=> clearOrderSearch());
+  }
+
   $$('input[name="accessMode"]').forEach(radio=>{
     radio.checked = radio.value === accessMode;
     radio.addEventListener('change', e=>{
@@ -7577,24 +7709,6 @@ function wireHandlers(){
     const f=e.target.files[0];
     if(f) await importStateFile(f);
     e.target.value='';
-  });
-
-  // пример выгрузки (новая схема с 5 переделами)
-  const exampleCSV = `Id задачи;Id родителя;Задача;Доска;Состояние;Статус;К-во подзадач;№;Резка, час;Гибка, час;Обработка чертежей, час;Сварка, час;Мехобработка;Сумма услуг;Заказчик;Начало;Конец;Изм. JSON
-P1;;Родитель A;Производство;В работе;—;2;ORD-001;5;10;2;3;4;—;Клиент А;05.09.2025;10.09.2025;2025-09-14 12:00
-C1;P1;Лазер;—;—;—;—;ORD-001;5;0;0;0;0;—;Клиент А;05.09.2025;06.09.2025;
-C2;P1;Гибка;—;—;—;—;ORD-001;0;10;0;0;0;—;Клиент А;07.09.2025;10.09.2025;
-P2;;Родитель B;Производство;Ожидание;—;3;ORD-002;3;0;1;0;2;—;Клиент Б;09.09.2025;12.09.2025;2025-09-14 12:00
-C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.2025;10.09.2025;`;
-  $("#loadExample").addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-    lastRows = parseCSVText(exampleCSV);
-    const doneSet = new Set(doneTasks.map(d=> d.uid));
-        tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
-        sortTasksByStart();
-        rememberStageOrder();
-        if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
-    $("#file").value='';
   });
 
   // исключения/бронь
@@ -7950,6 +8064,9 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         if(settingsClose){
           settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
         }
+
+        window.addEventListener('resize', adjustOrdersOverviewHeight);
+        updateOrderSearchControls();
 
         $("#autosave").checked = autosaveOn;
         renderSystemSettingsUI();
