@@ -3958,102 +3958,194 @@ function buildDeltaPreview(current, incoming){
   return {added, removed, changed, toDone};
 }
 
-function renderDeltaDialog(diff){
+function renderDeltaDialog(diffByStage, currentByStage){
   const el=$("#deltaContent");
-  const block = (key, arr, fmt) => `
-    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
-      <legend style="padding:0 6px">${key} (${arr.length})</legend>
-      ${arr.length? arr.map(fmt).join('') : '—'}
-    </fieldset>`;
+  const makeBlock = (title, arr, fmt)=>{
+    return `<fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">`
+      + `<legend style="padding:0 6px">${title} (${arr.length})</legend>`
+      + (arr.length ? arr.map(fmt).join('') : '—')
+      + '</fieldset>';
+  };
 
-  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtAdd = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-stage="${stage}" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtDel = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-stage="${stage}" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtChg = (stage)=>(x)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-stage="${stage}" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
+  const fmtDone = (stage)=>(t)=>`<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-stage="${stage}" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
 
-  el.innerHTML =
-    block('Новые', diff.added, fmtAdd) +
-    block('Изменённые', diff.changed, fmtChg) +
-    block('Удаляемые', diff.removed, fmtDel) +
-    block('Статус = Готово', diff.toDone, fmtDone);
+  const blocks = [];
+  STAGES.forEach(stage=>{
+    const diff = diffByStage.get(stage);
+    if(!diff) return;
+    const total = diff.added.length + diff.changed.length + diff.removed.length + diff.toDone.length;
+    if(!total) return;
+    const title = STAGE_TITLE[stage] || stage;
+    const content = makeBlock('Новые', diff.added, fmtAdd(stage))
+      + makeBlock('Изменённые', diff.changed, fmtChg(stage))
+      + makeBlock('Удаляемые', diff.removed, fmtDel(stage))
+      + makeBlock('Статус = Готово', diff.toDone, fmtDone(stage));
+    blocks.push(`<section style="margin-bottom:16px"><h3 style="margin:6px 0">${title}</h3>${content}</section>`);
+  });
+
+  el.innerHTML = blocks.length ? blocks.join('') : '<div class="muted">Изменений не обнаружено.</div>';
 
   $("#deltaDlg").showModal();
 
   $("#deltaApply").onclick = ()=>{
-    lastSnapshotJson = serializeState(); // снимок для отката
-    // перед применением сняем старые подсветки «isNew»
+    lastSnapshotJson = serializeState();
     tasks.forEach(t=>{ t.isNew=false; });
 
-    const sel = new Map(); $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
-      if(ch.checked) sel.set(ch.dataset.uid, ch.dataset.apply);
+    const sel = new Map();
+    $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
+      if(!ch.checked) return;
+      sel.set(ch.dataset.uid, { stage: ch.dataset.stage, action: ch.dataset.apply });
     });
 
-    const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    if(sel.size===0){
+      $("#deltaDlg").close();
+      return;
+    }
+
     const now = new Date();
+    const curStage = $("#process").value;
+    const stageSnapshots = new Map();
+    const stageDiffEntries = [];
+    const updatedByStage = new Map();
+    const appliedDiff = { added:[], removed:[], changed:[], toDone:[] };
 
-    // Удаления (только выбранные)
-    diff.removed.forEach(r=>{
-      if(!sel.has(r.uid) || sel.get(r.uid)!=='del') return;
-      const idx = byId.get(r.uid);
-      if(idx!=null){ tasks.splice(idx,1); byId.delete(r.uid); }
+    STAGES.forEach(stage=>{
+      const baseline = (currentByStage.get(stage) || []).map(cloneTaskRecord).filter(Boolean);
+      const diff = diffByStage.get(stage) || { added:[], removed:[], changed:[], toDone:[] };
+      const stageSel = new Map();
+      sel.forEach((info, uid)=>{ if(info.stage===stage) stageSel.set(uid, info.action); });
+      if(!stageSel.size){
+        updatedByStage.set(stage, baseline);
+        stageSnapshots.set(stage, captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined));
+        stageDiffEntries.push({ stage, diff: computeDiff(stageSnapshots.get(stage), stageSnapshots.get(stage)) });
+        return;
+      }
+
+      let stageTasks = baseline.map(cloneTaskRecord).filter(Boolean);
+      const removeSet = new Set();
+      diff.removed.forEach(item=>{
+        if(stageSel.get(item.uid) === 'del'){
+          removeSet.add(item.uid);
+          if(stage === curStage) appliedDiff.removed.push(cloneTaskRecord(item));
+        }
+      });
+      const archiveMap = new Map();
+      diff.toDone.forEach(item=>{
+        if(stageSel.get(item.uid) === 'done'){
+          archiveMap.set(item.uid, item);
+          if(stage === curStage) appliedDiff.toDone.push(cloneTaskRecord(item));
+        }
+      });
+
+      const survivors = [];
+      stageTasks.forEach(task=>{
+        if(archiveMap.has(task.uid)){
+          doneTasks.push({
+            uid:task.uid, orderId:task.orderId, stage:task.stage,
+            parentId:task.parentId, childId:task.childId,
+            hours:task.hours, extra:task.extraHours,
+            start:task.startDate, end:task.endDate,
+            when:now, source:'csv_status'
+          });
+          archiveMap.delete(task.uid);
+          return;
+        }
+        if(removeSet.has(task.uid)) return;
+        survivors.push(task);
+      });
+      stageTasks = survivors;
+
+      archiveMap.forEach(item=>{
+        doneTasks.push({
+          uid:item.uid, orderId:item.orderId, stage:item.stage || stage,
+          parentId:item.parentId, childId:item.childId,
+          hours:item.hours, extra:item.extraHours,
+          start:item.startDate, end:item.endDate,
+          when:now, source:'csv_status'
+        });
+      });
+
+      const byId = new Map(stageTasks.map(t=>[t.uid, t]));
+      diff.changed.forEach(({from,to,fields})=>{
+        if(stageSel.get(to.uid) !== 'chg') return;
+        if(!byId.has(from.uid)) return;
+        const target = byId.get(from.uid);
+        target.hours = to.hours;
+        target.extraHours = Math.max(0.25,(to.hours||0)*0.05);
+        target.startDate = to.startDate;
+        target.endDate = to.endDate;
+        target.startMissing = to.startMissing;
+        target.endMissing = to.endMissing;
+        target.state = to.state || target.state;
+        target.status = to.status || target.status;
+        target.orderId = to.orderId || target.orderId;
+        target.route = to.route || target.route;
+        if(!target.origStartDate) target.origStartDate = target.startDate;
+        target.isNew = true;
+        if(stage === curStage){
+          appliedDiff.changed.push({ from: cloneTaskRecord(from), to: cloneTaskRecord(to), fields: Array.isArray(fields) ? fields.slice() : [] });
+        }
+      });
+
+      diff.added.forEach(item=>{
+        if(stageSel.get(item.uid) !== 'add') return;
+        const clone = cloneTaskRecord(item);
+        clone.isNew = true;
+        stageTasks.push(clone);
+        if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
+      });
+
+      stageTasks.sort((a,b)=> +a.startDate - +b.startDate);
+
+      const beforeSnapshot = captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined);
+      const afterSnapshot = captureSnapshotFromRaw(stageTasks, stage, stage === curStage ? lockedUids : undefined);
+      stageSnapshots.set(stage, afterSnapshot);
+      stageDiffEntries.push({ stage, diff: computeDiff(beforeSnapshot, afterSnapshot) });
+      updatedByStage.set(stage, stageTasks);
     });
 
-	// В архив (статус Готово)
-	diff.toDone.forEach(d=>{
-	  if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
-	  if(byId.has(d.uid)){
-		const old=tasks.splice(byId.get(d.uid),1)[0];
-		doneTasks.push({
-		  uid:old.uid, orderId:old.orderId, stage:old.stage,
-		  parentId:old.parentId, childId:old.childId,
-		  hours:old.hours, extra:old.extraHours,
-		  start:old.startDate, end:old.endDate,
-		  when:now, source:'csv_status'
-		});
-		byId.delete(d.uid);
-	  } else {
-		doneTasks.push({
-		  uid:d.uid, orderId:d.orderId, stage:d.stage||d.stage,  // d.stage есть у incoming
-		  parentId:d.parentId, childId:d.childId,
-		  hours:d.hours, extra:d.extraHours,
-		  start:d.startDate, end:d.endDate,
-		  when:now, source:'csv_status'
-		});
-	  }
-	});
-
-    // Изменения
-    diff.changed.forEach(({from,to})=>{
-      if(!sel.has(to.uid) || sel.get(to.uid)!=='chg') return;
-      if(!byId.has(from.uid)) return;
-      const t=tasks[byId.get(from.uid)];
-      t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
-      t.startDate=to.startDate; t.endDate=to.endDate;
-      t.startMissing=to.startMissing; t.endMissing=to.endMissing;
-      t.state=to.state||t.state;
-      t.status=to.status||t.status;
-      t.orderId=to.orderId||t.orderId;
-      t.route=to.route||t.route;
-      if(!t.origStartDate) t.origStartDate = t.startDate;
-      t.isNew=true; // подсветим именно текущую волну изменений
+    STAGES.forEach(stage=>{
+      const list = updatedByStage.get(stage) || (currentByStage.get(stage) || []).map(cloneTaskRecord);
+      ordersByStage.set(stage, list.map(t=>t.uid));
+      if(stage === curStage){
+        tasks = list;
+      }
     });
 
-    // Новые
-    diff.added.forEach(n=>{
-      if(!sel.has(n.uid) || sel.get(n.uid)!=='add') return;
-      n.isNew=true; tasks.push(n);
+    const aggregated = [];
+    STAGES.forEach(stage=>{
+      const list = updatedByStage.get(stage) || (currentByStage.get(stage) || []);
+      list.forEach(task=> aggregated.push(cloneTaskRecord(task)) );
+    });
+    allTasksFromState = aggregated;
+
+    lastSyncedSnapshots = new Map(lastSyncedSnapshots);
+    stageSnapshots.forEach((snapshot, stage)=>{
+      if(snapshot) lastSyncedSnapshots.set(stage, snapshot);
     });
 
-    lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
-    lastRows = pendingRows; // установим из глобалки (см. importRows)
+    lastDiffApplied = appliedDiff;
+    lastRows = pendingRows;
     const stamp = new Date().toLocaleString();
     lastImportTime = stamp;
-    csvFreshnessStr = lastImportTime;
-    stateMeta.csvTimestamp = lastImportTime;
+    csvFreshnessStr = stamp;
+    stateMeta.csvTimestamp = stamp;
     updateFreshnessUI();
-	sortTasksByStart();
-	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
-	persistNow();
+
+    sortTasksByStart();
+    if(document.querySelector('#autoOptimize')?.checked){ optimizeQueue(); }
+    else { recompute(); }
+
+    const meaningfulEntries = stageDiffEntries.filter(entry=> diffHasChanges(entry.diff));
+    if(meaningfulEntries.length){
+      const summaryParts = meaningfulEntries.map(entry=>`${STAGE_TITLE[entry.stage] || entry.stage}: ${summarizeDiff(entry.diff)}`);
+      const combined = { stages:{} };
+      meaningfulEntries.forEach(entry=>{ combined.stages[entry.stage] = entry.diff; });
+      persistNow(undefined,{ source:'csv', multiStage:{ entries: meaningfulEntries, summary: summaryParts.join('; '), combinedDiff: combined } });
+    }
 
     $("#deltaDlg").close();
   };
@@ -4061,6 +4153,22 @@ function renderDeltaDialog(diff){
 }
 
 let pendingRows=null;
+
+function collectStageTasksSnapshot(){
+  const snapshot = new Map();
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(task=>{
+      if(!task || !task.stage) return;
+      if(!snapshot.has(task.stage)) snapshot.set(task.stage, []);
+      snapshot.get(task.stage).push(cloneTaskRecord(task));
+    });
+  }
+  const curStage = $("#process")?.value || currentProc || 'bend';
+  const currentList = tasks.map(cloneTaskRecord).filter(Boolean);
+  snapshot.set(curStage, currentList);
+  STAGES.forEach(stage=>{ if(!snapshot.has(stage)) snapshot.set(stage, []); });
+  return snapshot;
+}
 
 async function importFile(file){
   if(!file) return;
@@ -4110,10 +4218,15 @@ async function importRows(rows){
     return;
   }
 
-  // дельта
-  const incoming = mapRows(rows, p);
-  const diff = buildDeltaPreview(tasks, incoming);
-  renderDeltaDialog(diff);
+  // дельта по всем переделам
+  const currentByStage = collectStageTasksSnapshot();
+  const diffByStage = new Map();
+  STAGES.forEach(stage=>{
+    const incoming = mapRows(rows, stage);
+    const currentStageTasks = currentByStage.get(stage) || [];
+    diffByStage.set(stage, buildDeltaPreview(currentStageTasks, incoming));
+  });
+  renderDeltaDialog(diffByStage, currentByStage);
 }
 
 /* =========
@@ -4358,15 +4471,38 @@ function computeDiff(before, after){
 }
 
 function diffHasChanges(diff){
-  return !!(diff && (diff.added.length || diff.removed.length || diff.changed.length));
+  if(!diff) return false;
+  if(diff.stages && typeof diff.stages === 'object'){
+    return Object.values(diff.stages).some(stageDiff=> diffHasChanges(stageDiff));
+  }
+  return !!((diff.added && diff.added.length) || (diff.removed && diff.removed.length) || (diff.changed && diff.changed.length));
 }
 
 function summarizeDiff(diff){
   if(!diff) return '';
-  return `+${diff.added.length} ~${diff.changed.length} -${diff.removed.length}`;
+  if(diff.stages && typeof diff.stages === 'object'){
+    const totals = { added:0, changed:0, removed:0 };
+    Object.values(diff.stages).forEach(stageDiff=>{
+      if(!stageDiff) return;
+      totals.added += stageDiff.added?.length || 0;
+      totals.changed += stageDiff.changed?.length || 0;
+      totals.removed += stageDiff.removed?.length || 0;
+    });
+    return `+${totals.added} ~${totals.changed} -${totals.removed}`;
+  }
+  return `+${(diff.added?.length)||0} ~${(diff.changed?.length)||0} -${(diff.removed?.length)||0}`;
 }
 
 function diffToHtml(diff){
+  if(diff && diff.stages && typeof diff.stages === 'object'){
+    const entries = Object.entries(diff.stages).filter(([,val])=> diffHasChanges(val));
+    if(!entries.length) return '<div class="muted">Изменений нет</div>';
+    return entries.map(([stage,val])=>{
+      const title = STAGE_TITLE[stage] || stage;
+      const inner = diffToHtml(val);
+      return `<div style="margin-bottom:12px"><h4 style="margin:4px 0">${title}</h4>${inner}</div>`;
+    }).join('');
+  }
   if(!diffHasChanges(diff)) return '<div class="muted">Изменений нет</div>';
   const block = (title, arr, formatter)=>{
     if(!arr.length) return '';
@@ -4721,8 +4857,198 @@ function loadStageFromLS(stage){
 }
 
 function persistNow(stageOverride, opts={}){
-  const { source='manual', force=false, announce=true, silentOnConflict=false } = opts;
+  const { source='manual', force=false, announce=true, silentOnConflict=false, multiStage=null } = opts;
   if(!userCanEdit() && source !== 'system') return;
+  if(multiStage && Array.isArray(multiStage.entries)){
+    const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
+    if(!entriesRaw.length && !force) return;
+    try{
+      const curStage = stageOverride || $("#process")?.value || 'bend';
+      const stateObj = buildStateObject();
+      stateObj.process = curStage;
+
+      const rawPrev = readLocalSnapshot();
+      let prev = null;
+      let prevTasks = [];
+      let prevOrders = [];
+      let prevMeta = {};
+      if(rawPrev){
+        try{
+          prev = JSON.parse(rawPrev);
+          prevTasks = Array.isArray(prev.t) ? prev.t : [];
+          prevOrders = Array.isArray(prev.orders) ? prev.orders : [];
+          prevMeta = prev.meta || {};
+        }catch(_){ prev = null; }
+      }
+
+      if(prevTasks.length){
+        const merged = new Map();
+        prevTasks.forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        (stateObj.t || []).forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        stateObj.t = [...merged.values()];
+      }
+
+      if(prevOrders.length){
+        const map = new Map(prevOrders);
+        (stateObj.orders || []).forEach(([k,v])=> map.set(k,v));
+        stateObj.orders = [...map.entries()];
+      }
+
+      if(prev && prev.parallelByProc && !stateObj.parallelByProc) stateObj.parallelByProc = prev.parallelByProc;
+      if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
+
+      const meaningfulEntries = entriesRaw.filter(entry=> diffHasChanges(entry.diff));
+      const hasChanges = meaningfulEntries.length > 0 || force || !rawPrev;
+      const nowStr = new Date().toLocaleString();
+      const summaryParts = meaningfulEntries.map(entry=> `${STAGE_TITLE[entry.stage] || entry.stage}: ${summarizeDiff(entry.diff)}`);
+      const combinedDiff = (multiStage.combinedDiff && typeof multiStage.combinedDiff === 'object')
+        ? { ...multiStage.combinedDiff, stages: { ...(multiStage.combinedDiff.stages||{}) } }
+        : { stages:{} };
+      meaningfulEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
+
+      const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
+      meaningfulEntries.forEach(entry=>{
+        const stage = entry.stage;
+        const prevVersion = Number((prevMeta.versions && prevMeta.versions[stage]) || lastKnownVersions.get(stage) || 0);
+        const newVersion = prevVersion + 1;
+        versions[stage] = newVersion;
+        lastKnownVersions.set(stage, newVersion);
+      });
+      stateMeta.versions = versions;
+
+      if(hasChanges){
+        if(source === 'csv'){
+          csvFreshnessStr = nowStr;
+          lastImportTime = nowStr;
+          stateMeta.csvTimestamp = nowStr;
+        }else if(source !== 'system'){
+          manualFreshnessStr = nowStr;
+          lastManualTime = nowStr;
+          stateMeta.manualTimestamp = nowStr;
+        }
+        updateFreshnessUI();
+      }
+
+      if(hasChanges && source !== 'system'){
+        const lastAuthors = { ...(stateMeta.lastAuthors || {}) };
+        meaningfulEntries.forEach(entry=>{
+          lastAuthors[entry.stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: summarizeDiff(entry.diff) };
+        });
+        stateMeta.lastAuthors = lastAuthors;
+        const logEntry = {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
+          time: nowStr,
+          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
+          user: userAlias,
+          session: SESSION_ID,
+          source,
+          summary: multiStage.summary || summaryParts.join('; '),
+          diff: combinedDiff
+        };
+        activityLog.push(logEntry);
+        if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        markLogAttention();
+      }else{
+        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      }
+
+      stateObj.meta = {
+        versions: { ...(stateMeta.versions || {}) },
+        lastAuthors: { ...(stateMeta.lastAuthors || {}) },
+        csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
+        manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
+        history: stateMeta.history || activityLog.slice(-LOG_LIMIT)
+      };
+
+      const payload = JSON.stringify(stateObj);
+      const fingerprint = simpleHash(payload);
+      lastAppliedRemoteFingerprint = fingerprint;
+      lastPushedFingerprint = fingerprint;
+      suppressIncoming = true;
+      try{
+        lastSerializedState = payload;
+        if(enableLocalStore){
+          try{ localStorage.setItem(LS_KEY, payload); }catch(_){ /* ignore cache issues */ }
+        }else{
+          try{ localStorage.removeItem(LS_KEY); }catch(_){ /* ignore cache issues */ }
+        }
+      }finally{
+        suppressIncoming = false;
+      }
+
+      const targetStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
+
+      if(remoteSyncEnabled()){
+        remoteBridge.push(payload, { stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, session:SESSION_ID, summary: (multiStage.summary || summaryParts.join('; ')) || undefined })
+          .then(()=> setDataMode('remote'))
+          .catch(async err=>{
+            if(err?.status === 409){
+              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+              const stageName = meaningfulEntries.length>1
+                ? 'несколько переделов'
+                : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
+              const lastAuthor = detail?.lastAuthor;
+              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+              if(authorName){
+                messageParts.push(`Последние правки: ${authorName}.`);
+              }
+              messageParts.push('Актуальные данные загружены заново.');
+              showToast({
+                title:'Конфликт синхронизации',
+                message: messageParts.join(' '),
+                actions:[{label:'OK', handler:(el)=> el.remove()}]
+              });
+              try{
+                const latest = await remoteBridge.pull();
+                if(latest){
+                  applyStateFromExternal(latest, { origin:'remote' });
+                }
+              }catch(pullErr){
+                console.warn('failed to refresh after conflict', pullErr);
+              }
+              setDataMode('remote');
+              return;
+            }
+            console.warn('remote push failed', err);
+            const hadLocal = enableLocalStore;
+            if(!hadLocal){
+              applyStoragePrefs({ local:true });
+            }
+            let detailText = '';
+            if(err){
+              if(typeof err.detail === 'string' && err.detail.trim()){
+                detailText = err.detail.trim();
+              }else if(err.detail && typeof err.detail === 'object'){
+                const extra = err.detail.message || err.detail.error || err.body || '';
+                if(extra) detailText = String(extra).trim();
+              }
+              if(!detailText && err.message){
+                detailText = err.message;
+              }
+            }
+            const detailSuffix = detailText ? ` (${detailText})` : '';
+            showToast({
+              title:'Ошибка синхронизации',
+              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+              actions:[{label:'OK', handler:(el)=> el.remove()}]
+            });
+            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+            setDataMode(modeAfter);
+          });
+      }else{
+        setDataMode(enableLocalStore ? 'local' : 'session');
+      }
+
+      if(hasChanges && announce){
+        announceStateUpdate({stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias});
+      }
+    }catch(e){
+      console.warn('persist failed', e);
+    }
+    return;
+  }
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
     const stateObj = buildStateObject();
