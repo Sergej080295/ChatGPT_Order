@@ -2982,26 +2982,76 @@ function mapAllProcessesFromRows(rows){
 // fallback: когда нет lastRows (работаем только по текущим tasks)
 function mapOrdersFromTasks(ts){
   const orders = new Map(); // key = parentId || 'no-parent::<orderId>'
+  const fallbackByOrder = new Map(); // key -> Map(stage -> [routeSeg,...])
 
   for(const t of ts){
+    if(!t) continue;
     const key = t.parentId || ('no-parent::'+t.orderId);
     if(!orders.has(key)) orders.set(key, { parentId:key, orderId:t.orderId, stages:{}, number:0 });
+    const order = orders.get(key);
 
-    // берём часы и даты по каждому этапу из route; если по текущему переделу route пуст — подставим start/end самого таска
-    for(const s of STAGES){
-      let info = t.route?.[s] || null;
-      if(!info && t.stage===s){
-        info = { hours:(+t.hours||0)+(+t.extraHours||0), start:t.startDate||null, end:t.endDate||null };
+    if(t.stage){
+      const stage = t.stage;
+      const seg = order.stages[stage] || { start:null, end:null, hours:0, _direct:false };
+      const baseHours = (+t.hours||0) + (+t.extraHours||0);
+      seg.hours += baseHours;
+
+      const routeSeg = t.route?.[stage] || null;
+      const startCandidate = t.startDate || (routeSeg?.start ? new Date(routeSeg.start) : null);
+      const endCandidate   = t.endDate   || (routeSeg?.end   ? new Date(routeSeg.end)   : null);
+      if(startCandidate && (!seg.start || startCandidate < seg.start)) seg.start = new Date(startCandidate);
+      if(endCandidate   && (!seg.end   || endCandidate   > seg.end))   seg.end   = new Date(endCandidate);
+      seg._direct = true;
+      order.stages[stage] = seg;
+    }
+
+    if(t.route){
+      let stageMap = fallbackByOrder.get(key);
+      if(!stageMap){ stageMap = new Map(); fallbackByOrder.set(key, stageMap); }
+      for(const [otherStage, routeSeg] of Object.entries(t.route)){
+        if(!routeSeg || otherStage === t.stage) continue;
+        if(!stageMap.has(otherStage)) stageMap.set(otherStage, []);
+        stageMap.get(otherStage).push(routeSeg);
       }
-      if(!info) continue;
-
-      const agg = orders.get(key).stages[s] || {start:null,end:null,hours:0};
-      agg.hours += (+info.hours||0);
-      if(info.start && (!agg.start || info.start < agg.start)) agg.start = new Date(info.start);
-      if(info.end   && (!agg.end   || info.end   > agg.end))   agg.end   = new Date(info.end);
-      orders.get(key).stages[s] = agg;
+      if(stageMap.size === 0) fallbackByOrder.delete(key);
     }
   }
+
+  fallbackByOrder.forEach((stageMap, key)=>{
+    const order = orders.get(key);
+    if(!order) return;
+    stageMap.forEach((segments, stage)=>{
+      if(!Array.isArray(segments) || !segments.length) return;
+      const target = order.stages[stage];
+      if(target && target._direct) return; // прямые данные приоритетны
+
+      let start=null, end=null, hours=target ? target.hours||0 : 0;
+      segments.forEach(seg=>{
+        if(!seg) return;
+        const h = Number(seg.hours)||0;
+        hours = Math.max(hours, h);
+        const s = seg.start ? new Date(seg.start) : null;
+        const e = seg.end   ? new Date(seg.end)   : null;
+        if(s && (!start || s < start)) start = new Date(s);
+        if(e && (!end   || e > end))   end   = new Date(e);
+      });
+      if(!hours && !start && !end) return;
+
+      const record = target || { start:null, end:null, hours:0, _direct:false };
+      record.hours = Math.max(record.hours||0, hours);
+      if(start && (!record.start || start < record.start)) record.start = start;
+      if(end   && (!record.end   || end   > record.end))   record.end   = end;
+      order.stages[stage] = record;
+    });
+  });
+
+  orders.forEach(order=>{
+    Object.keys(order.stages).forEach(stage=>{
+      if(order.stages[stage] && Object.prototype.hasOwnProperty.call(order.stages[stage], '_direct')){
+        delete order.stages[stage]._direct;
+      }
+    });
+  });
 
   const arr = [...orders.values()].sort((a,b)=> a.orderId.localeCompare(b.orderId));
   arr.forEach((o,i)=> o.number=i+1);
