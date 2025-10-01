@@ -1673,20 +1673,60 @@ function applyStateFromExternal(raw, opts={}){
       setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
     }
 
-    if(!skipToasts && diffs.length){
+    if(!skipToasts){
       const authors = parsed.meta?.lastAuthors || {};
-      diffs.forEach(({stage, diff})=>{
-        const info = authors[stage];
-        const who = info?.name || info?.user || info?.session || 'Пользователь';
+      const metaLastChange = parsed.meta?.lastChange || {};
+      let summaryCandidate = opts.meta?.ordersSummary || metaLastChange.ordersSummary || parsed.meta?.ordersSummary || null;
+      let summaryText = opts.meta?.summary || metaLastChange.summary || summarizeOrdersSummary(summaryCandidate);
+      const stageMap = {};
+      if(diffs.length){
+        diffs.forEach(({stage, diff})=>{ stageMap[stage] = diff; });
+      }
+      if(!summaryCandidate && diffs.length){
+        summaryCandidate = buildOrdersSummary({ stages: stageMap });
+      }
+      if(!summaryText && summaryCandidate){
+        summaryText = summarizeOrdersSummary(summaryCandidate);
+      }
+      if(summaryText){
+        const who = opts.meta?.user || metaLastChange.user || opts.meta?.alias || userAlias || 'Пользователь';
+        let stageCandidates = Array.isArray(summaryCandidate?.stages) && summaryCandidate.stages.length ? summaryCandidate.stages : [];
+        if(!stageCandidates.length && Array.isArray(metaLastChange.stages)){
+          stageCandidates = metaLastChange.stages;
+        }
+        if(!stageCandidates.length && diffs.length === 1){
+          stageCandidates = [diffs[0].stage];
+        }
+        let stageLabel = opts.meta?.stage ? (STAGE_TITLE[opts.meta.stage] || opts.meta.stage) : 'Несколько переделов';
+        if(stageCandidates.length > 1){
+          stageLabel = 'Несколько переделов';
+        }else if(stageCandidates.length === 1){
+          const singleStage = stageCandidates[0];
+          stageLabel = STAGE_TITLE[singleStage] || singleStage;
+        }else if(!opts.meta?.stage || opts.meta?.stage === 'multi'){
+          stageLabel = 'Несколько переделов';
+        }
+        const detailDiff = diffs.length
+          ? (diffs.length === 1 ? diffs[0].diff : { stages: { ...stageMap } })
+          : null;
+        const detailStage = stageCandidates.length > 1 ? null : (stageCandidates[0] || opts.meta?.stage || null);
+        const detailPayload = {
+          ordersSummary: summaryCandidate || null,
+          diff: detailDiff,
+          stage: detailStage,
+          authors,
+          user: who,
+          time: metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '')
+        };
         showToast({
-          title: `Обновление — ${STAGE_TITLE[stage] || stage}`,
-          message: `${who}: ${summarizeDiff(diff)}`,
+          title: `Обновление — ${stageLabel}`,
+          message: `${who}: ${summaryText}`,
           actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(diff, { stage, authors })},
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
             {label:'OK', handler:(el)=> el.remove()}
           ]
         });
-      });
+      }
     }
   }catch(err){ console.warn('applyStateFromExternal failed', err); }
 }
@@ -4108,10 +4148,16 @@ function renderDeltaDialog(diffByStage, currentByStage){
 
     const meaningfulEntries = stageDiffEntries.filter(entry=> diffHasChanges(entry.diff));
     if(meaningfulEntries.length){
-      const summaryParts = meaningfulEntries.map(entry=>`${STAGE_TITLE[entry.stage] || entry.stage}: ${summarizeDiff(entry.diff)}`);
       const combined = { stages:{} };
       meaningfulEntries.forEach(entry=>{ combined.stages[entry.stage] = entry.diff; });
-      persistNow(undefined,{ source:'csv', multiStage:{ entries: meaningfulEntries, summary: summaryParts.join('; '), combinedDiff: combined } });
+      const combinedSummary = buildOrdersSummary(combined);
+      const stageSummaries = meaningfulEntries.map(entry=>{
+        const stageSummary = buildOrdersSummary(entry.diff, entry.stage);
+        const summaryText = summarizeOrdersSummary(stageSummary) || summarizeDiffLike(entry.diff, entry.stage);
+        return `${STAGE_TITLE[entry.stage] || entry.stage}: ${summaryText}`;
+      });
+      const summaryText = summarizeOrdersSummary(combinedSummary) || stageSummaries.join('; ');
+      persistNow(undefined,{ source:'csv', multiStage:{ entries: meaningfulEntries, summary: summaryText, combinedDiff: combined, ordersSummary: combinedSummary || null } });
     }
 
     $("#deltaDlg").close();
@@ -4454,19 +4500,398 @@ function diffHasChanges(diff){
   return !!((diff.added && diff.added.length) || (diff.removed && diff.removed.length) || (diff.changed && diff.changed.length));
 }
 
-function summarizeDiff(diff){
-  if(!diff) return '';
-  if(diff.stages && typeof diff.stages === 'object'){
-    const totals = { added:0, changed:0, removed:0 };
-    Object.values(diff.stages).forEach(stageDiff=>{
-      if(!stageDiff) return;
-      totals.added += stageDiff.added?.length || 0;
-      totals.changed += stageDiff.changed?.length || 0;
-      totals.removed += stageDiff.removed?.length || 0;
-    });
-    return `+${totals.added} ~${totals.changed} -${totals.removed}`;
+const STAGE_ORDER_INDEX = new Map(STAGES.map((name, idx)=>[name, idx]));
+
+function parseOrderParts(orderId){
+  const raw = String(orderId || '').trim();
+  if(!raw){
+    return { raw:'', number:'', customer:'', display:'Без номера' };
   }
-  return `+${(diff.added?.length)||0} ~${(diff.changed?.length)||0} -${(diff.removed?.length)||0}`;
+  const match = raw.match(/^([^\s]+)\s+(.*)$/);
+  if(match){
+    const number = match[1].replace(/^№+/i,'').trim();
+    const customer = match[2].trim();
+    const prefix = number ? (raw.startsWith('№') ? `№${number}` : `№${number}`) : raw;
+    const display = customer ? `${prefix} ${customer}` : prefix;
+    return { raw, number, customer, display };
+  }
+  const normalized = raw.startsWith('№') ? raw : `№${raw}`;
+  return { raw, number:raw, customer:'', display:normalized };
+}
+
+function parseDiffDate(value){
+  if(!value) return null;
+  if(value instanceof Date) return value;
+  const str = String(value).trim();
+  if(!str) return null;
+  const parsed = new Date(str);
+  if(Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0,0,0,0);
+  return parsed;
+}
+
+function formatDiffDate(value){
+  const date = parseDiffDate(value);
+  return date ? fmtDate(date) : '—';
+}
+
+function formatDiffNumber(value, { suffix='', precision=1 }={}){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return '—';
+  const rounded = Math.abs(num % 1) < 1e-9 ? num.toFixed(0) : num.toFixed(precision);
+  return `${rounded.replace('.',',')}${suffix}`;
+}
+
+function formatDiffProgress(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return '—';
+  const clamped = Math.max(0, Math.min(100, Math.round(num)));
+  return `${clamped}%`;
+}
+
+function formatReserve(value){
+  return value ? 'вкл' : 'выкл';
+}
+
+function routeSnapshotText(info){
+  if(!info || typeof info !== 'object') return '—';
+  const parts = [];
+  if(info.start) parts.push(`с ${formatDiffDate(info.start)}`);
+  if(info.end) parts.push(`по ${formatDiffDate(info.end)}`);
+  if(info.hours !== undefined && info.hours !== null){
+    const hoursText = formatDiffNumber(info.hours, { suffix:' ч', precision:1 });
+    if(hoursText !== '— ч') parts.push(hoursText);
+  }
+  return parts.length ? parts.join(', ') : '—';
+}
+
+function describeFieldChange(field, before, after){
+  const labels = {
+    start:'Начало',
+    end:'Окончание',
+    hours:'Часы',
+    extraHours:'Доп.часы',
+    progress:'Прогресс',
+    useReserve:'Бронь',
+    state:'Статус',
+    status:'Состояние',
+    locked:'Блокировка',
+    idx:'Позиция'
+  };
+  if(field === 'route'){
+    return describeRouteChange(before, after);
+  }
+  const label = labels[field] || field;
+  const detail = { field, label, beforeRaw: before, afterRaw: after, before: '', after: '' };
+  if(field === 'start' || field === 'end'){
+    detail.before = formatDiffDate(before);
+    detail.after = formatDiffDate(after);
+  }else if(field === 'hours' || field === 'extraHours'){
+    detail.before = formatDiffNumber(before, { suffix:' ч', precision:1 });
+    detail.after = formatDiffNumber(after, { suffix:' ч', precision:1 });
+  }else if(field === 'progress'){
+    detail.before = formatDiffProgress(before);
+    detail.after = formatDiffProgress(after);
+  }else if(field === 'useReserve'){
+    detail.before = formatReserve(!!before);
+    detail.after = formatReserve(!!after);
+  }else if(field === 'locked'){
+    detail.before = before ? 'вкл' : 'выкл';
+    detail.after = after ? 'вкл' : 'выкл';
+  }else if(field === 'idx'){
+    detail.before = before === undefined || before === null ? '—' : String(before);
+    detail.after = after === undefined || after === null ? '—' : String(after);
+  }else{
+    const safe = val => {
+      if(val === undefined || val === null || val === '') return '—';
+      return String(val);
+    };
+    detail.before = safe(before);
+    detail.after = safe(after);
+  }
+  return [detail];
+}
+
+function describeRouteChange(before, after){
+  const keys = new Set([
+    ...Object.keys(before || {}),
+    ...Object.keys(after || {})
+  ]);
+  const details = [];
+  keys.forEach(key=>{
+    const prev = before?.[key] || null;
+    const next = after?.[key] || null;
+    if(!prev && !next) return;
+    const changed = (
+      (prev?.start || null) !== (next?.start || null)
+      || (prev?.end || null) !== (next?.end || null)
+      || Number(prev?.hours ?? null) !== Number(next?.hours ?? null)
+    );
+    if(!changed) return;
+    const label = `Маршрут ${STAGE_LETTER[key] || key}`;
+    details.push({
+      field:`route.${key}`,
+      label,
+      beforeRaw: prev,
+      afterRaw: next,
+      before: routeSnapshotText(prev),
+      after: routeSnapshotText(next)
+    });
+  });
+  return details;
+}
+
+function collectSnapshotDetails(before, after){
+  const fields = ['start','end','hours','extraHours','progress','useReserve','state','status'];
+  const details = [];
+  fields.forEach(field=>{
+    const beforeVal = before ? before[field] : undefined;
+    const afterVal = after ? after[field] : undefined;
+    if(beforeVal === undefined && afterVal === undefined) return;
+    details.push(...(describeFieldChange(field, beforeVal, afterVal) || []));
+  });
+  details.push(...describeRouteChange(before?.route || null, after?.route || null));
+  return details;
+}
+
+function buildChangeSummaryEntry(type, stageLetter, details){
+  const prefix = stageLetter || '';
+  if(type === 'added'){
+    const bits = [];
+    const start = details.find(d=>d.field==='start');
+    const end = details.find(d=>d.field==='end');
+    const hours = details.find(d=>d.field==='hours');
+    if(start && start.after && start.after !== '—') bits.push(`начало ${start.after}`);
+    if(end && end.after && end.after !== '—') bits.push(`окончание ${end.after}`);
+    if(hours && hours.after && hours.after !== '— ч') bits.push(`часы ${hours.after}`);
+    const reserve = details.find(d=>d.field==='useReserve' && d.after === 'вкл');
+    if(reserve) bits.push('бронь вкл');
+    return `+${prefix}${bits.length ? ` (${bits.join(', ')})` : ''}`;
+  }
+  if(type === 'removed'){
+    return `-${prefix}`;
+  }
+  const primary = [];
+  details.forEach(detail=>{
+    if(detail.field === 'start'){
+      primary.push(`начало ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'end'){
+      primary.push(`окончание ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'hours'){
+      primary.push(`часы ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'progress'){
+      primary.push(`прогресс ${detail.before} → ${detail.after}`);
+    }else if(detail.field === 'useReserve'){
+      primary.push(`бронь ${detail.before} → ${detail.after}`);
+    }else if(detail.field?.startsWith('route.')){
+      primary.push(`${detail.label.toLowerCase()} ${detail.before} → ${detail.after}`);
+    }
+  });
+  const tail = primary.length ? primary.slice(0,3).join(', ') : 'обновлено';
+  return `${prefix}: ${tail}`;
+}
+
+function finalizeOrdersSummary(ordersMap, totals, stagesSet){
+  const orders = [];
+  ordersMap.forEach(order=>{
+    const stageList = Array.from(order.stageNames.values()).sort((a,b)=>{
+      const ia = STAGE_ORDER_INDEX.has(a) ? STAGE_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
+      const ib = STAGE_ORDER_INDEX.has(b) ? STAGE_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
+      return ia-ib;
+    });
+    const letters = stageList.map(name=> STAGE_LETTER[name] || name[0] || '').join('');
+    const changes = order.changes.map(change=>({
+      type: change.type,
+      stage: change.stage,
+      stageTitle: change.stageTitle,
+      stageLetter: change.stageLetter,
+      uid: change.uid,
+      summary: change.summary,
+      details: change.details
+    }));
+    const summaryText = changes.map(ch=>ch.summary).filter(Boolean).join('; ');
+    orders.push({
+      key: order.key,
+      orderId: order.orderId,
+      display: order.display,
+      number: order.number,
+      customer: order.customer,
+      stages: stageList,
+      stageLetters: letters,
+      summary: summaryText,
+      changes
+    });
+  });
+  orders.sort((a,b)=>{
+    const locale = (Intl && Intl.Collator) ? new Intl.Collator('ru', { numeric:true, sensitivity:'base' }) : null;
+    if(locale) return locale.compare(a.display, b.display);
+    return a.display.localeCompare(b.display);
+  });
+  const stages = Array.from(stagesSet.values()).sort((a,b)=>{
+    const ia = STAGE_ORDER_INDEX.has(a) ? STAGE_ORDER_INDEX.get(a) : Number.MAX_SAFE_INTEGER;
+    const ib = STAGE_ORDER_INDEX.has(b) ? STAGE_ORDER_INDEX.get(b) : Number.MAX_SAFE_INTEGER;
+    return ia-ib;
+  });
+  return { totals, orders, stages };
+}
+
+function buildOrdersSummary(diff, stageHint){
+  if(!diff) return null;
+  const stageEntries = [];
+  if(diff.stages && typeof diff.stages === 'object'){
+    Object.entries(diff.stages).forEach(([stage, stageDiff])=>{
+      if(stageDiff && diffHasChanges(stageDiff)){
+        stageEntries.push([stage, stageDiff]);
+      }
+    });
+  }else if(diffHasChanges(diff)){
+    stageEntries.push([stageHint || 'current', diff]);
+  }
+  if(!stageEntries.length) return null;
+  const totals = { added:0, removed:0, changed:0 };
+  const ordersMap = new Map();
+  const stagesSet = new Set();
+  const ensureOrder = (orderId, fallbackKey)=>{
+    const key = orderId || fallbackKey || `uid:${Math.random().toString(16).slice(2)}`;
+    if(ordersMap.has(key)) return ordersMap.get(key);
+    const parsed = parseOrderParts(orderId || '');
+    const entry = {
+      key,
+      orderId: orderId || '',
+      number: parsed.number,
+      customer: parsed.customer,
+      display: parsed.display,
+      changes: [],
+      stageNames: new Set()
+    };
+    ordersMap.set(key, entry);
+    return entry;
+  };
+  stageEntries.forEach(([stage, stageDiff])=>{
+    const stageTitle = STAGE_TITLE[stage] || stage;
+    const stageLetter = STAGE_LETTER[stage] || stage.slice(0,1).toUpperCase();
+    stagesSet.add(stage);
+    (stageDiff.added || []).forEach(task=>{
+      if(!task) return;
+      totals.added += 1;
+      const order = ensureOrder(task.orderId, task.uid);
+      order.stageNames.add(stage);
+      const details = collectSnapshotDetails(null, task);
+      const summary = buildChangeSummaryEntry('added', stageLetter, details);
+      order.changes.push({
+        type:'added',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: task.uid,
+        summary,
+        details
+      });
+    });
+    (stageDiff.removed || []).forEach(task=>{
+      if(!task) return;
+      totals.removed += 1;
+      const order = ensureOrder(task.orderId, task.uid);
+      order.stageNames.add(stage);
+      const details = collectSnapshotDetails(task, null);
+      const summary = buildChangeSummaryEntry('removed', stageLetter, details);
+      order.changes.push({
+        type:'removed',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: task.uid,
+        summary,
+        details
+      });
+    });
+    (stageDiff.changed || []).forEach(change=>{
+      if(!change) return;
+      totals.changed += 1;
+      const order = ensureOrder(change.after?.orderId || change.before?.orderId, change.uid);
+      order.stageNames.add(stage);
+      const fields = Array.isArray(change.fields) ? change.fields : [];
+      const details = fields.flatMap(field=> describeFieldChange(field.field, field.before, field.after) || []);
+      if(!details.length){
+        details.push(...collectSnapshotDetails(change.before || null, change.after || null));
+      }
+      const summary = buildChangeSummaryEntry('changed', stageLetter, details);
+      order.changes.push({
+        type:'changed',
+        stage,
+        stageTitle,
+        stageLetter,
+        uid: change.uid,
+        summary,
+        details
+      });
+    });
+  });
+  if(!ordersMap.size) return null;
+  return finalizeOrdersSummary(ordersMap, totals, stagesSet);
+}
+
+function summarizeOrdersSummary(summary, opts={}){
+  if(!summary || !Array.isArray(summary.orders) || !summary.orders.length) return '';
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 3;
+  const lines = [];
+  for(let i=0; i<summary.orders.length && i<limit; i+=1){
+    const order = summary.orders[i];
+    const letters = order.stageLetters ? ` [${order.stageLetters}]` : '';
+    const changeText = order.summary ? `: ${order.summary}` : '';
+    lines.push(`${order.display}${letters}${changeText}`.trim());
+  }
+  if(summary.orders.length > limit){
+    lines.push(`+${summary.orders.length - limit} заказов`);
+  }
+  return lines.join('; ');
+}
+
+function summarizeDiffLike(diff, stageHint){
+  if(!diff || !diffHasChanges(diff)) return '';
+  const summary = buildOrdersSummary(diff, stageHint);
+  return summarizeOrdersSummary(summary);
+}
+
+function renderOrdersSummaryDetails(summary, opts={}){
+  if(!summary || !Array.isArray(summary.orders) || !summary.orders.length){
+    return '<div class="muted">Изменений нет</div>';
+  }
+  const parts = [];
+  if(opts.user || opts.time){
+    const who = escapeHtml(opts.user || '—');
+    const when = escapeHtml(opts.time || '');
+    parts.push(`<div class="muted small" style="margin-bottom:8px">Автор: <strong>${who}</strong>${when ? ` • ${when}` : ''}</div>`);
+  }
+  summary.orders.forEach(order=>{
+    const headerLetters = order.stageLetters ? ` <span class="muted">[${escapeHtml(order.stageLetters)}]</span>` : '';
+    parts.push(`<div class="change-group">`);
+    parts.push(`<div class="change-group-head"><span class="change-stage">${escapeHtml(order.display)}</span>${headerLetters}</div>`);
+    order.changes.forEach(change=>{
+      const typeLabel = change.type === 'added'
+        ? 'Добавлено'
+        : (change.type === 'removed' ? 'Удалено' : 'Изменено');
+      parts.push(`<div style="margin-bottom:8px">`);
+      const uidHtml = change.uid ? ` ${uidBadge(change.uid)}` : '';
+      parts.push(`<div class="small muted">${escapeHtml(typeLabel)} • ${escapeHtml(change.stageTitle)}${uidHtml}</div>`);
+      if(Array.isArray(change.details) && change.details.length){
+        const rows = change.details.map(detail=>{
+          const before = escapeHtml(detail.before ?? '—');
+          const after = escapeHtml(detail.after ?? '—');
+          return `<div class="small" style="margin-left:8px;margin-top:4px">`+
+            `<span class="muted">${escapeHtml(detail.label)}:</span> `+
+            `${before} → <strong>${after}</strong>`+
+            `</div>`;
+        }).join('');
+        parts.push(rows);
+      }else{
+        parts.push(`<div class="small" style="margin-left:8px">Подробности отсутствуют</div>`);
+      }
+      parts.push(`</div>`);
+    });
+    parts.push(`</div>`);
+  });
+  return parts.join('');
 }
 
 function escapeHtml(str){
@@ -4551,9 +4976,18 @@ function renderLogList(){
     return;
   }
   const rows = activityLog.slice().reverse().map(entry=>{
-    const stageName = STAGE_TITLE[entry.stage] || entry.stage;
+    const stageCandidates = Array.isArray(entry.ordersSummary?.stages) ? entry.ordersSummary.stages : [];
+    let stageName = STAGE_TITLE[entry.stage] || entry.stage;
+    if(stageCandidates.length > 1){
+      stageName = 'Несколько переделов';
+    }else if(stageCandidates.length === 1){
+      const singleStage = stageCandidates[0];
+      stageName = STAGE_TITLE[singleStage] || singleStage;
+    }
     const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
-    const summary = entry.summary || summarizeDiff(entry.diff || {added:[],removed:[],changed:[]});
+    const summary = entry.summary
+      || summarizeOrdersSummary(entry.ordersSummary)
+      || summarizeDiffLike(entry.diff, entry.stage);
     return `<div class="log-entry" data-log-id="${entry.id}">`
       + `<div><strong>${stageName}</strong> — ${summary}</div>`
       + `<div class="meta">${meta}</div>`
@@ -4565,9 +4999,18 @@ function renderLogList(){
   container.innerHTML = rows;
 }
 
-function showUpdateDetails(diff, opts={}){
+function showUpdateDetails(context={}){
+  const { ordersSummary=null, diff=null, authors=null, stage=null, user=null, time=null } = context || {};
   const box = $("#updateDetails");
-  if(box) box.innerHTML = diffToHtml(diff, { mode:'detail', authors: opts.authors || null, stageKey: opts.stage || null });
+  if(box){
+    if(ordersSummary && Array.isArray(ordersSummary.orders) && ordersSummary.orders.length){
+      box.innerHTML = renderOrdersSummaryDetails(ordersSummary, { user, time });
+    }else if(diff){
+      box.innerHTML = diffToHtml(diff, { mode:'detail', authors: authors || null, stageKey: stage || null });
+    }else{
+      box.innerHTML = '<div class="muted">Изменений нет</div>';
+    }
+  }
   $("#updateDetailsDlg")?.showModal();
 }
 
@@ -4628,13 +5071,36 @@ function handleIncomingSyncMessage(msg){
         setDataMode(enableLocalStore ? 'local' : 'session');
       }
     }
-    if(msg.diff){
+    const summaryText = msg.summary
+      || summarizeOrdersSummary(msg.ordersSummary)
+      || summarizeDiffLike(msg.diff, msg.stage);
+    if(summaryText){
       markLogAttention();
+      const stageCandidates = Array.isArray(msg.ordersSummary?.stages) ? msg.ordersSummary.stages : [];
+      let stageLabel = STAGE_TITLE[msg.stage] || msg.stage;
+      if(stageCandidates.length > 1){
+        stageLabel = 'Несколько переделов';
+      }else if(stageCandidates.length === 1){
+        const singleStage = stageCandidates[0];
+        stageLabel = STAGE_TITLE[singleStage] || singleStage;
+      }else if(!msg.stage || msg.stage === 'multi'){
+        stageLabel = 'Несколько переделов';
+      }
+      const who = msg.user || msg.alias || 'Пользователь';
+      const detailStage = stageCandidates.length > 1 ? null : (stageCandidates[0] || msg.stage || null);
+      const detailPayload = {
+        ordersSummary: msg.ordersSummary || null,
+        diff: msg.diff || null,
+        stage: detailStage,
+        authors: msg.authors || null,
+        user: who,
+        time: msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '')
+      };
       showToast({
-        title: `Изменения — ${STAGE_TITLE[msg.stage] || msg.stage}`,
-        message: `${msg.user || msg.alias || 'Пользователь'}: ${summarizeDiff(msg.diff)}`,
+        title: `Изменения — ${stageLabel}`,
+        message: `${who}: ${summaryText}`,
         actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(msg.diff, { stage: msg.stage, authors: msg.authors || null })},
+          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
           {label:'OK', handler:(el)=> el.remove()}
         ]
       });
@@ -4922,12 +5388,17 @@ function persistNow(stageOverride, opts={}){
       const meaningfulEntries = entriesRaw.filter(entry=> diffHasChanges(entry.diff));
       const hasChanges = meaningfulEntries.length > 0 || force || !rawPrev;
       const nowStr = new Date().toLocaleString();
-      const summaryParts = meaningfulEntries.map(entry=> `${STAGE_TITLE[entry.stage] || entry.stage}: ${summarizeDiff(entry.diff)}`);
       const combinedDiff = (multiStage.combinedDiff && typeof multiStage.combinedDiff === 'object')
         ? { ...multiStage.combinedDiff, stages: { ...(multiStage.combinedDiff.stages||{}) } }
         : { stages:{} };
       meaningfulEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
       const authorsMap = {};
+      const stageSummaryParts = [];
+
+      const combinedSummary = (multiStage.ordersSummary && typeof multiStage.ordersSummary === 'object')
+        ? multiStage.ordersSummary
+        : buildOrdersSummary(combinedDiff);
+      const combinedSummaryText = summarizeOrdersSummary(combinedSummary);
 
       const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
       meaningfulEntries.forEach(entry=>{
@@ -4936,7 +5407,11 @@ function persistNow(stageOverride, opts={}){
         const newVersion = prevVersion + 1;
         versions[stage] = newVersion;
         lastKnownVersions.set(stage, newVersion);
-        authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: summarizeDiff(entry.diff) };
+        const stageSummaryObj = buildOrdersSummary(entry.diff, stage);
+        const stageSummaryText = summarizeOrdersSummary(stageSummaryObj)
+          || summarizeDiffLike(entry.diff, stage);
+        authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: stageSummaryText };
+        stageSummaryParts.push(`${STAGE_TITLE[stage] || stage}: ${stageSummaryText}`);
       });
       stateMeta.versions = versions;
 
@@ -4963,9 +5438,10 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
-          summary: multiStage.summary || summaryParts.join('; '),
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
           diff: combinedDiff,
-          authors: authorsMap
+          authors: authorsMap,
+          ordersSummary: combinedSummary || null
         };
         activityLog.push(logEntry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -4985,6 +5461,17 @@ function persistNow(stageOverride, opts={}){
           capacity: { ...(stateMeta.settings?.capacity || {}) },
           parallel: { ...(stateMeta.settings?.parallel || {}) },
           updatedAt: stateMeta.settings?.updatedAt || ''
+        },
+        ordersSummary: combinedSummary || null,
+        lastChange: {
+          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
+          stages: Array.from(new Set(meaningfulEntries.map(entry=> entry.stage))),
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          diff: hasChanges ? combinedDiff : null,
+          user: userAlias,
+          source,
+          time: nowStr,
+          ordersSummary: combinedSummary || null
         }
       };
 
@@ -5007,7 +5494,18 @@ function persistNow(stageOverride, opts={}){
       const targetStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
 
       if(remoteSyncEnabled()){
-        remoteBridge.push(payload, { stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, session:SESSION_ID, summary: (multiStage.summary || summaryParts.join('; ')) || undefined, authors: authorsMap })
+        remoteBridge.push(payload, {
+          stage: targetStageLabel,
+          diff: combinedDiff,
+          version:null,
+          source,
+          user:userAlias,
+          session:SESSION_ID,
+          summary: (combinedSummaryText || multiStage.summary || stageSummaryParts.join('; ')) || undefined,
+          authors: authorsMap,
+          ordersSummary: combinedSummary || null,
+          time: nowStr
+        })
           .then(()=> setDataMode('remote'))
           .catch(async err=>{
             if(err?.status === 409){
@@ -5069,7 +5567,17 @@ function persistNow(stageOverride, opts={}){
       }
 
       if(hasChanges && announce){
-        announceStateUpdate({stage: targetStageLabel, diff: combinedDiff, version:null, source, user:userAlias, authors: authorsMap});
+        announceStateUpdate({
+          stage: targetStageLabel,
+          diff: combinedDiff,
+          version:null,
+          source,
+          user:userAlias,
+          authors: authorsMap,
+          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          ordersSummary: combinedSummary || null,
+          time: nowStr
+        });
       }
     }catch(e){
       console.warn('persist failed', e);
@@ -5135,6 +5643,9 @@ function persistNow(stageOverride, opts={}){
     let authorsMap = null;
     let settingsSummary = '';
     const nowStr = new Date().toLocaleString();
+    const ordersSummary = diffChanged ? buildOrdersSummary(diff, curStage) : null;
+    const changeSummaryText = summarizeOrdersSummary(ordersSummary)
+      || summarizeDiffLike(diff, curStage);
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -5163,10 +5674,7 @@ function persistNow(stageOverride, opts={}){
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
-    let changeSummary = '';
-
     if(diffChanged){
-      changeSummary = summarizeDiff(diff);
       if(source === 'csv'){
         csvFreshnessStr = nowStr;
         lastImportTime = nowStr;
@@ -5179,7 +5687,7 @@ function persistNow(stageOverride, opts={}){
       updateFreshnessUI();
 
       if(source !== 'system'){
-        const authorDetails = { name:userAlias, session:SESSION_ID, at:nowStr, summary: changeSummary };
+        const authorDetails = { name:userAlias, session:SESSION_ID, at:nowStr, summary: changeSummaryText };
         authorsMap = { [curStage]: authorDetails };
         const entry = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
@@ -5188,9 +5696,10 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
-          summary: changeSummary,
+          summary: changeSummaryText,
           diff,
-          authors: authorsMap
+          authors: authorsMap,
+          ordersSummary: ordersSummary || null
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -5235,6 +5744,17 @@ function persistNow(stageOverride, opts={}){
         capacity: { ...(stateMeta.settings?.capacity || {}) },
         parallel: { ...(stateMeta.settings?.parallel || {}) },
         updatedAt: stateMeta.settings?.updatedAt || ''
+      },
+      ordersSummary: ordersSummary || null,
+      lastChange: {
+        stage: curStage,
+        stages: [curStage],
+        summary: summaryForMeta,
+        diff: diffChanged ? diff : null,
+        user: userAlias,
+        source,
+        time: nowStr,
+        ordersSummary: diffChanged ? (ordersSummary || null) : null
       }
     };
 
@@ -5258,18 +5778,32 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     const skipRemote = uiOnly && !diffChanged && !isSettingsChange;
+    const summaryForMeta = isSettingsChange && !diffChanged ? settingsSummary : changeSummaryText;
 
     if(remoteSyncEnabled()){
       if(skipRemote){
         setDataMode('remote');
       }else{
         const remoteStage = isSettingsChange && !diffChanged ? 'settings' : curStage;
-        const remoteSummary = isSettingsChange && !diffChanged ? settingsSummary : (changeSummary || undefined);
+        const remoteSummary = summaryForMeta || undefined;
         const remoteDiff = isSettingsChange && !diffChanged ? null : diff;
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
         const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
         const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
-        remoteBridge.push(payload, { stage:remoteStage, diff:remoteDiff, version:remoteVersion, source, user:userAlias, session:SESSION_ID, summary: remoteSummary, authors: remoteAuthors, ...remoteExtras })
+        const remoteOrdersSummary = diffChanged ? (ordersSummary || null) : null;
+        remoteBridge.push(payload, {
+          stage:remoteStage,
+          diff:remoteDiff,
+          version:remoteVersion,
+          source,
+          user:userAlias,
+          session:SESSION_ID,
+          summary: remoteSummary,
+          authors: remoteAuthors,
+          ordersSummary: remoteOrdersSummary,
+          time: nowStr,
+          ...remoteExtras
+        })
           .then(()=> setDataMode('remote'))
           .catch(async err=>{
             if(err?.status === 409){
@@ -5346,7 +5880,17 @@ function persistNow(stageOverride, opts={}){
       }
       if(diffChanged){
         const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
-        announceStateUpdate({stage:curStage, diff, version:newVersion, source, user:userAlias, authors: payloadAuthors});
+        announceStateUpdate({
+          stage:curStage,
+          diff,
+          version:newVersion,
+          source,
+          user:userAlias,
+          authors: payloadAuthors,
+          summary: summaryForMeta,
+          ordersSummary: ordersSummary || null,
+          time: nowStr
+        });
       }
     }
   }catch(e){
@@ -6131,7 +6675,16 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           const id = e.target?.dataset?.logDetail;
           if(!id) return;
           const entry = activityLog.find(x=>x.id===id);
-          if(entry) showUpdateDetails(entry.diff, { stage: entry.stage, authors: entry.authors || null });
+          if(entry){
+            showUpdateDetails({
+              ordersSummary: entry.ordersSummary || null,
+              diff: entry.diff || null,
+              stage: entry.stage || null,
+              authors: entry.authors || null,
+              user: entry.user || '',
+              time: entry.time || ''
+            });
+          }
         });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
