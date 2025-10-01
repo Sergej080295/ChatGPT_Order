@@ -243,6 +243,32 @@ td[data-field="progress"]{background:#fffef3}
 .chip.green{background:#22c55e}
 .chip.amber{background:#f59e0b}
 .chip.red{background:#ef4444}
+.orders-overview-controls{display:flex;align-items:center;gap:12px;margin:12px 0 10px}
+.orders-overview-controls label{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.orders-overview-controls select{border:1px solid #cbd5e1;border-radius:6px;padding:4px 8px;font-size:12px;min-width:140px}
+#ordersOverviewTable{width:100%;border-collapse:separate;border-spacing:0}
+#ordersOverviewTable thead th{position:sticky;top:0;background:#f8fafc;border-bottom:1px solid var(--line);padding:8px;font-size:12px;text-align:left;color:#1e293b;z-index:1}
+#ordersOverviewTable tbody td{border-bottom:1px solid var(--line);padding:10px 8px;vertical-align:middle;font-size:12px}
+#ordersOverviewTable tbody tr:nth-child(even){background:#f8fafc}
+.orders-overview-empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:12px}
+.order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
+.order-eye-btn:disabled{opacity:.4;cursor:default}
+.stage-check{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:2px solid #cbd5e1;color:#22c55e;font-size:14px;font-weight:700;line-height:1}
+.stage-check[data-state="pending"]{background:#fff;color:transparent}
+.stage-check[data-state="done"]{background:#dcfce7;border-color:#16a34a;color:#16a34a}
+.stage-check[data-state="missing"]{border-color:transparent;background:none;color:transparent}
+.stage-check[data-state="pending"]::after{content:''}
+.stage-check[data-state="done"]::after{content:'✔'}
+.progress-cell{min-width:160px}
+.progress-wrap{display:flex;flex-direction:column;gap:6px}
+.progress-remaining{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted)}
+.progress-bar{position:relative;height:18px;border-radius:999px;background:#e2e8f0;overflow:hidden;font-size:11px;font-weight:600;color:#0f172a}
+.progress-bar span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
+.progress-fill{height:100%;background:#3b82f6}
+.progress-bar[data-state="done"]{background:#dcfce7;color:#14532d}
+.progress-bar[data-state="done"] .progress-fill{background:#22c55e}
+.progress-bar[data-state="empty"]{background:#f1f5f9;color:#94a3b8}
+.progress-bar[data-state="empty"] .progress-fill{background:#cbd5e1}
 .status-ok{background:var(--ok);color:var(--okText);font-weight:600;border-radius:6px}
 .status-early{background:var(--early);color:var(--earlyText);font-weight:600;border-radius:6px}
 .status-late{background:var(--late);color:var(--lateText);font-weight:600;border-radius:6px}
@@ -433,6 +459,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
+                <option value="orders">Список заказов</option>
                 <option value="draw">Технологи: подготовка в работу</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
@@ -492,6 +519,52 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
         <button id="addOrder" class="btn">Добавить</button>
       </div>
+    </div>
+
+    <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
+      <label>Фильтр:
+        <select id="ordersOverviewFilter">
+          <option value="current" selected>Текущие</option>
+          <option value="all">Все заказы</option>
+          <option value="done">Готовые</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="table-wrap" id="ordersOverviewPanel" style="display:none">
+      <table id="ordersOverviewTable">
+        <colgroup>
+          <col style="width:44px">
+          <col style="width:48px">
+          <col>
+          <col style="width:90px">
+          <col style="width:90px">
+          <col style="width:160px">
+          <col style="width:160px">
+          <col style="width:160px">
+          <col style="width:160px">
+          <col style="width:160px">
+          <col style="width:90px">
+          <col style="width:90px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>№</th>
+            <th></th>
+            <th>Заказ</th>
+            <th>Закупка</th>
+            <th>Рубка</th>
+            <th>Технологи, ч</th>
+            <th>Лазер, ч</th>
+            <th>Гибка, ч</th>
+            <th>Сварка, ч</th>
+            <th>Мехобр., ч</th>
+            <th>Упаковка</th>
+            <th>Отгрузка</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
     </div>
 
     <div class="table-wrap" id="ordersScroller">
@@ -828,8 +901,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 
 
 <!-- ОБЩИЙ МАРШРУТ ЗАКАЗОВ -->
-<div class="section-bottom">
-  <div class="card">
+  <div class="section-bottom">
+    <div class="card" id="overviewCard">
     <div class="ov-toolbar">
       <h3 style="margin:0">Общий маршрут заказов</h3>
 	  <div class="group">
@@ -1910,6 +1983,10 @@ function sortBySavedOrder(arr, stage){
   return arr;
 }
 
+const OVERVIEW_STAGE = 'orders';
+const ORDER_LIST_FILTERS = new Set(['current','all','done']);
+const ORDER_FILTER_DEFAULT = 'current';
+
 function collectActiveTasksForOverview(){
   const doneSet = new Set(doneTasks.map(d=>d && d.uid).filter(Boolean));
   const trashSet = new Set(trash.map(d=>d && d.uid).filter(Boolean));
@@ -1962,6 +2039,337 @@ function collectActiveTasksForOverview(){
   byStage.forEach((list, stage)=>{ sortBySavedOrder(list, stage); });
 
   return { list:[...byUid.values()], byStage };
+}
+
+function orderKeyForRecord(rec){
+  if(!rec) return '';
+  if(rec.parentId) return String(rec.parentId);
+  const orderId = rec.orderId ? String(rec.orderId).trim() : '';
+  return orderId ? `no-parent::${orderId}` : '';
+}
+
+function safeDateValue(val){
+  if(!val) return null;
+  if(val instanceof Date){
+    const d = new Date(val);
+    if(!Number.isNaN(d.getTime())){ d.setHours(0,0,0,0); return d; }
+    return null;
+  }
+  const parsed = new Date(val);
+  if(Number.isNaN(parsed.getTime())) return null;
+  parsed.setHours(0,0,0,0);
+  return parsed;
+}
+
+function gatherAllStageTasks(){
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    return allTasksFromState.map(cloneTaskRecord).filter(Boolean);
+  }
+  if(lastRows && lastRows.length){
+    const aggregated = [];
+    STAGES.forEach(stage=>{
+      const mapped = mapRows(lastRows, stage) || [];
+      mapped.forEach(rec=> aggregated.push(cloneTaskRecord(rec)));
+    });
+    return aggregated;
+  }
+  return tasks.map(cloneTaskRecord).filter(Boolean);
+}
+
+function formatHoursToHMS(hours){
+  const totalSeconds = Math.max(0, Math.round(Number(hours||0) * 3600));
+  const h = String(Math.floor(totalSeconds / 3600)).padStart(2,'0');
+  const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2,'0');
+  const s = String(totalSeconds % 60).padStart(2,'0');
+  return `${h}:${m}:${s}`;
+}
+
+function extractSortedStageDates(order){
+  const dates = [];
+  if(order && order.stages){
+    for(const st of STAGES){
+      const seg = order.stages[st];
+      if(!seg || !seg.start) continue;
+      const d = safeDateValue(seg.start);
+      if(d) dates.push(+d);
+    }
+  }
+  dates.sort((a,b)=>a-b);
+  return dates;
+}
+
+function compareOrdersForOverview(a,b){
+  const aDates = extractSortedStageDates(a.order);
+  const bDates = extractSortedStageDates(b.order);
+  const maxLen = Math.max(aDates.length, bDates.length);
+  for(let i=0;i<maxLen;i++){
+    const av = aDates[i];
+    const bv = bDates[i];
+    if(av == null && bv == null) continue;
+    if(av == null) return 1;
+    if(bv == null) return -1;
+    if(av !== bv) return av - bv;
+  }
+  if(aDates.length === 0 && bDates.length === 0){
+    return a.order.orderId.localeCompare(b.order.orderId);
+  }
+  if(aDates.length === 0) return 1;
+  if(bDates.length === 0) return -1;
+  return a.order.orderId.localeCompare(b.order.orderId);
+}
+
+function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
+  const mode = ORDER_LIST_FILTERS.has(filterMode) ? filterMode : ORDER_FILTER_DEFAULT;
+  const baseTasks = gatherAllStageTasks();
+  const stageTasks = new Map(); // key -> Map(stage -> [task])
+
+  const registerTask = task => {
+    if(!task || !task.stage) return;
+    const key = orderKeyForRecord(task);
+    if(!key) return;
+    if(!stageTasks.has(key)) stageTasks.set(key, new Map());
+    const byStage = stageTasks.get(key);
+    if(!byStage.has(task.stage)) byStage.set(task.stage, []);
+    byStage.get(task.stage).push(task);
+  };
+
+  baseTasks.forEach(registerTask);
+
+  const doneStageSet = new Set();
+  const doneOrderKeys = new Set();
+  const donePseudoTasks = [];
+
+  doneTasks.forEach(rec => {
+    const key = orderKeyForRecord(rec);
+    if(!key) return;
+    doneOrderKeys.add(key);
+    const stage = rec.stage || '';
+    const start = safeDateValue(rec.start);
+    const end = safeDateValue(rec.end);
+    const hours = Number(rec.hours)||0;
+    const extra = Number(rec.extra)||0;
+    const pseudo = {
+      uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
+      orderId: rec.orderId || '',
+      stage,
+      childId: rec.childId || '',
+      parentId: rec.parentId || '',
+      hours,
+      extraHours: extra,
+      startDate: start,
+      endDate: end,
+      startMissing: !start,
+      endMissing: !end,
+      state: rec.state || '',
+      status: rec.status || '',
+      useReserve:false,
+      progress:100,
+      origStartDate: start,
+      route: {}
+    };
+    if(stage){
+      pseudo.route[stage] = { hours, start, end };
+      doneStageSet.add(`${key}::${stage}`);
+    }
+    donePseudoTasks.push(pseudo);
+    registerTask(pseudo);
+  });
+
+  const combinedTasks = baseTasks.concat(donePseudoTasks);
+  const aggregatedOrders = mapOrdersFromTasks(combinedTasks);
+
+  const activeInfo = collectActiveTasksForOverview();
+  const activeKeys = new Set(activeInfo.list.map(orderKeyForRecord).filter(Boolean));
+  const trashKeys = new Set(trash.map(orderKeyForRecord).filter(Boolean));
+
+  const rows = [];
+  aggregatedOrders.forEach(order => {
+    const key = orderKeyForRecord(order);
+    if(!key || trashKeys.has(key)) return;
+    const isActive = activeKeys.has(key);
+    const isDone = doneOrderKeys.has(key) && !isActive;
+    if(mode === 'current' && !isActive) return;
+    if(mode === 'done' && !isDone) return;
+    if(mode === 'all' && !isActive && !isDone) return;
+    rows.push({ order, key, isActive, isDone });
+  });
+
+  rows.sort(compareOrdersForOverview);
+  rows.forEach((entry, idx)=>{ entry.order.number = idx+1; });
+
+  return { rows, stageTasks, doneStageSet };
+}
+
+function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
+  const key = orderEntry.key;
+  const tasks = stageTasks.get(key)?.get(stage) || [];
+  let totalHours = 0;
+  let weighted = 0;
+  let percentSum = 0;
+  let remaining = 0;
+
+  tasks.forEach(task => {
+    const base = Math.max(0, (+task.hours||0) + (+task.extraHours||0));
+    const progress = Math.max(0, Math.min(100, Number(task.progress)||0));
+    totalHours += base;
+    weighted += base;
+    percentSum += progress * base;
+    remaining += remainingTotal(task);
+  });
+
+  const seg = orderEntry.order.stages?.[stage];
+  if(totalHours <= 0 && seg && Number(seg.hours)){
+    totalHours = Number(seg.hours);
+  }
+
+  if(remaining <= 0 && !orderEntry.isDone && !doneStageSet.has(`${key}::${stage}`)){
+    if(totalHours > 0){
+      const pct = weighted > 0 ? Math.max(0, Math.min(100, percentSum / weighted)) : 0;
+      remaining = totalHours * (1 - pct/100);
+    } else {
+      remaining = 0;
+    }
+  }
+
+  let percent = weighted > 0 ? (percentSum / weighted) : 0;
+  if(orderEntry.isDone || doneStageSet.has(`${key}::${stage}`)){
+    percent = 100;
+    remaining = 0;
+  }
+
+  percent = Math.max(0, Math.min(100, percent));
+  return { totalHours, percent, remaining };
+}
+
+function buildRoutePayload(orderEntry){
+  const route = {};
+  let total = 0;
+  STAGES.forEach(stage=>{
+    const seg = orderEntry.order.stages?.[stage];
+    if(!seg) return;
+    const start = seg.start ? safeDateValue(seg.start) : null;
+    const end = seg.end ? safeDateValue(seg.end) : null;
+    const hours = Number(seg.hours)||0;
+    total += hours;
+    route[stage] = { hours, start, end };
+  });
+  return {
+    orderId: orderEntry.order.orderId,
+    hours: total,
+    extraHours: 0,
+    progress: orderEntry.isDone ? 100 : 0,
+    route,
+    origStartDate: null
+  };
+}
+
+function renderOrdersOverviewTable(){
+  if($("#process").value !== OVERVIEW_STAGE) return;
+  const filterEl = $("#ordersOverviewFilter");
+  const mode = filterEl ? filterEl.value : ORDER_FILTER_DEFAULT;
+  const { rows, stageTasks, doneStageSet } = collectOrdersForList(mode);
+  const tbody = $("#ordersOverviewTable tbody");
+  if(!tbody) return;
+
+  tbody.innerHTML = '';
+  if(!rows.length){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 12;
+    td.className = 'orders-overview-empty';
+    td.textContent = 'Нет заказов для отображения';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+
+  rows.forEach(entry => {
+    const tr = document.createElement('tr');
+    const parts = parseOrderParts(entry.order.orderId);
+
+    const indicatorState = stage => {
+      const seg = entry.order.stages?.[stage];
+      const hasStage = !!(seg && (seg.start || seg.end || Number(seg.hours)));
+      if(!hasStage) return 'missing';
+      if(entry.isDone || doneStageSet.has(`${entry.key}::${stage}`)) return 'done';
+      return 'pending';
+    };
+
+    const renderProgress = stage => {
+      const seg = entry.order.stages?.[stage];
+      const hasStage = !!(seg && (seg.start || seg.end || Number(seg.hours)));
+      const tasksPresent = (stageTasks.get(entry.key)?.get(stage) || []).length > 0;
+      if(!hasStage && !tasksPresent){
+        return '<span class="muted">—</span>';
+      }
+      const metrics = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
+      const pct = Math.round(metrics.percent);
+      const remainingText = formatHoursToHMS(metrics.remaining);
+      const totalText = metrics.totalHours > 0 ? metrics.totalHours.toFixed(1).replace('.',',') : '0,0';
+      const state = pct >= 100 ? 'done' : (metrics.totalHours <= 0 ? 'empty' : 'active');
+      const width = Math.max(0, Math.min(100, pct));
+      return `
+        <div class="progress-wrap">
+          <div class="progress-remaining">${remainingText}</div>
+          <div class="progress-bar" data-state="${state}">
+            <div class="progress-fill" style="width:${width}%"></div>
+            <span>${pct}% (${totalText}ч)</span>
+          </div>
+        </div>
+      `;
+    };
+
+    tr.innerHTML = `
+      <td>${entry.order.number}</td>
+      <td><button class="order-eye-btn" title="Маршрут заказа">👁</button></td>
+      <td>${parts.display}</td>
+      <td><span class="stage-check" data-state="${indicatorState('proc')}"></span></td>
+      <td><span class="stage-check" data-state="${indicatorState('shear')}"></span></td>
+      <td class="progress-cell">${renderProgress('draw')}</td>
+      <td class="progress-cell">${renderProgress('laser')}</td>
+      <td class="progress-cell">${renderProgress('bend')}</td>
+      <td class="progress-cell">${renderProgress('weld')}</td>
+      <td class="progress-cell">${renderProgress('mech')}</td>
+      <td><span class="stage-check" data-state="${indicatorState('pack')}"></span></td>
+      <td><span class="stage-check" data-state="${indicatorState('ship')}"></span></td>
+    `;
+
+    const eyeBtn = tr.querySelector('.order-eye-btn');
+    if(eyeBtn){
+      const payload = buildRoutePayload(entry);
+      eyeBtn.addEventListener('click', ()=> openRoute(payload));
+    }
+
+    tbody.appendChild(tr);
+  });
+}
+
+function toggleOverviewMode(enabled){
+  const scroller = document.getElementById('ordersScroller');
+  if(scroller){ scroller.style.display = enabled ? 'none' : ''; }
+  const panel = document.getElementById('ordersOverviewPanel');
+  if(panel){ panel.style.display = enabled ? '' : 'none'; }
+  const controls = document.getElementById('ordersOverviewControls');
+  if(controls){ controls.style.display = enabled ? '' : 'none'; }
+
+  const hideIds = ['detail7','overdueCard','ganttCard','overviewCard'];
+  hideIds.forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(enabled){
+      if(el.dataset.prevDisplay === undefined){
+        el.dataset.prevDisplay = el.style.display || '';
+      }
+      el.style.display = 'none';
+    } else {
+      if(el.dataset.prevDisplay !== undefined){
+        el.style.display = el.dataset.prevDisplay;
+        delete el.dataset.prevDisplay;
+      } else {
+        el.style.display = '';
+      }
+    }
+  });
 }
 
 function buildOverviewOrderRanks(byStage){
@@ -2042,15 +2450,32 @@ const STAGE_CLASS = {
 
 // Переключение UI под безчасовые этапы
 function adjustUIForProcess(p){
+  if(p === OVERVIEW_STAGE){
+    toggleOverviewMode(true);
+    const tbl = document.getElementById('tasksTable');
+    if(tbl) tbl.setAttribute('data-nohours', '0');
+    const reserveBtn = document.getElementById('reserveBtn');
+    if(reserveBtn) reserveBtn.style.display = 'none';
+    const exceptionsBtn = document.getElementById('exceptionsBtn');
+    if(exceptionsBtn) exceptionsBtn.style.display = 'none';
+    const detail = document.getElementById('detail7');
+    if(detail) detail.style.display = 'none';
+    return;
+  }
+
+  toggleOverviewMode(false);
   const noHours = NOHOUR_STAGES.has(p);
   // показать/скрыть столбцы часов
   const tbl = document.getElementById('tasksTable');
   if(tbl) tbl.setAttribute('data-nohours', noHours ? '1' : '0');
 
   // Бронь/Исключения/«Подетально»
-  document.getElementById('reserveBtn').style.display    = noHours ? 'none' : '';
-  document.getElementById('exceptionsBtn').style.display = noHours ? 'none' : '';
-  document.getElementById('detail7').style.display       = noHours ? 'none' : '';
+  const reserveBtn = document.getElementById('reserveBtn');
+  if(reserveBtn) reserveBtn.style.display = noHours ? 'none' : '';
+  const exceptionsBtn = document.getElementById('exceptionsBtn');
+  if(exceptionsBtn) exceptionsBtn.style.display = noHours ? 'none' : '';
+  const detail = document.getElementById('detail7');
+  if(detail) detail.style.display = noHours ? 'none' : '';
 }
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
@@ -6725,8 +7150,14 @@ function recompute(){
   // актуальная вместимость для передела
   const proc=$("#process").value;
   adjustUIForProcess(proc);
-  
-  $("#procTitle").textContent = 
+
+  if(proc === OVERVIEW_STAGE){
+    $("#procTitle").textContent = 'Список заказов';
+    renderOrdersOverviewTable();
+    return;
+  }
+
+  $("#procTitle").textContent =
     proc==='bend' ? 'Гибка' :
     proc==='laser' ? 'Лазер' :
     proc==='draw' ? 'Технологи: подготовка в работу' :
@@ -6833,6 +7264,15 @@ function switchProcess(newProc){
     if(userCanEdit()) persistNow(prev);
   }
 
+  if(newProc === OVERVIEW_STAGE){
+    currentProc = newProc;
+    const filterEl = $("#ordersOverviewFilter");
+    if(filterEl) filterEl.value = ORDER_FILTER_DEFAULT;
+    adjustUIForProcess(newProc);
+    renderOrdersOverviewTable();
+    return;
+  }
+
   // пытаемся загрузить задачи ИЗ localStorage для newProc
   const saved = loadStageFromLS(newProc);
   if(saved && saved.length){
@@ -6880,7 +7320,9 @@ function switchProcess(newProc){
 function syncProcessFS(){
   const p = $("#process").value;
   const fs = $("#processFS");
-  if(fs) fs.value = p;
+  if(!fs) return;
+  const hasOption = Array.from(fs.options || []).some(opt => opt.value === p);
+  if(hasOption) fs.value = p;
 }
 
 $("#process").addEventListener('change', e=>{
@@ -6942,6 +7384,11 @@ function wireHandlers(){
     storageRemote.addEventListener('change', e=>{
       applyStoragePrefs({ remote: !!e.target.checked });
     });
+  }
+
+  const overviewFilter = $("#ordersOverviewFilter");
+  if(overviewFilter){
+    overviewFilter.addEventListener('change', ()=> renderOrdersOverviewTable());
   }
 
   $$('input[name="accessMode"]').forEach(radio=>{
