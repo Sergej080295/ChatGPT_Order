@@ -1862,6 +1862,27 @@ function sortBySavedOrder(arr, stage){
 function collectActiveTasksForOverview(){
   const doneSet = new Set(doneTasks.map(d=>d && d.uid).filter(Boolean));
   const trashSet = new Set(trash.map(d=>d && d.uid).filter(Boolean));
+
+  const doneParentKeys = new Set();
+  const trashParentKeys = new Set();
+
+  const recordParentKey = rec => {
+    if(!rec) return '';
+    if(rec.parentId) return rec.parentId;
+    const orderId = rec.orderId ? String(rec.orderId).trim() : '';
+    return orderId ? `no-parent::${orderId}` : '';
+  };
+
+  doneTasks.forEach(rec => {
+    const key = recordParentKey(rec);
+    if(key) doneParentKeys.add(key);
+  });
+  trash.forEach(rec => {
+    const key = recordParentKey(rec);
+    if(key) trashParentKeys.add(key);
+  });
+
+  const shouldSkipOrder = key => key && (doneParentKeys.has(key) || trashParentKeys.has(key));
   const byUid = new Map();
 
   const pushTask = (source)=>{
@@ -1870,6 +1891,8 @@ function collectActiveTasksForOverview(){
     clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
     clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
     if(clone.isDone || clone.isTrash) return;
+    const orderKey = clone.parentId || (clone.orderId ? `no-parent::${clone.orderId}` : '');
+    if(shouldSkipOrder(orderKey)) return;
     byUid.set(clone.uid, clone);
   };
 
