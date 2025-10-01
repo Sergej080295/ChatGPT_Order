@@ -5746,6 +5746,8 @@ function persistNow(stageOverride, opts={}){
       markLogAttention();
     }
 
+    const summaryForMeta = isSettingsChange && !diffChanged ? settingsSummary : changeSummaryText;
+
     stateObj.meta = {
       versions: { ...versions },
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
@@ -5790,7 +5792,6 @@ function persistNow(stageOverride, opts={}){
     mergeStageIntoAll(curStage, tasks);
 
     const skipRemote = uiOnly && !diffChanged && !isSettingsChange;
-    const summaryForMeta = isSettingsChange && !diffChanged ? settingsSummary : changeSummaryText;
 
     if(remoteSyncEnabled()){
       if(skipRemote){
