@@ -488,7 +488,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <h3>Список заказов</h3>
       <div class="row">
         <button id="showDone" class="btn ghost">Готовые</button>
-		<button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="showExcluded" class="btn ghost">Не учтённые</button>
         <button id="addOrder" class="btn">Добавить</button>
       </div>
     </div>
@@ -654,6 +655,10 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
     <label class="small"><input type="checkbox" id="lockNewOrders"> Все новые заказы создавать с замком и ставить в конец списка</label>
     <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
+    <div class="row" style="gap:8px;align-items:center">
+      <button id="ignoredStatesBtn" class="btn small ghost" type="button">Исключить состояния…</button>
+      <span id="ignoredStatesSummary" class="small muted">Все состояния учитываются</span>
+    </div>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
     <div class="muted small">Системные параметры:</div>
@@ -672,6 +677,19 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:12px">
     <button id="settingsClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="ignoredStatesDlg">
+  <h3 style="margin:0 0 6px">Не учитывать состояния</h3>
+  <p class="muted small" style="margin:0 0 8px">Укажите статусы из поля «Состояние», которые следует исключить из планирования и отчетов.</p>
+  <div id="ignoredStatesList" class="small" style="max-height:220px;overflow:auto;border:1px solid #e2e8f0;border-radius:6px;padding:6px"></div>
+  <div class="row" style="margin-top:10px;gap:8px">
+    <input id="ignoredStateInput" type="text" class="small" placeholder="Например: Отгружено" style="flex:1;min-width:200px">
+    <button id="ignoredStateAdd" class="btn primary" type="button">Добавить</button>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:12px">
+    <button id="ignoredStatesClose" class="btn" type="button">Готово</button>
   </div>
 </dialog>
 
@@ -733,6 +751,26 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="row" style="justify-content:flex-end;margin-top:10px">
     <button id="trashClear" class="btn attn">Очистить корзину</button>
     <button id="trashClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="excludedDlg">
+  <h3 style="margin:0 0 6px">Не учтённые заказы</h3>
+  <div class="table-wrap" style="max-height:55vh">
+    <table id="excludedTable" style="table-layout:auto">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Номер</th>
+          <th>Заказчик</th>
+          <th>Состояние</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="excludedClose" class="btn" type="button">Закрыть</button>
   </div>
 </dialog>
 
@@ -940,7 +978,8 @@ function cloneTaskRecord(task){
     isNew: !!task.isNew,
     isDone: !!task.isDone,
     isTrash: !!task.isTrash,
-    locked: !!task.locked || lockedUids.has(task.uid)
+    locked: !!task.locked || lockedUids.has(task.uid),
+    hiddenByState: !!task.hiddenByState
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1820,6 +1859,8 @@ let shiftOnProgress=true;
 let autoOptimizeOn = true;
 let lockNewOrders = false;
 let lockNewOrdersCsv = false;
+let ignoredStates = [];
+let ignoredStateSet = new Set();
 let csvFreshnessStr='—';
 let manualFreshnessStr='—';
 let lastRows=null;           // сырые строки последнего импорта
@@ -1896,6 +1937,7 @@ function collectActiveTasksForOverview(){
 
   const pushTask = (source)=>{
     if(!source || !source.uid || !source.stage) return;
+    if(source.hiddenByState) return;
     const clone = cloneTaskRecord(source);
     clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
     clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
@@ -2060,6 +2102,187 @@ function fitSliceText(el, label, hours, pct){
 }
 
 /* =========
+   Исключение состояний
+========= */
+function normalizeStateName(value){
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function applyIgnoredStateToTask(task){
+  if(!task) return false;
+  const normalized = normalizeStateName(task.state);
+  const hidden = normalized && ignoredStateSet.has(normalized);
+  task.hiddenByState = hidden;
+  return hidden;
+}
+
+function refreshIgnoredStateFlags(){
+  const mark = task => applyIgnoredStateToTask(task);
+  tasks.forEach(mark);
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(mark);
+  }
+  updateExcludedAttention();
+  if(document.getElementById('excludedDlg')?.open){
+    renderExcludedList();
+  }
+}
+
+function updateIgnoredStatesSummary(){
+  const summary = document.getElementById('ignoredStatesSummary');
+  if(!summary) return;
+  if(!ignoredStates.length){
+    summary.textContent = 'Все состояния учитываются';
+    return;
+  }
+  if(ignoredStates.length <= 3){
+    summary.textContent = `Не учитывать: ${ignoredStates.join(', ')}`;
+    return;
+  }
+  summary.textContent = `Не учитывать ${ignoredStates.length} состояний`;
+}
+
+function updateExcludedAttention(){
+  const btn = document.getElementById('showExcluded');
+  if(!btn) return;
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  const count = tasks.filter(t=> t && (!currentStage || t.stage === currentStage) && t.hiddenByState).length;
+  btn.classList.toggle('attn', count > 0);
+}
+
+function setIgnoredStates(list, opts={}){
+  const source = Array.isArray(list) ? list : [];
+  const next = [];
+  const normalized = new Set();
+  source.forEach(item=>{
+    const raw = typeof item === 'string' ? item.trim() : String(item ?? '').trim();
+    if(!raw) return;
+    const norm = normalizeStateName(raw);
+    if(!norm || normalized.has(norm)) return;
+    normalized.add(norm);
+    next.push(raw);
+  });
+  const changed = next.length !== ignoredStates.length || next.some((value, idx)=> value !== ignoredStates[idx]);
+  ignoredStates = next;
+  ignoredStateSet = normalized;
+  if(opts.updateTasks !== false){
+    refreshIgnoredStateFlags();
+  }else{
+    updateExcludedAttention();
+  }
+  updateIgnoredStatesSummary();
+  const excludedDlg = document.getElementById('excludedDlg');
+  if(excludedDlg?.open){
+    renderExcludedList();
+  }
+  const editorDlg = document.getElementById('ignoredStatesDlg');
+  if(editorDlg?.open){
+    renderIgnoredStatesDialog();
+  }
+  if(changed && opts.persist !== false){
+    persistMaybe('ui');
+  }
+  if(changed && opts.rerender !== false){
+    recompute();
+  }
+}
+
+function collectExcludedForStage(stage){
+  const key = stage || document.getElementById('process')?.value || currentProc || '';
+  return tasks.filter(task=> task && task.stage === key && task.hiddenByState);
+}
+
+function renderIgnoredStatesDialog(){
+  const listEl = document.getElementById('ignoredStatesList');
+  if(!listEl) return;
+  listEl.innerHTML = '';
+  if(!ignoredStates.length){
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'Список пуст. Добавьте состояние в поле ниже.';
+    listEl.appendChild(empty);
+    return;
+  }
+  ignoredStates.forEach((state, idx)=>{
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.cssText = 'justify-content:space-between;align-items:center;padding:4px 0;gap:8px';
+    const label = document.createElement('span');
+    label.textContent = state;
+    label.style.flex = '1';
+    const remove = document.createElement('button');
+    remove.className = 'btn small ghost';
+    remove.type = 'button';
+    remove.dataset.remove = String(idx);
+    remove.textContent = 'Убрать';
+    remove.addEventListener('click', ()=>{
+      const next = ignoredStates.slice();
+      next.splice(idx,1);
+      setIgnoredStates(next);
+    });
+    row.appendChild(label);
+    row.appendChild(remove);
+    listEl.appendChild(row);
+  });
+}
+
+function addIgnoredStateFromInput(){
+  const input = document.getElementById('ignoredStateInput');
+  if(!input) return;
+  const value = input.value.trim();
+  if(!value) return;
+  setIgnoredStates(ignoredStates.concat([value]));
+  input.value = '';
+  input.focus();
+}
+
+function openIgnoredStatesDialog(){
+  const dlg = document.getElementById('ignoredStatesDlg');
+  if(!dlg) return;
+  renderIgnoredStatesDialog();
+  dlg.showModal();
+  const input = document.getElementById('ignoredStateInput');
+  if(input){
+    input.value = '';
+    input.focus();
+  }
+}
+
+function renderExcludedList(){
+  const tbody = document.querySelector('#excludedTable tbody');
+  if(!tbody) return;
+  tbody.innerHTML = '';
+  const stage = document.getElementById('process')?.value || currentProc || '';
+  const list = collectExcludedForStage(stage);
+  if(!list.length){
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.className = 'muted';
+    td.textContent = 'Список пуст.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  list.forEach((task, idx)=>{
+    const parts = parseOrderParts(task.orderId || '');
+    const tr = document.createElement('tr');
+    const cells = [
+      String(idx + 1),
+      parts.number || parts.display || task.orderId || '—',
+      parts.customer || '',
+      task.state || '—'
+    ];
+    cells.forEach(text=>{
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+/* =========
    CSV
 ========= */
 async function readTextSmart(file){
@@ -2172,20 +2395,21 @@ function mapRows(rows, process='bend'){
       const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:Math.max(0.25,(isFinite(hours)?hours:0)*0.05),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
 
 	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
-	  if(rec.parentId){
-	    const ovr = routeOverrides.get(`${rec.parentId}::${process}`);
-	    if(ovr){
-	  	  if(ovr.start){ rec.startDate = new Date(ovr.start); rec.startMissing=false; }
-		  if('end' in ovr){ rec.endDate = ovr.end ? new Date(ovr.end) : null; rec.endMissing = !ovr.end; }
-		  if(rec.route && rec.route[process]){
-		    if(ovr.start) rec.route[process].start = new Date(ovr.start);
-		    if('end' in ovr) rec.route[process].end = ovr.end ? new Date(ovr.end) : null;
-		  }
-	    }
-	  }
+          if(rec.parentId){
+            const ovr = routeOverrides.get(`${rec.parentId}::${process}`);
+            if(ovr){
+                  if(ovr.start){ rec.startDate = new Date(ovr.start); rec.startMissing=false; }
+                  if('end' in ovr){ rec.endDate = ovr.end ? new Date(ovr.end) : null; rec.endMissing = !ovr.end; }
+                  if(rec.route && rec.route[process]){
+                    if(ovr.start) rec.route[process].start = new Date(ovr.start);
+                    if('end' in ovr) rec.route[process].end = ovr.end ? new Date(ovr.end) : null;
+                  }
+            }
+          }
 
-	  
-	  rec.startDate.setHours(0,0,0,0);
+
+          rec.startDate.setHours(0,0,0,0);
+          applyIgnoredStateToTask(rec);
       return rec;
     }).filter(Boolean);
   }
@@ -2294,6 +2518,7 @@ function mapRows(rows, process='bend'){
       route
     };
     rec.startDate.setHours(0,0,0,0);
+    applyIgnoredStateToTask(rec);
     out.push(rec);
   }
   return out;
@@ -2421,8 +2646,11 @@ function sortTasksByStart(){
 
 function optimizeQueue(){
   if(!tasks.length) return;
-  const lockedPositions = []; tasks.forEach((t,i)=>{ if(lockedUids.has(t.uid)) lockedPositions.push({pos:i, task:t}); });
-  const freeTasks = tasks.filter(t=>!lockedUids.has(t.uid));
+  const lockedPositions = [];
+  tasks.forEach((t,i)=>{
+    if(lockedUids.has(t.uid) || t.hiddenByState) lockedPositions.push({pos:i, task:t});
+  });
+  const freeTasks = tasks.filter(t=> !lockedUids.has(t.uid) && !t.hiddenByState);
   freeTasks.sort((a,b)=>{
     const ea=a.endDate?+a.endDate:Infinity, eb=b.endDate?+b.endDate:Infinity;
     if(ea!==eb) return ea-eb;
@@ -2479,7 +2707,7 @@ function applyEditImmediate(cell, task){
   
   
   else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null}; }
-  else if(field==='state'){ task.state = val; }
+  else if(field==='state'){ task.state = val; applyIgnoredStateToTask(task); }
   else if(field==='progress'){
     const p=parseHours(val);
     const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
@@ -2502,7 +2730,8 @@ function applyEditImmediate(cell, task){
 function renderTasksTable(){
   const tb=$("#tasksTable tbody"); tb.innerHTML='';
   const canEdit = userCanEdit();
-  tasks.forEach((t,i)=>{
+  const visibleTasks = tasks.map((task, index)=>({ task, index })).filter(entry=> !entry.task.hiddenByState);
+  visibleTasks.forEach(({ task: t, index: i }, visibleIndex)=>{
     const st=statusForTask(t);
     const rest = Math.max(0, remainingTotal(t));
     const tr=document.createElement('tr');
@@ -2511,7 +2740,7 @@ function renderTasksTable(){
     const useRes   = t.useReserve ? 'checked' : '';
 
     tr.innerHTML=`
-      <td>${i+1}</td>
+      <td>${visibleIndex+1}</td>
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
       <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
       <td class="eye" title="Маршрут заказа">👁</td>
@@ -2655,9 +2884,9 @@ function renderTasksTable(){
   });
 
   // ИТОГИ
-  const sHours = tasks.reduce((s,x)=>s+(+x.hours||0),0);
-  const sExtra = tasks.reduce((s,x)=>s+(+x.extraHours||0),0);
-  const sRest  = tasks.reduce((s,x)=>s+Math.max(0, remainingTotal(x)),0);
+  const sHours = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
+  const sExtra = visibleTasks.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
+  const sRest  = visibleTasks.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
   $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
@@ -2721,9 +2950,10 @@ function renderDetail(){
 
   const totalDays=daysBetween(schedule.minD,schedule.maxD)+1;
   const days=[...Array(totalDays)].map((_,i)=>addDays(schedule.minD,i));
-  const totalBy=new Map(tasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
+  const stageTasks = tasks.filter(t=> !t.hiddenByState);
+  const totalBy=new Map(stageTasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
   const cumBy=new Map([...totalBy.keys()].map(k=>[k,0]));
-  const labelByUid = new Map(tasks.map(t=>[t.uid,t.orderId]));
+  const labelByUid = new Map(stageTasks.map(t=>[t.uid,t.orderId]));
 
   // есть ли вообще Бронь
   let anyReserve = false;
@@ -2809,6 +3039,7 @@ function renderOverdue(){
   const box=$("#overDays"); if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
   const items=[];
   for(const t of tasks){
+    if(t.hiddenByState) continue;
     const rec=schedule.perTask.get(t.uid);
     if(!rec||!t.endDate) continue;
     let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); }
@@ -2876,6 +3107,7 @@ function renderGantt(intoFS=false){
   });
 
   tasks.forEach(t=>{
+    if(t.hiddenByState) return;
     const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=t.orderId;
     cards.leftBody.appendChild(lab);
 
@@ -3529,7 +3761,7 @@ function renderDoneList(){
           const route = {laser:null,bend:null,draw:null,weld:null,mech:null};
           route[stage] = { hours: (+d.hours||0), start, end };
 
-          tasks.push({
+          const restored = {
             uid: d.uid || ('restored::'+Date.now()),
             orderId: d.orderId,
             stage,
@@ -3548,7 +3780,9 @@ function renderDoneList(){
             origStartDate: start,
             route,
             isNew: true
-          });
+          };
+          applyIgnoredStateToTask(restored);
+          tasks.push(restored);
 
           if(typeof sortTasksByStart==='function') sortTasksByStart();
 
@@ -3633,7 +3867,7 @@ function renderTrashList(){
         const route = {laser:null,bend:null,draw:null,weld:null,mech:null,proc:null,shear:null,pack:null,ship:null};
         route[stage] = { hours: (+rec.hours||0), start, end };
 
-        tasks.push({
+        const restored = {
           uid: rec.uid || ('restored-trash::'+Date.now()),
           orderId: rec.orderId,
           stage, childId, parentId,
@@ -3643,7 +3877,9 @@ function renderTrashList(){
           startMissing: !rec.start, endMissing: !rec.end,
           state: '', status: '', useReserve:false, progress:0,
           origStartDate: start, route, isNew:true
-        });
+        };
+        applyIgnoredStateToTask(restored);
+        tasks.push(restored);
 
         if(typeof sortTasksByStart==='function') sortTasksByStart();
 
@@ -4251,6 +4487,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
         target.status = to.status || target.status;
         target.orderId = to.orderId || target.orderId;
         target.route = to.route || target.route;
+        applyIgnoredStateToTask(target);
         if(!target.origStartDate) target.origStartDate = target.startDate;
         target.isNew = true;
         if(stage === curStage){
@@ -4270,6 +4507,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
             lockedUids.add(clone.uid);
           }
         }
+        applyIgnoredStateToTask(clone);
         stageTasks.push(clone);
         if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
       });
@@ -5359,31 +5597,35 @@ function restoreState(json, opts={}){
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     const lockedSet = new Set(s.locked || []);
-    const tAll = (s.t||[]).map(x=>({
-      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-      hours:x.hours, extraHours:x.extraHours,
-      startDate: x.startDate? new Date(x.startDate): today0(),
-      endDate: x.endDate? new Date(x.endDate): null,
-      startMissing: !!x.startMissing,
-      endMissing: !!x.endMissing,
-      state: x.state||'',
-      status: x.status||'',
-      useReserve: !!x.useReserve,
-      progress: x.progress||0,
-      origStartDate: x.origStartDate?new Date(x.origStartDate):null,
-      route:{
-        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
-        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
-        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
-        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
-        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
-        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
-        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
-        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
-        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
-      },
-      locked: lockedSet.has(x.uid) || !!x.locked
-    }));
+    const tAll = (s.t||[]).map(x=>{
+      const rec = {
+        uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+        hours:x.hours, extraHours:x.extraHours,
+        startDate: x.startDate? new Date(x.startDate): today0(),
+        endDate: x.endDate? new Date(x.endDate): null,
+        startMissing: !!x.startMissing,
+        endMissing: !!x.endMissing,
+        state: x.state||'',
+        status: x.status||'',
+        useReserve: !!x.useReserve,
+        progress: x.progress||0,
+        origStartDate: x.origStartDate?new Date(x.origStartDate):null,
+        route:{
+          laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
+          bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
+          draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
+          weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
+          mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
+          proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
+          shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
+          pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
+          ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
+        },
+        locked: lockedSet.has(x.uid) || !!x.locked
+      };
+      applyIgnoredStateToTask(rec);
+      return rec;
+    });
 
     allTasksFromState = tAll.slice();
     const desiredProcess = preserveProcess ? ($("#process")?.value || s.process || 'bend') : (s.process || $("#process")?.value || 'bend');
@@ -6355,7 +6597,8 @@ function saveUiPreferences(){
       autoOptimizeOn: !!autoOptimizeOn,
       showIds: document.body ? document.body.classList.contains('show-ids') : false,
       lockNewOrders: !!lockNewOrders,
-      lockNewOrdersCsv: !!lockNewOrdersCsv
+      lockNewOrdersCsv: !!lockNewOrdersCsv,
+      ignoredStates: ignoredStates.slice()
     };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
@@ -6388,6 +6631,12 @@ function applyUiPreferences(prefs={}){
   }
   if(typeof prefs.lockNewOrdersCsv === 'boolean'){
     lockNewOrdersCsv = prefs.lockNewOrdersCsv;
+  }
+  if(Array.isArray(prefs.ignoredStates)){
+    setIgnoredStates(prefs.ignoredStates, { persist:false, rerender:false, updateTasks:false });
+  } else {
+    updateIgnoredStatesSummary();
+    updateExcludedAttention();
   }
   const autosaveEl = $("#autosave");
   if(autosaveEl) autosaveEl.checked = !!autosaveOn;
@@ -6435,8 +6684,9 @@ function markLogAttention(){ $("#logBtn")?.classList.add('attn'); }
 function clearLogAttention(){ $("#logBtn")?.classList.remove('attn'); }
 
 function recompute(){
-	tasks.forEach(t=>{
-	  // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
+  refreshIgnoredStateFlags();
+        tasks.forEach(t=>{
+          // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
 	  // Это сохраняет дату начала, которую ты только что установил (в т.ч. "сегодня").
 	  if(t.endDate && t.startDate && t.endDate < t.startDate){
 		t.endDate = new Date(t.startDate);
@@ -6475,10 +6725,11 @@ if (noHours) {
 }
 
 // подготовим задачи для аллокатора
-let allocTasks = tasks;
+const visibleTasks = tasks.filter(t=> !t.hiddenByState);
+let allocTasks = visibleTasks;
 if (noHours) {
   // вес = количество календарных дней в интервале, чтобы полоса заполняла весь диапазон
-  allocTasks = tasks.map(t => {
+  allocTasks = visibleTasks.map(t => {
     const s = t.startDate || today0();
     const e = t.endDate || t.startDate || today0();
     const days = Math.max(1, Math.round((e - s) / 86400000) + 1);
@@ -6595,6 +6846,9 @@ function switchProcess(newProc){
     recompute();
     rememberStageOrder(newProc);
   }
+  if(document.getElementById('excludedDlg')?.open){
+    renderExcludedList();
+  }
   lastSyncedSnapshots.set(newProc, captureSnapshotFromTasks(newProc, tasks, lockedUids));
 }
 
@@ -6625,6 +6879,28 @@ function wireHandlers(){
     localStorage.setItem(USER_ALIAS_KEY, userAlias);
     e.target.value = userAlias;
   });
+
+  const ignoredBtn = document.getElementById('ignoredStatesBtn');
+  if(ignoredBtn){
+    ignoredBtn.addEventListener('click', openIgnoredStatesDialog);
+  }
+  const ignoredAdd = document.getElementById('ignoredStateAdd');
+  if(ignoredAdd){
+    ignoredAdd.addEventListener('click', addIgnoredStateFromInput);
+  }
+  const ignoredInput = document.getElementById('ignoredStateInput');
+  if(ignoredInput){
+    ignoredInput.addEventListener('keydown', e=>{
+      if(e.key === 'Enter'){
+        e.preventDefault();
+        addIgnoredStateFromInput();
+      }
+    });
+  }
+  const ignoredClose = document.getElementById('ignoredStatesClose');
+  if(ignoredClose){
+    ignoredClose.addEventListener('click', ()=> document.getElementById('ignoredStatesDlg')?.close());
+  }
 
   const storageLocal = $("#storageLocal");
   if(storageLocal){
@@ -6709,13 +6985,19 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   document.getElementById('showTrash')?.addEventListener('click', ()=>{
     renderTrashList();
   });
+  document.getElementById('showExcluded')?.addEventListener('click', ()=>{
+    renderExcludedList();
+    document.getElementById('excludedDlg')?.showModal();
+  });
   $("#doneClose").addEventListener('click', ()=>$("#doneDlg").close());
+  document.getElementById('excludedClose')?.addEventListener('click', ()=> document.getElementById('excludedDlg')?.close());
 
   // добавить ручной заказ
   $("#addOrder").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
     const uid='user-'+Date.now()+'::'+$("#process").value;
     const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
+    applyIgnoredStateToTask(t);
     tasks.push(t);
     if(lockNewOrders){
       lockedUids.add(uid);
@@ -6874,7 +7156,11 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
           // добавленные в импорте — добавим обратно, если пользователь НЕ отметил их удалять
           prev.added.forEach(n=>{
             if(keep.has(n.uid) && keep.get(n.uid)==='add') return; // пользователь хочет удалить — уже удалено restoreState-ом
-            if(!byId.has(n.uid)){ tasks.push(n); byId.set(n.uid, tasks.length-1); }
+            if(!byId.has(n.uid)){
+              applyIgnoredStateToTask(n);
+              tasks.push(n);
+              byId.set(n.uid, tasks.length-1);
+            }
           });
           // удалённые в импорте — удалим снова, если пользователь НЕ отметил возвращать
           prev.removed.forEach(r=>{
@@ -6895,6 +7181,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
               t.status=to.status||t.status;
               t.orderId=to.orderId||t.orderId;
               t.route=to.route||t.route;
+              applyIgnoredStateToTask(t);
             }
           });
           // toDone — опять увести в архив, если пользователь не отметил «вернуть»
