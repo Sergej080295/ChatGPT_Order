@@ -455,9 +455,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
       <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
-      <label class="small session-label">Имя сеанса:
-        <input id="userAlias" type="text" maxlength="48" placeholder="User">
-      </label>
       <button id="saveBtn" class="btn small">Сохранить</button>
       <button id="logBtn" class="btn small ghost">Журнал</button>
       <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
@@ -641,6 +638,9 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 <dialog id="settingsDlg">
   <h3 style="margin-top:0">Настройки</h3>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:8px">
+    <label class="small session-label">Имя пользователя:
+      <input id="userAlias" type="text" maxlength="48" placeholder="User">
+    </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
   </div>
@@ -1501,9 +1501,19 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
   if(payload){
-    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote'});
+    const skip = skipRealtimeToastOnce;
+    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
+    if(skipRealtimeToastOnce){
+      skipRealtimeToastOnce = false;
+    }
   }else{
-    fetchLatestFromRemote({preserveProcess:true, origin:'remote'});
+    const skip = skipRealtimeToastOnce;
+    fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
+      .then(applied=>{
+        if(applied && skipRealtimeToastOnce){
+          skipRealtimeToastOnce = false;
+        }
+      });
   }
 }
 
@@ -1549,13 +1559,19 @@ function readLocalSnapshot(){
 }
 
 async function fetchLatestFromRemote(opts={}){
-  if(!remoteSyncEnabled()) return;
+  if(!remoteSyncEnabled()) return false;
   try{
     const raw = await remoteBridge.pull();
     if(raw){
-      applyStateFromExternal(raw, { ...opts, origin:'remote' });
+      const params = { ...opts };
+      if(!params.origin){
+        params.origin = 'remote';
+      }
+      applyStateFromExternal(raw, params);
+      return true;
     }
   }catch(err){ console.warn('fetchLatestFromRemote failed', err); }
+  return false;
 }
 
 function startRemotePolling(){
@@ -1748,6 +1764,7 @@ let suppressIncoming = false;
 let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
+let skipRealtimeToastOnce = true;
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
 enableLocalStore = storagePref.local;
@@ -5531,6 +5548,10 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
         const settingsBtn = $('#settingsBtn');
         if(settingsBtn){
           settingsBtn.addEventListener('click', ()=>{
+            const aliasInput = $('#userAlias');
+            if(aliasInput){
+              aliasInput.value = userAlias;
+            }
             const shiftBox = $('#shiftOnProgress');
             if(shiftBox) shiftBox.checked = shiftOnProgress;
             const autoBox = $('#autoOptimize');
