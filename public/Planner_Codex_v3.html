@@ -652,6 +652,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+    <label class="small"><input type="checkbox" id="lockNewOrders"> Все новые заказы создавать с замком и ставить в конец списка</label>
+    <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
   </div>
   <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
     <div class="muted small">Системные параметры:</div>
@@ -937,7 +939,8 @@ function cloneTaskRecord(task){
     isUserNew: !!task.isUserNew,
     isNew: !!task.isNew,
     isDone: !!task.isDone,
-    isTrash: !!task.isTrash
+    isTrash: !!task.isTrash,
+    locked: !!task.locked || lockedUids.has(task.uid)
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1378,11 +1381,14 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#lockNewOrders','#lockNewOrdersCsv'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
       if('disabled' in el) el.disabled = !canEdit;
+      if(el.id === 'lockNewOrders' || el.id === 'lockNewOrdersCsv'){
+        el.dataset.accessDisabled = !canEdit ? '1' : '0';
+      }
     }
   });
   ['#file','#stateFile'].forEach(sel=>{
@@ -1403,6 +1409,7 @@ function applyAccessMode(){
   $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
   refreshSystemSettingsAccess();
+  refreshNewOrderPrefUI();
 }
 
 function setAccessMode(mode, opts={}){
@@ -1811,6 +1818,8 @@ let lockedUids=new Set();    // замки на позициях (по uid)
 let autosaveOn=true;
 let shiftOnProgress=true;
 let autoOptimizeOn = true;
+let lockNewOrders = false;
+let lockNewOrdersCsv = false;
 let csvFreshnessStr='—';
 let manualFreshnessStr='—';
 let lastRows=null;           // сырые строки последнего импорта
@@ -2530,6 +2539,7 @@ function renderTasksTable(){
           if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
           e.currentTarget.dataset.locked = lockedUids.has(t.uid);
           e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
+          t.locked = lockedUids.has(t.uid);
           persistMaybe();
         });
       }
@@ -4168,6 +4178,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
     const stageDiffEntries = [];
     const updatedByStage = new Map();
     const appliedDiff = { added:[], removed:[], changed:[], toDone:[] };
+    const csvLockedAdds = new Map();
 
     STAGES.forEach(stage=>{
       const baseline = (currentByStage.get(stage) || []).map(cloneTaskRecord).filter(Boolean);
@@ -4247,15 +4258,40 @@ function renderDeltaDialog(diffByStage, currentByStage){
         }
       });
 
+      const csvLockOrder = (lockNewOrders && lockNewOrdersCsv) ? new Map() : null;
       diff.added.forEach(item=>{
         if(stageSel.get(item.uid) !== 'add') return;
         const clone = cloneTaskRecord(item);
         clone.isNew = true;
+        if(csvLockOrder){
+          clone.locked = true;
+          csvLockOrder.set(clone.uid, csvLockOrder.size);
+          if(stage === curStage){
+            lockedUids.add(clone.uid);
+          }
+        }
         stageTasks.push(clone);
         if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
       });
 
-      stageTasks.sort((a,b)=> +a.startDate - +b.startDate);
+      stageTasks.sort((a,b)=>{
+        if(csvLockOrder && csvLockOrder.size){
+          const aLocked = csvLockOrder.has(a.uid);
+          const bLocked = csvLockOrder.has(b.uid);
+          if(aLocked !== bLocked) return aLocked ? 1 : -1;
+          if(aLocked && bLocked){
+            return csvLockOrder.get(a.uid) - csvLockOrder.get(b.uid);
+          }
+        }
+        const aStart = a.startDate ? +a.startDate : 0;
+        const bStart = b.startDate ? +b.startDate : 0;
+        if(aStart !== bStart) return aStart - bStart;
+        return a.uid.localeCompare(b.uid);
+      });
+
+      if(csvLockOrder && csvLockOrder.size){
+        csvLockedAdds.set(stage, [...csvLockOrder.keys()]);
+      }
 
       const beforeSnapshot = captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined);
       const afterSnapshot = captureSnapshotFromRaw(stageTasks, stage, stage === curStage ? lockedUids : undefined);
@@ -4269,6 +4305,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
       ordersByStage.set(stage, list.map(t=>t.uid));
       if(stage === curStage){
         tasks = list;
+        lockedUids = new Set(list.filter(t=> t && t.locked).map(t=> t.uid));
       }
     });
 
@@ -4293,6 +4330,15 @@ function renderDeltaDialog(diffByStage, currentByStage){
     updateFreshnessUI();
 
     sortTasksByStart();
+    const csvTail = csvLockedAdds.get(curStage);
+    if(csvTail && csvTail.length){
+      const tailSet = new Set(csvTail);
+      const others = tasks.filter(t=> !tailSet.has(t.uid));
+      const tail = tasks.filter(t=> tailSet.has(t.uid));
+      tasks = others.concat(tail);
+      lockedUids = new Set(tasks.filter(t=> t && t.locked).map(t=> t.uid));
+      rememberStageOrder(curStage);
+    }
     if(document.querySelector('#autoOptimize')?.checked){ optimizeQueue(); }
     else { recompute(); }
 
@@ -4433,7 +4479,8 @@ function buildStateObject(){
       shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
       pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'', end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
       ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'', end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-    }
+    },
+    locked: !!x.locked || lockedUids.has(x.uid)
   }));
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
@@ -5334,7 +5381,8 @@ function restoreState(json, opts={}){
         shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
         pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
         ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
-      }
+      },
+      locked: lockedSet.has(x.uid) || !!x.locked
     }));
 
     allTasksFromState = tAll.slice();
@@ -5472,11 +5520,13 @@ function loadStageFromLS(stage){
     const raw = readLocalSnapshot();
     if(!raw) return null;
     const s = JSON.parse(raw);
-	
-	// поднимем сохранённый порядок строк по переделам
-	if (Array.isArray(s.orders)) {
-	  ordersByStage = new Map(s.orders);
-	}
+
+        // поднимем сохранённый порядок строк по переделам
+        if (Array.isArray(s.orders)) {
+          ordersByStage = new Map(s.orders);
+        }
+
+    const lockedSet = new Set(Array.isArray(s.locked) ? s.locked : []);
 
     const arr = (s.t||[]).filter(x=> x.stage===stage).map(x=>({
       uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
@@ -5497,7 +5547,8 @@ function loadStageFromLS(stage){
         shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
         pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null}   : null,
         ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null}   : null
-      }
+      },
+      locked: lockedSet.has(x.uid) || !!x.locked
     }));
     const seen = new Set();
 	return arr.filter(x => !seen.has(x.uid) && (seen.add(x.uid), true));
@@ -6302,7 +6353,9 @@ function saveUiPreferences(){
       autosaveOn: !!autosaveOn,
       shiftOnProgress: !!shiftOnProgress,
       autoOptimizeOn: !!autoOptimizeOn,
-      showIds: document.body ? document.body.classList.contains('show-ids') : false
+      showIds: document.body ? document.body.classList.contains('show-ids') : false,
+      lockNewOrders: !!lockNewOrders,
+      lockNewOrdersCsv: !!lockNewOrdersCsv
     };
     localStorage.setItem(UI_PREF_KEY, JSON.stringify(prefs));
   }catch(_){ /* ignore */ }
@@ -6330,16 +6383,44 @@ function applyUiPreferences(prefs={}){
   if(typeof prefs.autoOptimizeOn === 'boolean'){
     autoOptimizeOn = prefs.autoOptimizeOn;
   }
+  if(typeof prefs.lockNewOrders === 'boolean'){
+    lockNewOrders = prefs.lockNewOrders;
+  }
+  if(typeof prefs.lockNewOrdersCsv === 'boolean'){
+    lockNewOrdersCsv = prefs.lockNewOrdersCsv;
+  }
   const autosaveEl = $("#autosave");
   if(autosaveEl) autosaveEl.checked = !!autosaveOn;
   const shiftEl = $("#shiftOnProgress");
   if(shiftEl) shiftEl.checked = !!shiftOnProgress;
   const autoOptEl = $("#autoOptimize");
   if(autoOptEl) autoOptEl.checked = !!autoOptimizeOn;
+  const lockNewOrdersEl = $("#lockNewOrders");
+  if(lockNewOrdersEl) lockNewOrdersEl.checked = !!lockNewOrders;
+  const lockNewOrdersCsvEl = $("#lockNewOrdersCsv");
+  if(lockNewOrdersCsvEl) lockNewOrdersCsvEl.checked = !!lockNewOrdersCsv;
   if(typeof prefs.showIds === 'boolean' && document.body){
     document.body.classList.toggle('show-ids', prefs.showIds);
     const toggle = document.getElementById('showIdsToggle');
     if(toggle && 'checked' in toggle) toggle.checked = prefs.showIds;
+  }
+  refreshNewOrderPrefUI();
+}
+
+function refreshNewOrderPrefUI(){
+  const csvBox = document.getElementById('lockNewOrdersCsv');
+  const csvWrap = document.getElementById('lockNewOrdersCsvWrap');
+  const shouldDisable = !lockNewOrders;
+  if(csvBox){
+    const accessDisabled = csvBox.dataset.accessDisabled === '1';
+    const disableNow = shouldDisable || accessDisabled;
+    csvBox.disabled = disableNow;
+    csvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
+    if(csvWrap){
+      csvWrap.classList.toggle('muted', disableNow);
+    }
+  }else if(csvWrap){
+    csvWrap.classList.toggle('muted', shouldDisable);
   }
 }
 
@@ -6499,8 +6580,10 @@ function switchProcess(newProc){
     tasks = tasks.filter(t=> t.stage === newProc);
   }
 
+  lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
+
   sortBySavedOrder(tasks, newProc); // восстановим пользовательский порядок, если сохранён
-  
+
   // Если для этого передела ещё не сохраняли порядок — применим автооптимизацию один раз
   const hadOrder = ordersByStage.has(newProc);
   sortBySavedOrder(tasks, newProc);
@@ -6634,6 +6717,10 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     const uid='user-'+Date.now()+'::'+$("#process").value;
     const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     tasks.push(t);
+    if(lockNewOrders){
+      lockedUids.add(uid);
+      t.locked = true;
+    }
         rememberStageOrder();
         recompute();
         rebuildAndRenderMasterRoute();
@@ -6698,6 +6785,18 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
+    persistMaybe('ui');
+  });
+  $("#lockNewOrders").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = lockNewOrders; notifyReadOnly(); return; }
+    lockNewOrders = !!e.target.checked;
+    refreshNewOrderPrefUI();
+    persistMaybe('ui');
+  });
+  $("#lockNewOrdersCsv").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = lockNewOrdersCsv; notifyReadOnly(); return; }
+    lockNewOrdersCsv = !!e.target.checked;
+    refreshNewOrderPrefUI();
     persistMaybe('ui');
   });
   $("#saveBtn").addEventListener('click', ()=>{
@@ -6907,6 +7006,10 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
             if(shiftBox) shiftBox.checked = shiftOnProgress;
             const autoBox = $('#autoOptimize');
             if(autoBox) autoBox.checked = autoOptimizeOn;
+            const lockBox = $('#lockNewOrders');
+            if(lockBox) lockBox.checked = lockNewOrders;
+            const lockCsvBox = $('#lockNewOrdersCsv');
+            if(lockCsvBox) lockCsvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
             const locBox = $('#storageLocal');
             if(locBox) locBox.checked = enableLocalStore;
             const remBox = $('#storageRemote');
@@ -6918,6 +7021,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             renderSystemSettingsUI();
             refreshDataModeIndicator();
+            refreshNewOrderPrefUI();
             $('#settingsDlg').showModal();
           });
         }
