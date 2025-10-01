@@ -5618,6 +5618,48 @@ function persistNow(stageOverride, opts={}){
     }
 
     const prevStageTasks = prevTasks.filter(x=>x && x.stage === curStage);
+    if(prevStageTasks.length > 1){
+      let savedOrder = null;
+      if(Array.isArray(prevOrders) && prevOrders.length){
+        for(const tuple of prevOrders){
+          if(!Array.isArray(tuple) || tuple[0] !== curStage) continue;
+          const orderList = tuple[1];
+          if(Array.isArray(orderList) && orderList.length){
+            savedOrder = orderList;
+            break;
+          }
+        }
+      }
+      if(!savedOrder){
+        const currentOrder = ordersByStage.get(curStage);
+        if(Array.isArray(currentOrder) && currentOrder.length){
+          savedOrder = currentOrder;
+        }
+      }
+      if(savedOrder){
+        const pos = new Map(savedOrder.map((uid, index)=>[uid, index]));
+        const getStartTime = (task)=>{
+          if(task.startDate instanceof Date){
+            const time = task.startDate.getTime();
+            return Number.isNaN(time) ? 0 : time;
+          }
+          if(task.start){
+            const parsed = new Date(task.start).getTime();
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+          return 0;
+        };
+        prevStageTasks.sort((a,b)=>{
+          const ia = pos.has(a.uid) ? pos.get(a.uid) : Number.MAX_SAFE_INTEGER;
+          const ib = pos.has(b.uid) ? pos.get(b.uid) : Number.MAX_SAFE_INTEGER;
+          if(ia !== ib) return ia - ib;
+          const aStart = getStartTime(a);
+          const bStart = getStartTime(b);
+          if(aStart !== bStart) return aStart - bStart;
+          return String(a.uid || '').localeCompare(String(b.uid || ''));
+        });
+      }
+    }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
     const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const prevVersion = Number((prevMeta.versions && prevMeta.versions[curStage]) || 0);
