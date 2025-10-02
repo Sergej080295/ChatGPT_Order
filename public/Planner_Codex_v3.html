@@ -250,7 +250,8 @@ td[data-field="progress"]{background:#fffef3}
 .orders-toolbar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
 .orders-toolbar-row>*{flex:0 0 auto}
 .orders-toolbar-row .orders-overview-controls{margin:0}
-.orders-toolbar-row .orders-search-row{margin:0;margin-left:auto}
+.orders-toolbar-row .orders-search-row{margin:0}
+.orders-toolbar-buttons{display:flex;align-items:center;gap:8px}
 .orders-search-row{display:flex;align-items:center;gap:8px;margin:0}
 .orders-search-row input{flex:0 1 50ch;width:min(50ch,100%);min-width:200px;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:13px;color:#0f172a;background:#fff}
 .orders-search-row input:focus{outline:2px solid #bfdbfe;outline-offset:1px}
@@ -566,9 +567,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center">
       <h3 id="ordersCardTitle">Общий список заказов</h3>
-      <div class="row">
-        <button id="showTrash" class="btn ghost">Корзина</button>
-        <button id="showExcluded" class="btn ghost">Не учтённые</button>
+      <div class="row" id="ordersHeaderActions">
         <button id="addOrder" class="btn">Добавить</button>
       </div>
     </div>
@@ -597,6 +596,11 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <div class="orders-search-row" id="ordersSearchRow">
         <input id="orderSearchInput" type="search" placeholder="Поиск заказа" autocomplete="off" spellcheck="false">
         <button id="orderSearchClear" class="orders-search-clear" type="button" aria-label="Сбросить поиск">✕</button>
+      </div>
+
+      <div class="orders-toolbar-buttons" id="ordersToolbarButtons">
+        <button id="showExcluded" class="btn ghost">Не учтённые</button>
+        <button id="showTrash" class="btn ghost">Корзина</button>
       </div>
     </div>
 
@@ -2078,6 +2082,7 @@ let ordersByStage = new Map();
 let currentProc = '';
 let orderSearchRaw = '';
 let orderSearchNormalized = '';
+const stagesDirtyFromRoute = new Set();
 
 function normalizeOrderSearch(value){
   return String(value ?? '').replace(/\s+/g,' ').trim().toLowerCase();
@@ -2774,6 +2779,9 @@ function cascadeCompletionForTask(task, options={}){
     }
 
     if(stageChanged){
+      if(stageName !== currentProc){
+        stagesDirtyFromRoute.add(stageName);
+      }
       changed = true;
     }
   }
@@ -3229,6 +3237,10 @@ function applyStageProgressFromOverview(identity, stage, value){
   const stageList = gatherActiveStageList(stage);
   mergeStageIntoAll(stage, stageList);
   updateStageSnapshotFromAggregated(stage);
+
+  if(currentProc !== stage){
+    stagesDirtyFromRoute.add(stage);
+  }
 
   updateDoneAttention();
   recompute();
@@ -8824,7 +8836,8 @@ function switchProcess(newProc){
   }
 
   // пытаемся загрузить задачи ИЗ localStorage для newProc
-  const saved = loadStageFromLS(newProc);
+  const skipSaved = stagesDirtyFromRoute.has(newProc);
+  const saved = skipSaved ? null : loadStageFromLS(newProc);
   if(saved && saved.length){
     tasks = saved;
   }else if(Array.isArray(allTasksFromState) && allTasksFromState.length){
@@ -8847,6 +8860,8 @@ function switchProcess(newProc){
   }
 
   lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
+
+  stagesDirtyFromRoute.delete(newProc);
 
   sortBySavedOrder(tasks, newProc); // восстановим пользовательский порядок, если сохранён
   currentProc = newProc;
