@@ -561,7 +561,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <!-- ЛЕВАЯ КОЛОНКА: Общий список заказов + Подетально -->
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center">
-      <h3>Общий список заказов</h3>
+      <h3 id="ordersCardTitle">Общий список заказов</h3>
       <div class="row">
         <button id="showTrash" class="btn ghost">Корзина</button>
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
@@ -2305,6 +2305,7 @@ function buildDoneTaskRecord(rec){
   const hours = Number(rec.hours) || 0;
   const extraRaw = rec.extra != null ? rec.extra : rec.extraHours;
   const extra = Number(extraRaw) || 0;
+  const normalizedExtra = roundExtraForStage(stage, extra);
   const when = rec.when ? safeDateValue(rec.when) : null;
   const pseudo = {
     uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
@@ -2313,7 +2314,7 @@ function buildDoneTaskRecord(rec){
     childId: rec.childId || '',
     parentId: rec.parentId || '',
     hours,
-    extraHours: extra,
+    extraHours: normalizedExtra,
     startDate: start,
     endDate: end,
     startMissing: !start,
@@ -2360,7 +2361,7 @@ function restoreDoneRecordAtIndex(idx, stage){
     childId,
     parentId,
     hours: record.hours,
-    extraHours: Math.max(0.25, (+record.hours || 0) * 0.05),
+    extraHours: roundExtraForStage(stageForTask, Math.max(0.25, (+record.hours || 0) * 0.05)),
     startDate: start,
     endDate: end,
     startMissing: !record.start,
@@ -3177,8 +3178,12 @@ function applyStageProgressFromOverview(identity, stage, value){
   updateStageSnapshotFromAggregated(stage);
 
   updateDoneAttention();
-  renderOrdersOverviewTable();
-  rebuildAndRenderMasterRoute();
+  if(currentProc === stage){
+    recompute();
+  }else{
+    renderOrdersOverviewTable();
+    rebuildAndRenderMasterRoute();
+  }
   persistMaybe();
   return true;
 }
@@ -3450,6 +3455,10 @@ function adjustOrdersOverviewHeight(){
 }
 
 function toggleOverviewMode(enabled){
+  const cardTitle = document.getElementById('ordersCardTitle');
+  if(cardTitle){
+    cardTitle.textContent = enabled ? 'Общий список заказов' : 'Список заказов';
+  }
   const scroller = document.getElementById('ordersScroller');
   if(scroller){ scroller.style.display = enabled ? 'none' : ''; }
   const panel = document.getElementById('ordersOverviewPanel');
@@ -3647,6 +3656,16 @@ function adjustUIForProcess(p){
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
+
+function roundExtraForStage(stage, value){
+  let num = Number(value);
+  if(!Number.isFinite(num)) return 0;
+  if(NOHOUR_STAGES.has(stage)){
+    return Math.max(0, num);
+  }
+  num = Math.max(0, num);
+  return Math.round(num * 100) / 100;
+}
 
 let ovFilter = new Set(STAGES);  // какие этапы показаны на «Общем маршруте»
 let ovModeCurrent = 'detailed';  // 'detailed' | 'compact'
@@ -3991,7 +4010,8 @@ function mapRows(rows, process='bend'){
       const ed      = parseDate(edRaw);
       if(!orderId || (!sd && !ed)) return null;
       const uid = 'fallback::'+orderId+'::'+process;
-      const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:Math.max(0.25,(isFinite(hours)?hours:0)*0.05),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
+      const extraBase = Math.max(0.25,(isFinite(hours)?hours:0)*0.05);
+      const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:roundExtraForStage(process, extraBase),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
 
 	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
           if(rec.parentId){
@@ -4105,7 +4125,7 @@ function mapRows(rows, process='bend'){
       childId:String(ch[IDX.id]).trim(),
       parentId:pid,
       hours: useH||0,
-      extraHours: Math.max(0.25,(useH||0)*0.05),
+      extraHours: roundExtraForStage(process, Math.max(0.25,(useH||0)*0.05)),
       startDate: sd || today0(),
       endDate: ed || null,
       startMissing: !sd,
@@ -4391,8 +4411,8 @@ function applyEditImmediate(cell, task){
   if(!userCanEdit()) return;
   const field=cell.dataset.field, val=cell.textContent.trim();
   if(field==='orderId'){ if(val) task.orderId=val; }
-  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; task.extraHours=Math.max(0.25,h*0.05); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
-  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=e; }
+  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=Math.max(0.25,h*0.05); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
+  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=roundExtraForStage(task.stage, e); }
   
 	// --- НАЧАЛО: robust-парсер даты из первой строки ячейки ---
 	else if(field==='startDate'){
@@ -4453,6 +4473,14 @@ function renderTasksTable(){
   tbody.innerHTML = '';
   const canEdit = userCanEdit();
   const stage = document.getElementById('process')?.value || currentProc || '';
+  const noHours = NOHOUR_STAGES.has(stage);
+  const formatExtra = value => {
+    const num = Number(value) || 0;
+    if(noHours){
+      return String(num).replace('.',',');
+    }
+    return num.toFixed(2).replace('.',',');
+  };
   if(stage === OVERVIEW_STAGE){
     renderOrdersOverviewTable();
     return;
@@ -4501,7 +4529,7 @@ function renderTasksTable(){
     const allowEdit = canEdit && !isDoneRecord;
     const progressText = String(t.progress ?? 0).replace('.',',');
     const hoursText = String(t.hours ?? 0).replace('.',',');
-    const extraText = String(t.extraHours ?? 0).replace('.',',');
+    const extraText = formatExtra(t.extraHours ?? 0);
     const restText = rest.toFixed(1).replace('.',',');
     const startText = t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
     const endText = t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
@@ -4615,7 +4643,7 @@ function renderTasksTable(){
           else if(e.key==='Escape'){ e.preventDefault();
             if(field==='orderId') cell.textContent=t.orderId;
             if(field==='hours') cell.textContent=String(t.hours ?? 0).replace('.',',');
-            if(field==='extraHours') cell.textContent=String(t.extraHours ?? 0.25).replace('.',',');
+            if(field==='extraHours') cell.textContent=formatExtra(t.extraHours ?? 0.25);
             if(field==='startDate') cell.textContent=t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
             if(field==='endDate') cell.textContent=t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
             if(field==='state') cell.textContent=t.state||'';
@@ -4676,7 +4704,8 @@ function renderTasksTable(){
   const sExtra = totalsSource.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
   const sRest  = totalsSource.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
-  $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
+  const extraTotalText = (noHours ? sExtra.toFixed(1) : sExtra.toFixed(2)).replace('.',',');
+  $("#totExtra").textContent = extraTotalText;
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
 
   requestAnimationFrame(()=>{
@@ -5539,7 +5568,7 @@ function renderDoneList(){
             childId,
             parentId,
             hours: d.hours,
-            extraHours: Math.max(0.25,(+d.hours||0)*0.05),
+            extraHours: roundExtraForStage(stage, Math.max(0.25,(+d.hours||0)*0.05)),
             startDate: start,
             endDate: end,
             startMissing: !d.start,
@@ -5643,7 +5672,7 @@ function renderTrashList(){
           orderId: rec.orderId,
           stage, childId, parentId,
           hours: rec.hours,
-          extraHours: Math.max(0.25,(+rec.hours||0)*0.05),
+          extraHours: roundExtraForStage(stage, Math.max(0.25,(+rec.hours||0)*0.05)),
           startDate: start, endDate: end,
           startMissing: !rec.start, endMissing: !rec.end,
           state: '', status: '', useReserve:false, progress:0,
@@ -6036,7 +6065,7 @@ function importStateFromCSV(text){
 
   // применяем состояние
   // в рабочий список кладем только выбранный передел
-  const proc = (meta.process || $("#process").value || 'bend');
+  const proc = (meta.process || $("#process").value || OVERVIEW_STAGE);
   $("#process").value = proc;
   tasks = tArr.filter(x => x.stage === proc);
   sortBySavedOrder(tasks, proc);
@@ -6256,7 +6285,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
         if(!byId.has(from.uid)) return;
         const target = byId.get(from.uid);
         target.hours = to.hours;
-        target.extraHours = Math.max(0.25,(to.hours||0)*0.05);
+        target.extraHours = roundExtraForStage(stage, Math.max(0.25,(to.hours||0)*0.05));
         target.startDate = to.startDate;
         target.endDate = to.endDate;
         target.startMissing = to.startMissing;
@@ -7434,7 +7463,9 @@ function restoreState(json, opts={}){
     });
 
     allTasksFromState = tAll.slice();
-    const desiredProcess = preserveProcess ? ($("#process")?.value || s.process || 'bend') : (s.process || $("#process")?.value || 'bend');
+    const desiredProcess = preserveProcess
+      ? ($("#process")?.value || s.process || OVERVIEW_STAGE)
+      : (s.process || $("#process")?.value || OVERVIEW_STAGE);
     tasks = tAll.filter(x => x.stage === desiredProcess);
 
     doneTasks = (s.done||[]).map(x=>({
@@ -7537,7 +7568,7 @@ function restoreState(json, opts={}){
     if(preserveProcess){
       $("#process").value = desiredProcess;
     }else{
-      $("#process").value = s.process || 'bend';
+      $("#process").value = s.process || OVERVIEW_STAGE;
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
@@ -8595,7 +8626,8 @@ function recompute(){
 	  }
 
     if(!isFinite(t.hours)) t.hours=0;
-    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=Math.max(0.25,(t.hours||0)*0.05);
+    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=roundExtraForStage(t.stage, Math.max(0.25,(t.hours||0)*0.05));
+    else t.extraHours = roundExtraForStage(t.stage, t.extraHours);
   });
 
   // актуальная вместимость для передела
@@ -8944,8 +8976,10 @@ function wireHandlers(){
   // добавить ручной заказ
   $("#addOrder").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
-    const uid='user-'+Date.now()+'::'+$("#process").value;
-    const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
+    const stageKey = $("#process").value;
+    const uid='user-'+Date.now()+'::'+stageKey;
+    const newExtra = roundExtraForStage(stageKey, Math.max(0.25,1*0.05));
+    const t={uid,orderId:'Новый заказ',stage:stageKey,childId:'',parentId:'',hours:1,extraHours:newExtra,startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     applyIgnoredStateToTask(t);
     tasks.push(t);
     if(lockNewOrders){
@@ -9130,7 +9164,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             const idx = tasks.findIndex(x=>x.uid===from.uid);
             if(idx>-1){
               const t=tasks[idx];
-              t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
+              t.hours=to.hours; t.extraHours=roundExtraForStage(t.stage, Math.max(0.25,(to.hours||0)*0.05));
               t.startDate=to.startDate; t.endDate=to.endDate;
               t.startMissing=to.startMissing; t.endMissing=to.endMissing;
               t.state=to.state||t.state;
