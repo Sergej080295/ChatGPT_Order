@@ -3197,139 +3197,173 @@ function updateStageSnapshotFromAggregated(stage){
   lastSyncedSnapshots.set(stage, snapshot);
 }
 
-function applyStageProgressFromOverview(identity, stage, value){
-  if(!identity || !stage || !STAGES.includes(stage)) return false;
+function compareTasksForOrdering(a, b){
+  const getStart = task => {
+    if(task?.startDate instanceof Date){
+      return task.startDate.getTime();
+    }
+    if(task?.start instanceof Date){
+      return task.start.getTime();
+    }
+    return Number.MAX_SAFE_INTEGER;
+  };
+  const aStart = getStart(a);
+  const bStart = getStart(b);
+  if(aStart !== bStart) return aStart - bStart;
+  const aOrder = String(a?.orderId || '').trim();
+  const bOrder = String(b?.orderId || '').trim();
+  if(aOrder !== bOrder){
+    return aOrder.localeCompare(bOrder, 'ru', { sensitivity:'base', numeric:true });
+  }
+  const aUid = String(a?.uid || '');
+  const bUid = String(b?.uid || '');
+  return aUid.localeCompare(bUid);
+}
+
+function applyStageProgress(identity, stage, value, options={}){
+  if(!identity || !stage || stage === OVERVIEW_STAGE || !STAGES.includes(stage)) return false;
   ensureAllTasksCache();
   const matches = collectStageEntities(identity, stage);
   const hasData = matches.active.length || matches.stored.length || matches.done.length;
   if(!hasData){
-    alert('Нет данных для выбранного передела.');
+    if(!options.silent) alert('Нет данных для выбранного передела.');
     return false;
   }
 
-  const normalized = Math.max(0, Math.min(100, Number(value)||0));
+  const normalized = clampProgressValue(value);
   const markDone = normalized >= 100;
-  const now = new Date();
-  const removeUids = new Set();
-  const restoredTasks = [];
+  const now = options.when instanceof Date ? new Date(options.when) : new Date();
+  const source = options.source || 'ui';
 
+  const stageListRaw = gatherActiveStageList(stage);
+  const initialOrder = new Map();
+  stageListRaw.forEach((task, idx)=>{
+    if(task && task.uid) initialOrder.set(task.uid, idx);
+  });
+
+  const stageMap = new Map();
+  stageListRaw.forEach(task=>{
+    if(task && task.stage === stage){
+      stageMap.set(task.uid, cloneTaskRecord(task));
+    }
+  });
+  matches.stored.forEach(({ task })=>{
+    if(task && task.stage === stage && !stageMap.has(task.uid)){
+      stageMap.set(task.uid, cloneTaskRecord(task));
+    }
+  });
   matches.active.forEach(({ task })=>{
-    if(!task) return;
-    task.progress = normalized;
-    task.isDone = markDone;
-    if(markDone){
-      ensureDoneRecordFromTask(task, 'overview-route', now);
-      cascadeCompletionForTask(task, { when: now, updateUI:false });
-      removeUids.add(task.uid);
+    if(task && task.stage === stage && !stageMap.has(task.uid)){
+      stageMap.set(task.uid, cloneTaskRecord(task));
     }
   });
 
-  if(markDone && removeUids.size){
-    for(let i = tasks.length - 1; i >= 0; i--){
-      const task = tasks[i];
-      if(task && task.stage === stage && removeUids.has(task.uid)){
-        tasks.splice(i,1);
-        lockedUids.delete(task.uid);
-      }
+  const matchCandidate = candidate => matchesOrderIdentity(orderKeyForRecord(candidate), candidate, identity);
+  let touched = false;
+  const doneToArchive = [];
+  const doneRemovalIndices = [];
+
+  stageMap.forEach((task, uid)=>{
+    if(!matchCandidate(task)) return;
+    touched = true;
+    if(markDone){
+      task.progress = 100;
+      task.isDone = true;
+      doneToArchive.push(cloneTaskRecord(task));
+      stageMap.delete(uid);
+    }else{
+      task.progress = normalized;
+      task.isDone = false;
+      stageMap.set(uid, task);
     }
-  }
+  });
 
-  if(Array.isArray(allTasksFromState)){
-    const next = [];
-    allTasksFromState.forEach(task=>{
-      if(!task){ next.push(task); return; }
-      if(task.stage !== stage){ next.push(task); return; }
-      if(matchesOrderIdentity(orderKeyForRecord(task), task, identity)){
-        task.progress = normalized;
-        task.isDone = markDone;
-        if(markDone){
-          ensureDoneRecordFromTask(task, 'overview-route', now);
-          cascadeCompletionForTask(task, { when: now, updateUI:false });
-          removeUids.add(task.uid);
-          return; // пропускаем, чтобы удалить
-        }
-      }
-      next.push(task);
-    });
-    allTasksFromState = next;
-  }
-
-  if(!markDone && matches.done.length){
-    const indices = matches.done.map(entry=> entry.index).sort((a,b)=> b-a);
-    indices.forEach(idx=>{
-      const rec = doneTasks[idx];
+  if(!markDone){
+    matches.done.forEach(({ rec, index })=>{
       if(!rec) return;
       const restored = buildDoneTaskRecord(rec);
-      if(restored){
-        restored.progress = normalized;
-        restored.isDone = false;
-        restoredTasks.push(restored);
-      }
-      doneTasks.splice(idx,1);
+      if(!restored) return;
+      if(!matchCandidate(restored)) return;
+      touched = true;
+      restored.progress = normalized;
+      restored.isDone = false;
+      stageMap.set(restored.uid, restored);
+      doneRemovalIndices.push(index);
     });
   }
 
-  if(markDone && removeUids.size){
-    const list = ordersByStage.get(stage);
-    if(Array.isArray(list)){
-      ordersByStage.set(stage, list.filter(uid => !removeUids.has(uid)));
+  if(!touched){
+    return false;
+  }
+
+  if(doneRemovalIndices.length){
+    doneRemovalIndices.sort((a,b)=> b-a).forEach(idx=>{
+      if(idx >= 0 && idx < doneTasks.length){
+        doneTasks.splice(idx,1);
+      }
+    });
+  }
+
+  const removedUids = new Set(doneToArchive.map(task => task.uid));
+  let orderList = Array.isArray(ordersByStage.get(stage))
+    ? ordersByStage.get(stage).filter(uid => !removedUids.has(uid))
+    : [];
+
+  const appendCandidates = [];
+  stageMap.forEach((task, uid)=>{
+    if(!orderList.includes(uid)){
+      appendCandidates.push(task);
     }
+  });
+
+  if(appendCandidates.length){
+    appendCandidates.sort((a,b)=>{
+      const ia = initialOrder.has(a.uid) ? initialOrder.get(a.uid) : Number.MAX_SAFE_INTEGER;
+      const ib = initialOrder.has(b.uid) ? initialOrder.get(b.uid) : Number.MAX_SAFE_INTEGER;
+      if(ia !== ib) return ia - ib;
+      return compareTasksForOrdering(a,b);
+    });
+    appendCandidates.forEach(task=>{ orderList.push(task.uid); });
   }
 
-  if(!markDone && restoredTasks.length){
-    if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
-    const present = new Set(allTasksFromState.filter(task=> task && task.stage === stage).map(task=>task.uid));
-    restoredTasks.forEach(task=>{
-      if(!present.has(task.uid)){
-        allTasksFromState.push(cloneTaskRecord(task));
-        present.add(task.uid);
-      }
-    });
-    let list = ordersByStage.get(stage);
-    if(!Array.isArray(list)) list = [];
-    const orderSet = new Set(list);
-    restoredTasks.forEach(task=>{
-      if(!orderSet.has(task.uid)){
-        list.push(task.uid);
-        orderSet.add(task.uid);
-      }
-    });
-    ordersByStage.set(stage, list);
-  }
+  ordersByStage.set(stage, orderList);
+
+  const used = new Set();
+  const activeList = [];
+  orderList.forEach(uid=>{
+    if(stageMap.has(uid)){
+      const item = stageMap.get(uid);
+      used.add(uid);
+      item.isDone = false;
+      item.progress = clampProgressValue(item.progress);
+      activeList.push(item);
+    }
+  });
+  stageMap.forEach((task, uid)=>{
+    if(used.has(uid)) return;
+    task.isDone = false;
+    task.progress = clampProgressValue(task.progress);
+    activeList.push(task);
+  });
+
+  mergeStageIntoAll(stage, activeList);
 
   if(currentProc === stage){
-    if(!markDone && restoredTasks.length){
-      restoredTasks.forEach(task=> tasks.push(task));
-    }
-    sortBySavedOrder(tasks, stage);
+    tasks = activeList.map(cloneTaskRecord);
+    lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
     rememberStageOrder(stage);
-  }
-
-  const stageList = gatherActiveStageList(stage);
-  if(!ordersByStage.has(stage)){
-    ordersByStage.set(stage, stageList.map(task=> task.uid));
-  }else if(!markDone && stageList.length){
-    const orderList = ordersByStage.get(stage) || [];
-    const known = new Set(orderList);
-    let changedOrder = false;
-    stageList.forEach(task=>{
-      if(!task || known.has(task.uid)) return;
-      orderList.push(task.uid);
-      known.add(task.uid);
-      changedOrder = true;
-    });
-    if(changedOrder){
-      ordersByStage.set(stage, orderList);
-    }
-  }
-  mergeStageIntoAll(stage, stageList);
-  updateStageSnapshotFromAggregated(stage);
-
-  if(currentProc !== stage){
+  }else{
     stagesDirtyFromRoute.add(stage);
   }
 
-  updateDoneAttention();
+  if(doneToArchive.length){
+    doneToArchive.forEach(task=>{
+      ensureDoneRecordFromTask(task, source, now);
+      cascadeCompletionForTask(task, { when: now, updateUI:false });
+    });
+  }
+
+  updateStageSnapshotFromAggregated(stage);
   recompute();
   persistMaybe();
   return true;
@@ -3353,7 +3387,7 @@ function handleRouteStageToggle(stage, toggleEl){
       : `Снять отметку готовности с передела «${stageTitle}»?`;
     if(!confirm(question)) return;
     const targetValue = shouldMarkDone ? 100 : 0;
-    if(applyStageProgressFromOverview(currentRouteContext.identity, stage, targetValue)){
+    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, { source:'route-dialog' })){
       if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
         currentRouteContext.sourceTask.progress = targetValue;
       }
@@ -3375,7 +3409,7 @@ function handleRouteStageToggle(stage, toggleEl){
     alert('Введите число от 0 до 100.');
     return;
   }
-  if(applyStageProgressFromOverview(currentRouteContext.identity, stage, value)){
+  if(applyStageProgress(currentRouteContext.identity, stage, value, { source:'route-dialog' })){
     if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
       currentRouteContext.sourceTask.progress = value;
     }
@@ -4565,8 +4599,10 @@ function optimizeAllStages(options={}){
    ТАБЛИЦА
 ========= */
 function applyEditImmediate(cell, task){
-  if(!userCanEdit()) return;
-  const field=cell.dataset.field, val=cell.textContent.trim();
+  if(!userCanEdit()) return false;
+  if(!cell || !task) return false;
+  const field = cell.dataset.field;
+  const val = cell.textContent.trim();
   if(field==='orderId'){ if(val) task.orderId=val; }
   else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=Math.max(0.25,h*0.05); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
   else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=roundExtraForStage(task.stage, e); }
@@ -4602,27 +4638,32 @@ function applyEditImmediate(cell, task){
   else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null}; }
   else if(field==='state'){ task.state = val; applyIgnoredStateToTask(task); }
   else if(field==='progress'){
-    const p=parseHours(val);
-    const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
-    if(safe!==task.progress){
-      task.progress=safe;
+    const p = parseHours(val);
+    const safe = (Number.isFinite(p) && p>=0 && p<=100) ? p : 0;
+    if(safe !== task.progress){
+      task.progress = safe;
+      cell.textContent = String(safe).replace('.',',');
       if(shiftOnProgress){
         if(!task.origStartDate) task.origStartDate = task.startDate;
         if(+task.origStartDate===+task.startDate) task.origStartDate = task.startDate;
-        task.startDate=today0();
-        task.startMissing=false;
-                if(task.endDate && task.endDate < task.startDate){
-                  task.endDate = new Date(task.startDate);  // подтянем конец к старту
-                  task.endMissing = false;
-                }
-        task.route[task.stage]={...(task.route[task.stage]||{}),start:task.startDate};
+        task.startDate = today0();
+        task.startMissing = false;
+        if(task.endDate && task.endDate < task.startDate){
+          task.endDate = new Date(task.startDate);  // подтянем конец к старту
+          task.endMissing = false;
+        }
+        task.route[task.stage] = { ...(task.route[task.stage]||{}), start: task.startDate };
       }
-      if(safe >= 100 && userCanEdit()){
-        archiveTaskAsDone(task, 'progress');
-        return;
-      }
+      const identity = {
+        orderKey: orderKeyForRecord(task),
+        parentId: task.parentId ? String(task.parentId).trim() : '',
+        orderId: task.orderId || '',
+        orderIdNorm: normalizeOrderSearch(task.orderId || '')
+      };
+      return applyStageProgress(identity, task.stage, safe, { source:'ui-progress' });
     }
   }
+  return false;
 }
 function renderTasksTable(){
   const tbody = $("#tasksTable tbody");
@@ -4749,7 +4790,16 @@ function renderTasksTable(){
       } else {
         doneBox.addEventListener('change', e=>{
           if(e.target.checked){
-            archiveTaskAsDone(t, 'checkbox');
+            const identity = {
+              orderKey: orderKeyForRecord(t),
+              parentId: t.parentId ? String(t.parentId).trim() : '',
+              orderId: t.orderId || '',
+              orderIdNorm: normalizeOrderSearch(t.orderId || '')
+            };
+            const applied = applyStageProgress(identity, t.stage, 100, { source:'ui-checkbox' });
+            if(!applied){
+              e.target.checked = false;
+            }
           } else {
             doneBox.checked = false;
           }
@@ -4806,7 +4856,7 @@ function renderTasksTable(){
       const field=cell.dataset.field;
       if(editable){
         cell.addEventListener('keydown', e=>{
-          if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
+          if(e.key==='Enter'){ e.preventDefault(); const handled = applyEditImmediate(cell,t); if(!handled){ recompute(); persistMaybe(); } cell.blur(); }
           else if(e.key==='Escape'){ e.preventDefault();
             if(field==='orderId') cell.textContent=t.orderId;
             if(field==='hours') cell.textContent=String(t.hours ?? 0).replace('.',',');
@@ -4818,7 +4868,7 @@ function renderTasksTable(){
             cell.blur();
           }
         });
-        cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
+        cell.addEventListener('blur', ()=>{ const handled = applyEditImmediate(cell,t); if(!handled){ recompute(); persistMaybe(); } });
       } else {
         cell.setAttribute('contenteditable','false');
       }
