@@ -182,7 +182,7 @@ body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
 .log-entry:last-child{border-bottom:none}
 .log-entry .meta{color:var(--muted);font-size:12px;margin-top:2px}
 
-.btn{
+.btn{ 
   padding:6px 10px;
   border:1px solid #d1d5db;
   border-radius:8px;
@@ -190,6 +190,10 @@ body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
   cursor:pointer;
   transition:transform .08s ease, filter .15s ease, box-shadow .2s ease;
 }
+.tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.tools .optimize-group{display:inline-flex;gap:6px}
+.btn.icon-only{padding:6px;width:36px;min-width:36px;display:inline-flex;align-items:center;justify-content:center}
+.btn.icon-only svg{width:18px;height:18px;fill:currentColor}
 .btn:hover{ filter:brightness(.97) }
 .btn:active{ transform:translateY(1px) scale(.98) }
 .btn[disabled]{opacity:.55;cursor:not-allowed;pointer-events:none}
@@ -259,6 +263,7 @@ td[data-field="progress"]{background:#fffef3}
 .main.overview-mode #ordersOverviewPanel{max-width:none}
 .main.overview-mode #ordersOverviewTable{min-width:max-content;width:auto}
 .main.overview-mode .card{width:100%}
+.main.overview-mode #addOrder{display:none}
 .orders-overview-totals{margin:12px 0 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;overflow-x:auto}
 .orders-overview-totals table{border-collapse:separate;border-spacing:0;width:auto;min-width:max-content}
 .orders-overview-totals td{padding:6px 10px;font-size:12px;font-weight:600;color:#1f2937;text-align:center;white-space:nowrap}
@@ -511,9 +516,20 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       </label>
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
-      <button id="optimizeBtn" class="btn warn">Оптимизация</button>
-      <button id="undoImport" class="btn">Откат импорта</button> 
-	  <button id="exportCSV" class="btn">Экспорт (.csv)</button>
+      <div class="optimize-group">
+        <button id="optimizeAllBtn" class="btn warn icon-only" title="Оптимизация всех переделов" aria-label="Оптимизация всех переделов">
+          <svg viewBox="0 0 24 24" role="img" focusable="false">
+            <path d="M12 4a1 1 0 0 1 1 1v1.09a6.02 6.02 0 0 1 4.86 3.62 1 1 0 0 1-1.84.78A4 4 0 0 0 13 8.18V9a1 1 0 0 1-1.7.7L8.3 6.7a1 1 0 0 1 0-1.4l3-3A1 1 0 0 1 12 2v2Zm-7.86 9.28a1 1 0 0 1 1.84-.78A4 4 0 0 0 11 15.82V15a1 1 0 0 1 1.7-.7l3 3a1 1 0 0 1 0 1.4l-3 3A1 1 0 0 1 11 21v-1.09a6.02 6.02 0 0 1-4.86-3.62 1 1 0 0 1 1.84-.78A4 4 0 0 0 11 18.18V19a1 1 0 0 1 2 0v-1.09a6.02 6.02 0 0 1 4.86-3.62 1 1 0 0 1 .78 1.84A4 4 0 0 0 13 18.18V19a1 1 0 0 1-1.7.7l-3-3a1 1 0 0 1 0-1.4l3-3A1 1 0 0 1 12 12v1.09a6.02 6.02 0 0 1-4.86-3.62Z"/>
+          </svg>
+        </button>
+        <button id="optimizeStageBtn" class="btn warn icon-only" title="Оптимизация текущего передела" aria-label="Оптимизация текущего передела">
+          <svg viewBox="0 0 24 24" role="img" focusable="false">
+            <path d="M12 3a1 1 0 0 1 .78.37l2.5 3a1 1 0 1 1-1.56 1.25L13 6.7V12a1 1 0 0 1-1.75.65l-2.5-2.75a1 1 0 1 1 1.5-1.3L11 9.3V4a1 1 0 0 1 1-1Zm-6 9a1 1 0 0 1 .78.37l2.5 3a1 1 0 0 1-1.56 1.25L7 15.7V20a1 1 0 0 1-1.75.65l-2.5-2.75a1 1 0 0 1 1.5-1.3L5 17.3V12a1 1 0 0 1 1-1Zm12 0a1 1 0 0 1 .78.37l2.5 3a1 1 0 0 1-1.56 1.25L19 15.7V20a1 1 0 0 1-1.75.65l-2.5-2.75a1 1 0 0 1 1.5-1.3L17 17.3V12a1 1 0 0 1 1-1Z"/>
+          </svg>
+        </button>
+      </div>
+      <button id="undoImport" class="btn">Откат импорта</button>
+          <button id="exportCSV" class="btn">Экспорт (.csv)</button>
 	  <label class="btn">Импорт состояния
 	    <input id="stateFile" type="file" accept=".csv" style="display:none">
 	  </label>
@@ -1577,7 +1593,7 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#optimizeBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -2770,10 +2786,16 @@ function renderOrdersOverviewTable(){
     const tr = document.createElement('tr');
     const parts = entry.parts || parseOrderParts(entry.order.orderId);
 
+    const tasksForStage = stage => stageTasks.get(entry.key)?.get(stage) || [];
+    const stageHasWork = stage => {
+      if(tasksForStage(stage).length > 0) return true;
+      if(doneStageSet.has(`${entry.key}::${stage}`)) return true;
+      if(stage === 'ship' && entry.isDone) return true;
+      return false;
+    };
+
     const indicatorState = stage => {
-      const seg = entry.order.stages?.[stage];
-      const hasStage = !!(seg && (seg.start || seg.end || Number(seg.hours)));
-      if(!hasStage) return 'missing';
+      if(!stageHasWork(stage)) return 'missing';
       if(entry.isDone || doneStageSet.has(`${entry.key}::${stage}`)) return 'done';
       return 'pending';
     };
@@ -2810,16 +2832,12 @@ function renderOrdersOverviewTable(){
     });
 
     indicatorStages.forEach(stage => {
-      const state = indicatorState(stage);
-      if(state !== 'missing'){ totals[stage] += 1; }
+      if(stageHasWork(stage)){ totals[stage] += 1; }
       slipFlags[stage] = detectStageSlip(stage);
     });
 
     const renderProgress = stage => {
-      const seg = entry.order.stages?.[stage];
-      const hasStage = !!(seg && (seg.start || seg.end || Number(seg.hours)));
-      const tasksPresent = (stageTasks.get(entry.key)?.get(stage) || []).length > 0;
-      if(!hasStage && !tasksPresent){
+      if(!stageHasWork(stage)){
         return '<span class="muted">—</span>';
       }
       const metrics = metricsCache[stage] || computeStageMetrics(entry, stage, stageTasks, doneStageSet);
@@ -2985,6 +3003,23 @@ function toggleOverviewMode(enabled){
 
   const main = document.querySelector('.main');
   if(main){ main.classList.toggle('overview-mode', !!enabled); }
+
+  const addBtn = document.getElementById('addOrder');
+  if(addBtn){
+    if(enabled){
+      if(addBtn.dataset.prevDisplay === undefined){
+        addBtn.dataset.prevDisplay = addBtn.style.display || '';
+      }
+      addBtn.style.display = 'none';
+    }else{
+      if(addBtn.dataset.prevDisplay !== undefined){
+        addBtn.style.display = addBtn.dataset.prevDisplay;
+        delete addBtn.dataset.prevDisplay;
+      }else{
+        addBtn.style.display = '';
+      }
+    }
+  }
 
   const legend = document.getElementById('statusLegend');
   if(legend){
@@ -3784,12 +3819,92 @@ function optimizeStageArray(list, stage){
 }
 
 function optimizeQueue(){
-  if(!tasks.length) return;
   const stage = document.getElementById('process')?.value || currentProc || '';
-  tasks = optimizeStageArray(tasks, stage);
+  if(stage === OVERVIEW_STAGE) return false;
+  if(!tasks.length) return false;
+  const before = tasks.map(t=>t.uid).join('|');
+  const optimized = optimizeStageArray(tasks, stage);
+  const after = optimized.map(t=>t.uid).join('|');
+  if(after === before) return false;
+  tasks = optimized;
   rememberStageOrder(stage);
   recompute();
   persistMaybe();
+  return true;
+}
+
+function optimizeAllStages(options={}){
+  const { persist=true, rebuild=true } = options;
+  const stage = document.getElementById('process')?.value || currentProc || '';
+  const overview = stage === OVERVIEW_STAGE;
+  const aggregated = gatherAllStageTasks();
+  const byStage = new Map();
+  aggregated.forEach(task => {
+    if(!task || !task.stage) return;
+    if(!byStage.has(task.stage)) byStage.set(task.stage, []);
+    byStage.get(task.stage).push(task);
+  });
+
+  let changed = false;
+
+  const trackChange = (beforeList, afterList)=>{
+    const before = Array.isArray(beforeList) ? beforeList.map(t=>t.uid).join('|') : '';
+    const after = Array.isArray(afterList) ? afterList.map(t=>t.uid).join('|') : '';
+    if(before !== after) changed = true;
+  };
+
+  STAGES.forEach(stageName => {
+    if(!overview && stageName === stage){
+      if(tasks.length){
+        const optimized = optimizeStageArray(tasks, stageName);
+        trackChange(tasks, optimized);
+        tasks = optimized;
+        ordersByStage.set(stageName, tasks.map(t=>t.uid));
+        mergeStageIntoAll(stageName, tasks);
+      }else{
+        ordersByStage.set(stageName, []);
+        mergeStageIntoAll(stageName, []);
+        lastSyncedSnapshots.set(stageName, []);
+      }
+      return;
+    }
+
+    const list = (byStage.get(stageName) || []).filter(Boolean);
+    if(!list.length){
+      ordersByStage.set(stageName, []);
+      mergeStageIntoAll(stageName, []);
+      lastSyncedSnapshots.set(stageName, []);
+      return;
+    }
+    const optimized = optimizeStageArray(list, stageName);
+    trackChange(list, optimized);
+    ordersByStage.set(stageName, optimized.map(t=>t.uid));
+    mergeStageIntoAll(stageName, optimized);
+    const lockedSet = new Set(optimized.filter(t=>t.locked).map(t=>t.uid));
+    lastSyncedSnapshots.set(stageName, captureSnapshotFromRaw(optimized, stageName, lockedSet));
+  });
+
+  if(overview){
+    if(rebuild){
+      renderOrdersOverviewTable();
+      rebuildAndRenderMasterRoute();
+    }
+  }else{
+    rememberStageOrder(stage);
+    if(rebuild){
+      recompute();
+    }
+  }
+
+  if(!overview){
+    const currentSnapshot = captureSnapshotFromTasks(stage, tasks, lockedUids);
+    lastSyncedSnapshots.set(stage, currentSnapshot);
+  }
+
+  if(changed && persist){
+    persistMaybe();
+  }
+  return changed;
 }
 
 /* =========
@@ -5835,6 +5950,9 @@ function renderDeltaDialog(diffByStage, currentByStage){
       tasks = others.concat(tail);
       lockedUids = new Set(tasks.filter(t=> t && t.locked).map(t=> t.uid));
       rememberStageOrder(curStage);
+    }
+    if(autoOptimizeOn){
+      optimizeAllStages({ persist:false, rebuild:false });
     }
     recompute();
 
@@ -8355,10 +8473,20 @@ function wireHandlers(){
   
   // сортировка/оптимизация
   $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
-  $("#optimizeBtn").addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-    optimizeQueue();
-  });
+  const optimizeAllBtn = document.getElementById('optimizeAllBtn');
+  if(optimizeAllBtn){
+    optimizeAllBtn.addEventListener('click', ()=>{
+      if(!userCanEdit()){ notifyReadOnly(); return; }
+      optimizeAllStages();
+    });
+  }
+  const optimizeStageBtn = document.getElementById('optimizeStageBtn');
+  if(optimizeStageBtn){
+    optimizeStageBtn.addEventListener('click', ()=>{
+      if(!userCanEdit()){ notifyReadOnly(); return; }
+      optimizeQueue();
+    });
+  }
 
   // готовые
   const showDoneBtn = document.getElementById('showDone');
