@@ -885,6 +885,7 @@ body.overview-fs-active{overflow:hidden}
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
         <label class="small"><input type="checkbox" id="cascadeReady"> Автоготовность при упаковке/отгрузке</label>
+        <label class="small"><input type="checkbox" id="confirmReadyTime"> Уточнять время готовности</label>
         <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
         <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
         <div class="row" style="gap:8px;align-items:center">
@@ -1153,6 +1154,81 @@ const fmtDate=d=>`${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1
 // dd.mm.yyyy — для CSV-экспорта состояния
 const fmtDateCSV = d => `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
 
+const fmtDateTimeLocal = (value) => {
+  const ensureDate = (input) => {
+    if(input instanceof Date) return input;
+    const parsed = new Date(input);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  const date = ensureDate(value);
+  if(!date) return '';
+  const pad = num => String(num).padStart(2,'0');
+  return `${pad(date.getDate())}.${pad(date.getMonth()+1)}.${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+function parseDateTimeInput(raw){
+  if(raw == null) return null;
+  if(raw instanceof Date){
+    return Number.isNaN(raw.getTime()) ? null : new Date(raw);
+  }
+  const str = String(raw).trim();
+  if(!str) return null;
+  const normalized = str.replace(/\s+/g,' ');
+  const match = normalized.match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})(?:[ T](\d{1,2})(?::(\d{1,2})(?::(\d{1,2}))?)?)?$/);
+  if(!match) return null;
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  let year = Number(match[3]);
+  if(Number.isNaN(day) || Number.isNaN(month) || Number.isNaN(year)) return null;
+  if(year < 100) year += 2000;
+  const hour = match[4] != null ? Number(match[4]) : 0;
+  const minute = match[5] != null ? Number(match[5]) : 0;
+  const second = match[6] != null ? Number(match[6]) : 0;
+  const date = new Date(year, month-1, day, hour, minute, second);
+  if(date.getFullYear() !== year || date.getMonth() !== month-1 || date.getDate() !== day) return null;
+  return date;
+}
+
+function safeDateTimeValue(val){
+  if(!val) return null;
+  if(val instanceof Date){
+    return Number.isNaN(val.getTime()) ? null : new Date(val);
+  }
+  const parsed = new Date(val);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+const composeMetaLine = (parts=[]) => parts.filter(part => {
+  if(part == null) return false;
+  const text = String(part).trim();
+  return text.length > 0;
+}).join(' • ');
+
+const INTERACTIVE_PROGRESS_SOURCES = new Set(['route-dialog','ui-progress','ui-checkbox']);
+
+const CHANGE_SOURCE_LABELS = {
+  csv: 'Импорт CSV',
+  csv_status: 'Импорт CSV',
+  'import-state': 'Импорт состояния',
+  export: 'Экспорт',
+  clear: 'Очистка',
+  delete: 'Удаление заказа',
+  filters: 'Изменение фильтров',
+  settings: 'Изменение настроек',
+  system: 'Системные изменения',
+  'undo->redo_done': 'Откат изменений'
+};
+
+function describeChangeType(source){
+  if(!source) return 'Изменение данных';
+  if(Object.prototype.hasOwnProperty.call(CHANGE_SOURCE_LABELS, source)){
+    return CHANGE_SOURCE_LABELS[source];
+  }
+  if(source.startsWith('csv')) return 'Импорт CSV';
+  if(source.startsWith('undo')) return 'Откат изменений';
+  return 'Изменение данных';
+}
+
 // скачать текст как .csv (с BOM для корректной кириллицы в Excel)
 function downloadText(filename, text){
   const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
@@ -1215,7 +1291,10 @@ function cloneTaskRecord(task){
     isDone: !!task.isDone,
     isTrash: !!task.isTrash,
     locked: !!task.locked || lockedUids.has(task.uid),
-    hiddenByState: !!task.hiddenByState
+    hiddenByState: !!task.hiddenByState,
+    doneMeta: task.doneMeta && task.doneMeta.when
+      ? { when: new Date(task.doneMeta.when), source: task.doneMeta.source || '' }
+      : (task.doneMeta ? { ...task.doneMeta } : null)
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1223,7 +1302,8 @@ function cloneTaskRecord(task){
       copy.route[st] = {
         hours: Number(seg.hours)||0,
         start: seg.start ? new Date(seg.start) : null,
-        end: seg.end ? new Date(seg.end) : null
+        end: seg.end ? new Date(seg.end) : null,
+        ...(seg.doneAt ? { doneAt: new Date(seg.doneAt) } : {})
       };
     } else {
       copy.route[st] = null;
@@ -1656,7 +1736,7 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#confirmReadyTime','#lockNewOrders','#lockNewOrdersCsv'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -1975,6 +2055,9 @@ function applyStateFromExternal(raw, opts={}){
       }
       if(summaryText){
         const who = opts.meta?.user || metaLastChange.user || opts.meta?.alias || userAlias || 'Пользователь';
+        const changeType = opts.meta?.changeType || metaLastChange.changeType || describeChangeType(opts.meta?.source || metaLastChange.source);
+        const timeLabel = metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '');
+        const metaLine = composeMetaLine([changeType, timeLabel, who]);
         let stageCandidates = Array.isArray(summaryCandidate?.stages) && summaryCandidate.stages.length ? summaryCandidate.stages : [];
         if(!stageCandidates.length && Array.isArray(metaLastChange.stages)){
           stageCandidates = metaLastChange.stages;
@@ -2003,9 +2086,10 @@ function applyStateFromExternal(raw, opts={}){
           user: who,
           time: metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '')
         };
+        const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
         showToast({
           title: `Обновление — ${stageLabel}`,
-          message: `${who}: ${summaryText}`,
+          message: messageHtml,
           actions:[
             {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
             {label:'OK', handler:(el)=> el.remove()}
@@ -2097,6 +2181,7 @@ let autoOptimizeOn = true;
 let lockNewOrders = false;
 let lockNewOrdersCsv = false;
 let cascadeReadyOn = false;
+let confirmReadyTimeOn = false;
 let ignoredStates = [];
 let ignoredStateSet = new Set();
 let csvFreshnessStr='—';
@@ -2381,7 +2466,8 @@ function buildDoneTaskRecord(rec){
   const extraRaw = rec.extra != null ? rec.extra : rec.extraHours;
   const extra = Number(extraRaw) || 0;
   const normalizedExtra = roundExtraForStage(stage, extra);
-  const when = rec.when ? safeDateValue(rec.when) : null;
+  const when = rec.when ? safeDateTimeValue(rec.when) : null;
+  const doneAt = rec.doneAt ? safeDateTimeValue(rec.doneAt) : when;
   const pseudo = {
     uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
     orderId: rec.orderId || '',
@@ -2401,10 +2487,12 @@ function buildDoneTaskRecord(rec){
     isDone: true,
     origStartDate: start || null,
     route: {},
-    doneMeta: { when, source: rec.source || '' }
+    doneMeta: doneAt ? { when: doneAt, source: rec.source || '' } : (when ? { when, source: rec.source || '' } : null)
   };
   if(stage){
-    pseudo.route[stage] = { hours, start, end };
+    const seg = { hours, start, end };
+    if(doneAt) seg.doneAt = new Date(doneAt);
+    pseudo.route[stage] = seg;
   }
   return pseudo;
 }
@@ -2771,13 +2859,25 @@ function purgeDoneFromStageCache(stage, doneList){
 function ensureDoneRecordFromTask(task, source='cascade', when){
   if(!task || !task.uid) return null;
   const orderKey = orderKeyForRecord(task);
+  const stamp = when instanceof Date ? new Date(when) : new Date();
+  assignCompletionMeta(task, task.stage || '', stamp, source);
+
   const existing = doneTasks.find(rec => rec && rec.uid === task.uid);
-  if(existing) return existing;
+  if(existing){
+    existing.when = stamp;
+    existing.doneAt = stamp;
+    if(source) existing.source = source;
+    return existing;
+  }
   if(orderKey){
     const existingByStage = doneTasks.find(rec => rec && (rec.stage||'') === task.stage && orderKeyForRecord(rec) === orderKey);
-    if(existingByStage) return existingByStage;
+    if(existingByStage){
+      existingByStage.when = stamp;
+      existingByStage.doneAt = stamp;
+      if(source) existingByStage.source = source;
+      return existingByStage;
+    }
   }
-  const stamp = when instanceof Date ? new Date(when) : new Date();
   const normalizeDate = value => {
     if(!value) return null;
     if(value instanceof Date) return new Date(value);
@@ -2797,6 +2897,7 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
     state: task.state || '',
     status: task.status || '',
     when: stamp,
+    doneAt: stamp,
     source: source || 'cascade'
   };
   doneTasks.push(record);
@@ -2942,9 +3043,12 @@ function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage=
     const end = seg?.end ? safeDateValue(seg.end) : null;
     const rawHours = Number(seg?.hours)||0;
     const hours = PARALLEL_STAGES.has(stage) ? 0 : rawHours;
+    const doneAt = seg?.doneAt ? safeDateTimeValue(seg.doneAt) : null;
     if(seg){
       total += hours;
-      route[stage] = { hours, start, end };
+      const record = { hours, start, end };
+      if(doneAt) record.doneAt = doneAt;
+      route[stage] = record;
     }
 
     const tasksForStage = stageMap?.get(stage) || [];
@@ -3140,6 +3244,12 @@ function renderRouteDialog(context){
       toggle.setAttribute('aria-disabled', canToggle ? 'false' : 'true');
       toggle.setAttribute('role', 'button');
       toggle.tabIndex = canToggle ? 0 : -1;
+      if(item.done){
+        const doneAt = item.seg?.doneAt ? safeDateTimeValue(item.seg.doneAt) : null;
+        toggle.title = doneAt ? `Закрыто ${fmtDateTimeLocal(doneAt)}` : 'Передел закрыт';
+      }else{
+        toggle.removeAttribute('title');
+      }
       row.appendChild(toggle);
 
       const label = document.createElement('span');
@@ -3284,6 +3394,32 @@ function compareTasksForOrdering(a, b){
   return aUid.localeCompare(bUid);
 }
 
+function assignCompletionMeta(task, stage, when, source){
+  if(!task || !stage) return;
+  const stamp = when instanceof Date ? new Date(when) : new Date();
+  if(!task.route) task.route = {};
+  const current = task.route[stage] ? { ...task.route[stage] } : {};
+  current.doneAt = new Date(stamp);
+  task.route[stage] = current;
+  task.doneMeta = {
+    ...(task.doneMeta || {}),
+    when: new Date(stamp),
+    source: source || task.doneMeta?.source || 'manual'
+  };
+  task.isDone = true;
+}
+
+function clearCompletionMeta(task, stage){
+  if(!task || !stage) return;
+  if(task.doneMeta) delete task.doneMeta;
+  if(task.route && task.route[stage]){
+    const seg = { ...task.route[stage] };
+    delete seg.doneAt;
+    task.route[stage] = seg;
+  }
+  task.isDone = false;
+}
+
 function applyStageProgress(identity, stage, value, options={}){
   if(!identity || !stage || stage === OVERVIEW_STAGE || !STAGES.includes(stage)) return false;
   ensureAllTasksCache();
@@ -3291,8 +3427,31 @@ function applyStageProgress(identity, stage, value, options={}){
   const normalized = clampProgressValue(value);
   const markDone = normalized >= 100;
   const today = today0();
-  const now = options.when instanceof Date ? new Date(options.when) : new Date();
+  const defaultMoment = options.when instanceof Date ? new Date(options.when) : new Date();
   const source = options.source || 'ui';
+  const interactive = options.interactive !== undefined
+    ? !!options.interactive
+    : INTERACTIVE_PROGRESS_SOURCES.has(source);
+  let completionMoment = new Date(defaultMoment);
+
+  if(markDone && confirmReadyTimeOn && interactive && !options.skipReadyPrompt){
+    const defaultText = fmtDateTimeLocal(completionMoment);
+    while(true){
+      const answer = prompt('Укажите дату и время готовности (ДД.ММ.ГГГГ ЧЧ:ММ). Оставьте значение без изменений, чтобы использовать текущие дату и время.', defaultText);
+      if(answer === null) return false;
+      const trimmed = String(answer).trim();
+      if(!trimmed){
+        completionMoment = new Date(defaultMoment);
+        break;
+      }
+      const parsed = parseDateTimeInput(trimmed);
+      if(parsed){
+        completionMoment = parsed;
+        break;
+      }
+      alert('Введите дату в формате ДД.ММ.ГГГГ и время ЧЧ:ММ.');
+    }
+  }
 
   const matches = collectStageEntities(identity, stage);
   const activeMatches = Array.isArray(matches?.active) ? matches.active : [];
@@ -3387,8 +3546,9 @@ function applyStageProgress(identity, stage, value, options={}){
       if(prevProgress < 100) changed = true;
       target.progress = 100;
       target.isDone = true;
-      ensureDoneRecordFromTask(target, source, now);
-      cascadeCompletionForTask(target, { when: now, updateUI:false });
+      assignCompletionMeta(target, stage, completionMoment, source);
+      ensureDoneRecordFromTask(target, source, completionMoment);
+      cascadeCompletionForTask(target, { when: completionMoment, updateUI:false });
       removeSet.add(uid);
     });
 
@@ -3438,6 +3598,7 @@ function applyStageProgress(identity, stage, value, options={}){
         shiftTaskStart(stored, prevProgress);
         stored.progress = normalized;
         stored.isDone = false;
+        clearCompletionMeta(stored, stage);
         updatedStored.set(uid, stored);
         return;
       }
@@ -3450,6 +3611,7 @@ function applyStageProgress(identity, stage, value, options={}){
         shiftTaskStart(copy, prevProgress);
         copy.progress = normalized;
         copy.isDone = false;
+        clearCompletionMeta(copy, stage);
         allTasksFromState.push(copy);
         updatedStored.set(uid, copy);
         return;
@@ -3462,6 +3624,7 @@ function applyStageProgress(identity, stage, value, options={}){
           shiftTaskStart(restored, clampProgressValue(restored.progress));
           restored.progress = normalized;
           restored.isDone = false;
+          clearCompletionMeta(restored, stage);
           allTasksFromState.push(restored);
           updatedStored.set(uid, restored);
           changed = true;
@@ -5513,6 +5676,18 @@ function mapOrdersFromTasks(ts){
       }
 
       const routeSeg = t.route?.[stage] || null;
+      if(routeSeg && routeSeg.doneAt){
+        const doneCandidate = safeDateTimeValue(routeSeg.doneAt);
+        if(doneCandidate && (!seg.doneAt || doneCandidate > seg.doneAt)){
+          seg.doneAt = doneCandidate;
+        }
+      }
+      if(t.doneMeta?.when){
+        const doneCandidate = safeDateTimeValue(t.doneMeta.when);
+        if(doneCandidate && (!seg.doneAt || doneCandidate > seg.doneAt)){
+          seg.doneAt = doneCandidate;
+        }
+      }
       const startCandidate = t.startDate || (routeSeg?.start ? new Date(routeSeg.start) : null);
       const endCandidate   = t.endDate   || (routeSeg?.end   ? new Date(routeSeg.end)   : null);
       if(startCandidate && (!seg.start || startCandidate < seg.start)) seg.start = new Date(startCandidate);
@@ -5542,6 +5717,7 @@ function mapOrdersFromTasks(ts){
       if(target && target._direct) return; // прямые данные приоритетны
 
       let start=null, end=null, hours=target ? target.hours||0 : 0;
+      let doneAtCandidate = target?.doneAt ? safeDateTimeValue(target.doneAt) : null;
       segments.forEach(seg=>{
         if(!seg) return;
         const h = Number(seg.hours)||0;
@@ -5552,6 +5728,12 @@ function mapOrdersFromTasks(ts){
         const e = seg.end   ? new Date(seg.end)   : null;
         if(s && (!start || s < start)) start = new Date(s);
         if(e && (!end   || e > end))   end   = new Date(e);
+        if(seg.doneAt){
+          const candidate = safeDateTimeValue(seg.doneAt);
+          if(candidate && (!doneAtCandidate || candidate > doneAtCandidate)){
+            doneAtCandidate = candidate;
+          }
+        }
       });
       if(PARALLEL_STAGES.has(stage)){
         hours = 0;
@@ -5562,6 +5744,7 @@ function mapOrdersFromTasks(ts){
       record.hours = PARALLEL_STAGES.has(stage) ? 0 : Math.max(record.hours||0, hours);
       if(start && (!record.start || start < record.start)) record.start = start;
       if(end   && (!record.end   || end   > record.end))   record.end   = end;
+      if(doneAtCandidate) record.doneAt = doneAtCandidate;
       order.stages[stage] = record;
     });
   });
@@ -6282,6 +6465,7 @@ function exportStateCSV(){
   lines.push(`lastManualTime${sep}${lastManualTime||''}`);
   lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
   lines.push(`cascadeReadyOn${sep}${cascadeReadyOn?1:0}`);
+  lines.push(`confirmReadyTimeOn${sep}${confirmReadyTimeOn?1:0}`);
 
   // EXCEPTIONS
   lines.push(`#SECTION;exceptions`);
@@ -6566,6 +6750,12 @@ function importStateFromCSV(text){
     cascadeReadyOn = !!Number(meta.cascadeReadyOn);
   }
   $("#cascadeReady").checked = !!cascadeReadyOn;
+
+  if(meta.confirmReadyTimeOn !== undefined && meta.confirmReadyTimeOn !== ''){
+    confirmReadyTimeOn = !!Number(meta.confirmReadyTimeOn);
+  }
+  const confirmBoxMeta = $("#confirmReadyTime");
+  if(confirmBoxMeta) confirmBoxMeta.checked = !!confirmReadyTimeOn;
 
   shiftOnProgress = !!Number(meta.shiftOnProgress);
   $("#shiftOnProgress").checked = shiftOnProgress;
@@ -7020,33 +7210,55 @@ function buildStateObject(){
     });
   }
   const mergedTasks = [...combined.values()];
-  const t = mergedTasks.map(x=>({
-    uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-    hours:x.hours, extraHours:x.extraHours,
-    startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
-    startMissing:!!x.startMissing, endMissing:!!x.endMissing,
-    state:x.state||'', status:x.status||'',
-    useReserve:!!x.useReserve, progress:x.progress||0,
-    origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
-    route:{
-      laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
-      bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'', end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
-      draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'', end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
-      weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'', end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
-      mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'', end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
-      proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'', end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
-      shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
-      pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'', end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
-      ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'', end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-    },
-    locked: !!x.locked || lockedUids.has(x.uid)
-  }));
+  const toIso = value => {
+    if(!value) return '';
+    if(value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.toISOString();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+  };
+  const serializeRouteSeg = seg => {
+    if(!seg) return null;
+    return {
+      hours: seg.hours || 0,
+      start: toIso(seg.start),
+      end: toIso(seg.end),
+      doneAt: toIso(seg.doneAt)
+    };
+  };
+  const t = mergedTasks.map(x=>{
+    const doneWhenIso = toIso(x.doneMeta?.when || (x.route?.[x.stage]?.doneAt ?? ''));
+    const doneMetaOut = doneWhenIso
+      ? { when: doneWhenIso, source: x.doneMeta?.source || '' }
+      : null;
+    return {
+      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+      hours:x.hours, extraHours:x.extraHours,
+      startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
+      startMissing:!!x.startMissing, endMissing:!!x.endMissing,
+      state:x.state||'', status:x.status||'',
+      useReserve:!!x.useReserve, progress:x.progress||0,
+      origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
+      route:{
+        laser: serializeRouteSeg(x.route?.laser),
+        bend:  serializeRouteSeg(x.route?.bend),
+        draw:  serializeRouteSeg(x.route?.draw),
+        weld:  serializeRouteSeg(x.route?.weld),
+        mech:  serializeRouteSeg(x.route?.mech),
+        proc:  serializeRouteSeg(x.route?.proc),
+        shear: serializeRouteSeg(x.route?.shear),
+        pack:  serializeRouteSeg(x.route?.pack),
+        ship:  serializeRouteSeg(x.route?.ship)
+      },
+      locked: !!x.locked || lockedUids.has(x.uid),
+      doneMeta: doneMetaOut
+    };
+  });
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
     parentId:x.parentId||'', childId:x.childId||'',
     hours:x.hours, extra:x.extra,
     start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-    when:x.when?x.when.toISOString():'', source:x.source||''
+    when:x.when?x.when.toISOString():'', doneAt:x.doneAt?x.doneAt.toISOString():'', source:x.source||''
   }));
 
   const trashArr = trash.map(x=>({
@@ -7099,6 +7311,7 @@ function buildStateObject(){
     autosaveOn,
     autoOptimizeOn,
     cascadeReadyOn,
+    confirmReadyTimeOn,
     shiftOnProgress,
     ignoredStates: ignoredStates.slice(),
     meta: {
@@ -7130,7 +7343,8 @@ function normalizeRouteForDiff(route){
     return {
       hours:Number(part.hours||0),
       start:part.start ? (part.start instanceof Date ? part.start.toISOString() : String(part.start)) : '',
-      end:part.end ? (part.end instanceof Date ? part.end.toISOString() : String(part.end)) : ''
+      end:part.end ? (part.end instanceof Date ? part.end.toISOString() : String(part.end)) : '',
+      doneAt:part.doneAt ? (part.doneAt instanceof Date ? part.doneAt.toISOString() : String(part.doneAt)) : ''
     };
   };
   return {
@@ -7743,7 +7957,9 @@ function renderLogList(){
       const singleStage = stageCandidates[0];
       stageName = STAGE_TITLE[singleStage] || singleStage;
     }
-    const meta = `${entry.time || ''} • ${entry.user||'Неизвестный'} • ${entry.source || ''}`;
+    const metaType = entry.changeType || describeChangeType(entry.source);
+    const metaUser = entry.user || 'Неизвестный';
+    const meta = composeMetaLine([metaType, entry.time || '', metaUser]);
     const summary = entry.summary
       || summarizeOrdersSummary(entry.ordersSummary)
       || summarizeDiffLike(entry.diff, entry.stage);
@@ -7811,7 +8027,17 @@ function showToast({title, message, actions=[]}){
 }
 
 function announceStateUpdate(payload){
-  const msg = { type:'state-update', ...payload, alias:userAlias, session:SESSION_ID, timestamp:Date.now() };
+  const computedType = payload && Object.prototype.hasOwnProperty.call(payload, 'changeType') && payload.changeType != null
+    ? payload.changeType
+    : describeChangeType(payload?.source);
+  const msg = {
+    type:'state-update',
+    ...payload,
+    changeType: computedType,
+    alias:userAlias,
+    session:SESSION_ID,
+    timestamp:Date.now()
+  };
   if(broadcastChannel){
     try{ broadcastChannel.postMessage(msg); }catch(_){ /* ignore */ }
   }
@@ -7845,19 +8071,23 @@ function handleIncomingSyncMessage(msg){
       }else if(!msg.stage || msg.stage === 'multi'){
         stageLabel = 'Несколько переделов';
       }
-      const who = msg.user || msg.alias || 'Пользователь';
+      const userLabel = msg.user || msg.alias || 'Пользователь';
+      const changeType = msg.changeType || describeChangeType(msg.source);
+      const timeLabel = msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '');
+      const metaLine = composeMetaLine([changeType, timeLabel, userLabel]);
       const detailStage = stageCandidates.length > 1 ? null : (stageCandidates[0] || msg.stage || null);
       const detailPayload = {
         ordersSummary: msg.ordersSummary || null,
         diff: msg.diff || null,
         stage: detailStage,
         authors: msg.authors || null,
-        user: who,
+        user: userLabel,
         time: msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '')
       };
+      const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
       showToast({
         title: `Изменения — ${stageLabel}`,
-        message: `${who}: ${summaryText}`,
+        message: messageHtml,
         actions:[
           {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
           {label:'OK', handler:(el)=> el.remove()}
@@ -7935,18 +8165,21 @@ function restoreState(json, opts={}){
         progress: x.progress||0,
         origStartDate: x.origStartDate?new Date(x.origStartDate):null,
         route:{
-          laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
-          bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
-          draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
-          weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
-          mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null,
-          proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null}     : null,
-          shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
-          pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null}     : null,
-          ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null}     : null
+          laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null, doneAt:x.route.laser.doneAt?new Date(x.route.laser.doneAt):null} : null,
+          bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null, doneAt:x.route.bend.doneAt?new Date(x.route.bend.doneAt):null}     : null,
+          draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null, doneAt:x.route.draw.doneAt?new Date(x.route.draw.doneAt):null}     : null,
+          weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null, doneAt:x.route.weld.doneAt?new Date(x.route.weld.doneAt):null}     : null,
+          mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null, doneAt:x.route.mech.doneAt?new Date(x.route.mech.doneAt):null}     : null,
+          proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,     end:x.route.proc.end?new Date(x.route.proc.end):null, doneAt:x.route.proc.doneAt?new Date(x.route.proc.doneAt):null}     : null,
+          shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null, doneAt:x.route.shear.doneAt?new Date(x.route.shear.doneAt):null} : null,
+          pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null, doneAt:x.route.pack.doneAt?new Date(x.route.pack.doneAt):null}     : null,
+          ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null, doneAt:x.route.ship.doneAt?new Date(x.route.ship.doneAt):null}     : null
         },
         locked: lockedSet.has(x.uid) || !!x.locked
       };
+      if(x.doneMeta && x.doneMeta.when){
+        rec.doneMeta = { when: new Date(x.doneMeta.when), source: x.doneMeta.source || '' };
+      }
       applyIgnoredStateToTask(rec);
       return rec;
     });
@@ -7964,7 +8197,7 @@ function restoreState(json, opts={}){
       parentId:x.parentId||'', childId:x.childId||'',
       hours:x.hours, extra:x.extra,
       start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
-      when:x.when?new Date(x.when):null, source:x.source||''
+      when:x.when?new Date(x.when):null, doneAt:x.doneAt?new Date(x.doneAt): (x.when? new Date(x.when): null), source:x.source||''
     }));
 
     trash = (s.trash||[]).map(x=>({
@@ -8034,11 +8267,14 @@ function restoreState(json, opts={}){
     if(activityLog.length){
       activityLog = activityLog.map(entry=>{
         if(!entry) return entry;
-        if(entry.ordersSummary || !entry.diff || !diffHasChanges(entry.diff)) return entry;
+        const changeType = entry.changeType || describeChangeType(entry.source);
+        if(entry.ordersSummary || !entry.diff || !diffHasChanges(entry.diff)){
+          return { ...entry, changeType };
+        }
         const stageHint = (entry.stage && entry.stage !== 'multi' && entry.stage !== 'settings') ? entry.stage : null;
         const summary = buildOrdersSummary(entry.diff, stageHint);
-        if(!summary) return entry;
-        return { ...entry, ordersSummary: summary };
+        if(!summary) return { ...entry, changeType };
+        return { ...entry, ordersSummary: summary, changeType };
       });
       stateMeta.history = activityLog.slice(-LOG_LIMIT);
     }
@@ -8079,6 +8315,9 @@ function restoreState(json, opts={}){
     if(s.cascadeReadyOn !== undefined){
       cascadeReadyOn = !!s.cascadeReadyOn;
     }
+    if(s.confirmReadyTimeOn !== undefined){
+      confirmReadyTimeOn = !!s.confirmReadyTimeOn;
+    }
     applyUiPreferences(loadedPrefs);
     saveUiPreferences();
 
@@ -8095,6 +8334,8 @@ function restoreState(json, opts={}){
     sortBySavedOrder(tasks, $("#process").value);
     recompute();
     updateTrashAttention?.();
+    const confirmElRestore = $("#confirmReadyTime");
+    if(confirmElRestore) confirmElRestore.checked = !!confirmReadyTimeOn;
   }catch(e){ console.warn('restoreState failed', e); }
   refreshDataModeIndicator();
 }
@@ -8122,15 +8363,15 @@ function loadStageFromLS(stage){
       useReserve: !!x.useReserve, progress: x.progress||0,
       origStartDate: x.origStartDate? new Date(x.origStartDate): null,
       route:{
-        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
-        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,   end:x.route.bend.end?new Date(x.route.bend.end):null}   : null,
-        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,   end:x.route.draw.end?new Date(x.route.draw.end):null}   : null,
-        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,   end:x.route.weld.end?new Date(x.route.weld.end):null}   : null,
-        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,   end:x.route.mech.end?new Date(x.route.mech.end):null}   : null,
-        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,   end:x.route.proc.end?new Date(x.route.proc.end):null}   : null,
-        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
-        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null}   : null,
-        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null}   : null
+        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null, doneAt:x.route.laser.doneAt?new Date(x.route.laser.doneAt):null} : null,
+        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,   end:x.route.bend.end?new Date(x.route.bend.end):null, doneAt:x.route.bend.doneAt?new Date(x.route.bend.doneAt):null}   : null,
+        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,   end:x.route.draw.end?new Date(x.route.draw.end):null, doneAt:x.route.draw.doneAt?new Date(x.route.draw.doneAt):null}   : null,
+        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,   end:x.route.weld.end?new Date(x.route.weld.end):null, doneAt:x.route.weld.doneAt?new Date(x.route.weld.doneAt):null}   : null,
+        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,   end:x.route.mech.end?new Date(x.route.mech.end):null, doneAt:x.route.mech.doneAt?new Date(x.route.mech.doneAt):null}   : null,
+        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,   end:x.route.proc.end?new Date(x.route.proc.end):null, doneAt:x.route.proc.doneAt?new Date(x.route.proc.doneAt):null}   : null,
+        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null, doneAt:x.route.shear.doneAt?new Date(x.route.shear.doneAt):null} : null,
+        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null, doneAt:x.route.pack.doneAt?new Date(x.route.pack.doneAt):null}   : null,
+        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null, doneAt:x.route.ship.doneAt?new Date(x.route.ship.doneAt):null}   : null
       },
       locked: lockedSet.has(x.uid) || !!x.locked
     }));
@@ -8195,6 +8436,7 @@ function persistNow(stageOverride, opts={}){
         ? multiStage.ordersSummary
         : buildOrdersSummary(combinedDiff);
       const combinedSummaryText = summarizeOrdersSummary(combinedSummary);
+      const changeType = describeChangeType(source);
 
       const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
       meaningfulEntries.forEach(entry=>{
@@ -8234,6 +8476,7 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
+          changeType,
           summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
           diff: combinedDiff,
           authors: authorsMap,
@@ -8268,7 +8511,8 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           source,
           time: nowStr,
-          ordersSummary: combinedSummary || null
+          ordersSummary: combinedSummary || null,
+          changeType
         }
       };
 
@@ -8301,7 +8545,8 @@ function persistNow(stageOverride, opts={}){
           summary: (combinedSummaryText || multiStage.summary || stageSummaryParts.join('; ')) || undefined,
           authors: authorsMap,
           ordersSummary: combinedSummary || null,
-          time: nowStr
+          time: nowStr,
+          changeType
         })
           .then(()=> setDataMode('remote'))
           .catch(async err=>{
@@ -8373,7 +8618,8 @@ function persistNow(stageOverride, opts={}){
           authors: authorsMap,
           summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
           ordersSummary: combinedSummary || null,
-          time: nowStr
+          time: nowStr,
+          changeType
         });
       }
     }catch(e){
@@ -8485,6 +8731,7 @@ function persistNow(stageOverride, opts={}){
     const ordersSummary = diffChanged ? buildOrdersSummary(diff, curStage) : null;
     const changeSummaryText = summarizeOrdersSummary(ordersSummary)
       || summarizeDiffLike(diff, curStage);
+    const changeType = describeChangeType(source);
 
     // merge tasks from other стадий
     if(prevTasks.length){
@@ -8535,6 +8782,7 @@ function persistNow(stageOverride, opts={}){
           user: userAlias,
           session: SESSION_ID,
           source,
+          changeType,
           summary: changeSummaryText,
           diff,
           authors: authorsMap,
@@ -8561,6 +8809,7 @@ function persistNow(stageOverride, opts={}){
         user: userAlias,
         session: SESSION_ID,
         source: 'settings',
+        changeType: describeChangeType('settings'),
         summary: settingsSummary,
         diff: null,
         settings: {
@@ -8596,7 +8845,8 @@ function persistNow(stageOverride, opts={}){
         user: userAlias,
         source,
         time: nowStr,
-        ordersSummary: diffChanged ? (ordersSummary || null) : null
+        ordersSummary: diffChanged ? (ordersSummary || null) : null,
+        changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType
       }
     };
 
@@ -8643,6 +8893,7 @@ function persistNow(stageOverride, opts={}){
           authors: remoteAuthors,
           ordersSummary: remoteOrdersSummary,
           time: nowStr,
+          changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
           ...remoteExtras
         })
           .then(()=> setDataMode('remote'))
@@ -8716,7 +8967,8 @@ function persistNow(stageOverride, opts={}){
             entries: settingsChange.entries,
             summary: settingsSummary,
             updatedAt: stateMeta.settings?.updatedAt || nowStr
-          }
+          },
+          changeType: describeChangeType('settings')
         });
       }
       if(diffChanged){
@@ -8730,7 +8982,8 @@ function persistNow(stageOverride, opts={}){
           authors: payloadAuthors,
           summary: summaryForMeta,
           ordersSummary: ordersSummary || null,
-          time: nowStr
+          time: nowStr,
+          changeType
         });
       }
     }
@@ -9598,6 +9851,12 @@ function wireHandlers(){
     if(!userCanEdit()){ e.target.checked = cascadeReadyOn; notifyReadOnly(); return; }
     cascadeReadyOn = !!e.target.checked;
     persistSharedPreference('cascadeReadyOn', 'Автоготовность при упаковке/отгрузке', cascadeReadyOn);
+  });
+
+  $("#confirmReadyTime").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = confirmReadyTimeOn; notifyReadOnly(); return; }
+    confirmReadyTimeOn = !!e.target.checked;
+    persistSharedPreference('confirmReadyTimeOn', 'Уточнять время готовности', confirmReadyTimeOn);
   });
 
   // Гант — FS
