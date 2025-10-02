@@ -247,7 +247,11 @@ td[data-field="progress"]{background:#fffef3}
 .chip.green{background:#22c55e}
 .chip.amber{background:#f59e0b}
 .chip.red{background:#ef4444}
-.orders-search-row{display:flex;align-items:center;gap:8px;margin:12px 0}
+.orders-toolbar-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0}
+.orders-toolbar-row>*{flex:0 0 auto}
+.orders-toolbar-row .orders-overview-controls{margin:0}
+.orders-toolbar-row .orders-search-row{margin:0;margin-left:auto}
+.orders-search-row{display:flex;align-items:center;gap:8px;margin:0}
 .orders-search-row input{flex:0 1 50ch;width:min(50ch,100%);min-width:200px;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:13px;color:#0f172a;background:#fff}
 .orders-search-row input:focus{outline:2px solid #bfdbfe;outline-offset:1px}
 .orders-search-clear{width:32px;height:32px;border-radius:999px;border:1px solid #cbd5e1;background:#f1f5f9;color:#475569;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1}
@@ -569,29 +573,31 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       </div>
     </div>
 
-    <div class="orders-search-row" id="ordersSearchRow">
-      <input id="orderSearchInput" type="search" placeholder="Поиск заказа" autocomplete="off" spellcheck="false">
-      <button id="orderSearchClear" class="orders-search-clear" type="button" aria-label="Сбросить поиск">✕</button>
-    </div>
+    <div class="orders-toolbar-row">
+      <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
+        <label>Фильтр:
+          <select id="ordersOverviewFilter">
+            <option value="current" selected>Текущие</option>
+            <option value="all">Все заказы</option>
+            <option value="done">Готовые</option>
+          </select>
+        </label>
+      </div>
 
-    <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
-      <label>Фильтр:
-        <select id="ordersOverviewFilter">
-          <option value="current" selected>Текущие</option>
-          <option value="all">Все заказы</option>
-          <option value="done">Готовые</option>
-        </select>
-      </label>
-    </div>
+      <div class="orders-overview-controls" id="stageFilterControls" style="display:none">
+        <label>Фильтр:
+          <select id="stageOrdersFilter">
+            <option value="current" selected>Текущие</option>
+            <option value="all">Все заказы</option>
+            <option value="done">Готовые</option>
+          </select>
+        </label>
+      </div>
 
-    <div class="orders-overview-controls" id="stageFilterControls" style="display:none">
-      <label>Фильтр:
-        <select id="stageOrdersFilter">
-          <option value="current" selected>Текущие</option>
-          <option value="all">Все заказы</option>
-          <option value="done">Готовые</option>
-        </select>
-      </label>
+      <div class="orders-search-row" id="ordersSearchRow">
+        <input id="orderSearchInput" type="search" placeholder="Поиск заказа" autocomplete="off" spellcheck="false">
+        <button id="orderSearchClear" class="orders-search-clear" type="button" aria-label="Сбросить поиск">✕</button>
+      </div>
     </div>
 
     <div class="table-wrap" id="ordersOverviewPanel" style="display:none">
@@ -3225,12 +3231,7 @@ function applyStageProgressFromOverview(identity, stage, value){
   updateStageSnapshotFromAggregated(stage);
 
   updateDoneAttention();
-  if(currentProc === stage){
-    recompute();
-  }else{
-    renderOrdersOverviewTable();
-    rebuildAndRenderMasterRoute();
-  }
+  recompute();
   persistMaybe();
   return true;
 }
@@ -4685,7 +4686,17 @@ function renderTasksTable(){
 
     const eye = tr.querySelector('.eye');
     if(eye){
-      eye.addEventListener('click', ()=> openRoute(t));
+      eye.addEventListener('click', ()=>{
+        ensureAllTasksCache();
+        const identity = {
+          orderKey: orderKeyForRecord(t),
+          parentId: t.parentId ? String(t.parentId).trim() : '',
+          orderId: t.orderId || '',
+          orderIdNorm: normalizeOrderSearch(t.orderId || '')
+        };
+        const payload = collectOrderPayloadForIdentity(identity);
+        openRoute(payload || t);
+      });
     }
 
     tr.querySelectorAll('[contenteditable]').forEach(cell=>{
@@ -4773,6 +4784,7 @@ function renderTasksTable(){
    МАРШРУТ (диалог «глаз») — иконки + суммы
 ========= */
 function openRoute(source){
+  ensureAllTasksCache();
   const context = buildRouteContextFromSource(source);
   if(!context){
     alert('Маршрут заказа недоступен.');
