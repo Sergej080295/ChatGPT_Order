@@ -288,6 +288,8 @@ td[data-field="progress"]{background:#fffef3}
 .status-ok{background:var(--ok);color:var(--okText);font-weight:600;border-radius:6px}
 .status-early{background:var(--early);color:var(--earlyText);font-weight:600;border-radius:6px}
 .status-late{background:var(--late);color:var(--lateText);font-weight:600;border-radius:6px}
+.status-done{background:#dcfce7;color:#166534;font-weight:600;border-radius:6px}
+.done-row{opacity:.85}
 
 /* сайдбар: «Сорваны сроки» */
 .overdue-list{display:grid;gap:8px}
@@ -416,8 +418,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 #tasksTable[data-nohours="1"] tbody td:nth-child(9) { display:none }
 /* Безчасовые этапы: убираем колонку «Бронь» */
 #tasksTable[data-nohours="1"] col#colReserve { display:none }
-#tasksTable[data-nohours="1"] thead th:nth-child(14) { display:none }
-#tasksTable[data-nohours="1"] tbody td:nth-child(14) { display:none }
+#tasksTable[data-nohours="1"] thead th:nth-child(13) { display:none }
+#tasksTable[data-nohours="1"] tbody td:nth-child(13) { display:none }
 
 /* итоговую строку «Итого» для безчасовых не показываем */
 #tasksTable[data-nohours="1"] tfoot { display:none }
@@ -529,7 +531,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <div class="row" style="justify-content:space-between;align-items:center">
       <h3>Список заказов</h3>
       <div class="row">
-        <button id="showDone" class="btn ghost">Готовые</button>
         <button id="showTrash" class="btn ghost">Корзина</button>
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
         <button id="addOrder" class="btn">Добавить</button>
@@ -544,6 +545,16 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
       <label>Фильтр:
         <select id="ordersOverviewFilter">
+          <option value="current" selected>Текущие</option>
+          <option value="all">Все заказы</option>
+          <option value="done">Готовые</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="orders-overview-controls" id="stageFilterControls" style="display:none">
+      <label>Фильтр:
+        <select id="stageOrdersFilter">
           <option value="current" selected>Текущие</option>
           <option value="all">Все заказы</option>
           <option value="done">Готовые</option>
@@ -759,7 +770,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
-    <label class="small"><input type="checkbox" id="lockNewOrders"> Все новые заказы создавать с замком и ставить в конец списка</label>
+    <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
     <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
     <div class="row" style="gap:8px;align-items:center">
       <button id="ignoredStatesBtn" class="btn small ghost" type="button">Исключить состояния…</button>
@@ -2096,6 +2107,45 @@ function sortBySavedOrder(arr, stage){
 const OVERVIEW_STAGE = 'orders';
 const ORDER_LIST_FILTERS = new Set(['current','all','done']);
 const ORDER_FILTER_DEFAULT = 'current';
+const stageListFilterByStage = new Map();
+
+function getStageListFilter(stage){
+  const key = stage || currentProc || '';
+  if(!key) return ORDER_FILTER_DEFAULT;
+  return stageListFilterByStage.get(key) || ORDER_FILTER_DEFAULT;
+}
+
+function setStageListFilter(stage, mode){
+  const key = stage || currentProc || '';
+  if(!key) return;
+  const normalized = ORDER_LIST_FILTERS.has(mode) ? mode : ORDER_FILTER_DEFAULT;
+  stageListFilterByStage.set(key, normalized);
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  if(currentStage === key){
+    const select = document.getElementById('stageOrdersFilter');
+    if(select && select.value !== normalized){
+      select.value = normalized;
+    }
+  }
+}
+
+function updateStageFilterControls(stage){
+  const currentStage = stage || document.getElementById('process')?.value || currentProc || '';
+  if(currentStage && currentStage !== OVERVIEW_STAGE && !stageListFilterByStage.has(currentStage)){
+    stageListFilterByStage.set(currentStage, ORDER_FILTER_DEFAULT);
+  }
+  const wrap = document.getElementById('stageFilterControls');
+  if(wrap){
+    wrap.style.display = currentStage === OVERVIEW_STAGE ? 'none' : '';
+  }
+  const select = document.getElementById('stageOrdersFilter');
+  if(select){
+    const mode = getStageListFilter(currentStage);
+    if(select.value !== mode){
+      select.value = mode;
+    }
+  }
+}
 
 function collectActiveTasksForOverview(){
   const doneSet = new Set(doneTasks.map(d=>d && d.uid).filter(Boolean));
@@ -2169,6 +2219,94 @@ function safeDateValue(val){
   if(Number.isNaN(parsed.getTime())) return null;
   parsed.setHours(0,0,0,0);
   return parsed;
+}
+
+function buildDoneTaskRecord(rec){
+  if(!rec) return null;
+  const stage = rec.stage || '';
+  const start = safeDateValue(rec.start);
+  const end = safeDateValue(rec.end);
+  const hours = Number(rec.hours) || 0;
+  const extraRaw = rec.extra != null ? rec.extra : rec.extraHours;
+  const extra = Number(extraRaw) || 0;
+  const when = rec.when ? safeDateValue(rec.when) : null;
+  const pseudo = {
+    uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
+    orderId: rec.orderId || '',
+    stage,
+    childId: rec.childId || '',
+    parentId: rec.parentId || '',
+    hours,
+    extraHours: extra,
+    startDate: start,
+    endDate: end,
+    startMissing: !start,
+    endMissing: !end,
+    state: rec.state || '',
+    status: rec.status || '',
+    useReserve: false,
+    progress: 100,
+    origStartDate: start || null,
+    route: {},
+    doneMeta: { when, source: rec.source || '' }
+  };
+  if(stage){
+    pseudo.route[stage] = { hours, start, end };
+  }
+  return pseudo;
+}
+
+function restoreDoneRecordAtIndex(idx, stage){
+  if(idx == null || idx < 0 || idx >= doneTasks.length) return null;
+  const record = doneTasks[idx];
+  if(!record) return null;
+  const targetStage = record.stage || '';
+  const currentStage = stage || document.getElementById('process')?.value || currentProc || '';
+  if(targetStage && currentStage && targetStage !== currentStage){
+    alert(`Этот заказ относится к переделу «${STAGE_TITLE[targetStage] || targetStage}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
+    return null;
+  }
+  const parsed = splitUid(record.uid);
+  const childId = record.childId || (parsed ? parsed.childId : '');
+  const parentId = record.parentId || findParentIdByChild(childId);
+  const start = safeDateValue(record.start) || today0();
+  const end = safeDateValue(record.end);
+  const stageForTask = targetStage || currentStage;
+  const route = {};
+  STAGES.forEach(st => { route[st] = null; });
+  if(stageForTask){
+    route[stageForTask] = { hours: (+record.hours || 0), start, end };
+  }
+  const restored = {
+    uid: record.uid || ('restored::' + Date.now()),
+    orderId: record.orderId,
+    stage: stageForTask,
+    childId,
+    parentId,
+    hours: record.hours,
+    extraHours: Math.max(0.25, (+record.hours || 0) * 0.05),
+    startDate: start,
+    endDate: end,
+    startMissing: !record.start,
+    endMissing: !record.end,
+    state: record.state || '',
+    status: record.status || '',
+    useReserve: false,
+    progress: 0,
+    origStartDate: start,
+    route,
+    isNew: true
+  };
+  applyIgnoredStateToTask(restored);
+  doneTasks.splice(idx,1);
+  tasks.push(restored);
+  if(typeof sortTasksByStart === 'function') sortTasksByStart();
+  updateDoneAttention();
+  rememberStageOrder(stageForTask);
+  recompute();
+  rebuildAndRenderMasterRoute();
+  persistMaybe();
+  return restored;
 }
 
 function gatherAllStageTasks(){
@@ -2251,33 +2389,10 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
   doneTasks.forEach(rec => {
     const key = orderKeyForRecord(rec);
     if(!key) return;
-    const stage = rec.stage || '';
-    const start = safeDateValue(rec.start);
-    const end = safeDateValue(rec.end);
-    const hours = Number(rec.hours)||0;
-    const extra = Number(rec.extra)||0;
-    const pseudo = {
-      uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
-      orderId: rec.orderId || '',
-      stage,
-      childId: rec.childId || '',
-      parentId: rec.parentId || '',
-      hours,
-      extraHours: extra,
-      startDate: start,
-      endDate: end,
-      startMissing: !start,
-      endMissing: !end,
-      state: rec.state || '',
-      status: rec.status || '',
-      useReserve:false,
-      progress:100,
-      origStartDate: start,
-      route: {}
-    };
-    if(stage){
-      pseudo.route[stage] = { hours, start, end };
-      doneStageSet.add(`${key}::${stage}`);
+    const pseudo = buildDoneTaskRecord(rec);
+    if(!pseudo) return;
+    if(pseudo.stage){
+      doneStageSet.add(`${key}::${pseudo.stage}`);
     }
     donePseudoTasks.push(pseudo);
     registerTask(pseudo);
@@ -2544,7 +2659,13 @@ function adjustOrdersOverviewHeight(){
   const rect = panel.getBoundingClientRect();
   if(!rect || Number.isNaN(rect.top)) return;
   const bottomGap = 32;
-  const available = Math.max(240, window.innerHeight - rect.top - bottomGap);
+  let totalsHeight = 0;
+  const totals = document.getElementById('ordersOverviewTotals');
+  if(totals && totals.style.display !== 'none' && totals.offsetParent !== null){
+    const totalsRect = totals.getBoundingClientRect();
+    totalsHeight = (totalsRect?.height || totals.offsetHeight || 0) + 16;
+  }
+  const available = Math.max(240, window.innerHeight - rect.top - bottomGap - totalsHeight);
   panel.style.maxHeight = `${available}px`;
   panel.style.height = `${available}px`;
 }
@@ -2562,6 +2683,15 @@ function toggleOverviewMode(enabled){
   }
   const controls = document.getElementById('ordersOverviewControls');
   if(controls){ controls.style.display = enabled ? '' : 'none'; }
+  const stageControls = document.getElementById('stageFilterControls');
+  if(stageControls){
+    if(enabled){
+      stageControls.style.display = 'none';
+    } else {
+      stageControls.style.display = '';
+      updateStageFilterControls();
+    }
+  }
   const totals = document.getElementById('ordersOverviewTotals');
   if(totals){ totals.style.display = enabled ? '' : 'none'; }
 
@@ -2696,6 +2826,7 @@ function adjustUIForProcess(p){
     if(exceptionsBtn) exceptionsBtn.style.display = 'none';
     const detail = document.getElementById('detail7');
     if(detail) detail.style.display = 'none';
+    updateStageFilterControls(p);
     return;
   }
 
@@ -2712,6 +2843,7 @@ function adjustUIForProcess(p){
   if(exceptionsBtn) exceptionsBtn.style.display = noHours ? 'none' : '';
   const detail = document.getElementById('detail7');
   if(detail) detail.style.display = noHours ? 'none' : '';
+  updateStageFilterControls(p);
 }
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
@@ -3432,43 +3564,96 @@ function applyEditImmediate(cell, task){
   }
 }
 function renderTasksTable(){
-  const tb=$("#tasksTable tbody"); tb.innerHTML='';
+  const tbody = $("#tasksTable tbody");
+  if(!tbody) return;
+  tbody.innerHTML = '';
   const canEdit = userCanEdit();
-  const visibleEntries = tasks.map((task, index)=>({ task, index })).filter(entry=> !entry.task.hiddenByState);
-  const filteredEntries = orderSearchNormalized ? visibleEntries.filter(({ task })=> taskMatchesSearch(task)) : visibleEntries;
-  filteredEntries.forEach(({ task: t, index: i }, visibleIndex)=>{
-    const st=statusForTask(t);
+  const stage = document.getElementById('process')?.value || currentProc || '';
+  if(stage === OVERVIEW_STAGE){
+    renderOrdersOverviewTable();
+    return;
+  }
+  const filterMode = getStageListFilter(stage);
+  const includeActive = filterMode !== 'done';
+  const includeDone = filterMode !== 'current';
+
+  const activeEntriesBase = includeActive
+    ? tasks.map((task, index)=>({ task, index, source:'active' })).filter(entry=> !entry.task.hiddenByState)
+    : [];
+  const filteredActive = orderSearchNormalized
+    ? activeEntriesBase.filter(({ task })=> taskMatchesSearch(task))
+    : activeEntriesBase;
+
+  let doneEntries = [];
+  if(includeDone){
+    doneEntries = doneTasks
+      .map((rec, idx)=>({ rec, idx }))
+      .filter(({ rec })=> (rec?.stage || '') === stage)
+      .map(({ rec, idx })=>{
+        const task = buildDoneTaskRecord(rec);
+        return task ? { task, doneIndex: idx, source:'done' } : null;
+      })
+      .filter(Boolean);
+    if(orderSearchNormalized){
+      doneEntries = doneEntries.filter(entry => taskMatchesSearch(entry.task));
+    }
+  }
+
+  let rowsToRender = [];
+  if(filterMode === 'current'){
+    rowsToRender = filteredActive;
+  } else if(filterMode === 'done'){
+    rowsToRender = doneEntries;
+  } else {
+    rowsToRender = filteredActive.concat(doneEntries);
+  }
+
+  rowsToRender.forEach((entry, visibleIndex)=>{
+    const isDoneRecord = entry.source === 'done';
+    const t = entry.task;
+    const taskIndex = isDoneRecord ? -1 : entry.index;
+    const status = isDoneRecord ? { text: 'Готово', cls: 'status-done' } : statusForTask(t);
     const rest = Math.max(0, remainingTotal(t));
-    const tr=document.createElement('tr');
-    tr.draggable=canEdit; tr.dataset.index=i; if(t.isNew) tr.classList.add('newRow');
+    const allowEdit = canEdit && !isDoneRecord;
+    const progressText = String(t.progress ?? 0).replace('.',',');
+    const hoursText = String(t.hours ?? 0).replace('.',',');
+    const extraText = String(t.extraHours ?? 0).replace('.',',');
+    const restText = rest.toFixed(1).replace('.',',');
+    const startText = t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
+    const endText = t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
+    const origChanged = t.origStartDate instanceof Date && t.startDate instanceof Date && (+t.origStartDate !== +t.startDate);
+    const origMarkup = origChanged ? `<span class="orig">исх.: ${fmtDate(t.origStartDate)}</span>` : '';
+    const useReserve = t.useReserve ? 'checked' : '';
+    const orderAttrs = (allowEdit && t.isUserNew) ? 'contenteditable="true" data-field="orderId"' : 'contenteditable="false"';
 
-    const useRes   = t.useReserve ? 'checked' : '';
+    const tr = document.createElement('tr');
+    tr.draggable = allowEdit;
+    tr.dataset.index = isDoneRecord ? '' : String(taskIndex);
+    if(t.isNew && allowEdit) tr.classList.add('newRow');
+    if(isDoneRecord) tr.classList.add('done-row');
 
-    tr.innerHTML=`
-      <td>${visibleIndex+1}</td>
+    tr.innerHTML = `
+      <td>${visibleIndex + 1}</td>
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
       <td class="eye" title="Маршрут заказа">👁</td>
-      <td class="drag-handle" ${(canEdit && t.isUserNew)?'contenteditable="true" data-field="orderId"':''}>${t.orderId}</td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="progress">${String(t.progress||0).replace('.',',')}</td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="hours">${String(t.hours).replace('.',',')}</td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="extraHours">${String(t.extraHours??0.25).replace('.',',')}</td>
-      <td class="rest-cell">${rest.toFixed(1).replace('.',',')}</td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="startDate" class="start-cell ${t.startMissing?'error':''}">
-          ${fmtDate(t.startDate)}
-          ${t.origStartDate && (+t.origStartDate!==+t.startDate) ? `<span class="orig">исх.: ${fmtDate(t.origStartDate)}</span>`:''}
-      </td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="endDate"   class="${t.endMissing?'error':''}">${t.endDate?fmtDate(t.endDate):'—'}</td>
-      <td ${canEdit?'contenteditable="true"':'contenteditable="false"'} data-field="state">${t.state||''}</td>
-      <td class="${st.cls}">${st.text}</td>
-      <td><input type="checkbox" data-reserve ${useRes} title="Использовать Бронь" ${!canEdit?'disabled':''}></td>
-      <td><input type="checkbox" data-done ${!canEdit ? 'disabled' : ''}></td>
-      <td><button class="del-btn" title="Удалить" data-del ${!canEdit?'disabled':''}>×</button></td>
+      <td class="drag-handle" ${orderAttrs}>${t.orderId}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="progress">${progressText}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="hours">${hoursText}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="extraHours">${extraText}</td>
+      <td class="rest-cell">${restText}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="startDate" class="start-cell ${t.startMissing?'error':''}">${startText}${origMarkup}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="endDate" class="${t.endMissing?'error':''}">${endText}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="state">${t.state || ''}</td>
+      <td class="${status.cls}">${status.text || ''}</td>
+      <td><input type="checkbox" data-reserve ${useReserve} title="Использовать Бронь" ${allowEdit ? '' : 'disabled'}></td>
+      <td><input type="checkbox" data-done ${canEdit ? '' : 'disabled'} ${isDoneRecord ? 'checked' : ''}></td>
+      <td><button class="del-btn" title="Удалить" data-del ${(canEdit && !isDoneRecord) ? '' : 'disabled'}>×</button></td>
     `;
 
     const lockBtn = tr.querySelector('.lock-btn');
     if(lockBtn){
-      lockBtn.disabled = !canEdit;
-      if(canEdit){
+      lockBtn.disabled = !allowEdit;
+      if(allowEdit){
         lockBtn.addEventListener('click', (e)=>{
           if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
           e.currentTarget.dataset.locked = lockedUids.has(t.uid);
@@ -3480,88 +3665,122 @@ function renderTasksTable(){
     }
 
     const doneBox = tr.querySelector('input[data-done]');
-    if(canEdit && doneBox){
-      doneBox.addEventListener('change', e=>{
-        if(e.target.checked){
-          doneTasks.push({
-            uid:t.uid, orderId:t.orderId, stage:t.stage,
-            parentId:t.parentId, childId:t.childId,
-            hours:t.hours, extra:t.extraHours,
-            start:t.startDate, end:t.endDate,
-            when:new Date(), source:'checkbox'
-          });
-          tasks.splice(i,1);
-          rememberStageOrder();
-          updateDoneAttention();
-          recompute();
-          rebuildAndRenderMasterRoute();
-          persistMaybe();
-        }
-      });
+    if(doneBox){
+      doneBox.checked = isDoneRecord;
+      if(!canEdit){
+        doneBox.disabled = true;
+      } else if(isDoneRecord){
+        doneBox.addEventListener('change', e=>{
+          if(!e.target.checked){
+            restoreDoneRecordAtIndex(entry.doneIndex, stage);
+          } else {
+            e.target.checked = true;
+          }
+        });
+      } else {
+        doneBox.addEventListener('change', e=>{
+          if(e.target.checked){
+            doneTasks.push({
+              uid: t.uid,
+              orderId: t.orderId,
+              stage: t.stage,
+              parentId: t.parentId,
+              childId: t.childId,
+              hours: t.hours,
+              extra: t.extraHours,
+              start: t.startDate,
+              end: t.endDate,
+              state: t.state || '',
+              status: t.status || '',
+              when: new Date(),
+              source: 'checkbox'
+            });
+            tasks.splice(taskIndex,1);
+            rememberStageOrder(stage);
+            updateDoneAttention();
+            recompute();
+            rebuildAndRenderMasterRoute();
+            persistMaybe();
+          } else {
+            doneBox.checked = false;
+          }
+        });
+      }
     }
 
     const delBtn = tr.querySelector('[data-del]');
-    if(canEdit && delBtn){
-      delBtn.addEventListener('click', ()=>{
-        if (!confirm('Удалить заказ из списка? Он будет перемещён в «Корзину».')) return;
+    if(delBtn){
+      if(canEdit && !isDoneRecord){
+        delBtn.addEventListener('click', ()=>{
+          if (!confirm('Удалить заказ из списка? Он будет перемещён в «Корзину».')) return;
 
-        const idx = tasks.findIndex(x=>x.uid===t.uid);
-        if(idx>-1){
-          trash.push({
-            uid: t.uid, orderId: t.orderId, stage: t.stage,
-            parentId: t.parentId, childId: t.childId,
-            hours: t.hours, extra: t.extraHours,
-            start: t.startDate, end: t.endDate,
-            when: new Date(), source: 'delete'
-          });
+          const idx = tasks.findIndex(x=>x.uid===t.uid);
+          if(idx>-1){
+            trash.push({
+              uid: t.uid, orderId: t.orderId, stage: t.stage,
+              parentId: t.parentId, childId: t.childId,
+              hours: t.hours, extra: t.extraHours,
+              start: t.startDate, end: t.endDate,
+              when: new Date(), source: 'delete'
+            });
 
-          tasks.splice(idx,1);
-          rememberStageOrder();
-          updateTrashAttention?.();
-          recompute();
-          rebuildAndRenderMasterRoute();
-          persistMaybe();
-        }
-      });
+            tasks.splice(idx,1);
+            rememberStageOrder(stage);
+            updateTrashAttention?.();
+            recompute();
+            rebuildAndRenderMasterRoute();
+            persistMaybe();
+          }
+        });
+      } else {
+        delBtn.disabled = true;
+      }
     }
 
-    tr.querySelector('.eye').addEventListener('click', ()=> openRoute(t));
+    const eye = tr.querySelector('.eye');
+    if(eye){
+      eye.addEventListener('click', ()=> openRoute(t));
+    }
 
     tr.querySelectorAll('[contenteditable]').forEach(cell=>{
-      const editable = canEdit && cell.getAttribute('contenteditable') === 'true';
+      const editable = allowEdit && cell.getAttribute('contenteditable') === 'true';
       const field=cell.dataset.field;
       if(editable){
         cell.addEventListener('keydown', e=>{
           if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
           else if(e.key==='Escape'){ e.preventDefault();
             if(field==='orderId') cell.textContent=t.orderId;
-            if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
-            if(field==='extraHours') cell.textContent=String(t.extraHours??0.25).replace('.',',');
-            if(field==='startDate') cell.textContent=fmtDate(t.startDate);
-            if(field==='endDate') cell.textContent=t.endDate?fmtDate(t.endDate):'—';
+            if(field==='hours') cell.textContent=String(t.hours ?? 0).replace('.',',');
+            if(field==='extraHours') cell.textContent=String(t.extraHours ?? 0.25).replace('.',',');
+            if(field==='startDate') cell.textContent=t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
+            if(field==='endDate') cell.textContent=t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
             if(field==='state') cell.textContent=t.state||'';
-            if(field==='progress') cell.textContent=String(t.progress||0).replace('.',',');
+            if(field==='progress') cell.textContent=String(t.progress ?? 0).replace('.',',');
             cell.blur();
           }
         });
         cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
-      }else{
+      } else {
         cell.setAttribute('contenteditable','false');
       }
     });
 
     const reserveBox = tr.querySelector('input[data-reserve]');
-    if(canEdit && reserveBox){
-      reserveBox.addEventListener('change', e=>{
-        t.useReserve = !!e.target.checked;
-        recompute();
-        persistMaybe();
-      });
+    if(reserveBox){
+      if(allowEdit){
+        reserveBox.addEventListener('change', e=>{
+          t.useReserve = !!e.target.checked;
+          recompute();
+          persistMaybe();
+        });
+      } else {
+        reserveBox.disabled = true;
+      }
     }
 
-    if(canEdit){
+    if(allowEdit){
       let dropAbove=true;
-      tr.addEventListener('dragstart', e=>{ tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; tr.dataset.dragIndex=i; });
+      tr.addEventListener('dragstart', e=>{ tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; tr.dataset.dragIndex=taskIndex; });
       tr.addEventListener('dragend', ()=>{ tr.classList.remove('dragging'); $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below')); persistMaybe(); });
       tr.addEventListener('dragover', e=>{
         e.preventDefault();
@@ -3574,24 +3793,24 @@ function renderTasksTable(){
         e.preventDefault();
         const dragIndex = Number(document.querySelector('tr.dragging')?.dataset.index ?? tr.dataset.index);
         const targetIndex = Number(tr.dataset.index);
-        if(dragIndex===targetIndex) return;
+        if(Number.isNaN(dragIndex) || Number.isNaN(targetIndex) || dragIndex===targetIndex) return;
         const item = tasks.splice(dragIndex,1)[0];
         let insertIndex = targetIndex + (dropAbove?0:1);
         if(insertIndex<0) insertIndex=0; if(insertIndex>tasks.length) insertIndex=tasks.length;
         tasks.splice(insertIndex,0,item);
-        rememberStageOrder();
+        rememberStageOrder(stage);
         recompute();
         persistMaybe();
       });
     }
 
-    tb.appendChild(tr);
+    tbody.appendChild(tr);
   });
 
-  // ИТОГИ
-  const sHours = filteredEntries.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
-  const sExtra = filteredEntries.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
-  const sRest  = filteredEntries.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
+  const totalsSource = filteredActive;
+  const sHours = totalsSource.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
+  const sExtra = totalsSource.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
+  const sRest  = totalsSource.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
   $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
@@ -5161,6 +5380,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
             parentId:task.parentId, childId:task.childId,
             hours:task.hours, extra:task.extraHours,
             start:task.startDate, end:task.endDate,
+            state:task.state || '', status:task.status || '',
             when:now, source:'csv_status'
           });
           archiveMap.delete(task.uid);
@@ -5177,6 +5397,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
           parentId:item.parentId, childId:item.childId,
           hours:item.hours, extra:item.extraHours,
           start:item.startDate, end:item.endDate,
+          state:item.state || '', status:item.status || '',
           when:now, source:'csv_status'
         });
       });
@@ -5358,14 +5579,15 @@ async function importRows(rows){
     const now = new Date();
     const active = [];
     mapped.forEach(t=>{
-	  if(isDoneStatus(t.status)){
-		doneTasks.push({
-		  uid:t.uid, orderId:t.orderId, stage:t.stage,
-		  parentId:t.parentId, childId:t.childId,
-		  hours:t.hours, extra:t.extraHours,
-		  start:t.startDate, end:t.endDate,
-		  when:now, source:'csv_status'
-		});
+          if(isDoneStatus(t.status)){
+                doneTasks.push({
+                  uid:t.uid, orderId:t.orderId, stage:t.stage,
+                  parentId:t.parentId, childId:t.childId,
+                  hours:t.hours, extra:t.extraHours,
+                  start:t.startDate, end:t.endDate,
+                  state:t.state || '', status:t.status || '',
+                  when:now, source:'csv_status'
+                });
 	  } else {
 		active.push(t);
 	  }
@@ -7652,6 +7874,16 @@ function wireHandlers(){
     ignoredClose.addEventListener('click', ()=> document.getElementById('ignoredStatesDlg')?.close());
   }
 
+  const stageFilterSelect = document.getElementById('stageOrdersFilter');
+  if(stageFilterSelect){
+    stageFilterSelect.addEventListener('change', e=>{
+      const stage = document.getElementById('process')?.value || currentProc || '';
+      const mode = ORDER_LIST_FILTERS.has(e.target.value) ? e.target.value : ORDER_FILTER_DEFAULT;
+      setStageListFilter(stage, mode);
+      renderTasksTable();
+    });
+  }
+
   const storageLocal = $("#storageLocal");
   if(storageLocal){
     storageLocal.checked = enableLocalStore;
@@ -7729,7 +7961,10 @@ function wireHandlers(){
   });
 
   // готовые
-  $("#showDone").addEventListener('click', ()=>{ renderDoneList(); $("#doneDlg").showModal(); });
+  const showDoneBtn = document.getElementById('showDone');
+  if(showDoneBtn){
+    showDoneBtn.addEventListener('click', ()=>{ renderDoneList(); $("#doneDlg").showModal(); });
+  }
   document.getElementById('showTrash')?.addEventListener('click', ()=>{
     renderTrashList();
   });
@@ -7936,17 +8171,18 @@ function wireHandlers(){
 		  prev.toDone.forEach(d=>{
 		    if(keep.has(d.uid) && keep.get(d.uid)==='done') return;
 		    const idx = tasks.findIndex(x=>x.uid===d.uid);
-		    if(idx>-1){
-			  const old=tasks.splice(idx,1)[0];
-			  doneTasks.push({
-			    uid:old.uid, orderId:old.orderId, stage:old.stage,
-			    parentId:old.parentId, childId:old.childId,
-			    hours:old.hours, extra:old.extraHours,
-			    start:old.startDate, end:old.endDate,
-			    when:new Date(), source:'undo->redo_done'
-			  });
-		    }
-		  });
+                    if(idx>-1){
+                          const old=tasks.splice(idx,1)[0];
+                          doneTasks.push({
+                            uid:old.uid, orderId:old.orderId, stage:old.stage,
+                            parentId:old.parentId, childId:old.childId,
+                            hours:old.hours, extra:old.extraHours,
+                            start:old.startDate, end:old.endDate,
+                            state:old.state || '', status:old.status || '',
+                            when:new Date(), source:'undo->redo_done'
+                          });
+                    }
+                  });
         }
 
         sortTasksByStart(); recompute(); persistNow();
