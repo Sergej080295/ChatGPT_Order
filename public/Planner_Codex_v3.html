@@ -248,7 +248,7 @@ td[data-field="progress"]{background:#fffef3}
 .chip.amber{background:#f59e0b}
 .chip.red{background:#ef4444}
 .orders-search-row{display:flex;align-items:center;gap:8px;margin:12px 0}
-.orders-search-row input{flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:13px;color:#0f172a;background:#fff}
+.orders-search-row input{flex:0 1 50ch;width:min(50ch,100%);min-width:200px;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:13px;color:#0f172a;background:#fff}
 .orders-search-row input:focus{outline:2px solid #bfdbfe;outline-offset:1px}
 .orders-search-clear{width:32px;height:32px;border-radius:999px;border:1px solid #cbd5e1;background:#f1f5f9;color:#475569;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1}
 .orders-search-clear[disabled]{opacity:.4;cursor:default}
@@ -2409,6 +2409,31 @@ function formatHoursToHMS(hours){
   return `${h}:${m}:${s}`;
 }
 
+function clampProgressValue(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return 0;
+  if(num < 0) return 0;
+  if(num > 100) return 100;
+  return num;
+}
+
+function formatProgressForInput(value){
+  const num = clampProgressValue(value);
+  if(Number.isInteger(num)) return String(num);
+  let str = num.toString();
+  if(str.includes('e')){
+    str = num.toFixed(6);
+  }
+  str = str.replace(/\.0+$/,'');
+  str = str.replace(/(\.\d*?[1-9])0+$/, '$1');
+  return str;
+}
+
+function formatProgressForDisplay(value){
+  const str = formatProgressForInput(value);
+  return str.replace('.',',');
+}
+
 function matchesOrderIdentity(orderKey, order, identity){
   if(!identity) return false;
   const normalizedKey = orderKey ? String(orderKey).trim() : '';
@@ -2786,8 +2811,29 @@ function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage=
     const metrics = metricsByStage && metricsByStage[stage]
       ? metricsByStage[stage]
       : (stageTasks ? computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet) : null);
-    if(metrics){
-      stageProgress[stage] = metrics.percent;
+
+    let progressValue = null;
+    if(tasksForStage.length){
+      const values = tasksForStage
+        .map(task => {
+          if(!task) return null;
+          const num = Number(task.progress);
+          return Number.isFinite(num) ? clampProgressValue(num) : null;
+        })
+        .filter(val => val != null);
+      if(values.length){
+        const first = values[0];
+        const same = values.every(val => Math.abs(val - first) < 0.0001);
+        progressValue = same ? first : (values.reduce((sum, val)=> sum + val, 0) / values.length);
+      }
+    }
+
+    if(progressValue == null && metrics){
+      progressValue = metrics.percent;
+    }
+
+    if(progressValue != null){
+      stageProgress[stage] = clampProgressValue(progressValue);
     }
 
     if(slipFlags && slipFlags[stage]){
@@ -2940,7 +2986,8 @@ function renderRouteDialog(context){
       toggle.className = 'stage-check route-stage-check route-stage-toggle';
       toggle.dataset.stage = item.stage;
       toggle.dataset.state = item.done ? 'done' : 'pending';
-      toggle.dataset.progress = String(stageProgress[item.stage] != null ? stageProgress[item.stage] : (item.done ? 100 : 0));
+      const toggleProgress = stageProgress[item.stage] != null ? stageProgress[item.stage] : (item.done ? 100 : 0);
+      toggle.dataset.progress = formatProgressForInput(toggleProgress);
       toggle.dataset.hasTasks = item.hasDetails ? '1' : '0';
       if(slipSet.has(item.stage)) toggle.dataset.slip = 'true';
       const canToggle = item.hasDetails || item.done;
@@ -2964,7 +3011,7 @@ function renderRouteDialog(context){
         parts.push(`${seg.hours.toFixed(1)} ч`);
       }
       if(stageProgress[item.stage] != null){
-        parts.push(`${Math.round(stageProgress[item.stage])}%`);
+        parts.push(`${formatProgressForDisplay(stageProgress[item.stage])}%`);
       } else if(item.done){
         parts.push('100%');
       }
@@ -3188,7 +3235,7 @@ function applyStageProgressFromOverview(identity, stage, value){
   return true;
 }
 
-function handleRouteStageToggle(stage){
+function handleRouteStageToggle(stage, toggleEl){
   if(!stage || !currentRouteContext || !currentRouteContext.identity) return;
   if(!userCanEdit()){ notifyReadOnly(); return; }
   const stageTitle = STAGE_TITLE[stage] || stage;
@@ -3215,9 +3262,13 @@ function handleRouteStageToggle(stage){
     return;
   }
 
+  const datasetValue = toggleEl?.dataset?.progress;
   const currentPct = currentRouteContext.stageProgress?.[stage];
-  const defaultValue = currentPct != null ? Math.round(currentPct) : (isDone ? 100 : 0);
-  const answer = prompt(`Укажите готовность передела «${stageTitle}» в процентах (0–100):`, String(defaultValue));
+  const fallback = currentPct != null ? formatProgressForInput(currentPct) : (isDone ? '100' : '0');
+  const defaultValue = (typeof datasetValue === 'string' && datasetValue.length)
+    ? datasetValue
+    : fallback;
+  const answer = prompt(`Укажите готовность передела «${stageTitle}» в процентах (0–100):`, defaultValue);
   if(answer == null) return;
   const value = Number(String(answer).replace(',','.').trim());
   if(!Number.isFinite(value) || value < 0 || value > 100){
@@ -3227,6 +3278,9 @@ function handleRouteStageToggle(stage){
   if(applyStageProgressFromOverview(currentRouteContext.identity, stage, value)){
     if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
       currentRouteContext.sourceTask.progress = value;
+    }
+    if(currentRouteContext.stageProgress){
+      currentRouteContext.stageProgress[stage] = clampProgressValue(value);
     }
     refreshCurrentRouteContext();
   }
@@ -7463,9 +7517,10 @@ function restoreState(json, opts={}){
     });
 
     allTasksFromState = tAll.slice();
+    const savedProcess = s.process || OVERVIEW_STAGE;
     const desiredProcess = preserveProcess
-      ? ($("#process")?.value || s.process || OVERVIEW_STAGE)
-      : (s.process || $("#process")?.value || OVERVIEW_STAGE);
+      ? ($("#process")?.value || savedProcess)
+      : savedProcess;
     tasks = tAll.filter(x => x.stage === desiredProcess);
 
     doneTasks = (s.done||[]).map(x=>({
@@ -7568,7 +7623,7 @@ function restoreState(json, opts={}){
     if(preserveProcess){
       $("#process").value = desiredProcess;
     }else{
-      $("#process").value = s.process || OVERVIEW_STAGE;
+      $("#process").value = OVERVIEW_STAGE;
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
@@ -7594,7 +7649,7 @@ function restoreState(json, opts={}){
     if(preserveProcess){
       tasks = tAll.filter(x=> x.stage === desiredProcess);
     }else{
-      tasks = tAll.filter(x=> x.stage === $("#process").value);
+      tasks = [];
     }
 
     sortBySavedOrder(tasks, $("#process").value);
@@ -8837,7 +8892,7 @@ function wireHandlers(){
       const target = e.target.closest('.route-stage-toggle');
       if(!target) return;
       if(target.getAttribute('aria-disabled') === 'true') return;
-      handleRouteStageToggle(target.dataset.stage);
+      handleRouteStageToggle(target.dataset.stage, target);
     });
     routeContent.addEventListener('keydown', e=>{
       if(e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
@@ -8845,7 +8900,7 @@ function wireHandlers(){
       if(!target) return;
       if(target.getAttribute('aria-disabled') === 'true') return;
       e.preventDefault();
-      handleRouteStageToggle(target.dataset.stage);
+      handleRouteStageToggle(target.dataset.stage, target);
     });
   }
   const ignoredInput = document.getElementById('ignoredStateInput');
