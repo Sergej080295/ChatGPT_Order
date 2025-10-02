@@ -262,7 +262,7 @@ td[data-field="progress"]{background:#fffef3}
 .orders-overview-totals{margin:12px 0 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;overflow-x:auto}
 .orders-overview-totals table{border-collapse:separate;border-spacing:0;width:auto;min-width:max-content}
 .orders-overview-totals td{padding:6px 10px;font-size:12px;font-weight:600;color:#1f2937;text-align:center;white-space:nowrap}
-.orders-overview-totals .orders-total{text-align:left;font-weight:700}
+.orders-overview-totals .orders-total{text-align:center;font-weight:700}
 .orders-overview-empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:12px}
 .order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
 .order-eye-btn:disabled{opacity:.4;cursor:default}
@@ -2536,15 +2536,71 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
   return record;
 }
 
-function cascadeCompletionForTask(task){
+function archiveTaskAsDone(task, source='manual', opts={}){
+  if(!task || !task.uid) return false;
+  const stage = task.stage || '';
+  const timestamp = opts.when instanceof Date ? new Date(opts.when) : new Date();
+  const cascadeNext = opts.cascade !== false;
+  const updateUI = opts.updateUI !== false;
+
+  const idx = tasks.findIndex(entry => entry && entry.uid === task.uid);
+  const alreadyArchived = doneTasks.some(rec => rec && rec.uid === task.uid);
+  if(alreadyArchived && idx === -1){
+    return false;
+  }
+
+  task.progress = 100;
+  ensureDoneRecordFromTask(task, source, timestamp);
+  if(idx > -1){
+    tasks.splice(idx,1);
+  }
+
+  if(stage){
+    forgetTaskFromStageOrder(stage, task.uid);
+    rememberStageOrder(stage);
+  }
+
+  if(cascadeNext){
+    cascadeCompletionForTask(task, { when: timestamp, updateUI: false });
+  }
+
+  if(updateUI){
+    updateDoneAttention();
+    recompute();
+    rebuildAndRenderMasterRoute();
+    persistMaybe();
+  }
+
+  return true;
+}
+
+function cascadeCompletionForTask(task, options={}){
   if(!cascadeReadyOn) return false;
   if(!task || !task.stage) return false;
   if(task.stage !== 'pack' && task.stage !== 'ship') return false;
   const orderKey = orderKeyForRecord(task);
-  if(!orderKey) return false;
+  const parentId = task.parentId ? String(task.parentId).trim() : '';
+  const orderIdNorm = normalizeOrderSearch(task.orderId || '');
+  if(!orderKey && !parentId && !orderIdNorm) return false;
   const stageIdx = STAGE_ORDER_INDEX.get(task.stage);
   if(stageIdx == null) return false;
-  const now = new Date();
+  const when = options.when instanceof Date ? new Date(options.when) : new Date();
+
+  if(!Array.isArray(allTasksFromState)){
+    const aggregated = gatherAllStageTasks();
+    allTasksFromState = Array.isArray(aggregated) ? aggregated.filter(Boolean) : [];
+  }
+
+  const matchesOrder = candidate => {
+    if(!candidate) return false;
+    if(orderKey && orderKeyForRecord(candidate) === orderKey) return true;
+    const candidateParent = candidate.parentId ? String(candidate.parentId).trim() : '';
+    if(parentId && candidateParent && candidateParent === parentId) return true;
+    const candidateOrder = normalizeOrderSearch(candidate.orderId || '');
+    if(orderIdNorm && candidateOrder && candidateOrder === orderIdNorm) return true;
+    return false;
+  };
+
   let changed = false;
 
   for(const stageName of STAGES){
@@ -2556,11 +2612,11 @@ function cascadeCompletionForTask(task){
     if(Array.isArray(allTasksFromState) && allTasksFromState.length){
       const next = [];
       for(const item of allTasksFromState){
-        if(!item || item.stage !== stageName || orderKeyForRecord(item) !== orderKey){
+        if(!item || item.stage !== stageName || !matchesOrder(item)){
           next.push(item);
           continue;
         }
-        ensureDoneRecordFromTask(item, 'cascade', now);
+        ensureDoneRecordFromTask(item, 'cascade', when);
         forgetTaskFromStageOrder(stageName, item.uid);
         stageChanged = true;
       }
@@ -2572,10 +2628,17 @@ function cascadeCompletionForTask(task){
     if(currentProc === stageName){
       for(let i = tasks.length - 1; i >= 0; i--){
         const candidate = tasks[i];
-        if(orderKeyForRecord(candidate) !== orderKey) continue;
-        ensureDoneRecordFromTask(candidate, 'cascade', now);
-        tasks.splice(i,1);
-        forgetTaskFromStageOrder(stageName, candidate.uid);
+        if(!candidate || !matchesOrder(candidate)) continue;
+        archiveTaskAsDone(candidate, 'cascade', { cascade:false, updateUI:false, when });
+        stageChanged = true;
+      }
+    }
+
+    const snapshot = lastSyncedSnapshots.get(stageName);
+    if(Array.isArray(snapshot) && snapshot.length){
+      const filtered = snapshot.filter(entry => !matchesOrder(entry));
+      if(filtered.length !== snapshot.length){
+        lastSyncedSnapshots.set(stageName, filtered);
         stageChanged = true;
       }
     }
@@ -2583,6 +2646,13 @@ function cascadeCompletionForTask(task){
     if(stageChanged){
       changed = true;
     }
+  }
+
+  if(changed && options.updateUI !== false){
+    updateDoneAttention();
+    recompute();
+    rebuildAndRenderMasterRoute();
+    persistMaybe();
   }
 
   return changed;
@@ -2652,6 +2722,8 @@ function renderOrdersOverviewTable(){
     if(totalsBox){ totalsBox.style.display = ''; }
     updateOrderSearchControls();
     adjustOrdersOverviewHeight();
+    syncOverviewTotalsColumns();
+    attachOverviewTotalsScrollSync();
     return;
   }
 
@@ -2767,6 +2839,66 @@ function renderOrdersOverviewTable(){
   if(totalsBox){ totalsBox.style.display = ''; }
   updateOrderSearchControls();
   adjustOrdersOverviewHeight();
+  syncOverviewTotalsColumns();
+  attachOverviewTotalsScrollSync();
+}
+
+function syncOverviewTotalsColumns(){
+  const overviewTable = document.getElementById('ordersOverviewTable');
+  const totalsBox = document.getElementById('ordersOverviewTotals');
+  if(!overviewTable || !totalsBox || totalsBox.style.display === 'none') return;
+  const totalsTable = totalsBox.querySelector('table');
+  if(!totalsTable) return;
+  const headerRow = overviewTable.querySelector('thead tr');
+  if(!headerRow) return;
+  const headerCells = Array.from(headerRow.children || []);
+  if(!headerCells.length) return;
+  const colgroup = totalsTable.querySelector('colgroup');
+  const totalCols = colgroup ? Array.from(colgroup.children || []) : [];
+  if(totalCols.length !== headerCells.length) return;
+
+  const widths = headerCells.map(cell => {
+    const rect = cell.getBoundingClientRect();
+    const width = rect && rect.width ? rect.width : cell.offsetWidth || 0;
+    return Math.max(0, Math.round(width));
+  });
+
+  widths.forEach((width, idx)=>{
+    if(totalCols[idx]){
+      totalCols[idx].style.width = width ? `${width}px` : '';
+    }
+  });
+
+  const tableRect = overviewTable.getBoundingClientRect();
+  if(tableRect && tableRect.width){
+    const width = Math.max(tableRect.width, overviewTable.offsetWidth || tableRect.width);
+    totalsTable.style.width = `${width}px`;
+    totalsTable.style.minWidth = `${width}px`;
+  }
+}
+
+function attachOverviewTotalsScrollSync(){
+  const panel = document.getElementById('ordersOverviewPanel');
+  const totals = document.getElementById('ordersOverviewTotals');
+  if(!panel || !totals) return;
+  if(panel.dataset.totalsSyncBound === '1') return;
+  let syncing = false;
+  const syncFromPanel = ()=>{
+    if(syncing) return;
+    syncing = true;
+    totals.scrollLeft = panel.scrollLeft;
+    syncing = false;
+  };
+  const syncFromTotals = ()=>{
+    if(syncing) return;
+    syncing = true;
+    panel.scrollLeft = totals.scrollLeft;
+    syncing = false;
+  };
+  panel.addEventListener('scroll', syncFromPanel);
+  totals.addEventListener('scroll', syncFromTotals);
+  panel.dataset.totalsSyncBound = '1';
+  totals.dataset.totalsSyncBound = '1';
 }
 
 function adjustOrdersOverviewHeight(){
@@ -3675,11 +3807,15 @@ function applyEditImmediate(cell, task){
         if(+task.origStartDate===+task.startDate) task.origStartDate = task.startDate;
         task.startDate=today0();
         task.startMissing=false;
-		if(task.endDate && task.endDate < task.startDate){
-		  task.endDate = new Date(task.startDate);  // подтянем конец к старту
-		  task.endMissing = false;
-		}
+                if(task.endDate && task.endDate < task.startDate){
+                  task.endDate = new Date(task.startDate);  // подтянем конец к старту
+                  task.endMissing = false;
+                }
         task.route[task.stage]={...(task.route[task.stage]||{}),start:task.startDate};
+      }
+      if(safe >= 100 && userCanEdit()){
+        archiveTaskAsDone(task, 'progress');
+        return;
       }
     }
   }
@@ -3801,28 +3937,7 @@ function renderTasksTable(){
       } else {
         doneBox.addEventListener('change', e=>{
           if(e.target.checked){
-            doneTasks.push({
-              uid: t.uid,
-              orderId: t.orderId,
-              stage: t.stage,
-              parentId: t.parentId,
-              childId: t.childId,
-              hours: t.hours,
-              extra: t.extraHours,
-              start: t.startDate,
-              end: t.endDate,
-              state: t.state || '',
-              status: t.status || '',
-              when: new Date(),
-              source: 'checkbox'
-            });
-            tasks.splice(taskIndex,1);
-            rememberStageOrder(stage);
-            cascadeCompletionForTask(t);
-            updateDoneAttention();
-            recompute();
-            rebuildAndRenderMasterRoute();
-            persistMaybe();
+            archiveTaskAsDone(t, 'checkbox');
           } else {
             doneBox.checked = false;
           }
@@ -6825,8 +6940,8 @@ function restoreState(json, opts={}){
     if(typeof loadedPrefs.autoOptimizeOn !== 'boolean' && s.autoOptimizeOn !== undefined){
       loadedPrefs.autoOptimizeOn = !!s.autoOptimizeOn;
     }
-    if(typeof loadedPrefs.cascadeReadyOn !== 'boolean' && s.cascadeReadyOn !== undefined){
-      loadedPrefs.cascadeReadyOn = !!s.cascadeReadyOn;
+    if(s.cascadeReadyOn !== undefined){
+      cascadeReadyOn = !!s.cascadeReadyOn;
     }
     applyUiPreferences(loadedPrefs);
     saveUiPreferences();
@@ -7684,7 +7799,6 @@ function saveUiPreferences(){
       autosaveOn: !!autosaveOn,
       shiftOnProgress: !!shiftOnProgress,
       autoOptimizeOn: !!autoOptimizeOn,
-      cascadeReadyOn: !!cascadeReadyOn,
       showIds: document.body ? document.body.classList.contains('show-ids') : false,
       lockNewOrders: !!lockNewOrders,
       lockNewOrdersCsv: !!lockNewOrdersCsv
@@ -7697,7 +7811,11 @@ function loadUiPreferences(){
   try{
     const raw = localStorage.getItem(UI_PREF_KEY);
     if(!raw) return {};
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if(parsed && typeof parsed === 'object' && 'cascadeReadyOn' in parsed){
+      delete parsed.cascadeReadyOn;
+    }
+    return parsed;
   }catch(_){ return {}; }
 }
 
@@ -7714,9 +7832,6 @@ function applyUiPreferences(prefs={}){
   }
   if(typeof prefs.autoOptimizeOn === 'boolean'){
     autoOptimizeOn = prefs.autoOptimizeOn;
-  }
-  if(typeof prefs.cascadeReadyOn === 'boolean'){
-    cascadeReadyOn = prefs.cascadeReadyOn;
   }
   if(typeof prefs.lockNewOrders === 'boolean'){
     lockNewOrders = prefs.lockNewOrders;
@@ -8446,7 +8561,10 @@ function wireHandlers(){
           settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
         }
 
-        window.addEventListener('resize', adjustOrdersOverviewHeight);
+        window.addEventListener('resize', ()=>{
+          adjustOrdersOverviewHeight();
+          syncOverviewTotalsColumns();
+        });
         updateOrderSearchControls();
 
         $("#autosave").checked = autosaveOn;
