@@ -2334,6 +2334,7 @@ function buildDoneTaskRecord(rec){
     status: rec.status || '',
     useReserve: false,
     progress: 100,
+    isDone: true,
     origStartDate: start || null,
     route: {},
     doneMeta: { when, source: rec.source || '' }
@@ -2405,7 +2406,10 @@ function gatherAllStageTasks(){
     const aggregated = [];
     STAGES.forEach(stage=>{
       const mapped = mapRows(lastRows, stage) || [];
-      mapped.forEach(rec=> aggregated.push(cloneTaskRecord(rec)));
+      mapped.forEach(rec=>{
+        if(!rec || rec.isDone || isDoneStatus(rec.status)) return;
+        aggregated.push(cloneTaskRecord(rec));
+      });
     });
     return aggregated;
   }
@@ -2570,6 +2574,17 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
   const activeKeys = new Set(activeInfo.list.map(orderKeyForRecord).filter(Boolean));
   const trashKeys = new Set(trash.map(orderKeyForRecord).filter(Boolean));
 
+  aggregatedOrders.forEach(order => {
+    const key = orderKeyForRecord(order);
+    if(!key || !order?.stages) return;
+    Object.keys(order.stages).forEach(stage => {
+      const seg = order.stages[stage];
+      if(seg && seg.done){
+        doneStageSet.add(`${key}::${stage}`);
+      }
+    });
+  });
+
   const rows = [];
   aggregatedOrders.forEach(order => {
     const key = orderKeyForRecord(order);
@@ -2634,6 +2649,59 @@ function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
 
   percent = Math.max(0, Math.min(100, percent));
   return { totalHours, percent, remaining };
+}
+
+function partitionDoneTasks(list){
+  const active = [];
+  const done = [];
+  (Array.isArray(list) ? list : []).forEach(task => {
+    if(!task) return;
+    if(task.isDone || isDoneStatus(task.status)){
+      done.push(task);
+    } else {
+      active.push(task);
+    }
+  });
+  return { active, done };
+}
+
+function registerDoneTasks(doneList, options={}){
+  if(!Array.isArray(doneList) || !doneList.length) return;
+  const source = options.source || 'status';
+  const when = options.when instanceof Date ? new Date(options.when) : new Date();
+  const stage = options.stage || null;
+  doneList.forEach(task => {
+    if(!task) return;
+    task.progress = 100;
+    task.isDone = true;
+    ensureDoneRecordFromTask(task, source, when);
+  });
+  if(stage && currentProc !== stage){
+    stagesDirtyFromRoute.add(stage);
+  }
+}
+
+function purgeDoneFromStageCache(stage, doneList){
+  if(!stage || !Array.isArray(doneList) || !doneList.length) return;
+  const uidSet = new Set(doneList.map(task => task && task.uid).filter(Boolean));
+  if(uidSet.size){
+    const savedOrder = ordersByStage.get(stage);
+    if(Array.isArray(savedOrder)){
+      ordersByStage.set(stage, savedOrder.filter(uid => !uidSet.has(uid)));
+    }
+  }
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    allTasksFromState = allTasksFromState.filter(task => {
+      if(!task) return false;
+      if(task.stage !== stage) return true;
+      if(uidSet.has(task.uid)) return false;
+      if(task.isDone || isDoneStatus(task.status)) return false;
+      return true;
+    });
+  }
+  if(stage && currentProc !== stage){
+    stagesDirtyFromRoute.add(stage);
+  }
 }
 
 function ensureDoneRecordFromTask(task, source='cascade', when){
@@ -3148,6 +3216,7 @@ function applyStageProgressFromOverview(identity, stage, value){
   matches.active.forEach(({ task })=>{
     if(!task) return;
     task.progress = normalized;
+    task.isDone = markDone;
     if(markDone){
       ensureDoneRecordFromTask(task, 'overview-route', now);
       cascadeCompletionForTask(task, { when: now, updateUI:false });
@@ -3172,6 +3241,7 @@ function applyStageProgressFromOverview(identity, stage, value){
       if(task.stage !== stage){ next.push(task); return; }
       if(matchesOrderIdentity(orderKeyForRecord(task), task, identity)){
         task.progress = normalized;
+        task.isDone = markDone;
         if(markDone){
           ensureDoneRecordFromTask(task, 'overview-route', now);
           cascadeCompletionForTask(task, { when: now, updateUI:false });
@@ -3192,6 +3262,7 @@ function applyStageProgressFromOverview(identity, stage, value){
       const restored = buildDoneTaskRecord(rec);
       if(restored){
         restored.progress = normalized;
+        restored.isDone = false;
         restoredTasks.push(restored);
       }
       doneTasks.splice(idx,1);
@@ -3651,6 +3722,8 @@ const STAGES = ['draw','proc','shear','laser','bend','weld','mech','pack','ship'
 const PROGRESS_STAGES = ['draw','laser','bend','weld','mech'];
 const INDICATOR_STAGES = ['proc','shear','pack','ship'];
 
+const isDoneStatus = s => /готов|done|сдан|закрыт|closed/i.test(String(s||''));
+
 const STAGE_TITLE = {
   draw:'Технологи: подготовка в работу',
   proc:'Закупка',
@@ -3744,7 +3817,6 @@ let currentRouteContext = null;   // текущее состояние откр�
    ВСПОМОГАТ.
 ========= */
 const capFor = (ds, base)=> exceptions.has(ds)? exceptions.get(ds) : base;
-const isDoneStatus = s => /готов|done|сдан|закрыт|closed/i.test(String(s||''));
 function remainingTotal(t){
   const base = (+t.hours||0)+(+t.extraHours||0);
   const p = Math.max(0, Math.min(100, +t.progress || 0));
@@ -4150,8 +4222,9 @@ function mapRows(rows, process='bend'){
 	  const s = String(v ?? '').trim();
 	  return (s==='—' || s==='-' || s==='–') ? '' : s;
 	};
-	const status = clean(ch[IDX.status]) || clean(prow?.[IDX.status]);
-	const state  = clean(ch[IDX.state])  || clean(prow?.[IDX.state]);
+        const status = clean(ch[IDX.status]) || clean(prow?.[IDX.status]);
+        const state  = clean(ch[IDX.state])  || clean(prow?.[IDX.state]);
+        const doneByStatus = isDoneStatus(status);
 
 
 	// Сбор маршрута по всем этапам (только реальные подзадачи; даты берём ТОЛЬКО из подзадач)
@@ -4199,7 +4272,8 @@ function mapRows(rows, process='bend'){
       endMissing: !ed,
       state, status,
       useReserve:false,
-      progress:0,
+      progress: doneByStatus ? 100 : 0,
+      isDone: doneByStatus,
       origStartDate: sd || today0(),
       route
     };
@@ -5132,6 +5206,10 @@ function mapOrdersFromTasks(ts){
         seg.hours += baseHours;
       }else{
         seg.hours = 0;
+      }
+
+      if(t.isDone || isDoneStatus(t.status) || Number(t.progress) >= 100){
+        seg.done = true;
       }
 
       const routeSeg = t.route?.[stage] || null;
@@ -6531,32 +6609,42 @@ async function importRows(rows){
   // первичный импорт
   if(!lastRows && tasks.length===0){
     lastRows = rows;
-    const mapped = mapRows(rows, p);
-
-    // статусы -> «Готовые»
     const now = new Date();
-    const active = [];
-    mapped.forEach(t=>{
-          if(isDoneStatus(t.status)){
-                doneTasks.push({
-                  uid:t.uid, orderId:t.orderId, stage:t.stage,
-                  parentId:t.parentId, childId:t.childId,
-                  hours:t.hours, extra:t.extraHours,
-                  start:t.startDate, end:t.endDate,
-                  state:t.state || '', status:t.status || '',
-                  when:now, source:'csv_status'
-                });
-	  } else {
-		active.push(t);
-	  }
+    const stageActive = new Map();
+    const aggregated = [];
+    ordersByStage = new Map();
+    STAGES.forEach(stage=>{
+      const mapped = mapRows(rows, stage) || [];
+      const { active, done } = partitionDoneTasks(mapped);
+      if(done.length){
+        registerDoneTasks(done, { source:'csv_status', when: now, stage });
+      }
+      stageActive.set(stage, active);
+      ordersByStage.set(stage, active.map(task => task.uid));
+      active.forEach(task => aggregated.push(cloneTaskRecord(task)));
     });
-    tasks = active;
+
+    allTasksFromState = aggregated;
+
+    const initialStageList = stageActive.get(p) || [];
+    if(p && p !== OVERVIEW_STAGE){
+      tasks = initialStageList;
+    } else {
+      tasks = [];
+    }
+
+    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+
     if(autoOptimizeOn){
       optimizeAllStages({ persist:false, rebuild:false });
-      rememberStageOrder(p);
+      if(p && p !== OVERVIEW_STAGE){
+        rememberStageOrder(p);
+      }
     } else {
-      sortTasksByStart();
-      rememberStageOrder(p);
+      if(p && p !== OVERVIEW_STAGE){
+        sortTasksByStart();
+        rememberStageOrder(p);
+      }
     }
 
     if(p === OVERVIEW_STAGE){
@@ -8857,6 +8945,15 @@ function switchProcess(newProc){
   }else{
     // на крайний случай — отфильтруем по stage из текущего массива
     tasks = tasks.filter(t=> t.stage === newProc);
+  }
+
+  if(tasks.length){
+    const { active, done } = partitionDoneTasks(tasks);
+    if(done.length){
+      registerDoneTasks(done, { source:'csv_status', stage: newProc });
+      purgeDoneFromStageCache(newProc, done);
+    }
+    tasks = active;
   }
 
   lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
