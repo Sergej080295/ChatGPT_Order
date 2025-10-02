@@ -259,8 +259,10 @@ td[data-field="progress"]{background:#fffef3}
 .main.overview-mode #ordersOverviewPanel{max-width:none}
 .main.overview-mode #ordersOverviewTable{min-width:max-content;width:auto}
 .main.overview-mode .card{width:100%}
-.orders-overview-totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:12px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;font-size:12px;font-weight:600;color:#1f2937}
-.orders-overview-totals .orders-total{grid-column:1/-1;font-weight:700}
+.orders-overview-totals{margin:12px 0 0;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:#f1f5f9;overflow-x:auto}
+.orders-overview-totals table{border-collapse:separate;border-spacing:0;width:auto;min-width:max-content}
+.orders-overview-totals td{padding:6px 10px;font-size:12px;font-weight:600;color:#1f2937;text-align:center;white-space:nowrap}
+.orders-overview-totals .orders-total{text-align:left;font-weight:700}
 .orders-overview-empty{padding:24px 12px;text-align:center;color:var(--muted);font-size:12px}
 .order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
 .order-eye-btn:disabled{opacity:.4;cursor:default}
@@ -473,16 +475,16 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 <body>
 
 <header>
-  <h1 id="pageTitle">Планировщик — <span id="procTitle">Гибка</span></h1>
+  <h1 id="pageTitle">Планировщик — <span id="procTitle">Список заказов</span></h1>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
-                <option value="orders">Список заказов</option>
+                <option value="orders" selected>Список заказов</option>
                 <option value="draw">Технологи: подготовка в работу</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
                 <option value="laser">Лазер</option>
-                <option value="bend" selected>Гибка</option>
+                <option value="bend">Гибка</option>
                 <option value="weld">Сварка</option>
                 <option value="mech">Мехобработка</option>
                 <option value="pack">Упаковка</option>
@@ -599,16 +601,36 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     </div>
 
     <div class="orders-overview-totals" id="ordersOverviewTotals" style="display:none">
-      <span class="orders-total" data-total="orders">Итого: 0</span>
-      <span data-total-stage="proc">Закупка: 0 шт</span>
-      <span data-total-stage="shear">Рубка: 0 шт</span>
-      <span data-total-stage="draw">Технологи: 00:00:00</span>
-      <span data-total-stage="laser">Лазер: 00:00:00</span>
-      <span data-total-stage="bend">Гибка: 00:00:00</span>
-      <span data-total-stage="weld">Сварка: 00:00:00</span>
-      <span data-total-stage="mech">Мехобр.: 00:00:00</span>
-      <span data-total-stage="pack">Упаковка: 0 шт</span>
-      <span data-total-stage="ship">Отгрузка: 0 шт</span>
+      <table>
+        <colgroup>
+          <col style="width:56px">
+          <col style="width:52px">
+          <col style="width:240px">
+          <col style="width:92px">
+          <col style="width:92px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:150px">
+          <col style="width:92px">
+          <col style="width:92px">
+        </colgroup>
+        <tbody>
+          <tr>
+            <td class="orders-total" data-total="orders" colspan="3">Итого: 0</td>
+            <td data-total-stage="proc">Закупка: 0 шт</td>
+            <td data-total-stage="shear">Рубка: 0 шт</td>
+            <td data-total-stage="draw">Технологи: 00:00:00</td>
+            <td data-total-stage="laser">Лазер: 00:00:00</td>
+            <td data-total-stage="bend">Гибка: 00:00:00</td>
+            <td data-total-stage="weld">Сварка: 00:00:00</td>
+            <td data-total-stage="mech">Мехобр.: 00:00:00</td>
+            <td data-total-stage="pack">Упаковка: 0 шт</td>
+            <td data-total-stage="ship">Отгрузка: 0 шт</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="table-wrap" id="ordersScroller">
@@ -770,6 +792,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
     </label>
     <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
     <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+    <label class="small"><input type="checkbox" id="cascadeReady"> Автоготовность при упаковке/отгрузке</label>
     <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
     <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
     <div class="row" style="gap:8px;align-items:center">
@@ -1537,7 +1560,7 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#lockNewOrders','#lockNewOrdersCsv'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -1977,6 +2000,7 @@ let shiftOnProgress=true;
 let autoOptimizeOn = true;
 let lockNewOrders = false;
 let lockNewOrdersCsv = false;
+let cascadeReadyOn = false;
 let ignoredStates = [];
 let ignoredStateSet = new Set();
 let csvFreshnessStr='—';
@@ -2102,6 +2126,16 @@ function sortBySavedOrder(arr, stage){
     return (a.startDate?.getTime()||0) - (b.startDate?.getTime()||0) || a.uid.localeCompare(b.uid);
   });
   return arr;
+}
+
+function forgetTaskFromStageOrder(stage, uid){
+  if(!stage || !uid) return;
+  const list = ordersByStage.get(stage);
+  if(!Array.isArray(list) || !list.length) return;
+  const idx = list.indexOf(uid);
+  if(idx === -1) return;
+  list.splice(idx,1);
+  ordersByStage.set(stage, list);
 }
 
 const OVERVIEW_STAGE = 'orders';
@@ -2465,6 +2499,93 @@ function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
 
   percent = Math.max(0, Math.min(100, percent));
   return { totalHours, percent, remaining };
+}
+
+function ensureDoneRecordFromTask(task, source='cascade', when){
+  if(!task || !task.uid) return null;
+  const orderKey = orderKeyForRecord(task);
+  const existing = doneTasks.find(rec => rec && rec.uid === task.uid);
+  if(existing) return existing;
+  if(orderKey){
+    const existingByStage = doneTasks.find(rec => rec && (rec.stage||'') === task.stage && orderKeyForRecord(rec) === orderKey);
+    if(existingByStage) return existingByStage;
+  }
+  const stamp = when instanceof Date ? new Date(when) : new Date();
+  const normalizeDate = value => {
+    if(!value) return null;
+    if(value instanceof Date) return new Date(value);
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  const record = {
+    uid: task.uid,
+    orderId: task.orderId,
+    stage: task.stage,
+    parentId: task.parentId,
+    childId: task.childId,
+    hours: task.hours,
+    extra: task.extraHours,
+    start: normalizeDate(task.startDate),
+    end: normalizeDate(task.endDate),
+    state: task.state || '',
+    status: task.status || '',
+    when: stamp,
+    source: source || 'cascade'
+  };
+  doneTasks.push(record);
+  return record;
+}
+
+function cascadeCompletionForTask(task){
+  if(!cascadeReadyOn) return false;
+  if(!task || !task.stage) return false;
+  if(task.stage !== 'pack' && task.stage !== 'ship') return false;
+  const orderKey = orderKeyForRecord(task);
+  if(!orderKey) return false;
+  const stageIdx = STAGE_ORDER_INDEX.get(task.stage);
+  if(stageIdx == null) return false;
+  const now = new Date();
+  let changed = false;
+
+  for(const stageName of STAGES){
+    const idxVal = STAGE_ORDER_INDEX.get(stageName);
+    if(idxVal == null || idxVal >= stageIdx) continue;
+
+    let stageChanged = false;
+
+    if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+      const next = [];
+      for(const item of allTasksFromState){
+        if(!item || item.stage !== stageName || orderKeyForRecord(item) !== orderKey){
+          next.push(item);
+          continue;
+        }
+        ensureDoneRecordFromTask(item, 'cascade', now);
+        forgetTaskFromStageOrder(stageName, item.uid);
+        stageChanged = true;
+      }
+      if(stageChanged){
+        allTasksFromState = next;
+      }
+    }
+
+    if(currentProc === stageName){
+      for(let i = tasks.length - 1; i >= 0; i--){
+        const candidate = tasks[i];
+        if(orderKeyForRecord(candidate) !== orderKey) continue;
+        ensureDoneRecordFromTask(candidate, 'cascade', now);
+        tasks.splice(i,1);
+        forgetTaskFromStageOrder(stageName, candidate.uid);
+        stageChanged = true;
+      }
+    }
+
+    if(stageChanged){
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function buildRoutePayload(orderEntry){
@@ -3697,6 +3818,7 @@ function renderTasksTable(){
             });
             tasks.splice(taskIndex,1);
             rememberStageOrder(stage);
+            cascadeCompletionForTask(t);
             updateDoneAttention();
             recompute();
             rebuildAndRenderMasterRoute();
@@ -4930,6 +5052,7 @@ function exportStateCSV(){
   lines.push(`lastImportTime${sep}${lastImportTime||''}`);
   lines.push(`lastManualTime${sep}${lastManualTime||''}`);
   lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
+  lines.push(`cascadeReadyOn${sep}${cascadeReadyOn?1:0}`);
 
   // EXCEPTIONS
   lines.push(`#SECTION;exceptions`);
@@ -5210,6 +5333,10 @@ function importStateFromCSV(text){
   autosaveOn = !!Number(meta.autosaveOn); $("#autosave").checked = autosaveOn;
   autoOptimizeOn = !!Number(meta.autoOptimizeOn);
   $("#autoOptimize").checked = autoOptimizeOn;
+  if(meta.cascadeReadyOn !== undefined && meta.cascadeReadyOn !== ''){
+    cascadeReadyOn = !!Number(meta.cascadeReadyOn);
+  }
+  $("#cascadeReady").checked = !!cascadeReadyOn;
 
   shiftOnProgress = !!Number(meta.shiftOnProgress);
   $("#shiftOnProgress").checked = shiftOnProgress;
@@ -5724,6 +5851,7 @@ function buildStateObject(){
     lastManualTime,
     autosaveOn,
     autoOptimizeOn,
+    cascadeReadyOn,
     shiftOnProgress,
     ignoredStates: ignoredStates.slice(),
     meta: {
@@ -6697,6 +6825,9 @@ function restoreState(json, opts={}){
     if(typeof loadedPrefs.autoOptimizeOn !== 'boolean' && s.autoOptimizeOn !== undefined){
       loadedPrefs.autoOptimizeOn = !!s.autoOptimizeOn;
     }
+    if(typeof loadedPrefs.cascadeReadyOn !== 'boolean' && s.cascadeReadyOn !== undefined){
+      loadedPrefs.cascadeReadyOn = !!s.cascadeReadyOn;
+    }
     applyUiPreferences(loadedPrefs);
     saveUiPreferences();
 
@@ -7553,6 +7684,7 @@ function saveUiPreferences(){
       autosaveOn: !!autosaveOn,
       shiftOnProgress: !!shiftOnProgress,
       autoOptimizeOn: !!autoOptimizeOn,
+      cascadeReadyOn: !!cascadeReadyOn,
       showIds: document.body ? document.body.classList.contains('show-ids') : false,
       lockNewOrders: !!lockNewOrders,
       lockNewOrdersCsv: !!lockNewOrdersCsv
@@ -7583,6 +7715,9 @@ function applyUiPreferences(prefs={}){
   if(typeof prefs.autoOptimizeOn === 'boolean'){
     autoOptimizeOn = prefs.autoOptimizeOn;
   }
+  if(typeof prefs.cascadeReadyOn === 'boolean'){
+    cascadeReadyOn = prefs.cascadeReadyOn;
+  }
   if(typeof prefs.lockNewOrders === 'boolean'){
     lockNewOrders = prefs.lockNewOrders;
   }
@@ -7607,6 +7742,8 @@ function applyUiPreferences(prefs={}){
   if(shiftEl) shiftEl.checked = !!shiftOnProgress;
   const autoOptEl = $("#autoOptimize");
   if(autoOptEl) autoOptEl.checked = !!autoOptimizeOn;
+  const cascadeEl = $("#cascadeReady");
+  if(cascadeEl) cascadeEl.checked = !!cascadeReadyOn;
   const lockNewOrdersEl = $("#lockNewOrders");
   if(lockNewOrdersEl) lockNewOrdersEl.checked = !!lockNewOrders;
   const lockNewOrdersCsvEl = $("#lockNewOrdersCsv");
@@ -8077,6 +8214,12 @@ function wireHandlers(){
     persistMaybe('ui');
   });
 
+  $("#cascadeReady").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = cascadeReadyOn; notifyReadOnly(); return; }
+    cascadeReadyOn = !!e.target.checked;
+    persistMaybe('ui');
+  });
+
   // Гант — FS
   $("#toggleFS").addEventListener('click', ()=>{
     $("#processFS").value = $("#process").value;
@@ -8277,6 +8420,8 @@ function wireHandlers(){
             if(shiftBox) shiftBox.checked = shiftOnProgress;
             const autoBox = $('#autoOptimize');
             if(autoBox) autoBox.checked = autoOptimizeOn;
+            const cascadeBox = $('#cascadeReady');
+            if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
             const lockBox = $('#lockNewOrders');
             if(lockBox) lockBox.checked = lockNewOrders;
             const lockCsvBox = $('#lockNewOrdersCsv');
