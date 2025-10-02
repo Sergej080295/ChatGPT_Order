@@ -897,6 +897,11 @@ body.overview-fs-active{overflow:hidden}
           <span id="ignoredStatesSummary" class="small muted">Все состояния учитываются</span>
         </div>
       </div>
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
+        <div class="muted small">Журнал и уведомления:</div>
+        <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
+        <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
+      </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
         <div class="muted small">Системные параметры:</div>
         <div id="systemSettings" class="settings-system"></div>
@@ -1740,7 +1745,7 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#confirmReadyTime','#lockNewOrders','#lockNewOrdersCsv'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#confirmReadyTime','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -2186,6 +2191,8 @@ let lockNewOrders = false;
 let lockNewOrdersCsv = false;
 let cascadeReadyOn = false;
 let confirmReadyTimeOn = false;
+let priorityChangeLoggingOn = true;
+let routeDateChangeLoggingOn = true;
 let ignoredStates = [];
 let ignoredStateSet = new Set();
 let csvFreshnessStr='—';
@@ -6582,6 +6589,8 @@ function exportStateCSV(){
   lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
   lines.push(`cascadeReadyOn${sep}${cascadeReadyOn?1:0}`);
   lines.push(`confirmReadyTimeOn${sep}${confirmReadyTimeOn?1:0}`);
+  lines.push(`priorityChangeLoggingOn${sep}${priorityChangeLoggingOn?1:0}`);
+  lines.push(`routeDateChangeLoggingOn${sep}${routeDateChangeLoggingOn?1:0}`);
 
   // EXCEPTIONS
   lines.push(`#SECTION;exceptions`);
@@ -6872,6 +6881,16 @@ function importStateFromCSV(text){
   }
   const confirmBoxMeta = $("#confirmReadyTime");
   if(confirmBoxMeta) confirmBoxMeta.checked = !!confirmReadyTimeOn;
+  if(meta.priorityChangeLoggingOn !== undefined && meta.priorityChangeLoggingOn !== ''){
+    priorityChangeLoggingOn = !!Number(meta.priorityChangeLoggingOn);
+  }
+  const priorityBoxMeta = $("#notifyPriorityChange");
+  if(priorityBoxMeta) priorityBoxMeta.checked = !!priorityChangeLoggingOn;
+  if(meta.routeDateChangeLoggingOn !== undefined && meta.routeDateChangeLoggingOn !== ''){
+    routeDateChangeLoggingOn = !!Number(meta.routeDateChangeLoggingOn);
+  }
+  const routeBoxMeta = $("#notifyRouteDates");
+  if(routeBoxMeta) routeBoxMeta.checked = !!routeDateChangeLoggingOn;
 
   shiftOnProgress = !!Number(meta.shiftOnProgress);
   $("#shiftOnProgress").checked = shiftOnProgress;
@@ -7428,6 +7447,8 @@ function buildStateObject(){
     autoOptimizeOn,
     cascadeReadyOn,
     confirmReadyTimeOn,
+    priorityChangeLoggingOn,
+    routeDateChangeLoggingOn,
     shiftOnProgress,
     ignoredStates: ignoredStates.slice(),
     meta: {
@@ -7587,6 +7608,72 @@ function diffHasChanges(diff){
     return Object.values(diff.stages).some(stageDiff=> diffHasChanges(stageDiff));
   }
   return !!((diff.added && diff.added.length) || (diff.removed && diff.removed.length) || (diff.changed && diff.changed.length));
+}
+
+function filterStageDiffForAnnouncements(stageDiff){
+  if(!stageDiff) return stageDiff;
+  const suppressPriority = !priorityChangeLoggingOn;
+  const suppressRoute = !routeDateChangeLoggingOn;
+  if(!suppressPriority && !suppressRoute) return stageDiff;
+  const changes = Array.isArray(stageDiff.changed) ? stageDiff.changed : [];
+  if(!changes.length) return stageDiff;
+  let mutated = false;
+  const filteredChanged = [];
+  changes.forEach(change=>{
+    if(!change) return;
+    const fields = Array.isArray(change.fields) ? change.fields : [];
+    if(!fields.length){
+      filteredChanged.push(change);
+      return;
+    }
+    const filteredFields = fields.filter(field=>{
+      if(!field) return false;
+      if(suppressPriority && field.field === 'idx') return false;
+      if(suppressRoute && field.field === 'route') return false;
+      return true;
+    }).map(field=> field ? { ...field } : field);
+    if(filteredFields.length === fields.length && !mutated){
+      filteredChanged.push(change);
+      return;
+    }
+    if(filteredFields.length){
+      mutated = true;
+      filteredChanged.push({ ...change, fields: filteredFields });
+    }else{
+      mutated = true;
+    }
+  });
+  if(!mutated) return stageDiff;
+  const result = { ...stageDiff };
+  result.changed = filteredChanged;
+  return result;
+}
+
+function filterDiffForAnnouncements(diff){
+  if(!diff) return diff;
+  if(diff.stages && typeof diff.stages === 'object'){
+    let mutated = false;
+    const nextStages = {};
+    Object.entries(diff.stages).forEach(([stage, stageDiff])=>{
+      const filtered = filterStageDiffForAnnouncements(stageDiff);
+      if(filtered && diffHasChanges(filtered)){
+        nextStages[stage] = filtered;
+        if(filtered !== stageDiff) mutated = true;
+      }else if(filtered && filtered === stageDiff && diffHasChanges(filtered)){
+        nextStages[stage] = filtered;
+      }else if(stageDiff && diffHasChanges(stageDiff)){
+        mutated = true;
+      }
+    });
+    if(!Object.keys(nextStages).length){
+      return { stages:{} };
+    }
+    if(!mutated && Object.keys(nextStages).length === Object.keys(diff.stages).length){
+      return diff;
+    }
+    return { ...diff, stages: nextStages };
+  }
+  return filterStageDiffForAnnouncements(diff);
 }
 
 const STAGE_ORDER_INDEX = new Map(STAGES.map((name, idx)=>[name, idx]));
@@ -8434,6 +8521,12 @@ function restoreState(json, opts={}){
     if(s.confirmReadyTimeOn !== undefined){
       confirmReadyTimeOn = !!s.confirmReadyTimeOn;
     }
+    if(s.priorityChangeLoggingOn !== undefined){
+      priorityChangeLoggingOn = !!s.priorityChangeLoggingOn;
+    }
+    if(s.routeDateChangeLoggingOn !== undefined){
+      routeDateChangeLoggingOn = !!s.routeDateChangeLoggingOn;
+    }
     applyUiPreferences(loadedPrefs);
     saveUiPreferences();
 
@@ -8452,6 +8545,10 @@ function restoreState(json, opts={}){
     updateTrashAttention?.();
     const confirmElRestore = $("#confirmReadyTime");
     if(confirmElRestore) confirmElRestore.checked = !!confirmReadyTimeOn;
+    const priorityElRestore = $("#notifyPriorityChange");
+    if(priorityElRestore) priorityElRestore.checked = !!priorityChangeLoggingOn;
+    const routeElRestore = $("#notifyRouteDates");
+    if(routeElRestore) routeElRestore.checked = !!routeDateChangeLoggingOn;
   }catch(e){ console.warn('restoreState failed', e); }
   refreshDataModeIndicator();
 }
@@ -8551,10 +8648,15 @@ function persistNow(stageOverride, opts={}){
       const meaningfulEntries = entriesRaw.filter(entry=> diffHasChanges(entry.diff));
       const hasChanges = meaningfulEntries.length > 0 || force || !rawPrev;
       const nowStr = new Date().toLocaleString();
-      const combinedDiff = (multiStage.combinedDiff && typeof multiStage.combinedDiff === 'object')
-        ? { ...multiStage.combinedDiff, stages: { ...(multiStage.combinedDiff.stages||{}) } }
-        : { stages:{} };
-      meaningfulEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
+      const announcementEntries = meaningfulEntries.map(entry=> ({
+        stage: entry.stage,
+        diff: filterDiffForAnnouncements(entry.diff)
+      }));
+      const visibleEntries = announcementEntries.filter(entry=> diffHasChanges(entry.diff));
+      const combinedDiff = { stages:{} };
+      visibleEntries.forEach(entry=>{ combinedDiff.stages[entry.stage] = entry.diff; });
+      const defaultStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
+      const visibleStageLabel = visibleEntries.length>1 ? 'multi' : (visibleEntries[0]?.stage || defaultStageLabel);
       const authorsMap = {};
       const stageSummaryParts = [];
 
@@ -8562,11 +8664,12 @@ function persistNow(stageOverride, opts={}){
       const overrideOrdersSummary = ordersSummaryOverrideOpt && typeof ordersSummaryOverrideOpt === 'object'
         ? ordersSummaryOverrideOpt
         : null;
-      const combinedSummaryBase = (multiStage.ordersSummary && typeof multiStage.ordersSummary === 'object')
-        ? multiStage.ordersSummary
-        : buildOrdersSummary(combinedDiff);
-      const combinedSummary = overrideOrdersSummary || combinedSummaryBase;
-      const combinedSummaryText = overrideSummaryText || summarizeOrdersSummary(combinedSummary);
+      const combinedSummary = visibleEntries.length
+        ? (overrideOrdersSummary || buildOrdersSummary(combinedDiff))
+        : null;
+      const combinedSummaryText = visibleEntries.length
+        ? (overrideSummaryText || summarizeOrdersSummary(combinedSummary))
+        : '';
       const changeType = describeChangeType(source);
 
       const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
@@ -8576,12 +8679,17 @@ function persistNow(stageOverride, opts={}){
         const newVersion = prevVersion + 1;
         versions[stage] = newVersion;
         lastKnownVersions.set(stage, newVersion);
-        const stageSummaryObj = buildOrdersSummary(entry.diff, stage);
-        const stageSummaryText = summarizeOrdersSummary(stageSummaryObj)
-          || summarizeDiffLike(entry.diff, stage);
-        authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: stageSummaryText };
-        stageSummaryParts.push(`${STAGE_TITLE[stage] || stage}: ${stageSummaryText}`);
       });
+      if(visibleEntries.length){
+        visibleEntries.forEach(entry=>{
+          const stage = entry.stage;
+          const stageSummaryObj = buildOrdersSummary(entry.diff, stage);
+          const stageSummaryText = summarizeOrdersSummary(stageSummaryObj)
+            || summarizeDiffLike(entry.diff, stage);
+          authorsMap[stage] = { name:userAlias, session:SESSION_ID, at:nowStr, summary: stageSummaryText };
+          stageSummaryParts.push(`${STAGE_TITLE[stage] || stage}: ${stageSummaryText}`);
+        });
+      }
       stateMeta.versions = versions;
 
       if(hasChanges){
@@ -8597,18 +8705,21 @@ function persistNow(stageOverride, opts={}){
         updateFreshnessUI();
       }
 
-      if(hasChanges && source !== 'system'){
+      const fallbackSummary = stageSummaryParts.filter(Boolean).join('; ');
+      const summaryLine = combinedSummaryText || fallbackSummary;
+
+      if(hasChanges && source !== 'system' && visibleEntries.length){
         const lastAuthors = { ...(stateMeta.lastAuthors || {}), ...authorsMap };
         stateMeta.lastAuthors = lastAuthors;
         const logEntry = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
           time: nowStr,
-          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
+          stage: visibleStageLabel,
           user: userAlias,
           session: SESSION_ID,
           source,
           changeType,
-          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
+          summary: summaryLine,
           diff: combinedDiff,
           authors: authorsMap,
           ordersSummary: combinedSummary || null
@@ -8633,16 +8744,16 @@ function persistNow(stageOverride, opts={}){
           updatedAt: stateMeta.settings?.updatedAt || ''
         },
         ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
-        ordersSummary: combinedSummary || null,
+        ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
         lastChange: {
-          stage: meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage),
-          stages: Array.from(new Set(meaningfulEntries.map(entry=> entry.stage))),
-          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
-          diff: hasChanges ? combinedDiff : null,
+          stage: visibleStageLabel,
+          stages: visibleEntries.map(entry=> entry.stage),
+          summary: summaryLine,
+          diff: hasChanges && visibleEntries.length ? combinedDiff : null,
           user: userAlias,
           source,
           time: nowStr,
-          ordersSummary: combinedSummary || null,
+          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
           changeType
         }
       };
@@ -8663,7 +8774,7 @@ function persistNow(stageOverride, opts={}){
         suppressIncoming = false;
       }
 
-      const targetStageLabel = meaningfulEntries.length>1 ? 'multi' : (meaningfulEntries[0]?.stage || curStage);
+      const targetStageLabel = visibleStageLabel;
 
       if(remoteSyncEnabled()){
         remoteBridge.push(payload, {
@@ -8673,9 +8784,9 @@ function persistNow(stageOverride, opts={}){
           source,
           user:userAlias,
           session:SESSION_ID,
-          summary: (combinedSummaryText || multiStage.summary || stageSummaryParts.join('; ')) || undefined,
+          summary: summaryLine || undefined,
           authors: authorsMap,
-          ordersSummary: combinedSummary || null,
+          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
           time: nowStr,
           changeType
         })
@@ -8747,8 +8858,8 @@ function persistNow(stageOverride, opts={}){
           source,
           user:userAlias,
           authors: authorsMap,
-          summary: combinedSummaryText || multiStage.summary || stageSummaryParts.join('; '),
-          ordersSummary: combinedSummary || null,
+          summary: summaryLine,
+          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
           time: nowStr,
           changeType
         });
@@ -8854,6 +8965,8 @@ function persistNow(stageOverride, opts={}){
     const currentSnapshot = captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const diff = computeDiff(prevSnapshot, currentSnapshot);
     const diffChanged = diffHasChanges(diff);
+    const announcementDiff = diffChanged ? filterDiffForAnnouncements(diff) : diff;
+    const announcementChanged = diffChanged ? diffHasChanges(announcementDiff) : false;
     const isSettingsChange = Array.isArray(settingsChange?.entries) && settingsChange.entries.length > 0;
     const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
     let authorsMap = null;
@@ -8863,11 +8976,11 @@ function persistNow(stageOverride, opts={}){
     const overrideOrdersSummary = ordersSummaryOverrideOpt && typeof ordersSummaryOverrideOpt === 'object'
       ? ordersSummaryOverrideOpt
       : null;
-    const ordersSummary = diffChanged ? buildOrdersSummary(diff, curStage) : null;
+    const ordersSummary = announcementChanged ? buildOrdersSummary(announcementDiff, curStage) : null;
     const effectiveOrdersSummary = overrideOrdersSummary || ordersSummary;
-    const changeSummaryText = overrideSummaryText
-      || summarizeOrdersSummary(effectiveOrdersSummary)
-      || summarizeDiffLike(diff, curStage);
+    const changeSummaryText = announcementChanged
+      ? (overrideSummaryText || summarizeOrdersSummary(effectiveOrdersSummary) || summarizeDiffLike(announcementDiff, curStage))
+      : (overrideSummaryText || '');
     const changeType = describeChangeType(source);
 
     // merge tasks from other стадий
@@ -8909,7 +9022,7 @@ function persistNow(stageOverride, opts={}){
       }
       updateFreshnessUI();
 
-      if(source !== 'system'){
+      if(source !== 'system' && announcementChanged){
         const authorDetails = { name:userAlias, session:SESSION_ID, at:nowStr, summary: changeSummaryText };
         authorsMap = { [curStage]: authorDetails };
         const entry = {
@@ -8921,7 +9034,7 @@ function persistNow(stageOverride, opts={}){
           source,
           changeType,
           summary: changeSummaryText,
-          diff,
+          diff: announcementDiff,
           authors: authorsMap,
           ordersSummary: effectiveOrdersSummary || null
         };
@@ -8959,7 +9072,13 @@ function persistNow(stageOverride, opts={}){
       markLogAttention();
     }
 
-    const summaryForMeta = isSettingsChange && !diffChanged ? settingsSummary : changeSummaryText;
+    const summaryForMeta = isSettingsChange && !diffChanged
+      ? settingsSummary
+      : (announcementChanged ? changeSummaryText : '');
+    const ordersSummaryForMeta = isSettingsChange && !diffChanged
+      ? null
+      : (announcementChanged ? (effectiveOrdersSummary || null) : null);
+    const diffForMeta = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
 
     stateObj.meta = {
       versions: { ...versions },
@@ -8973,16 +9092,16 @@ function persistNow(stageOverride, opts={}){
         updatedAt: stateMeta.settings?.updatedAt || ''
       },
       ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
-      ordersSummary: effectiveOrdersSummary || null,
+      ordersSummary: ordersSummaryForMeta,
       lastChange: {
         stage: curStage,
         stages: [curStage],
         summary: summaryForMeta,
-        diff: diffChanged ? diff : null,
+        diff: diffForMeta,
         user: userAlias,
         source,
         time: nowStr,
-        ordersSummary: diffChanged ? (effectiveOrdersSummary || null) : null,
+        ordersSummary: ordersSummaryForMeta,
         changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType
       }
     };
@@ -9014,11 +9133,11 @@ function persistNow(stageOverride, opts={}){
       }else{
         const remoteStage = isSettingsChange && !diffChanged ? 'settings' : curStage;
         const remoteSummary = summaryForMeta || undefined;
-        const remoteDiff = isSettingsChange && !diffChanged ? null : diff;
+        const remoteDiff = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
         const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
         const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
-        const remoteOrdersSummary = diffChanged ? (effectiveOrdersSummary || null) : null;
+        const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         remoteBridge.push(payload, {
           stage:remoteStage,
           diff:remoteDiff,
@@ -9109,16 +9228,18 @@ function persistNow(stageOverride, opts={}){
         });
       }
       if(diffChanged){
-        const payloadAuthors = authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null);
+        const payloadAuthors = announcementChanged
+          ? (authorsMap || (stateMeta.lastAuthors && stateMeta.lastAuthors[curStage] ? { [curStage]: stateMeta.lastAuthors[curStage] } : null))
+          : null;
         announceStateUpdate({
           stage:curStage,
-          diff,
+          diff: announcementChanged ? announcementDiff : null,
           version:newVersion,
           source,
           user:userAlias,
           authors: payloadAuthors,
           summary: summaryForMeta,
-          ordersSummary: effectiveOrdersSummary || null,
+          ordersSummary: ordersSummaryForMeta,
           time: nowStr,
           changeType
         });
@@ -9454,6 +9575,10 @@ function applyUiPreferences(prefs={}){
   if(lockNewOrdersEl) lockNewOrdersEl.checked = !!lockNewOrders;
   const lockNewOrdersCsvEl = $("#lockNewOrdersCsv");
   if(lockNewOrdersCsvEl) lockNewOrdersCsvEl.checked = !!lockNewOrdersCsv;
+  const priorityNotifyEl = $("#notifyPriorityChange");
+  if(priorityNotifyEl) priorityNotifyEl.checked = !!priorityChangeLoggingOn;
+  const routeNotifyEl = $("#notifyRouteDates");
+  if(routeNotifyEl) routeNotifyEl.checked = !!routeDateChangeLoggingOn;
   if(typeof prefs.showIds === 'boolean' && document.body){
     document.body.classList.toggle('show-ids', prefs.showIds);
     const toggle = document.getElementById('showIdsToggle');
@@ -9994,6 +10119,18 @@ function wireHandlers(){
     if(!userCanEdit()){ e.target.checked = confirmReadyTimeOn; notifyReadOnly(); return; }
     confirmReadyTimeOn = !!e.target.checked;
     persistSharedPreference('confirmReadyTimeOn', 'Уточнять время готовности', confirmReadyTimeOn);
+  });
+
+  $("#notifyPriorityChange").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = priorityChangeLoggingOn; notifyReadOnly(); return; }
+    priorityChangeLoggingOn = !!e.target.checked;
+    persistSharedPreference('priorityChangeLoggingOn', 'Изменение приоритета', priorityChangeLoggingOn);
+  });
+
+  $("#notifyRouteDates").addEventListener('change', e=>{
+    if(!userCanEdit()){ e.target.checked = routeDateChangeLoggingOn; notifyReadOnly(); return; }
+    routeDateChangeLoggingOn = !!e.target.checked;
+    persistSharedPreference('routeDateChangeLoggingOn', 'Изменение дат маршрута', routeDateChangeLoggingOn);
   });
 
   // Гант — FS
