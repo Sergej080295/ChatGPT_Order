@@ -370,6 +370,22 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 .switch{display:inline-flex;gap:4px;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden}
 .switch button{padding:4px 8px;border:none;background:#fff;cursor:pointer}
 .switch button.active{background:#eef2ff;font-weight:700}
+#overviewCard{display:flex;flex-direction:column;gap:10px}
+#overviewCard.fullscreen-active{flex:1}
+#overviewCard.fullscreen-active #overview,#overviewCard.fullscreen-active #overviewCompact{flex:1;display:flex;flex-direction:column}
+#overviewCard.fullscreen-active .ov-wrap{flex:1}
+#overviewCard.fullscreen-active .ov-right,#overviewCard.fullscreen-active .ov-body,#overviewCard.fullscreen-active #ovBody,#overviewCard.fullscreen-active #ovBodyC{flex:1}
+#overviewCard .ov-wrap{flex:1}
+#overviewCard #overview,#overviewCard #overviewCompact{display:flex;flex-direction:column;gap:0;flex:1}
+.route-legend{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:12px}
+.route-legend .item{display:flex;align-items:center;gap:6px}
+.route-legend .dot{width:12px;height:12px;border-radius:4px}
+.overview-overlay{position:fixed;inset:0;background:#fff;z-index:1000;display:none;flex-direction:column}
+.overview-overlay.active{display:flex}
+.overview-overlay .topbar{display:flex;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--line)}
+.overview-overlay .title{font-weight:700}
+.overview-overlay .content{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column}
+body.overview-fs-active{overflow:hidden}
 
 /* Сегодня — подсветка колонки */
 .gantt-header-cell.today,
@@ -567,9 +583,6 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center">
       <h3 id="ordersCardTitle">Общий список заказов</h3>
-      <div class="row" id="ordersHeaderActions">
-        <button id="addOrder" class="btn">Добавить</button>
-      </div>
     </div>
 
     <div class="orders-toolbar-row">
@@ -600,6 +613,7 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 
       <div class="orders-toolbar-buttons" id="ordersToolbarButtons">
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
+        <button id="addOrder" class="btn">Добавить</button>
         <button id="showTrash" class="btn ghost">Корзина</button>
       </div>
     </div>
@@ -848,6 +862,23 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
         <label class="small"><input type="checkbox" id="storageRemote" checked> SQL база</label>
         <div class="small muted" id="storageModeHint">—</div>
       </div>
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;width:100%">
+        <label class="small">Стартовая страница:
+          <select id="startStagePreference">
+            <option value="orders">Общий список заказов</option>
+            <option value="draw">Технологи: подготовка в работу</option>
+            <option value="proc">Закупка</option>
+            <option value="shear">Рубка</option>
+            <option value="laser">Лазер</option>
+            <option value="bend">Гибка</option>
+            <option value="weld">Сварка</option>
+            <option value="mech">Мехобработка</option>
+            <option value="pack">Упаковка</option>
+            <option value="ship">Отгрузка</option>
+          </select>
+        </label>
+        <div class="small muted">Настройка применяется индивидуально и используется при следующем открытии Планировщика.</div>
+      </div>
     </div>
     <div class="settings-panel" data-settings-panel="shared">
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:4px;width:100%">
@@ -1045,9 +1076,22 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
         </div>
       </div>
       <div class="group" style="margin-left:auto">
+        <button id="overviewFullscreenBtn" class="btn">Во весь экран</button>
         <button id="ovReset" class="btn">Сброс</button>
         <button id="ovApply" class="btn primary">Сохранить изменения</button>
       </div>
+    </div>
+
+    <div class="route-legend" id="overviewLegend">
+      <span class="item"><span class="dot stage-draw"></span>Технологи</span>
+      <span class="item"><span class="dot stage-proc"></span>Закупка</span>
+      <span class="item"><span class="dot stage-shear"></span>Рубка</span>
+      <span class="item"><span class="dot stage-laser"></span>Лазер</span>
+      <span class="item"><span class="dot stage-bend"></span>Гибка</span>
+      <span class="item"><span class="dot stage-weld"></span>Сварка</span>
+      <span class="item"><span class="dot stage-mech"></span>Мехобработка</span>
+      <span class="item"><span class="dot stage-pack"></span>Упаковка</span>
+      <span class="item"><span class="dot stage-ship"></span>Отгрузка</span>
     </div>
 
     <!-- подробный -->
@@ -1080,20 +1124,18 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       </div>
     </div>
   </div>
-  <div class="compact-legend" style="margin-top:8px">
-	<span><i class="dot stage-draw"></i>Технологи</span>
-	<span><i class="dot stage-proc"></i>Закупка</span>
-	<span><i class="dot stage-shear"></i>Рубка</span>
-	<span><i class="dot stage-laser"></i>Лазер</span>
-	<span><i class="dot stage-bend"></i>Гибка</span>
-	<span><i class="dot stage-weld"></i>Сварка</span>
-	<span><i class="dot stage-mech"></i>Мех</span>
-	<span><i class="dot stage-pack"></i>Упаковка</span>
-	<span><i class="dot stage-ship"></i>Отгрузка</span>
-  </div>
-
 </div>
 <div id="ovStats" class="ov-stats"></div>
+    </div>
+  </div>
+
+<div class="overview-overlay" id="overviewOverlay">
+  <div class="topbar">
+    <span class="title">Общий маршрут заказов — полноэкранный режим</span>
+    <button id="overviewExitFS" class="btn">Выйти</button>
+  </div>
+  <div class="content" id="overviewOverlayContent"></div>
+</div>
 
 <script>
 
@@ -1132,6 +1174,7 @@ const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|
 const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
 const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
+const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
   local:{label:'Локальный кэш'},
@@ -1145,6 +1188,7 @@ let remotePreferenceRequested = true;
 let currentDataOrigin = 'unknown';
 let lastSerializedState = '';
 let remoteSubscriptionStop = null;
+let preferredStartStage = 'orders';
 
 function cloneTaskRecord(task){
   if(!task) return null;
@@ -2288,6 +2332,26 @@ function collectActiveTasksForOverview(){
   return { list:[...byUid.values()], byStage };
 }
 
+function collectDoneStageKeys(){
+  const keys = new Set();
+  doneTasks.forEach(rec => {
+    if(!rec || !rec.stage) return;
+    const key = orderKeyForRecord(rec);
+    if(key) keys.add(`${key}::${rec.stage}`);
+  });
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(task => {
+      if(!task || !task.stage) return;
+      const progress = clampProgressValue(task.progress);
+      if(task.isDone || isDoneStatus(task.status) || progress >= 100){
+        const key = orderKeyForRecord(task);
+        if(key) keys.add(`${key}::${task.stage}`);
+      }
+    });
+  }
+  return keys;
+}
+
 function orderKeyForRecord(rec){
   if(!rec) return '';
   if(rec.parentId) return String(rec.parentId);
@@ -3226,208 +3290,231 @@ function applyStageProgress(identity, stage, value, options={}){
 
   const normalized = clampProgressValue(value);
   const markDone = normalized >= 100;
+  const today = today0();
   const now = options.when instanceof Date ? new Date(options.when) : new Date();
   const source = options.source || 'ui';
-  const keyForTask = task => {
-    if(!task) return '';
-    if(task.uid) return task.uid;
-    const orderKey = orderKeyForRecord(task);
-    const stageName = task.stage || stage;
-    return orderKey ? `${orderKey}::${stageName}` : `${stageName}::${Math.random()}`;
-  };
-  const matchCandidate = candidate => matchesOrderIdentity(orderKeyForRecord(candidate), candidate, identity);
 
-  const stageRecords = new Map();
-  const otherRecords = [];
+  const matches = collectStageEntities(identity, stage);
+  const activeMatches = Array.isArray(matches?.active) ? matches.active : [];
+  const storedMatches = Array.isArray(matches?.stored) ? matches.stored : [];
+  const doneMatches = Array.isArray(matches?.done) ? matches.done : [];
 
-  if(Array.isArray(allTasksFromState)){
-    allTasksFromState.forEach(task => {
-      if(!task) return;
-      const clone = cloneTaskRecord(task);
-      if(clone.stage === stage){
-        stageRecords.set(keyForTask(clone), clone);
-      }else{
-        otherRecords.push(clone);
-      }
-    });
-  }
-
-  if(currentProc === stage){
-    tasks.forEach(task => {
-      if(!task || task.stage !== stage) return;
-      const clone = cloneTaskRecord(task);
-      stageRecords.set(keyForTask(clone), clone);
-    });
-  }
-
-  let hasStageMatch = false;
-  stageRecords.forEach(task => { if(matchCandidate(task)) hasStageMatch = true; });
-
-  let hasDoneMatch = false;
-  doneTasks.forEach(rec => {
-    if(!rec || rec.stage !== stage) return;
-    if(matchCandidate(rec)){
-      hasDoneMatch = true;
-      return;
-    }
-    const restored = buildDoneTaskRecord(rec);
-    if(restored && matchCandidate(restored)) hasDoneMatch = true;
-  });
-
-  if(!hasStageMatch && !hasDoneMatch){
+  if(!activeMatches.length && !storedMatches.length && !doneMatches.length){
     if(!options.silent) alert('Нет данных для выбранного передела.');
     return false;
   }
 
-  const stageEntries = Array.from(stageRecords.values());
-  const newStageMap = new Map();
-  const archiveRecords = [];
-  let changed = false;
-  let restoredCount = 0;
-  let hasActiveArchive = false;
+  if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
 
-  stageEntries.forEach(task => {
-    const key = keyForTask(task);
-    if(!key) return;
-    if(matchCandidate(task)){
-      const prevProgress = clampProgressValue(task.progress);
-      const prevDone = !!task.isDone || isDoneStatus(task.status) || prevProgress >= 100;
-      if(markDone){
-        hasActiveArchive = true;
-        if(!prevDone) changed = true;
-        const archived = cloneTaskRecord(task);
-        archived.progress = 100;
-        archived.isDone = true;
-        archiveRecords.push(archived);
-        return;
-      }
-      if(prevProgress !== normalized || prevDone){
-        changed = true;
-      }
-      task.progress = normalized;
-      task.isDone = false;
+  const shiftTaskStart = (task, prevProgressValue) => {
+    if(!shiftOnProgress || !task) return;
+    const prev = clampProgressValue(prevProgressValue);
+    if(prev === normalized) return;
+    if(task.startDate instanceof Date && !task.origStartDate){
+      task.origStartDate = new Date(task.startDate);
+    }else if(task.startDate instanceof Date && task.origStartDate instanceof Date && (+task.origStartDate === +task.startDate)){
+      task.origStartDate = new Date(task.startDate);
     }
-    task.progress = clampProgressValue(task.progress);
-    task.isDone = false;
-    newStageMap.set(key, task);
+    task.startDate = new Date(today);
+    task.startMissing = false;
+    if(task.endDate instanceof Date && task.endDate < task.startDate){
+      task.endDate = new Date(task.startDate);
+      task.endMissing = false;
+    }
+    if(!task.route) task.route = {};
+    const seg = { ...(task.route[stage] || {}) };
+    seg.start = new Date(task.startDate);
+    if(seg.end && seg.end < seg.start){
+      seg.end = new Date(seg.start);
+    }
+    if(seg.hours == null && Number.isFinite(task.hours)){
+      seg.hours = Number(task.hours) || 0;
+    }
+    task.route[stage] = seg;
+  };
+
+  const uidSet = new Set();
+  const storedByUid = new Map();
+  storedMatches.forEach(({ task, index }) => {
+    if(task && task.uid){
+      uidSet.add(task.uid);
+      storedByUid.set(task.uid, { task, index });
+    }
+  });
+  activeMatches.forEach(({ task, index }) => {
+    if(task && task.uid){
+      uidSet.add(task.uid);
+      if(!storedByUid.has(task.uid)){
+        storedByUid.set(task.uid, { task: null, index: -1, activeIndex:index });
+      }
+    }
+  });
+  doneMatches.forEach(({ rec }) => {
+    if(rec && rec.uid){
+      uidSet.add(rec.uid);
+      if(!storedByUid.has(rec.uid)){
+        storedByUid.set(rec.uid, { task: null, index: -1 });
+      }
+    }
   });
 
-  const originalDoneTasks = doneTasks.slice();
-  let nextDoneTasks = originalDoneTasks;
-
-  if(!markDone){
-    nextDoneTasks = [];
-    originalDoneTasks.forEach(rec => {
-      if(!rec || rec.stage !== stage){
-        nextDoneTasks.push(rec);
-        return;
-      }
-      const restored = buildDoneTaskRecord(rec);
-      if(restored && matchCandidate(restored)){
-        const prevProgress = clampProgressValue(restored.progress);
-        if(prevProgress !== normalized) changed = true;
-        restored.progress = normalized;
-        restored.isDone = false;
-        newStageMap.set(keyForTask(restored), restored);
-        restoredCount++;
-      }else{
-        nextDoneTasks.push(rec);
-      }
-    });
-  }else if(hasActiveArchive){
-    nextDoneTasks = [];
-    originalDoneTasks.forEach(rec => {
-      if(!rec || rec.stage !== stage){
-        nextDoneTasks.push(rec);
-        return;
-      }
-      const matchesDone = matchCandidate(rec) || (() => {
-        const restored = buildDoneTaskRecord(rec);
-        return restored && matchCandidate(restored);
-      })();
-      if(matchesDone){
-        changed = true;
-      }else{
-        nextDoneTasks.push(rec);
-      }
-    });
-  }
-
-  const didChange = changed || restoredCount > 0 || archiveRecords.length > 0;
-  if(!didChange){
+  if(!uidSet.size){
+    if(!options.silent) alert('Не удалось определить задачи для выбранного передела.');
     return false;
   }
 
-  doneTasks = nextDoneTasks;
+  const removeSet = new Set();
+  let changed = false;
 
-  const stageMapByUid = new Map();
-  newStageMap.forEach(task => {
-    if(!task) return;
-    const uid = task.uid || keyForTask(task);
-    task.uid = uid;
-    stageMapByUid.set(uid, task);
-  });
-
-  let orderList = Array.isArray(ordersByStage.get(stage)) ? ordersByStage.get(stage).filter(uid => stageMapByUid.has(uid)) : [];
-  const missing = [];
-  stageMapByUid.forEach((task, uid) => {
-    if(!orderList.includes(uid)) missing.push(task);
-  });
-  if(missing.length){
-    missing.sort(compareTasksForOrdering);
-    orderList = orderList.concat(missing.map(task => task.uid));
-  }
-  ordersByStage.set(stage, orderList);
-
-  const orderedStageTasks = [];
-  orderList.forEach(uid => {
-    if(!stageMapByUid.has(uid)) return;
-    const item = stageMapByUid.get(uid);
-    item.progress = clampProgressValue(item.progress);
-    item.isDone = false;
-    orderedStageTasks.push(item);
-    stageMapByUid.delete(uid);
-  });
-  if(stageMapByUid.size){
-    const leftovers = Array.from(stageMapByUid.values());
-    leftovers.sort(compareTasksForOrdering);
-    leftovers.forEach(task => {
-      task.progress = clampProgressValue(task.progress);
-      task.isDone = false;
-      orderedStageTasks.push(task);
+  if(markDone){
+    uidSet.forEach(uid => {
+      let target = storedByUid.get(uid)?.task || null;
+      if(!target){
+        const activeEntry = activeMatches.find(entry => entry.task && entry.task.uid === uid);
+        if(activeEntry?.task){
+          target = cloneTaskRecord(activeEntry.task);
+        }
+      }
+      if(!target){
+        const doneEntry = doneMatches.find(entry => entry.rec && entry.rec.uid === uid);
+        if(doneEntry?.rec){
+          target = buildDoneTaskRecord(doneEntry.rec);
+        }
+      }
+      if(!target) return;
+      const prevProgress = clampProgressValue(target.progress);
+      shiftTaskStart(target, prevProgress);
+      if(prevProgress < 100) changed = true;
+      target.progress = 100;
+      target.isDone = true;
+      ensureDoneRecordFromTask(target, source, now);
+      cascadeCompletionForTask(target, { when: now, updateUI:false });
+      removeSet.add(uid);
     });
+
+    if(!removeSet.size) return false;
+
+    if(removeSet.size){
+      const beforeLen = allTasksFromState.length;
+      allTasksFromState = allTasksFromState.filter(task => {
+        if(!task) return false;
+        if(task.stage !== stage) return true;
+        return !removeSet.has(task.uid);
+      });
+      if(allTasksFromState.length !== beforeLen) changed = true;
+    }
+
+    if(currentProc === stage){
+      const before = tasks.length;
+      tasks = tasks.filter(task => !(task && removeSet.has(task.uid)));
+      if(tasks.length !== before) changed = true;
+      lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+      rememberStageOrder(stage);
+    }else{
+      stagesDirtyFromRoute.add(stage);
+    }
+
+    const currentOrder = Array.isArray(ordersByStage.get(stage)) ? ordersByStage.get(stage) : [];
+    const filteredOrder = currentOrder.filter(uid => !removeSet.has(uid));
+    ordersByStage.set(stage, filteredOrder);
+  }else{
+    const removedDone = new Set();
+    const updatedStored = new Map();
+
+    doneMatches.forEach(({ rec }) => {
+      if(rec && uidSet.has(rec.uid)) removedDone.add(rec.uid);
+    });
+    if(removedDone.size){
+      const before = doneTasks.length;
+      doneTasks = doneTasks.filter(rec => !(rec && removedDone.has(rec.uid)));
+      if(doneTasks.length !== before) changed = true;
+    }
+
+    uidSet.forEach(uid => {
+      let stored = storedByUid.get(uid)?.task || null;
+      if(stored){
+        const prevProgress = clampProgressValue(stored.progress);
+        if(prevProgress !== normalized) changed = true;
+        shiftTaskStart(stored, prevProgress);
+        stored.progress = normalized;
+        stored.isDone = false;
+        updatedStored.set(uid, stored);
+        return;
+      }
+
+      const activeEntry = activeMatches.find(entry => entry.task && entry.task.uid === uid);
+      if(activeEntry?.task){
+        const copy = cloneTaskRecord(activeEntry.task);
+        const prevProgress = clampProgressValue(copy.progress);
+        if(prevProgress !== normalized) changed = true;
+        shiftTaskStart(copy, prevProgress);
+        copy.progress = normalized;
+        copy.isDone = false;
+        allTasksFromState.push(copy);
+        updatedStored.set(uid, copy);
+        return;
+      }
+
+      const doneEntry = doneMatches.find(entry => entry.rec && entry.rec.uid === uid);
+      if(doneEntry?.rec){
+        const restored = buildDoneTaskRecord(doneEntry.rec);
+        if(restored){
+          shiftTaskStart(restored, clampProgressValue(restored.progress));
+          restored.progress = normalized;
+          restored.isDone = false;
+          allTasksFromState.push(restored);
+          updatedStored.set(uid, restored);
+          changed = true;
+        }
+      }
+    });
+
+    if(currentProc === stage){
+      const byUid = new Map(tasks.map((task, idx)=> task ? [task.uid, { task, idx }] : null).filter(Boolean));
+      updatedStored.forEach((record, uid)=>{
+        if(!record) return;
+        const entry = byUid.get(uid);
+        if(entry){
+          tasks[entry.idx] = cloneTaskRecord(record);
+        }else{
+          tasks.push(cloneTaskRecord(record));
+        }
+      });
+      lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+      rememberStageOrder(stage);
+    }else{
+      stagesDirtyFromRoute.add(stage);
+    }
   }
 
-  const stageTasksForState = orderedStageTasks.map(cloneTaskRecord);
-  const combined = [];
-  const seen = new Set();
-  const pushUnique = task => {
-    if(!task) return;
-    const uid = task.uid || keyForTask(task);
-    if(uid && seen.has(uid)) return;
-    combined.push(task);
-    if(uid) seen.add(uid);
-  };
+  if(!changed && !markDone) return false;
 
-  otherRecords.forEach(task => pushUnique(cloneTaskRecord(task)));
-  stageTasksForState.forEach(task => pushUnique(task));
-  allTasksFromState = combined;
+  const others = [];
+  const stageActive = [];
+  allTasksFromState.forEach(task => {
+    if(!task) return;
+    if(task.stage === stage){
+      if(task.isDone || isDoneStatus(task.status) || clampProgressValue(task.progress) >= 100){
+        return;
+      }
+      stageActive.push(task);
+    }else{
+      others.push(task);
+    }
+  });
+
+  stageActive.sort(compareTasksForOrdering);
+  ordersByStage.set(stage, stageActive.map(task => task.uid));
+
+  allTasksFromState = others.concat(stageActive);
 
   if(currentProc === stage){
-    tasks = orderedStageTasks.map(cloneTaskRecord);
+    tasks = stageActive.map(cloneTaskRecord);
     lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
     rememberStageOrder(stage);
-  }else{
-    stagesDirtyFromRoute.add(stage);
   }
 
-  if(archiveRecords.length){
-    archiveRecords.forEach(task => {
-      ensureDoneRecordFromTask(task, source, now);
-      cascadeCompletionForTask(task, { when: now, updateUI:false });
-    });
-  }
-
+  updateDoneAttention();
   updateStageSnapshotFromAggregated(stage);
   rebuildAndRenderMasterRoute();
   recompute();
@@ -3797,6 +3884,52 @@ function toggleOverviewMode(enabled){
   }
 }
 
+function enterOverviewFullscreen(){
+  const card = document.getElementById('overviewCard');
+  const overlay = document.getElementById('overviewOverlay');
+  const content = document.getElementById('overviewOverlayContent');
+  if(!card || !overlay || !content) return;
+  if(overlay.classList.contains('active')) return;
+  if(!overviewFsPlaceholder){
+    overviewFsPlaceholder = document.createElement('div');
+    overviewFsPlaceholder.id = 'overviewCardPlaceholder';
+    overviewFsPlaceholder.style.display = 'none';
+  }
+  if(!overviewFsPlaceholder.isConnected && card.parentElement){
+    card.parentElement.insertBefore(overviewFsPlaceholder, card);
+  }
+  content.appendChild(card);
+  card.classList.add('fullscreen-active');
+  overlay.classList.add('active');
+  if(document.body){
+    document.body.classList.add('overview-fs-active');
+  }
+  rebuildAndRenderMasterRoute();
+}
+
+function exitOverviewFullscreen(){
+  const card = document.getElementById('overviewCard');
+  const overlay = document.getElementById('overviewOverlay');
+  const wasActive = overlay?.classList.contains('active');
+  if(overlay){
+    overlay.classList.remove('active');
+  }
+  if(document.body){
+    document.body.classList.remove('overview-fs-active');
+  }
+  if(card){
+    card.classList.remove('fullscreen-active');
+    if(overviewFsPlaceholder && overviewFsPlaceholder.parentNode){
+      overviewFsPlaceholder.parentNode.insertBefore(card, overviewFsPlaceholder);
+      overviewFsPlaceholder.remove();
+      overviewFsPlaceholder = null;
+    }
+  }
+  if(wasActive){
+    rebuildAndRenderMasterRoute();
+  }
+}
+
 function buildOverviewOrderRanks(byStage){
   const ranks = new Map();
   const stageOrderMaps = new Map();
@@ -3878,6 +4011,36 @@ const STAGE_CLASS = {
   ship:'stage-ship'
 };
 
+function normalizeStartStage(value){
+  if(typeof value !== 'string') return OVERVIEW_STAGE;
+  const trimmed = value.trim();
+  if(trimmed === OVERVIEW_STAGE) return OVERVIEW_STAGE;
+  return STAGES.includes(trimmed) ? trimmed : OVERVIEW_STAGE;
+}
+
+function loadPreferredStartStage(){
+  let stored = null;
+  try{ stored = localStorage.getItem(START_STAGE_PREF_KEY); }
+  catch(_){ stored = null; }
+  preferredStartStage = normalizeStartStage(stored || preferredStartStage || OVERVIEW_STAGE);
+  return preferredStartStage;
+}
+
+function savePreferredStartStage(stage){
+  const normalized = normalizeStartStage(stage);
+  preferredStartStage = normalized;
+  try{ localStorage.setItem(START_STAGE_PREF_KEY, normalized); }
+  catch(_){ /* ignore */ }
+  return normalized;
+}
+
+function getPreferredStartStage(){
+  if(!preferredStartStage) return loadPreferredStartStage();
+  return normalizeStartStage(preferredStartStage);
+}
+
+loadPreferredStartStage();
+
 // Переключение UI под безчасовые этапы
 function adjustUIForProcess(p){
   if(p === OVERVIEW_STAGE){
@@ -3928,6 +4091,7 @@ let ovModeCurrent = 'detailed';  // 'detailed' | 'compact'
 let routeOverrides = new Map();  // `${parentId}::${stage}` => {start:Date|null,end:Date|null}
 let routeEditsWorking = new Map(); // несохранённые правки (как overrides)
 let currentRouteContext = null;   // текущее состояние открытого маршрута
+let overviewFsPlaceholder = null; // узел-заглушка для возврата карточки из полноэкранного режима
 
 /* =========
    ВСПОМОГАТ.
@@ -5418,12 +5582,15 @@ function mapOrdersFromTasks(ts){
 function visibleDayIdxForRange(minD,maxD){
   const n=daysBetween(minD,maxD)+1; return [...Array(n).keys()];
 }
-function calcBoundsForOrders(orders){
+function calcBoundsForOrders(orders, doneStageKeys = new Set()){
   let minD=null, maxD=null;
   for(const o of orders){
+    const orderKey = orderKeyForRecord(o);
     for(const st of STAGES){
       if(!ovFilter.has(st)) continue;
       const seg=o.stages[st]; if(!seg) continue;
+      if(seg.done) continue;
+      if(orderKey && doneStageKeys.has(`${orderKey}::${st}`)) continue;
       if(seg.start){ minD = (!minD||seg.start<minD)? new Date(seg.start): minD; }
       if(seg.end){   maxD = (!maxD||seg.end>maxD)?   new Date(seg.end): maxD; }
     }
@@ -5477,12 +5644,15 @@ function onBarDrop(){
 }
 
 /* статистика */
-function renderOvStats(orders){
+function renderOvStats(orders, doneStageKeys = new Set()){
   const sums = Object.fromEntries(STAGES.map(s => [s, {cnt:0, h:0}]));
   for(const o of orders){
+    const orderKey = orderKeyForRecord(o);
     for(const st of STAGES){
       if(!ovFilter.has(st)) continue;
       const seg=o.stages[st]; if(!seg) continue;
+      if(seg.done) continue;
+      if(orderKey && doneStageKeys.has(`${orderKey}::${st}`)) continue;
       sums[st].cnt++; sums[st].h += (+seg.hours||0);
     }
   }
@@ -5502,6 +5672,7 @@ function renderOvStats(orders){
 function renderOverview(){
   const { list: activeTasks, byStage } = collectActiveTasksForOverview();
   let orders = mapOrdersFromTasks(activeTasks);
+  const doneStageKeys = collectDoneStageKeys();
 
   const rankByParent = buildOverviewOrderRanks(byStage);
   if(rankByParent.size){
@@ -5539,7 +5710,7 @@ function renderOverview(){
 
   if(detailed){
     // границы шкалы берём как в Ганте (из allocate), а если allocate ещё не готов — из самих этапов
-	const b = calcBoundsForOrders(orders);
+    const b = calcBoundsForOrders(orders, doneStageKeys);
 	const minD = (schedule && schedule.minD) ? new Date(Math.min(+schedule.minD, +b.minD)) : b.minD;
 	const maxD = (schedule && schedule.maxD) ? new Date(Math.max(+schedule.maxD, +b.maxD)) : b.maxD;
     const idxs = visibleDayIdxForRange(minD,maxD);
@@ -5562,7 +5733,15 @@ function renderOverview(){
     const grid=$("#ovGrid"); grid.innerHTML='';
 
     for(const o of orders){
-      const stagesKeys = STAGES.filter(s=>ovFilter.has(s) && o.stages[s] && o.stages[s].start && o.stages[s].end);
+      const orderKey = orderKeyForRecord(o);
+      const stagesKeys = STAGES.filter(stage=>{
+        if(!ovFilter.has(stage)) return false;
+        const seg = o.stages[stage];
+        if(!seg || !seg.start || !seg.end) return false;
+        if(seg.done) return false;
+        if(orderKey && doneStageKeys.has(`${orderKey}::${stage}`)) return false;
+        return true;
+      });
       if(stagesKeys.length===0) continue;
 
       // 1) строка-заголовок заказа (без полос)
@@ -5621,7 +5800,7 @@ function renderOverview(){
 	  cont.style.setProperty('--ovRow','22px');
 
 	  // границы общей шкалы для заголовка — как в Ганте
-	  const b = calcBoundsForOrders(orders);
+          const b = calcBoundsForOrders(orders, doneStageKeys);
 	  const minD = (schedule && schedule.minD) ? new Date(Math.min(+schedule.minD, +b.minD)) : b.minD;
 	  const maxD = (schedule && schedule.maxD) ? new Date(Math.max(+schedule.maxD, +b.maxD)) : b.maxD;
 
@@ -5641,15 +5820,23 @@ function renderOverview(){
 	  const leftC=$("#ovLeftBodyC"); leftC.innerHTML='';
 	  const gridC=$("#ovGridC"); gridC.innerHTML='';
 
-	  orders.forEach(o=>{
-		// видимые этапы заказа
-		let keys = STAGES.filter(s=> ovFilter.has(s) && o.stages[s]);
-		if(keys.length===0) return;
+          orders.forEach(o=>{
+                const orderKey = orderKeyForRecord(o);
+                // видимые этапы заказа
+                let keys = STAGES.filter(s=>{
+                  if(!ovFilter.has(s)) return false;
+                  const seg = o.stages[s];
+                  if(!seg) return false;
+                  if(seg.done) return false;
+                  if(orderKey && doneStageKeys.has(`${orderKey}::${s}`)) return false;
+                  return true;
+                });
+                if(keys.length===0) return;
 
-		// мин/макс даты по заказу (без них строить нечего)
-		let earliest=null, latest=null;
-		keys.forEach(k=>{
-		  const seg = o.stages[k];
+                // мин/макс даты по заказу (без них строить нечего)
+                let earliest=null, latest=null;
+                keys.forEach(k=>{
+                  const seg = o.stages[k];
 		  const a = seg.start || seg.end;
 		  const b = seg.end   || seg.start;
 		  if (a) earliest = (!earliest || a < earliest) ? new Date(a) : earliest;
@@ -5723,7 +5910,7 @@ keys.forEach(k=>{
     bindOverviewScroll(true);
 	}
 
-	renderOvStats(orders);
+        renderOvStats(orders, doneStageKeys);
 }
 
 /* =========
@@ -7766,9 +7953,10 @@ function restoreState(json, opts={}){
 
     allTasksFromState = tAll.slice();
     const savedProcess = s.process || OVERVIEW_STAGE;
+    const preferredStage = preserveProcess ? null : normalizeStartStage(getPreferredStartStage() || savedProcess);
     const desiredProcess = preserveProcess
       ? ($("#process")?.value || savedProcess)
-      : savedProcess;
+      : preferredStage;
     tasks = tAll.filter(x => x.stage === desiredProcess);
 
     doneTasks = (s.done||[]).map(x=>({
@@ -7871,7 +8059,7 @@ function restoreState(json, opts={}){
     if(preserveProcess){
       $("#process").value = desiredProcess;
     }else{
-      $("#process").value = OVERVIEW_STAGE;
+      $("#process").value = desiredProcess;
     }
     currentProc = $("#process").value;
     adjustUIForProcess(currentProc);
@@ -7897,7 +8085,11 @@ function restoreState(json, opts={}){
     if(preserveProcess){
       tasks = tAll.filter(x=> x.stage === desiredProcess);
     }else{
-      tasks = [];
+      if(desiredProcess === OVERVIEW_STAGE){
+        tasks = [];
+      }else{
+        tasks = tAll.filter(x=> x.stage === desiredProcess);
+      }
     }
 
     sortBySavedOrder(tasks, $("#process").value);
@@ -9205,6 +9397,15 @@ function wireHandlers(){
     });
   }
 
+  const startStageSelect = document.getElementById('startStagePreference');
+  if(startStageSelect){
+    startStageSelect.value = getPreferredStartStage();
+    startStageSelect.addEventListener('change', e=>{
+      const chosen = savePreferredStartStage(e.target.value);
+      startStageSelect.value = chosen;
+    });
+  }
+
   const overviewFilter = $("#ordersOverviewFilter");
   if(overviewFilter){
     overviewFilter.addEventListener('change', ()=> renderOrdersOverviewTable());
@@ -9589,6 +9790,15 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 
         $('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); rebuildAndRenderMasterRoute(); });
 
+        const ovFsBtn = $('#overviewFullscreenBtn');
+        if(ovFsBtn){
+          ovFsBtn.addEventListener('click', ()=> enterOverviewFullscreen());
+        }
+        const ovExitBtn = $('#overviewExitFS');
+        if(ovExitBtn){
+          ovExitBtn.addEventListener('click', ()=> exitOverviewFullscreen());
+        }
+
         const settingsBtn = $('#settingsBtn');
         if(settingsBtn){
           settingsBtn.addEventListener('click', ()=>{
@@ -9614,6 +9824,8 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
               remBox.disabled = !remoteBridge.hasRemote;
               remBox.parentElement?.classList.toggle('muted', remBox.disabled);
             }
+            const startStageSel = $('#startStagePreference');
+            if(startStageSel) startStageSel.value = getPreferredStartStage();
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             renderSystemSettingsUI();
             refreshDataModeIndicator();
@@ -9646,6 +9858,14 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 /* =========
    ИНИЦИАЛИЗАЦИЯ
 ========= */
+document.addEventListener('keydown', e=>{
+  if(e.key === 'Escape' || e.key === 'Esc'){
+    const overlay = document.getElementById('overviewOverlay');
+    if(overlay && overlay.classList.contains('active')){
+      exitOverviewFullscreen();
+    }
+  }
+});
 document.addEventListener('DOMContentLoaded', ()=>{
 
   setupRealtimeSync();
@@ -9654,6 +9874,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
   refreshDataModeIndicator();
   updateFreshnessUI();
   try{ localStorage.setItem(USER_ALIAS_KEY, userAlias); }catch(_){ }
+  const processSelect = document.getElementById('process');
+  if(processSelect){
+    processSelect.value = getPreferredStartStage();
+  }
   bootstrapState();
 });
 </script>
