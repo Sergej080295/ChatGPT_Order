@@ -3223,149 +3223,215 @@ function compareTasksForOrdering(a, b){
 function applyStageProgress(identity, stage, value, options={}){
   if(!identity || !stage || stage === OVERVIEW_STAGE || !STAGES.includes(stage)) return false;
   ensureAllTasksCache();
-  const matches = collectStageEntities(identity, stage);
-  const hasData = matches.active.length || matches.stored.length || matches.done.length;
-  if(!hasData){
-    if(!options.silent) alert('Нет данных для выбранного передела.');
-    return false;
-  }
 
   const normalized = clampProgressValue(value);
   const markDone = normalized >= 100;
   const now = options.when instanceof Date ? new Date(options.when) : new Date();
   const source = options.source || 'ui';
-
-  const stageListRaw = gatherActiveStageList(stage);
-  const initialOrder = new Map();
-  stageListRaw.forEach((task, idx)=>{
-    if(task && task.uid) initialOrder.set(task.uid, idx);
-  });
-
-  const stageMap = new Map();
-  stageListRaw.forEach(task=>{
-    if(task && task.stage === stage){
-      stageMap.set(task.uid, cloneTaskRecord(task));
-    }
-  });
-  matches.stored.forEach(({ task })=>{
-    if(task && task.stage === stage && !stageMap.has(task.uid)){
-      stageMap.set(task.uid, cloneTaskRecord(task));
-    }
-  });
-  matches.active.forEach(({ task })=>{
-    if(task && task.stage === stage && !stageMap.has(task.uid)){
-      stageMap.set(task.uid, cloneTaskRecord(task));
-    }
-  });
-
+  const keyForTask = task => {
+    if(!task) return '';
+    if(task.uid) return task.uid;
+    const orderKey = orderKeyForRecord(task);
+    const stageName = task.stage || stage;
+    return orderKey ? `${orderKey}::${stageName}` : `${stageName}::${Math.random()}`;
+  };
   const matchCandidate = candidate => matchesOrderIdentity(orderKeyForRecord(candidate), candidate, identity);
-  let touched = false;
-  const doneToArchive = [];
-  const doneRemovalIndices = [];
 
-  stageMap.forEach((task, uid)=>{
-    if(!matchCandidate(task)) return;
-    touched = true;
-    if(markDone){
-      task.progress = 100;
-      task.isDone = true;
-      doneToArchive.push(cloneTaskRecord(task));
-      stageMap.delete(uid);
-    }else{
-      task.progress = normalized;
-      task.isDone = false;
-      stageMap.set(uid, task);
-    }
-  });
+  const stageRecords = new Map();
+  const otherRecords = [];
 
-  if(!markDone){
-    matches.done.forEach(({ rec, index })=>{
-      if(!rec) return;
-      const restored = buildDoneTaskRecord(rec);
-      if(!restored) return;
-      if(!matchCandidate(restored)) return;
-      touched = true;
-      restored.progress = normalized;
-      restored.isDone = false;
-      stageMap.set(restored.uid, restored);
-      doneRemovalIndices.push(index);
-    });
-  }
-
-  if(!touched){
-    return false;
-  }
-
-  if(doneRemovalIndices.length){
-    doneRemovalIndices.sort((a,b)=> b-a).forEach(idx=>{
-      if(idx >= 0 && idx < doneTasks.length){
-        doneTasks.splice(idx,1);
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(task => {
+      if(!task) return;
+      const clone = cloneTaskRecord(task);
+      if(clone.stage === stage){
+        stageRecords.set(keyForTask(clone), clone);
+      }else{
+        otherRecords.push(clone);
       }
     });
   }
 
-  const removedUids = new Set(doneToArchive.map(task => task.uid));
-  let orderList = Array.isArray(ordersByStage.get(stage))
-    ? ordersByStage.get(stage).filter(uid => !removedUids.has(uid))
-    : [];
-
-  const appendCandidates = [];
-  stageMap.forEach((task, uid)=>{
-    if(!orderList.includes(uid)){
-      appendCandidates.push(task);
-    }
-  });
-
-  if(appendCandidates.length){
-    appendCandidates.sort((a,b)=>{
-      const ia = initialOrder.has(a.uid) ? initialOrder.get(a.uid) : Number.MAX_SAFE_INTEGER;
-      const ib = initialOrder.has(b.uid) ? initialOrder.get(b.uid) : Number.MAX_SAFE_INTEGER;
-      if(ia !== ib) return ia - ib;
-      return compareTasksForOrdering(a,b);
+  if(currentProc === stage){
+    tasks.forEach(task => {
+      if(!task || task.stage !== stage) return;
+      const clone = cloneTaskRecord(task);
+      stageRecords.set(keyForTask(clone), clone);
     });
-    appendCandidates.forEach(task=>{ orderList.push(task.uid); });
   }
 
+  let hasStageMatch = false;
+  stageRecords.forEach(task => { if(matchCandidate(task)) hasStageMatch = true; });
+
+  let hasDoneMatch = false;
+  doneTasks.forEach(rec => {
+    if(!rec || rec.stage !== stage) return;
+    if(matchCandidate(rec)){
+      hasDoneMatch = true;
+      return;
+    }
+    const restored = buildDoneTaskRecord(rec);
+    if(restored && matchCandidate(restored)) hasDoneMatch = true;
+  });
+
+  if(!hasStageMatch && !hasDoneMatch){
+    if(!options.silent) alert('Нет данных для выбранного передела.');
+    return false;
+  }
+
+  const stageEntries = Array.from(stageRecords.values());
+  const newStageMap = new Map();
+  const archiveRecords = [];
+  let changed = false;
+  let restoredCount = 0;
+  let hasActiveArchive = false;
+
+  stageEntries.forEach(task => {
+    const key = keyForTask(task);
+    if(!key) return;
+    if(matchCandidate(task)){
+      const prevProgress = clampProgressValue(task.progress);
+      const prevDone = !!task.isDone || isDoneStatus(task.status) || prevProgress >= 100;
+      if(markDone){
+        hasActiveArchive = true;
+        if(!prevDone) changed = true;
+        const archived = cloneTaskRecord(task);
+        archived.progress = 100;
+        archived.isDone = true;
+        archiveRecords.push(archived);
+        return;
+      }
+      if(prevProgress !== normalized || prevDone){
+        changed = true;
+      }
+      task.progress = normalized;
+      task.isDone = false;
+    }
+    task.progress = clampProgressValue(task.progress);
+    task.isDone = false;
+    newStageMap.set(key, task);
+  });
+
+  const originalDoneTasks = doneTasks.slice();
+  let nextDoneTasks = originalDoneTasks;
+
+  if(!markDone){
+    nextDoneTasks = [];
+    originalDoneTasks.forEach(rec => {
+      if(!rec || rec.stage !== stage){
+        nextDoneTasks.push(rec);
+        return;
+      }
+      const restored = buildDoneTaskRecord(rec);
+      if(restored && matchCandidate(restored)){
+        const prevProgress = clampProgressValue(restored.progress);
+        if(prevProgress !== normalized) changed = true;
+        restored.progress = normalized;
+        restored.isDone = false;
+        newStageMap.set(keyForTask(restored), restored);
+        restoredCount++;
+      }else{
+        nextDoneTasks.push(rec);
+      }
+    });
+  }else if(hasActiveArchive){
+    nextDoneTasks = [];
+    originalDoneTasks.forEach(rec => {
+      if(!rec || rec.stage !== stage){
+        nextDoneTasks.push(rec);
+        return;
+      }
+      const matchesDone = matchCandidate(rec) || (() => {
+        const restored = buildDoneTaskRecord(rec);
+        return restored && matchCandidate(restored);
+      })();
+      if(matchesDone){
+        changed = true;
+      }else{
+        nextDoneTasks.push(rec);
+      }
+    });
+  }
+
+  const didChange = changed || restoredCount > 0 || archiveRecords.length > 0;
+  if(!didChange){
+    return false;
+  }
+
+  doneTasks = nextDoneTasks;
+
+  const stageMapByUid = new Map();
+  newStageMap.forEach(task => {
+    if(!task) return;
+    const uid = task.uid || keyForTask(task);
+    task.uid = uid;
+    stageMapByUid.set(uid, task);
+  });
+
+  let orderList = Array.isArray(ordersByStage.get(stage)) ? ordersByStage.get(stage).filter(uid => stageMapByUid.has(uid)) : [];
+  const missing = [];
+  stageMapByUid.forEach((task, uid) => {
+    if(!orderList.includes(uid)) missing.push(task);
+  });
+  if(missing.length){
+    missing.sort(compareTasksForOrdering);
+    orderList = orderList.concat(missing.map(task => task.uid));
+  }
   ordersByStage.set(stage, orderList);
 
-  const used = new Set();
-  const activeList = [];
-  orderList.forEach(uid=>{
-    if(stageMap.has(uid)){
-      const item = stageMap.get(uid);
-      used.add(uid);
-      item.isDone = false;
-      item.progress = clampProgressValue(item.progress);
-      activeList.push(item);
-    }
+  const orderedStageTasks = [];
+  orderList.forEach(uid => {
+    if(!stageMapByUid.has(uid)) return;
+    const item = stageMapByUid.get(uid);
+    item.progress = clampProgressValue(item.progress);
+    item.isDone = false;
+    orderedStageTasks.push(item);
+    stageMapByUid.delete(uid);
   });
-  stageMap.forEach((task, uid)=>{
-    if(used.has(uid)) return;
-    task.isDone = false;
-    task.progress = clampProgressValue(task.progress);
-    activeList.push(task);
-  });
+  if(stageMapByUid.size){
+    const leftovers = Array.from(stageMapByUid.values());
+    leftovers.sort(compareTasksForOrdering);
+    leftovers.forEach(task => {
+      task.progress = clampProgressValue(task.progress);
+      task.isDone = false;
+      orderedStageTasks.push(task);
+    });
+  }
 
-  mergeStageIntoAll(stage, activeList);
+  const stageTasksForState = orderedStageTasks.map(cloneTaskRecord);
+  const combined = [];
+  const seen = new Set();
+  const pushUnique = task => {
+    if(!task) return;
+    const uid = task.uid || keyForTask(task);
+    if(uid && seen.has(uid)) return;
+    combined.push(task);
+    if(uid) seen.add(uid);
+  };
+
+  otherRecords.forEach(task => pushUnique(cloneTaskRecord(task)));
+  stageTasksForState.forEach(task => pushUnique(task));
+  allTasksFromState = combined;
 
   if(currentProc === stage){
-    tasks = activeList.map(cloneTaskRecord);
-    lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
+    tasks = orderedStageTasks.map(cloneTaskRecord);
+    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
     rememberStageOrder(stage);
   }else{
     stagesDirtyFromRoute.add(stage);
   }
 
-  if(doneToArchive.length){
-    doneToArchive.forEach(task=>{
+  if(archiveRecords.length){
+    archiveRecords.forEach(task => {
       ensureDoneRecordFromTask(task, source, now);
       cascadeCompletionForTask(task, { when: now, updateUI:false });
     });
   }
 
   updateStageSnapshotFromAggregated(stage);
+  rebuildAndRenderMasterRoute();
   recompute();
-  persistMaybe();
+  persistMaybe('data', { source, stageOverride: stage });
   return true;
 }
 
@@ -8484,7 +8550,8 @@ function persistNow(stageOverride, opts={}){
 function persistMaybe(reason='data', opts={}){
   if(reason==='ui'){ saveUiPreferences(); return; }
   if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
-  if(autosaveOn || opts.force) persistNow(undefined, opts);
+  const stageOverride = Object.prototype.hasOwnProperty.call(opts, 'stageOverride') ? opts.stageOverride : undefined;
+  if(autosaveOn || opts.force) persistNow(stageOverride, opts);
 }
 
 let pendingSettingsTimer = null;
