@@ -272,6 +272,8 @@ td[data-field="progress"]{background:#fffef3}
 .order-eye-btn{background:none;border:none;cursor:pointer;font-size:18px;line-height:1}
 .order-eye-btn:disabled{opacity:.4;cursor:default}
 .stage-check{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:2px solid #cbd5e1;color:#22c55e;font-size:14px;font-weight:700;line-height:1}
+.route-stage-toggle{cursor:pointer}
+.route-stage-toggle[aria-disabled="true"]{cursor:default;opacity:.55}
 .stage-check[data-state="pending"]{background:#fff;color:transparent}
 .stage-check[data-state="done"]{background:#dcfce7;border-color:#16a34a;color:#16a34a}
 .stage-check[data-state="missing"]{border-color:transparent;background:none;color:transparent}
@@ -492,11 +494,11 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 <body>
 
 <header>
-  <h1 id="pageTitle">Планировщик — <span id="procTitle">Список заказов</span></h1>
+  <h1 id="pageTitle">Планировщик — <span id="procTitle">Общий список заказов</span></h1>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
-                <option value="orders" selected>Список заказов</option>
+                <option value="orders" selected>Общий список заказов</option>
                 <option value="draw">Технологи: подготовка в работу</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
@@ -556,10 +558,10 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 <div id="toastContainer" aria-live="polite"></div>
 
 <div class="main">
-  <!-- ЛЕВАЯ КОЛОНКА: Список заказов + Подетально -->
+  <!-- ЛЕВАЯ КОЛОНКА: Общий список заказов + Подетально -->
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center">
-      <h3>Список заказов</h3>
+      <h3>Общий список заказов</h3>
       <div class="row">
         <button id="showTrash" class="btn ghost">Корзина</button>
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
@@ -2406,6 +2408,44 @@ function formatHoursToHMS(hours){
   return `${h}:${m}:${s}`;
 }
 
+function matchesOrderIdentity(orderKey, order, identity){
+  if(!identity) return false;
+  const normalizedKey = orderKey ? String(orderKey).trim() : '';
+  const targetKey = identity.orderKey ? String(identity.orderKey).trim() : '';
+  if(targetKey && normalizedKey && normalizedKey === targetKey) return true;
+  const parent = order?.parentId ? String(order.parentId).trim() : '';
+  const targetParent = identity.parentId ? String(identity.parentId).trim() : '';
+  if(targetParent && parent && parent === targetParent) return true;
+  const orderIdNorm = normalizeOrderSearch(order?.orderId || '');
+  const targetOrderNorm = identity.orderIdNorm || normalizeOrderSearch(identity.orderId || '');
+  if(targetOrderNorm && orderIdNorm && targetOrderNorm === orderIdNorm) return true;
+  return false;
+}
+
+function detectStageSlipForOrder(orderKey, stage, stageTasks){
+  if(!schedule || !schedule.perTask) return false;
+  if(!stageTasks || !stageTasks.has(orderKey)) return false;
+  const tasksForStage = stageTasks.get(orderKey)?.get(stage) || [];
+  return tasksForStage.some(task => {
+    if(!task) return false;
+    const deadline = task.endDate instanceof Date
+      ? task.endDate
+      : (task.endDate ? new Date(task.endDate) : null);
+    if(!deadline || Number.isNaN(deadline.getTime())) return false;
+    const rec = schedule.perTask.get(task.uid);
+    if(!rec || !Array.isArray(rec.segments) || !rec.segments.length) return false;
+    let last = null;
+    rec.segments.forEach(seg => {
+      const raw = seg?.date;
+      if(!raw) return;
+      const date = raw instanceof Date ? new Date(raw) : new Date(raw);
+      if(Number.isNaN(date.getTime())) return;
+      if(!last || date > last) last = date;
+    });
+    return last && last > deadline;
+  });
+}
+
 function extractSortedStageDates(order){
   const dates = [];
   if(order && order.stages){
@@ -2440,8 +2480,22 @@ function compareOrdersForOverview(a,b){
   return a.order.orderId.localeCompare(b.order.orderId);
 }
 
-function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
+function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
   const mode = ORDER_LIST_FILTERS.has(filterMode) ? filterMode : ORDER_FILTER_DEFAULT;
+  const opts = options || {};
+  const ignoreSearch = !!opts.ignoreSearch;
+  const targetIdentityRaw = opts.targetIdentity && typeof opts.targetIdentity === 'object'
+    ? opts.targetIdentity
+    : null;
+  const targetIdentity = targetIdentityRaw
+    ? {
+        orderKey: targetIdentityRaw.orderKey ? String(targetIdentityRaw.orderKey).trim() : '',
+        parentId: targetIdentityRaw.parentId ? String(targetIdentityRaw.parentId).trim() : '',
+        orderId: targetIdentityRaw.orderId || '',
+        orderIdNorm: targetIdentityRaw.orderIdNorm || normalizeOrderSearch(targetIdentityRaw.orderId || '')
+      }
+    : null;
+  const wantsSpecific = !!targetIdentity;
   const baseTasks = gatherAllStageTasks();
   const stageTasks = new Map(); // key -> Map(stage -> [task])
 
@@ -2487,10 +2541,14 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT){
     const shipDone = doneStageSet.has(`${key}::ship`);
     const isDone = shipDone && !isActive;
     const parts = parseOrderParts(order.orderId);
-    if(!overviewMatchesSearch(order, parts)) return;
-    if(mode === 'current' && !isActive) return;
-    if(mode === 'done' && !isDone) return;
-    if(mode === 'all' && !isActive && !isDone) return;
+    const matchesTarget = wantsSpecific && matchesOrderIdentity(key, order, targetIdentity);
+    if(wantsSpecific && !matchesTarget) return;
+    if(!wantsSpecific && !ignoreSearch && !overviewMatchesSearch(order, parts)) return;
+    if(!wantsSpecific){
+      if(mode === 'current' && !isActive) return;
+      if(mode === 'done' && !isDone) return;
+      if(mode === 'all' && !isActive && !isDone) return;
+    }
     rows.push({ order, key, isActive, isDone, parts });
   });
 
@@ -2698,37 +2756,475 @@ function cascadeCompletionForTask(task, options={}){
   return changed;
 }
 
-function buildRoutePayload(orderEntry, doneStageSet){
+function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage={}, slipFlags={}){
   const route = {};
   let total = 0;
+  const stageDetails = {};
+  const stageProgress = {};
+  const slipSet = new Set();
+  const stageMap = stageTasks instanceof Map ? stageTasks.get(orderEntry.key) : null;
+
   STAGES.forEach(stage=>{
     const seg = orderEntry.order.stages?.[stage];
-    if(!seg) return;
-    const start = seg.start ? safeDateValue(seg.start) : null;
-    const end = seg.end ? safeDateValue(seg.end) : null;
-    const rawHours = Number(seg.hours)||0;
+    const start = seg?.start ? safeDateValue(seg.start) : null;
+    const end = seg?.end ? safeDateValue(seg.end) : null;
+    const rawHours = Number(seg?.hours)||0;
     const hours = PARALLEL_STAGES.has(stage) ? 0 : rawHours;
-    total += hours;
-    route[stage] = { hours, start, end };
+    if(seg){
+      total += hours;
+      route[stage] = { hours, start, end };
+    }
+
+    const tasksForStage = stageMap?.get(stage) || [];
+    if(tasksForStage.length){
+      stageDetails[stage] = {
+        uids: tasksForStage.map(task => task.uid)
+      };
+    }
+
+    const metrics = metricsByStage && metricsByStage[stage]
+      ? metricsByStage[stage]
+      : (stageTasks ? computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet) : null);
+    if(metrics){
+      stageProgress[stage] = metrics.percent;
+    }
+
+    if(slipFlags && slipFlags[stage]){
+      slipSet.add(stage);
+    }
   });
+
   const doneStages = [];
   if(doneStageSet && orderEntry?.key){
     STAGES.forEach(stage=>{
-      if(doneStageSet.has(`${orderEntry.key}::${stage}`)) doneStages.push(stage);
+      if(doneStageSet.has(`${orderEntry.key}::${stage}`)){
+        doneStages.push(stage);
+        if(!(stage in stageProgress)) stageProgress[stage] = 100;
+      }
     });
   }
+
   const parentId = orderEntry?.order?.parentId || '';
+  const identity = {
+    orderKey: orderEntry.key || parentId || '',
+    parentId,
+    orderId: orderEntry.order.orderId || '',
+    orderIdNorm: normalizeOrderSearch(orderEntry.order.orderId || '')
+  };
+
   return {
     orderId: orderEntry.order.orderId,
-    hours: total,
-    extraHours: 0,
-    progress: orderEntry.isDone ? 100 : 0,
     route,
-    origStartDate: null,
-    parentId,
-    orderKey: orderEntry.key || parentId || '',
-    doneStages
+    totalHours: total,
+    doneStages,
+    stageDetails,
+    stageProgress,
+    slipStages: slipSet,
+    identity,
+    isDone: !!orderEntry.isDone,
+    isActive: !!orderEntry.isActive,
+    parts: orderEntry.parts || null
   };
+}
+
+function collectOrderPayloadForIdentity(identity){
+  if(!identity) return null;
+  const { rows, stageTasks, doneStageSet } = collectOrdersForList('all', { ignoreSearch:true, targetIdentity: identity });
+  if(!rows.length) return null;
+  const entry = rows[0];
+  const metricsCache = {};
+  PROGRESS_STAGES.forEach(stage => {
+    metricsCache[stage] = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
+  });
+  const slipFlags = {};
+  STAGES.forEach(stage => {
+    slipFlags[stage] = detectStageSlipForOrder(entry.key, stage, stageTasks);
+  });
+  return buildRoutePayload(entry, doneStageSet, stageTasks, metricsCache, slipFlags);
+}
+
+function deriveRouteContextFromPayload(payload, sourceTask=null){
+  if(!payload) return null;
+  const slipStages = payload.slipStages instanceof Set
+    ? payload.slipStages
+    : new Set(Array.isArray(payload.slipStages) ? payload.slipStages : []);
+  const identity = payload.identity || {
+    orderKey: payload.orderKey || '',
+    parentId: payload.parentId || '',
+    orderId: payload.orderId || '',
+    orderIdNorm: normalizeOrderSearch(payload.orderId || '')
+  };
+  const displayName = payload.parts?.display || identity.orderId || payload.orderId || '';
+  return {
+    orderId: payload.orderId || identity.orderId || '',
+    displayName,
+    route: payload.route || {},
+    totalHours: payload.totalHours != null ? payload.totalHours : (payload.hours || 0),
+    doneStages: Array.isArray(payload.doneStages) ? payload.doneStages.slice() : [],
+    stageDetails: payload.stageDetails || {},
+    stageProgress: payload.stageProgress || {},
+    slipStages,
+    identity,
+    isDone: !!payload.isDone,
+    isActive: !!payload.isActive,
+    parts: payload.parts || null,
+    sourceTask: sourceTask || payload.sourceTask || null,
+    sourceStage: payload.sourceStage || (sourceTask ? sourceTask.stage || null : null)
+  };
+}
+
+function buildRouteContextFromSource(source){
+  if(!source) return null;
+  if(source.identity || source.stageDetails || source.route){
+    return deriveRouteContextFromPayload(source, source.sourceTask || null);
+  }
+  const identity = {
+    orderKey: source.orderKey || orderKeyForRecord(source),
+    parentId: source.parentId ? String(source.parentId).trim() : '',
+    orderId: source.orderId || '',
+    orderIdNorm: normalizeOrderSearch(source.orderId || '')
+  };
+  const payload = collectOrderPayloadForIdentity(identity);
+  if(!payload) return null;
+  const context = deriveRouteContextFromPayload(payload, source);
+  context.sourceStage = source.stage || context.sourceStage || null;
+  return context;
+}
+
+function renderRouteDialog(context){
+  const titleEl = document.getElementById('routeTitle');
+  if(titleEl){
+    titleEl.textContent = context?.displayName || context?.orderId || '—';
+  }
+  const wrap = document.getElementById('routeContent');
+  if(!wrap){
+    return;
+  }
+  wrap.innerHTML = '';
+  if(!context){
+    wrap.innerHTML = '<div class="muted">Нет данных по маршруту</div>';
+    return;
+  }
+
+  const doneSet = new Set(context.doneStages || []);
+  const slipSet = context.slipStages instanceof Set ? context.slipStages : new Set();
+  const stageProgress = context.stageProgress || {};
+  const stageDetails = context.stageDetails || {};
+
+  const items = [];
+  STAGES.forEach(stage => {
+    const seg = context.route?.[stage] || null;
+    const hasRoute = !!(seg && (Number.isFinite(seg.hours) || seg.start || seg.end));
+    const done = doneSet.has(stage);
+    const hasDetails = Array.isArray(stageDetails[stage]?.uids) && stageDetails[stage].uids.length > 0;
+    if(!hasRoute && !done && !hasDetails) return;
+    items.push({ stage, seg, done, hasDetails });
+  });
+
+  if(!items.length){
+    wrap.innerHTML = '<div class="muted">Нет данных по маршруту</div>';
+  } else {
+    items.sort((a,b)=>{
+      const as = a.seg?.start instanceof Date ? a.seg.start.getTime() : Infinity;
+      const bs = b.seg?.start instanceof Date ? b.seg.start.getTime() : Infinity;
+      if(as !== bs) return as - bs;
+      return STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage);
+    });
+
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'route-stage';
+
+      const toggle = document.createElement('span');
+      toggle.className = 'stage-check route-stage-check route-stage-toggle';
+      toggle.dataset.stage = item.stage;
+      toggle.dataset.state = item.done ? 'done' : 'pending';
+      toggle.dataset.progress = String(stageProgress[item.stage] != null ? stageProgress[item.stage] : (item.done ? 100 : 0));
+      toggle.dataset.hasTasks = item.hasDetails ? '1' : '0';
+      if(slipSet.has(item.stage)) toggle.dataset.slip = 'true';
+      const canToggle = item.hasDetails || item.done;
+      toggle.setAttribute('aria-disabled', canToggle ? 'false' : 'true');
+      toggle.setAttribute('role', 'button');
+      toggle.tabIndex = canToggle ? 0 : -1;
+      row.appendChild(toggle);
+
+      const label = document.createElement('span');
+      label.className = 'route-stage-label';
+      label.textContent = stageIcon(item.stage);
+      row.appendChild(label);
+
+      const meta = document.createElement('span');
+      meta.className = 'route-stage-meta';
+      const seg = item.seg || {};
+      const startText = seg.start instanceof Date ? fmtDate(seg.start) : '—';
+      const endText = seg.end instanceof Date ? fmtDate(seg.end) : '—';
+      const parts = [`${startText} → ${endText}`];
+      if(Number.isFinite(seg.hours) && seg.hours > 0){
+        parts.push(`${seg.hours.toFixed(1)} ч`);
+      }
+      if(stageProgress[item.stage] != null){
+        parts.push(`${Math.round(stageProgress[item.stage])}%`);
+      } else if(item.done){
+        parts.push('100%');
+      }
+      meta.textContent = parts.join(', ');
+      row.appendChild(meta);
+
+      wrap.appendChild(row);
+    });
+  }
+
+  const summary = document.createElement('div');
+  summary.innerHTML = '<hr>';
+  const details = [];
+  details.push(`<div><b>Итого по заказу (все этапы):</b> ${Number(context.totalHours || 0).toFixed(1)} ч</div>`);
+  if(context.sourceTask && context.sourceTask.stage){
+    const stage = context.sourceTask.stage;
+    const base = (+context.sourceTask.hours||0)+(+context.sourceTask.extraHours||0);
+    const prog = Math.max(0, Math.min(100, Number(context.sourceTask.progress)||0));
+    details.push(`<div><b>Текущий передел (${STAGE_TITLE[stage] || stage}):</b> ${base.toFixed(1)} ч, прогресс: ${prog}%</div>`);
+    if(context.sourceTask.origStartDate instanceof Date){
+      details.push(`<div class="muted" style="margin-top:6px">Изначальная дата старта (по текущему переделу): <b>${fmtDate(context.sourceTask.origStartDate)}</b></div>`);
+    }
+  }
+  summary.innerHTML += details.join('');
+  wrap.appendChild(summary);
+}
+
+function refreshCurrentRouteContext(){
+  if(!currentRouteContext || !currentRouteContext.identity) return;
+  const payload = collectOrderPayloadForIdentity(currentRouteContext.identity);
+  if(!payload){
+    currentRouteContext = null;
+    return;
+  }
+  const next = deriveRouteContextFromPayload(payload, currentRouteContext.sourceTask || null);
+  next.sourceStage = currentRouteContext.sourceStage || next.sourceStage || null;
+  currentRouteContext = next;
+  renderRouteDialog(currentRouteContext);
+}
+
+function ensureAllTasksCache(){
+  if(Array.isArray(allTasksFromState)) return;
+  const aggregated = gatherAllStageTasks();
+  allTasksFromState = Array.isArray(aggregated) ? aggregated.filter(Boolean) : [];
+}
+
+function gatherActiveStageList(stage){
+  const order = ordersByStage.get(stage);
+  const byUid = new Map();
+  if(currentProc === stage){
+    tasks.forEach(task=>{ if(task && task.stage === stage) byUid.set(task.uid, task); });
+  }
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach(task=>{ if(task && task.stage === stage) byUid.set(task.uid, task); });
+  }
+  const list = [];
+  if(Array.isArray(order) && order.length){
+    order.forEach(uid => {
+      if(byUid.has(uid)) list.push(byUid.get(uid));
+    });
+    byUid.forEach((task, uid)=>{
+      if(!order.includes(uid)) list.push(task);
+    });
+    return list;
+  }
+  byUid.forEach(task=> list.push(task));
+  return list;
+}
+
+function collectStageEntities(identity, stage){
+  const matches = { active: [], stored: [], done: [] };
+  tasks.forEach((task, index)=>{
+    if(!task || task.stage !== stage) return;
+    if(matchesOrderIdentity(orderKeyForRecord(task), task, identity)){
+      matches.active.push({ task, index });
+    }
+  });
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState.forEach((task, index)=>{
+      if(!task || task.stage !== stage) return;
+      if(matchesOrderIdentity(orderKeyForRecord(task), task, identity)){
+        matches.stored.push({ task, index });
+      }
+    });
+  }
+  doneTasks.forEach((rec, index)=>{
+    if(!rec || rec.stage !== stage) return;
+    if(matchesOrderIdentity(orderKeyForRecord(rec), rec, identity)){
+      matches.done.push({ rec, index });
+    }
+  });
+  return matches;
+}
+
+function updateStageSnapshotFromAggregated(stage){
+  const stageList = gatherActiveStageList(stage);
+  const lockedSet = currentProc === stage
+    ? new Set(Array.from(lockedUids || []))
+    : new Set(stageList.filter(task=> task && task.locked).map(task=>task.uid));
+  const snapshot = captureSnapshotFromRaw(stageList, stage, lockedSet);
+  lastSyncedSnapshots.set(stage, snapshot);
+}
+
+function applyStageProgressFromOverview(identity, stage, value){
+  if(!identity || !stage || !STAGES.includes(stage)) return false;
+  ensureAllTasksCache();
+  const matches = collectStageEntities(identity, stage);
+  const hasData = matches.active.length || matches.stored.length || matches.done.length;
+  if(!hasData){
+    alert('Нет данных для выбранного передела.');
+    return false;
+  }
+
+  const normalized = Math.max(0, Math.min(100, Number(value)||0));
+  const markDone = normalized >= 100;
+  const now = new Date();
+  const removeUids = new Set();
+  const restoredTasks = [];
+
+  matches.active.forEach(({ task })=>{
+    if(!task) return;
+    task.progress = normalized;
+    if(markDone){
+      ensureDoneRecordFromTask(task, 'overview-route', now);
+      cascadeCompletionForTask(task, { when: now, updateUI:false });
+      removeUids.add(task.uid);
+    }
+  });
+
+  if(markDone && removeUids.size){
+    for(let i = tasks.length - 1; i >= 0; i--){
+      const task = tasks[i];
+      if(task && task.stage === stage && removeUids.has(task.uid)){
+        tasks.splice(i,1);
+        lockedUids.delete(task.uid);
+      }
+    }
+  }
+
+  if(Array.isArray(allTasksFromState)){
+    const next = [];
+    allTasksFromState.forEach(task=>{
+      if(!task){ next.push(task); return; }
+      if(task.stage !== stage){ next.push(task); return; }
+      if(matchesOrderIdentity(orderKeyForRecord(task), task, identity)){
+        task.progress = normalized;
+        if(markDone){
+          ensureDoneRecordFromTask(task, 'overview-route', now);
+          cascadeCompletionForTask(task, { when: now, updateUI:false });
+          removeUids.add(task.uid);
+          return; // пропускаем, чтобы удалить
+        }
+      }
+      next.push(task);
+    });
+    allTasksFromState = next;
+  }
+
+  if(!markDone && matches.done.length){
+    const indices = matches.done.map(entry=> entry.index).sort((a,b)=> b-a);
+    indices.forEach(idx=>{
+      const rec = doneTasks[idx];
+      if(!rec) return;
+      const restored = buildDoneTaskRecord(rec);
+      if(restored){
+        restored.progress = normalized;
+        restoredTasks.push(restored);
+      }
+      doneTasks.splice(idx,1);
+    });
+  }
+
+  if(markDone && removeUids.size){
+    const list = ordersByStage.get(stage);
+    if(Array.isArray(list)){
+      ordersByStage.set(stage, list.filter(uid => !removeUids.has(uid)));
+    }
+  }
+
+  if(!markDone && restoredTasks.length){
+    if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+    const present = new Set(allTasksFromState.filter(task=> task && task.stage === stage).map(task=>task.uid));
+    restoredTasks.forEach(task=>{
+      if(!present.has(task.uid)){
+        allTasksFromState.push(cloneTaskRecord(task));
+        present.add(task.uid);
+      }
+    });
+    let list = ordersByStage.get(stage);
+    if(!Array.isArray(list)) list = [];
+    const orderSet = new Set(list);
+    restoredTasks.forEach(task=>{
+      if(!orderSet.has(task.uid)){
+        list.push(task.uid);
+        orderSet.add(task.uid);
+      }
+    });
+    ordersByStage.set(stage, list);
+  }
+
+  if(currentProc === stage){
+    if(!markDone && restoredTasks.length){
+      restoredTasks.forEach(task=> tasks.push(task));
+    }
+    sortBySavedOrder(tasks, stage);
+    rememberStageOrder(stage);
+  }
+
+  const stageList = gatherActiveStageList(stage);
+  mergeStageIntoAll(stage, stageList);
+  updateStageSnapshotFromAggregated(stage);
+
+  updateDoneAttention();
+  renderOrdersOverviewTable();
+  rebuildAndRenderMasterRoute();
+  persistMaybe();
+  return true;
+}
+
+function handleRouteStageToggle(stage){
+  if(!stage || !currentRouteContext || !currentRouteContext.identity) return;
+  if(!userCanEdit()){ notifyReadOnly(); return; }
+  const stageTitle = STAGE_TITLE[stage] || stage;
+  const hasTasks = (currentRouteContext.stageDetails?.[stage]?.uids || []).length > 0;
+  const isDone = (currentRouteContext.doneStages || []).includes(stage);
+  if(!hasTasks && !isDone){
+    alert('Нет задач для изменения статуса этого передела.');
+    return;
+  }
+
+  if(PARALLEL_STAGES.has(stage)){
+    const shouldMarkDone = !isDone;
+    const question = shouldMarkDone
+      ? `Отметить передел «${stageTitle}» готовым?`
+      : `Снять отметку готовности с передела «${stageTitle}»?`;
+    if(!confirm(question)) return;
+    const targetValue = shouldMarkDone ? 100 : 0;
+    if(applyStageProgressFromOverview(currentRouteContext.identity, stage, targetValue)){
+      if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
+        currentRouteContext.sourceTask.progress = targetValue;
+      }
+      refreshCurrentRouteContext();
+    }
+    return;
+  }
+
+  const currentPct = currentRouteContext.stageProgress?.[stage];
+  const defaultValue = currentPct != null ? Math.round(currentPct) : (isDone ? 100 : 0);
+  const answer = prompt(`Укажите готовность передела «${stageTitle}» в процентах (0–100):`, String(defaultValue));
+  if(answer == null) return;
+  const value = Number(String(answer).replace(',','.').trim());
+  if(!Number.isFinite(value) || value < 0 || value > 100){
+    alert('Введите число от 0 до 100.');
+    return;
+  }
+  if(applyStageProgressFromOverview(currentRouteContext.identity, stage, value)){
+    if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
+      currentRouteContext.sourceTask.progress = value;
+    }
+    refreshCurrentRouteContext();
+  }
 }
 
 function renderOrdersOverviewTable(){
@@ -2779,8 +3275,6 @@ function renderOrdersOverviewTable(){
   }
 
   const totals = { orders: rows.length, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
-  const progressStages = ['draw','laser','bend','weld','mech'];
-  const indicatorStages = ['proc','shear','pack','ship'];
 
   rows.forEach(entry => {
     const tr = document.createElement('tr');
@@ -2800,40 +3294,19 @@ function renderOrdersOverviewTable(){
       return 'pending';
     };
 
-    const detectStageSlip = stage => {
-      if(!schedule || !schedule.perTask) return false;
-      const tasksForStage = stageTasks.get(entry.key)?.get(stage) || [];
-      return tasksForStage.some(task => {
-        if(!task) return false;
-        const deadline = task.endDate instanceof Date ? task.endDate : (task.endDate ? new Date(task.endDate) : null);
-        if(!deadline || Number.isNaN(deadline.getTime())) return false;
-        const rec = schedule.perTask.get(task.uid);
-        if(!rec || !Array.isArray(rec.segments) || !rec.segments.length) return false;
-        let last = null;
-        rec.segments.forEach(seg => {
-          const raw = seg?.date;
-          if(!raw) return;
-          const date = raw instanceof Date ? new Date(raw) : new Date(raw);
-          if(Number.isNaN(date.getTime())) return;
-          if(!last || date > last) last = date;
-        });
-        return last && last > deadline;
-      });
-    };
-
     const metricsCache = {};
     const slipFlags = {};
 
-    progressStages.forEach(stage => {
+    PROGRESS_STAGES.forEach(stage => {
       const metrics = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
       metricsCache[stage] = metrics;
       totals[stage] += metrics.remaining;
-      slipFlags[stage] = detectStageSlip(stage);
+      slipFlags[stage] = detectStageSlipForOrder(entry.key, stage, stageTasks);
     });
 
-    indicatorStages.forEach(stage => {
+    INDICATOR_STAGES.forEach(stage => {
       if(stageHasWork(stage)){ totals[stage] += 1; }
-      slipFlags[stage] = detectStageSlip(stage);
+      slipFlags[stage] = detectStageSlipForOrder(entry.key, stage, stageTasks);
     });
 
     const renderProgress = stage => {
@@ -2881,7 +3354,7 @@ function renderOrdersOverviewTable(){
 
     const eyeBtn = tr.querySelector('.order-eye-btn');
     if(eyeBtn){
-      const payload = buildRoutePayload(entry, doneStageSet);
+      const payload = buildRoutePayload(entry, doneStageSet, stageTasks, metricsCache, slipFlags);
       eyeBtn.addEventListener('click', ()=> openRoute(payload));
     }
 
@@ -3099,6 +3572,9 @@ function rebuildAndRenderMasterRoute(){
 // этапы: добавлены безчасовые proc(Закупка), shear(Рубка), pack(Упаковка), ship (отгрузка)
 const STAGES = ['draw','proc','shear','laser','bend','weld','mech','pack','ship'];
 
+const PROGRESS_STAGES = ['draw','laser','bend','weld','mech'];
+const INDICATOR_STAGES = ['proc','shear','pack','ship'];
+
 const STAGE_TITLE = {
   draw:'Технологи: подготовка в работу',
   proc:'Закупка',
@@ -3176,6 +3652,7 @@ let ovFilter = new Set(STAGES);  // какие этапы показаны на 
 let ovModeCurrent = 'detailed';  // 'detailed' | 'compact'
 let routeOverrides = new Map();  // `${parentId}::${stage}` => {start:Date|null,end:Date|null}
 let routeEditsWorking = new Map(); // несохранённые правки (как overrides)
+let currentRouteContext = null;   // текущее состояние открытого маршрута
 
 /* =========
    ВСПОМОГАТ.
@@ -4212,78 +4689,16 @@ function renderTasksTable(){
 /* =========
    МАРШРУТ (диалог «глаз») — иконки + суммы
 ========= */
-function openRoute(task){
-  $("#routeTitle").textContent = task.orderId;
-
-  const doneSet = new Set(
-    Array.isArray(task.doneStages)
-      ? task.doneStages.filter(Boolean)
-      : []
-  );
-  const orderKey = task.orderKey || orderKeyForRecord(task) || '';
-  if(orderKey){
-    doneTasks.forEach(rec=>{
-      if(orderKeyForRecord(rec) === orderKey && rec.stage){
-        doneSet.add(rec.stage);
-      }
-    });
+function openRoute(source){
+  const context = buildRouteContextFromSource(source);
+  if(!context){
+    alert('Маршрут заказа недоступен.');
+    return;
   }
-  if(task.stage && Math.max(0, Math.min(100, Number(task.progress)||0)) >= 100){
-    doneSet.add(task.stage);
-  }
-
-  const items = STAGES.map(stage=>{
-    const infoRaw = task.route?.[stage] || null;
-    const hasInfo = infoRaw && (Number.isFinite(infoRaw.hours) || infoRaw.start || infoRaw.end);
-    const done = doneSet.has(stage);
-    if(!hasInfo && !done) return null;
-    const start = infoRaw?.start instanceof Date ? infoRaw.start : (infoRaw?.start ? safeDateValue(infoRaw.start) : null);
-    const end = infoRaw?.end instanceof Date ? infoRaw.end : (infoRaw?.end ? safeDateValue(infoRaw.end) : null);
-    const rawHours = infoRaw && Number.isFinite(infoRaw.hours) ? Number(infoRaw.hours) : 0;
-    const hours = PARALLEL_STAGES.has(stage) ? 0 : rawHours;
-    return { stage, start, end, hours, done };
-  }).filter(Boolean);
-
-  items.sort((a,b)=>{
-    const as = a.start instanceof Date ? a.start.getTime() : Infinity;
-    const bs = b.start instanceof Date ? b.start.getTime() : Infinity;
-    if(as !== bs) return as - bs;
-    return STAGES.indexOf(a.stage) - STAGES.indexOf(b.stage);
-  });
-
-  let sumAll = 0;
-  const lines = items.map(item=>{
-    sumAll += item.hours || 0;
-    const startText = item.start ? fmtDate(item.start) : '—';
-    const endText = item.end ? fmtDate(item.end) : '—';
-    const hoursText = item.hours > 0 ? `${item.hours.toFixed(1)} ч` : '';
-    const metaParts = [`${startText} → ${endText}`];
-    if(hoursText) metaParts.push(hoursText);
-    const meta = metaParts.join(', ');
-    const state = item.done ? 'done' : 'pending';
-    return `
-      <div class="route-stage">
-        <span class="stage-check route-stage-check" data-state="${state}"></span>
-        <span class="route-stage-label">${stageIcon(item.stage)}</span>
-        <span class="route-stage-meta">${meta}</span>
-      </div>
-    `;
-  }).join('');
-
-  const totalCurrent = task.stage ? ((+task.hours||0)+(+task.extraHours||0)) : 0;
-  const stageBlock = task.stage
-    ? `<div><b>По текущему переделу:</b> ${totalCurrent.toFixed(1)} ч, прогресс: ${Math.max(0,Math.min(100,task.progress||0))}%</div>`
-    : '';
-
-  const html = `
-    ${lines || '<div class="muted">Нет данных по маршруту</div>'}
-    <hr>
-    <div><b>Итого по заказу (все этапы):</b> ${sumAll.toFixed(1)} ч</div>
-    ${stageBlock}
-    ${task.origStartDate ? `<div class="muted" style="margin-top:6px">Изначальная дата старта (по текущему переделу): <b>${fmtDate(task.origStartDate)}</b></div>` : ''}
-  `;
-  $("#routeContent").innerHTML = html;
-  $("#routeDlg").showModal();
+  currentRouteContext = context;
+  renderRouteDialog(context);
+  const dlg = document.getElementById('routeDlg');
+  if(dlg){ dlg.showModal(); }
 }
 
 /* =========
@@ -6029,13 +6444,18 @@ async function importRows(rows){
 	  }
     });
     tasks = active;
-    if (autoOptimizeOn) {
-      tasks = optimizeStageArray(tasks, p);
+    if(autoOptimizeOn){
+      optimizeAllStages({ persist:false, rebuild:false });
       rememberStageOrder(p);
-      recompute();
     } else {
       sortTasksByStart();
       rememberStageOrder(p);
+    }
+
+    if(p === OVERVIEW_STAGE){
+      renderOrdersOverviewTable();
+      rebuildAndRenderMasterRoute();
+    } else {
       recompute();
     }
 
@@ -8183,7 +8603,7 @@ function recompute(){
   adjustUIForProcess(proc);
 
   if(proc === OVERVIEW_STAGE){
-    $("#procTitle").textContent = 'Список заказов';
+    $("#procTitle").textContent = 'Общий список заказов';
     renderOrdersOverviewTable();
     return;
   }
@@ -8377,6 +8797,24 @@ function wireHandlers(){
   const ignoredAdd = document.getElementById('ignoredStateAdd');
   if(ignoredAdd){
     ignoredAdd.addEventListener('click', addIgnoredStateFromInput);
+  }
+
+  const routeContent = document.getElementById('routeContent');
+  if(routeContent){
+    routeContent.addEventListener('click', e=>{
+      const target = e.target.closest('.route-stage-toggle');
+      if(!target) return;
+      if(target.getAttribute('aria-disabled') === 'true') return;
+      handleRouteStageToggle(target.dataset.stage);
+    });
+    routeContent.addEventListener('keydown', e=>{
+      if(e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      const target = e.target.closest('.route-stage-toggle');
+      if(!target) return;
+      if(target.getAttribute('aria-disabled') === 'true') return;
+      e.preventDefault();
+      handleRouteStageToggle(target.dataset.stage);
+    });
   }
   const ignoredInput = document.getElementById('ignoredStateInput');
   if(ignoredInput){
@@ -8632,7 +9070,8 @@ function wireHandlers(){
   });
 
   // маршрут диалог
-  $("#routeClose").addEventListener('click', ()=> $("#routeDlg").close());
+$("#routeClose").addEventListener('click', ()=> $("#routeDlg").close());
+$("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 
   // откат импорта — выборочно
   $("#undoImport").addEventListener('click', ()=>{
