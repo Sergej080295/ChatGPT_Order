@@ -3306,6 +3306,22 @@ function applyStageProgressFromOverview(identity, stage, value){
   }
 
   const stageList = gatherActiveStageList(stage);
+  if(!ordersByStage.has(stage)){
+    ordersByStage.set(stage, stageList.map(task=> task.uid));
+  }else if(!markDone && stageList.length){
+    const orderList = ordersByStage.get(stage) || [];
+    const known = new Set(orderList);
+    let changedOrder = false;
+    stageList.forEach(task=>{
+      if(!task || known.has(task.uid)) return;
+      orderList.push(task.uid);
+      known.add(task.uid);
+      changedOrder = true;
+    });
+    if(changedOrder){
+      ordersByStage.set(stage, orderList);
+    }
+  }
   mergeStageIntoAll(stage, stageList);
   updateStageSnapshotFromAggregated(stage);
 
@@ -4860,8 +4876,12 @@ function renderTasksTable(){
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
 
   requestAnimationFrame(()=>{
-    const w=Math.min(2200,Math.max(960,$("#tasksTable").offsetWidth+24));
-    document.documentElement.style.setProperty('--leftWidth', w+'px');
+    const tableEl = $("#tasksTable");
+    const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leftWidth')) || 960;
+    const tableWidth = tableEl ? tableEl.offsetWidth : 0;
+    const desired = tableWidth > 0 ? tableWidth + 24 : currentWidth;
+    const w = Math.min(2200, desired);
+    document.documentElement.style.setProperty('--leftWidth', w + 'px');
   });
   updateOrderSearchControls();
 }
@@ -8926,18 +8946,18 @@ function switchProcess(newProc){
   // пытаемся загрузить задачи ИЗ localStorage для newProc
   const skipSaved = stagesDirtyFromRoute.has(newProc);
   const saved = skipSaved ? null : loadStageFromLS(newProc);
+  let cached = [];
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    cached = allTasksFromState
+      .filter(t=> t && t.stage === newProc)
+      .map(cloneTaskRecord)
+      .filter(Boolean);
+  }
+
   if(saved && saved.length){
     tasks = saved;
-  }else if(Array.isArray(allTasksFromState) && allTasksFromState.length){
-    const cached = allTasksFromState.filter(t=> t && t.stage === newProc).map(cloneTaskRecord).filter(Boolean);
-    if(cached.length){
-      tasks = cached;
-    }else if(lastRows && lastRows.length){
-      const doneSet = new Set(doneTasks.map(d=>d.uid));
-      tasks = mapRows(lastRows, newProc).filter(t=> !doneSet.has(t.uid));
-    }else{
-      tasks = tasks.filter(t=> t.stage === newProc);
-    }
+  }else if(cached.length || skipSaved){
+    tasks = cached;
   }else if(lastRows && lastRows.length){
     // fallback — из исходной выгрузки, исключая уже «Готовые»
     const doneSet = new Set(doneTasks.map(d=>d.uid));
