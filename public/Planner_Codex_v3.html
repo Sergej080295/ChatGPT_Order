@@ -614,7 +614,11 @@ body.overview-fs-active{overflow:hidden}
       <div class="orders-toolbar-buttons" id="ordersToolbarButtons">
         <button id="showExcluded" class="btn ghost">Не учтённые</button>
         <button id="addOrder" class="btn">Добавить</button>
-        <button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="showTrash" class="btn ghost icon-only" title="Корзина" aria-label="Корзина">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M9 3a1 1 0 0 0-.894.553L7.382 5H4a1 1 0 1 0 0 2h.26l.94 12.18A3 3 0 0 0 8.19 22h7.62a3 3 0 0 0 2.99-2.82L19.74 7H20a1 1 0 1 0 0-2h-3.382l-.724-1.447A1 1 0 0 0 15 3H9Zm1.118 2h3.764l.334.667A1 1 0 0 0 15.118 6H8.882a1 1 0 0 0-.098-1.333L10.118 5Zm-2.99 3h8.744l-.9 11.653a1 1 0 0 1-.997.88H8.355a1 1 0 0 1-.997-.88L7.128 8Z" fill="currentColor"/>
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -3433,6 +3437,11 @@ function applyStageProgress(identity, stage, value, options={}){
     ? !!options.interactive
     : INTERACTIVE_PROGRESS_SOURCES.has(source);
   let completionMoment = new Date(defaultMoment);
+  const progressBeforeMap = new Map();
+  const progressAfterMap = new Map();
+  const summaryRecords = new Map();
+  let summaryOrderId = identity?.orderId || '';
+  let summaryOrderKey = identity?.orderKey || '';
 
   if(markDone && confirmReadyTimeOn && interactive && !options.skipReadyPrompt){
     const defaultText = fmtDateTimeLocal(completionMoment);
@@ -3542,6 +3551,14 @@ function applyStageProgress(identity, stage, value, options={}){
       }
       if(!target) return;
       const prevProgress = clampProgressValue(target.progress);
+      if(!summaryRecords.has(uid) && target) summaryRecords.set(uid, target);
+      if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
+      progressAfterMap.set(uid, 100);
+      if(!summaryOrderId && target?.orderId) summaryOrderId = target.orderId;
+      if(!summaryOrderKey){
+        const keyCandidate = orderKeyForRecord(target);
+        if(keyCandidate) summaryOrderKey = keyCandidate;
+      }
       shiftTaskStart(target, prevProgress);
       if(prevProgress < 100) changed = true;
       target.progress = 100;
@@ -3594,6 +3611,14 @@ function applyStageProgress(identity, stage, value, options={}){
       let stored = storedByUid.get(uid)?.task || null;
       if(stored){
         const prevProgress = clampProgressValue(stored.progress);
+        if(!summaryRecords.has(uid) && stored) summaryRecords.set(uid, stored);
+        if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
+        progressAfterMap.set(uid, normalized);
+        if(!summaryOrderId && stored?.orderId) summaryOrderId = stored.orderId;
+        if(!summaryOrderKey){
+          const keyCandidate = orderKeyForRecord(stored);
+          if(keyCandidate) summaryOrderKey = keyCandidate;
+        }
         if(prevProgress !== normalized) changed = true;
         shiftTaskStart(stored, prevProgress);
         stored.progress = normalized;
@@ -3607,6 +3632,14 @@ function applyStageProgress(identity, stage, value, options={}){
       if(activeEntry?.task){
         const copy = cloneTaskRecord(activeEntry.task);
         const prevProgress = clampProgressValue(copy.progress);
+        if(!summaryRecords.has(uid) && copy) summaryRecords.set(uid, copy);
+        if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
+        progressAfterMap.set(uid, normalized);
+        if(!summaryOrderId && copy?.orderId) summaryOrderId = copy.orderId;
+        if(!summaryOrderKey){
+          const keyCandidate = orderKeyForRecord(copy);
+          if(keyCandidate) summaryOrderKey = keyCandidate;
+        }
         if(prevProgress !== normalized) changed = true;
         shiftTaskStart(copy, prevProgress);
         copy.progress = normalized;
@@ -3621,7 +3654,16 @@ function applyStageProgress(identity, stage, value, options={}){
       if(doneEntry?.rec){
         const restored = buildDoneTaskRecord(doneEntry.rec);
         if(restored){
-          shiftTaskStart(restored, clampProgressValue(restored.progress));
+          const prevProgress = clampProgressValue(restored.progress);
+          if(!summaryRecords.has(uid) && restored) summaryRecords.set(uid, restored);
+          if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
+          progressAfterMap.set(uid, normalized);
+          if(!summaryOrderId && restored?.orderId) summaryOrderId = restored.orderId;
+          if(!summaryOrderKey){
+            const keyCandidate = orderKeyForRecord(restored);
+            if(keyCandidate) summaryOrderKey = keyCandidate;
+          }
+          shiftTaskStart(restored, prevProgress);
           restored.progress = normalized;
           restored.isDone = false;
           clearCompletionMeta(restored, stage);
@@ -3677,11 +3719,85 @@ function applyStageProgress(identity, stage, value, options={}){
     rememberStageOrder(stage);
   }
 
+  let summaryOverrideText = '';
+  let ordersSummaryOverride = null;
+  if((changed || markDone) && INTERACTIVE_PROGRESS_SOURCES.has(source) && progressAfterMap.size){
+    const firstIter = progressAfterMap.keys().next();
+    const firstUid = (firstIter && firstIter.done === false)
+      ? firstIter.value
+      : (uidSet.values().next().value);
+    let recordForSummary = summaryRecords.get(firstUid) || null;
+    if(!recordForSummary && storedByUid.get(firstUid)?.task){
+      recordForSummary = storedByUid.get(firstUid).task;
+    }
+    if(!recordForSummary){
+      const activeEntry = activeMatches.find(entry => entry.task && entry.task.uid === firstUid);
+      if(activeEntry?.task) recordForSummary = activeEntry.task;
+    }
+    const fallbackOrderId = identity?.orderId || '';
+    if(!summaryOrderId){
+      if(recordForSummary?.orderId) summaryOrderId = recordForSummary.orderId;
+      else summaryOrderId = fallbackOrderId;
+    }
+    if(!summaryOrderKey){
+      const candidate = recordForSummary ? orderKeyForRecord(recordForSummary) : '';
+      if(candidate) summaryOrderKey = candidate;
+      else if(identity?.orderKey) summaryOrderKey = identity.orderKey;
+    }
+    const parts = parseOrderParts(summaryOrderId || fallbackOrderId || identity?.orderKey || '');
+    const displayName = parts.display || summaryOrderId || fallbackOrderId || identity?.orderKey || 'Заказ';
+    const stageTitle = STAGE_TITLE[stage] || stage;
+    const stageLetter = STAGE_LETTER[stage] || stage.slice(0,1).toUpperCase();
+    const afterValRaw = progressAfterMap.get(firstUid);
+    const afterVal = clampProgressValue(afterValRaw);
+    const beforeValRaw = progressBeforeMap.has(firstUid) ? progressBeforeMap.get(firstUid) : afterVal;
+    const beforeVal = clampProgressValue(beforeValRaw);
+    const beforeLabel = formatDiffProgress(beforeVal);
+    const afterLabel = formatDiffProgress(afterVal);
+    const changeSummaryShort = beforeLabel === afterLabel
+      ? `прогресс ${afterLabel}`
+      : `прогресс ${beforeLabel} → ${afterLabel}`;
+    summaryOverrideText = `${displayName} — ${stageTitle}: ${changeSummaryShort}`;
+    const summaryKey = summaryOrderKey || summaryOrderId || (firstUid ? `uid:${firstUid}` : `${stage}-progress`);
+    const changeDetails = [{
+      field: 'progress',
+      label: 'Прогресс',
+      before: beforeLabel,
+      after: afterLabel
+    }];
+    ordersSummaryOverride = {
+      totals: { added: 0, removed: 0, changed: Math.max(1, progressAfterMap.size) },
+      stages: [stage],
+      orders: [{
+        key: summaryKey,
+        orderId: parts.raw || summaryOrderId || summaryKey,
+        display: displayName,
+        number: parts.number,
+        customer: parts.customer,
+        stages: [stage],
+        stageLetters: stageLetter,
+        summary: changeSummaryShort,
+        changes: [{
+          type: 'changed',
+          stage,
+          stageTitle,
+          stageLetter,
+          uid: firstUid || null,
+          summary: changeSummaryShort,
+          details: changeDetails
+        }]
+      }]
+    };
+  }
+
   updateDoneAttention();
   updateStageSnapshotFromAggregated(stage);
   rebuildAndRenderMasterRoute();
   recompute();
-  persistMaybe('data', { source, stageOverride: stage });
+  const persistOptions = { source, stageOverride: stage };
+  if(summaryOverrideText) persistOptions.summaryOverride = summaryOverrideText;
+  if(ordersSummaryOverride) persistOptions.ordersSummaryOverride = ordersSummaryOverride;
+  persistMaybe('data', persistOptions);
   return true;
 }
 
@@ -8382,7 +8498,17 @@ function loadStageFromLS(stage){
 }
 
 function persistNow(stageOverride, opts={}){
-  const { source='manual', force=false, announce=true, silentOnConflict=false, multiStage=null, settingsChange=null, uiOnly=false } = opts;
+  const {
+    source='manual',
+    force=false,
+    announce=true,
+    silentOnConflict=false,
+    multiStage=null,
+    settingsChange=null,
+    uiOnly=false,
+    summaryOverride: summaryOverrideOpt=null,
+    ordersSummaryOverride: ordersSummaryOverrideOpt=null
+  } = opts;
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
     const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
@@ -8432,10 +8558,15 @@ function persistNow(stageOverride, opts={}){
       const authorsMap = {};
       const stageSummaryParts = [];
 
-      const combinedSummary = (multiStage.ordersSummary && typeof multiStage.ordersSummary === 'object')
+      const overrideSummaryText = typeof summaryOverrideOpt === 'string' ? summaryOverrideOpt.trim() : '';
+      const overrideOrdersSummary = ordersSummaryOverrideOpt && typeof ordersSummaryOverrideOpt === 'object'
+        ? ordersSummaryOverrideOpt
+        : null;
+      const combinedSummaryBase = (multiStage.ordersSummary && typeof multiStage.ordersSummary === 'object')
         ? multiStage.ordersSummary
         : buildOrdersSummary(combinedDiff);
-      const combinedSummaryText = summarizeOrdersSummary(combinedSummary);
+      const combinedSummary = overrideOrdersSummary || combinedSummaryBase;
+      const combinedSummaryText = overrideSummaryText || summarizeOrdersSummary(combinedSummary);
       const changeType = describeChangeType(source);
 
       const versions = { ...(stateMeta.versions || {}), ...(prevMeta.versions || {}) };
@@ -8728,8 +8859,14 @@ function persistNow(stageOverride, opts={}){
     let authorsMap = null;
     let settingsSummary = '';
     const nowStr = new Date().toLocaleString();
+    const overrideSummaryText = typeof summaryOverrideOpt === 'string' ? summaryOverrideOpt.trim() : '';
+    const overrideOrdersSummary = ordersSummaryOverrideOpt && typeof ordersSummaryOverrideOpt === 'object'
+      ? ordersSummaryOverrideOpt
+      : null;
     const ordersSummary = diffChanged ? buildOrdersSummary(diff, curStage) : null;
-    const changeSummaryText = summarizeOrdersSummary(ordersSummary)
+    const effectiveOrdersSummary = overrideOrdersSummary || ordersSummary;
+    const changeSummaryText = overrideSummaryText
+      || summarizeOrdersSummary(effectiveOrdersSummary)
       || summarizeDiffLike(diff, curStage);
     const changeType = describeChangeType(source);
 
@@ -8786,7 +8923,7 @@ function persistNow(stageOverride, opts={}){
           summary: changeSummaryText,
           diff,
           authors: authorsMap,
-          ordersSummary: ordersSummary || null
+          ordersSummary: effectiveOrdersSummary || null
         };
         activityLog.push(entry);
         if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
@@ -8836,7 +8973,7 @@ function persistNow(stageOverride, opts={}){
         updatedAt: stateMeta.settings?.updatedAt || ''
       },
       ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
-      ordersSummary: ordersSummary || null,
+      ordersSummary: effectiveOrdersSummary || null,
       lastChange: {
         stage: curStage,
         stages: [curStage],
@@ -8845,7 +8982,7 @@ function persistNow(stageOverride, opts={}){
         user: userAlias,
         source,
         time: nowStr,
-        ordersSummary: diffChanged ? (ordersSummary || null) : null,
+        ordersSummary: diffChanged ? (effectiveOrdersSummary || null) : null,
         changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType
       }
     };
@@ -8881,7 +9018,7 @@ function persistNow(stageOverride, opts={}){
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
         const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
         const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
-        const remoteOrdersSummary = diffChanged ? (ordersSummary || null) : null;
+        const remoteOrdersSummary = diffChanged ? (effectiveOrdersSummary || null) : null;
         remoteBridge.push(payload, {
           stage:remoteStage,
           diff:remoteDiff,
@@ -8981,7 +9118,7 @@ function persistNow(stageOverride, opts={}){
           user:userAlias,
           authors: payloadAuthors,
           summary: summaryForMeta,
-          ordersSummary: ordersSummary || null,
+          ordersSummary: effectiveOrdersSummary || null,
           time: nowStr,
           changeType
         });
