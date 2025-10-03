@@ -562,7 +562,16 @@ body.overview-fs-active{overflow:hidden}
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
       <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
       <button id="saveBtn" class="btn small">Сохранить</button>
-      <button id="logBtn" class="btn small ghost">Журнал</button>
+      <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
+        <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+          <rect x="4" y="3" width="14" height="18" rx="2" fill="#2563eb"/>
+          <rect x="6" y="5" width="10" height="14" rx="1" fill="#f8fafc"/>
+          <rect x="8" y="8" width="6" height="2" rx="1" fill="#2563eb"/>
+          <rect x="8" y="12" width="6" height="2" rx="1" fill="#2563eb"/>
+          <path d="M18 7h1a2 2 0 0 1 2 2v9c0 1.105-.895 2-2 2h-7" fill="#f59e0b"/>
+          <path d="M18 7v11a2 2 0 0 1-2 2h-5" fill="#fbbf24"/>
+        </svg>
+      </button>
       <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
     </div>
     <div class="row small muted" id="freshnessRow" style="margin-left:auto;gap:16px">
@@ -3989,7 +3998,18 @@ function renderOrdersOverviewTable(){
 
     const rawTitle = (parts.raw || '').replace(/^№+/i,'').trim();
     const displayTitle = (parts.display || '').replace(/^№+/i,'').trim();
-    const orderTitle = parts.customer || rawTitle || displayTitle || (parts.display || '');
+    const numberPart = (parts.number || rawTitle || '').replace(/^№+/i,'').trim();
+    const customerPart = (parts.customer || '').trim();
+    let orderTitle = '';
+    if(numberPart && customerPart){
+      orderTitle = `${numberPart} ${customerPart}`;
+    } else if(numberPart){
+      orderTitle = numberPart;
+    } else if(customerPart){
+      orderTitle = customerPart;
+    } else {
+      orderTitle = displayTitle || rawTitle || (parts.display || '');
+    }
 
     tr.innerHTML = `
       <td>${entry.order.number}</td>
