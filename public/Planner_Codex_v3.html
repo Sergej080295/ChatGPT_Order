@@ -2587,6 +2587,24 @@ function formatHoursToHMS(hours){
   return `${h}:${m}:${s}`;
 }
 
+function formatStageHoursWithDays(stage, hours){
+  const hoursText = formatHoursToHMS(hours);
+  const storedCap = capByProc?.[stage];
+  let capacity = Number(storedCap);
+  if(!Number.isFinite(capacity) || capacity <= 0){
+    const fallback = DEFAULT_CAP?.[stage];
+    capacity = Number(fallback);
+  }
+  if(!Number.isFinite(capacity) || capacity <= 0){
+    return hoursText;
+  }
+  const safeHours = Math.max(0, Number(hours) || 0);
+  const days = safeHours / capacity;
+  const rounded = Math.round(days * 10) / 10;
+  const daysText = rounded.toFixed(1).replace('.',',').replace(/,0$/, '');
+  return `${hoursText} (${daysText}д)`;
+}
+
 function clampProgressValue(value){
   const num = Number(value);
   if(!Number.isFinite(num)) return 0;
@@ -3880,11 +3898,11 @@ function renderOrdersOverviewTable(){
     setCell('shear', `${totals.shear} шт`);
     setCell('pack', `${totals.pack} шт`);
     setCell('ship', `${totals.ship} шт`);
-    setCell('draw', formatHoursToHMS(totals.draw));
-    setCell('laser', formatHoursToHMS(totals.laser));
-    setCell('bend', formatHoursToHMS(totals.bend));
-    setCell('weld', formatHoursToHMS(totals.weld));
-    setCell('mech', formatHoursToHMS(totals.mech));
+    setCell('draw', formatStageHoursWithDays('draw', totals.draw));
+    setCell('laser', formatStageHoursWithDays('laser', totals.laser));
+    setCell('bend', formatStageHoursWithDays('bend', totals.bend));
+    setCell('weld', formatStageHoursWithDays('weld', totals.weld));
+    setCell('mech', formatStageHoursWithDays('mech', totals.mech));
   };
 
   updateTotalsUI({ orders: 0, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 });
@@ -3969,10 +3987,14 @@ function renderOrdersOverviewTable(){
       return `<span class="stage-check" data-state="${state}"${slipAttr}></span>`;
     };
 
+    const rawTitle = (parts.raw || '').replace(/^№+/i,'').trim();
+    const displayTitle = (parts.display || '').replace(/^№+/i,'').trim();
+    const orderTitle = parts.customer || rawTitle || displayTitle || (parts.display || '');
+
     tr.innerHTML = `
       <td>${entry.order.number}</td>
       <td><button class="order-eye-btn" title="Маршрут заказа">👁</button></td>
-      <td>${parts.display}</td>
+      <td>${orderTitle}</td>
       <td>${renderIndicator('proc')}</td>
       <td>${renderIndicator('shear')}</td>
       <td class="progress-cell">${renderProgress('draw')}</td>
