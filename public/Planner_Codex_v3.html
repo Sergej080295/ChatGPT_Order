@@ -4642,14 +4642,72 @@ function renderExcludedList(){
     tbody.appendChild(tr);
     return;
   }
+  if(stage === 'orders'){
+    const grouped = [];
+    const byOrder = new Map();
+    let missingKeyCounter = 0;
+    list.forEach(task=>{
+      const parts = parseOrderParts(task.orderId || '');
+      let mapKey = parts.raw || task.orderId || '';
+      if(!mapKey){
+        mapKey = `__missing__${missingKeyCounter++}`;
+      }
+      let group = byOrder.get(mapKey);
+      if(!group){
+        group = {
+          parts,
+          tasks: [],
+          labels: [],
+          seen: new Set()
+        };
+        byOrder.set(mapKey, group);
+        grouped.push(group);
+      }else if(!group.parts?.raw && parts.raw){
+        group.parts = parts;
+      }
+      group.tasks.push(task);
+      const stageTitle = STAGE_TITLE[task.stage] || task.stage || '';
+      const stateLabel = typeof task.state === 'string' ? task.state.trim() : '';
+      let label = '';
+      if(stageTitle && stateLabel){
+        label = `${stageTitle} — ${stateLabel}`;
+      }else if(stageTitle){
+        label = stageTitle;
+      }else if(stateLabel){
+        label = stateLabel;
+      }else{
+        label = '—';
+      }
+      if(!group.seen.has(label)){
+        group.seen.add(label);
+        group.labels.push(label);
+      }
+    });
+    grouped.forEach((group, idx)=>{
+      const parts = group.parts || {};
+      const numberCell = parts.number || parts.display || parts.raw || group.tasks[0]?.orderId || '—';
+      const customerCell = parts.customer || '';
+      const stateCell = group.labels.length ? group.labels.join('; ') : '—';
+      const tr = document.createElement('tr');
+      [
+        String(idx + 1),
+        numberCell,
+        customerCell,
+        stateCell
+      ].forEach(text=>{
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    return;
+  }
   list.forEach((task, idx)=>{
     const parts = parseOrderParts(task.orderId || '');
     const stageTitle = STAGE_TITLE[task.stage] || task.stage || '';
     const stateLabel = typeof task.state === 'string' ? task.state.trim() : '';
-    let stateText = stateLabel || '—';
-    if(stage === 'orders'){
-      stateText = stageTitle ? (stateLabel ? `${stageTitle} — ${stateLabel}` : stageTitle) : stateText;
-    }
+    const stateText = stageTitle ? (stateLabel ? `${stageTitle} — ${stateLabel}` : stageTitle) : (stateLabel || '—');
     const tr = document.createElement('tr');
     const cells = [
       String(idx + 1),
