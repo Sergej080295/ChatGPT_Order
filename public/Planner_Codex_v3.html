@@ -4506,7 +4506,11 @@ function updateExcludedAttention(){
   const btn = document.getElementById('showExcluded');
   if(!btn) return;
   const currentStage = document.getElementById('process')?.value || currentProc || '';
-  const count = tasks.filter(t=> t && (!currentStage || t.stage === currentStage) && t.hiddenByState).length;
+  const count = tasks.reduce((acc, task)=>{
+    if(!task || !task.hiddenByState) return acc;
+    if(currentStage === 'orders' || !currentStage || task.stage === currentStage) return acc + 1;
+    return acc;
+  }, 0);
   btn.classList.toggle('attn', count > 0);
 }
 
@@ -4554,6 +4558,9 @@ function setIgnoredStates(list, opts={}){
 
 function collectExcludedForStage(stage){
   const key = stage || document.getElementById('process')?.value || currentProc || '';
+  if(key === 'orders' || !key){
+    return tasks.filter(task=> task && task.hiddenByState);
+  }
   return tasks.filter(task=> task && task.stage === key && task.hiddenByState);
 }
 
@@ -4631,12 +4638,18 @@ function renderExcludedList(){
   }
   list.forEach((task, idx)=>{
     const parts = parseOrderParts(task.orderId || '');
+    const stageTitle = STAGE_TITLE[task.stage] || task.stage || '';
+    const stateLabel = typeof task.state === 'string' ? task.state.trim() : '';
+    let stateText = stateLabel || '—';
+    if(stage === 'orders'){
+      stateText = stageTitle ? (stateLabel ? `${stageTitle} — ${stateLabel}` : stageTitle) : stateText;
+    }
     const tr = document.createElement('tr');
     const cells = [
       String(idx + 1),
       parts.number || parts.display || task.orderId || '—',
       parts.customer || '',
-      task.state || '—'
+      stateText
     ];
     cells.forEach(text=>{
       const td = document.createElement('td');
