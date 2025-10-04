@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход в систему</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at top, #223558, #0d111b 70%);
+      color: #f8fafc;
+    }
+    .card {
+      background: rgba(13, 17, 27, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 18px;
+      padding: 32px 28px;
+      width: min(360px, 92vw);
+      box-shadow: 0 20px 60px rgba(15, 23, 42, 0.45);
+      backdrop-filter: blur(14px);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+    p {
+      margin: 0 0 24px;
+      opacity: 0.75;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 18px;
+      font-size: 13px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: rgba(226, 232, 240, 0.8);
+    }
+    input {
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      padding: 10px 14px;
+      font-size: 15px;
+      background: rgba(15, 23, 42, 0.6);
+      color: inherit;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus-visible {
+      outline: none;
+      border-color: #38bdf8;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
+    }
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 12px 16px;
+      width: 100%;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      background: linear-gradient(135deg, #1e3a8a, #3b82f6);
+      color: #f8fafc;
+      transition: transform 0.12s ease, box-shadow 0.2s;
+    }
+    button:active {
+      transform: translateY(1px);
+    }
+    .hint {
+      margin-top: 18px;
+      font-size: 13px;
+      opacity: 0.7;
+      text-align: center;
+    }
+    .toast {
+      position: fixed;
+      left: 50%;
+      top: 24px;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(244, 63, 94, 0.6);
+      color: #fecdd3;
+      padding: 12px 18px;
+      border-radius: 12px;
+      font-size: 14px;
+      box-shadow: 0 12px 30px rgba(244, 63, 94, 0.25);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+    .toast.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Вход в систему</h1>
+    <p>Используйте выданные учетные данные. По умолчанию доступен администратор: <code>admin@example.com</code> / <code>change-me</code>.</p>
+    <form id="loginForm">
+      <label>
+        Email
+        <input id="email" name="email" type="email" autocomplete="username" required />
+      </label>
+      <label>
+        Пароль
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit">Войти</button>
+    </form>
+    <p class="hint">После входа вы будете перенаправлены в Планировщик.</p>
+  </main>
+  <div id="toast" class="toast" role="alert"></div>
+  <script>
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/me', { headers: { 'Accept': 'application/json' } });
+        if (res.ok) {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        console.warn('Auth check failed', err);
+      }
+    })();
+    const form = document.getElementById('loginForm');
+    const toast = document.getElementById('toast');
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3200);
+    }
+
+    async function login(event) {
+      event.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      if (!email || !password) {
+        showToast('Введите email и пароль');
+        return;
+      }
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password })
+        });
+        if (!res.ok) {
+          const detail = await res.json().catch(() => ({ error: 'Не удалось войти' }));
+          showToast(detail.error || 'Не удалось войти');
+          return;
+        }
+        window.location.href = '/';
+      } catch (err) {
+        console.error(err);
+        showToast('Ошибка соединения. Попробуйте ещё раз.');
+      }
+    }
+
+    form.addEventListener('submit', login);
+  </script>
+</body>
+</html>
