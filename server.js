@@ -71,6 +71,50 @@ const broadcastEvent = (payload) => {
   });
 };
 
+const DEFAULT_CRM_LANES = [
+  'Не запланированное',
+  'Клиент',
+  'Отдел продаж',
+  'Технологи',
+  'Производство',
+  'Закупка',
+  'Упаковка',
+  'Готово (Ож. отгрузки)',
+  'Отгружено'
+];
+
+const PLANNER_STAGE_KEYS = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'pack', 'ship'];
+
+const CRM_STAGE_ALIASES = new Map([
+  ['laser', 'laser'],
+  ['лазер', 'laser'],
+  ['резка', 'laser'],
+  ['rezka', 'laser'],
+  ['cut', 'laser'],
+  ['bend', 'bend'],
+  ['гибка', 'bend'],
+  ['сгиб', 'bend'],
+  ['draw', 'draw'],
+  ['подготовка', 'draw'],
+  ['подготовка в работу', 'draw'],
+  ['подготовка к работе', 'draw'],
+  ['технологи', 'proc'],
+  ['proc', 'proc'],
+  ['технологический отдел', 'proc'],
+  ['закупка', 'proc'],
+  ['purchase', 'proc'],
+  ['weld', 'weld'],
+  ['сварка', 'weld'],
+  ['mech', 'mech'],
+  ['мех', 'mech'],
+  ['мехобработка', 'mech'],
+  ['pack', 'pack'],
+  ['упаковка', 'pack'],
+  ['ship', 'ship'],
+  ['отгрузка', 'ship'],
+  ['отгружено', 'ship']
+]);
+
 const DEFAULT_STATE = {
   t: [],
   orders: [],
@@ -460,6 +504,171 @@ const computeOrderAggregates = (order, stages) => {
   };
 };
 
+const mergeCrmLanes = (lanes) => {
+  const seen = new Set();
+  const ordered = [];
+  DEFAULT_CRM_LANES.forEach((lane) => {
+    if (!seen.has(lane)) {
+      ordered.push(lane);
+      seen.add(lane);
+    }
+  });
+  (lanes || []).forEach((laneRaw) => {
+    const lane = (laneRaw || '').trim();
+    if (!lane) return;
+    if (!seen.has(lane)) {
+      ordered.push(lane);
+      seen.add(lane);
+    }
+  });
+  return ordered;
+};
+
+const normalizePlannerStage = (stageKey, stageName) => {
+  const candidates = [stageKey, stageName, stageKeyFromName(stageName || stageKey || '')];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = candidate.toString().trim().toLowerCase();
+    if (!normalized) continue;
+    if (CRM_STAGE_ALIASES.has(normalized)) {
+      return CRM_STAGE_ALIASES.get(normalized);
+    }
+  }
+  return 'proc';
+};
+
+const safeDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+};
+
+const buildPlannerStateFromCrm = (board) => {
+  const nowIso = new Date().toISOString();
+  const tasks = [];
+  const perStage = new Map(PLANNER_STAGE_KEYS.map((key) => [key, []]));
+
+  (board?.orders || []).forEach((order) => {
+    const orderId = order.id != null ? String(order.id) : `crm-${order.orderNo || crypto.randomUUID()}`;
+    const orderNumber = order.orderNo || orderId;
+    const baseIdentity = orderNumber;
+    const lane = order.lane || DEFAULT_CRM_LANES[0];
+    const stages = Array.isArray(order.stages) && order.stages.length ? order.stages : [];
+
+    stages.forEach((stage) => {
+      const plannerStage = normalizePlannerStage(stage.stageKey, stage.stageName);
+      const uid = `${orderId}::${plannerStage}-${stage.id ?? stage.stageKey ?? crypto.randomUUID()}`;
+      const startIso = safeDate(stage.dateStart ? `${stage.dateStart}T00:00:00Z` : null);
+      const endIso = safeDate(stage.dateEnd ? `${stage.dateEnd}T00:00:00Z` : null);
+      const hours = numberOrNull(stage.hours) ?? 0;
+      const percent = numberOrNull(stage.percent) ?? 0;
+      const stageRoute = {};
+      PLANNER_STAGE_KEYS.forEach((key) => {
+        if (key === plannerStage) {
+          stageRoute[key] = {
+            hours,
+            start: startIso,
+            end: endIso,
+            ...(stage.isReady ? { doneAt: stage.updatedAt ? safeDate(stage.updatedAt) : nowIso } : {})
+          };
+        } else {
+          stageRoute[key] = null;
+        }
+      });
+
+      const task = {
+        uid,
+        orderId,
+        orderNumber,
+        orderCustomer: order.customer || '',
+        orderIdentity: baseIdentity,
+        stage: plannerStage,
+        childId: `${orderId}-${plannerStage}`,
+        parentId: orderId,
+        hours,
+        extraHours: 0,
+        startDate: startIso,
+        endDate: endIso,
+        startMissing: !startIso,
+        endMissing: !endIso,
+        state: lane,
+        status: stage.isReady || order.isDone ? 'Готово' : percent >= 100 ? 'Готово' : 'В работе',
+        useReserve: false,
+        progress: percent,
+        origStartDate: startIso,
+        route: stageRoute,
+        isUserNew: false,
+        isNew: false,
+        isDone: !!(stage.isReady || order.isDone),
+        isTrash: false,
+        locked: false,
+        hiddenByState: false,
+        doneMeta: stage.isReady || order.isDone
+          ? { when: stage.updatedAt ? safeDate(stage.updatedAt) : nowIso, source: 'crm' }
+          : null
+      };
+
+      tasks.push(task);
+      if (!perStage.has(plannerStage)) {
+        perStage.set(plannerStage, []);
+      }
+      perStage.get(plannerStage).push(uid);
+    });
+  });
+
+  const ordersMatrix = PLANNER_STAGE_KEYS.map((stage) => [stage, perStage.get(stage) || []]);
+
+  const baseState = {
+    routeOverrides: [],
+    t: tasks,
+    done: [],
+    trash: [],
+    exc: [],
+    res: [],
+    process: 'laser',
+    capByProc: { laser: 0, bend: 0, draw: 0, weld: 0, mech: 0, proc: 0 },
+    parallelByProc: { proc: 0, shear: 0, pack: 0, ship: 0 },
+    filter: 'all',
+    locked: [],
+    orders: ordersMatrix,
+    freshness: nowIso,
+    freshnessCsv: nowIso,
+    freshnessManual: '',
+    lastImportTime: nowIso,
+    lastManualTime: '',
+    autosaveOn: true,
+    autoOptimizeOn: true,
+    shiftOnProgress: true,
+    meta: {
+      versions: {},
+      lastAuthors: {},
+      csvTimestamp: nowIso,
+      manualTimestamp: '',
+      history: [],
+      storage: { local: true, remote: true, remotePreferred: true, mode: 'remote' },
+      settings: {
+        capacity: { laser: 0, bend: 0, draw: 0, weld: 0, mech: 0, proc: 0 },
+        parallel: { proc: 0, shear: 0, pack: 0, ship: 0 },
+        autosave: true,
+        shiftOnProgress: true,
+        autoOptimize: true
+      }
+    }
+  };
+
+  return {
+    state: JSON.stringify(baseState),
+    meta: {
+      stage: 'crm-sync',
+      version: Date.now(),
+      source: 'crm',
+      generatedAt: nowIso,
+      orders: board?.orders?.length ?? 0
+    }
+  };
+};
+
 const fetchCrmState = async () => {
   await ensureCrmSchema();
   const { rows: orderRows } = await pool.query(
@@ -475,10 +684,10 @@ const fetchCrmState = async () => {
       board: {
         id: 'default',
         name: 'Список заказов',
-        lanes: [],
+        lanes: [...DEFAULT_CRM_LANES],
         orders: []
       },
-      lanes: []
+      lanes: [...DEFAULT_CRM_LANES]
     };
   }
 
@@ -499,7 +708,7 @@ const fetchCrmState = async () => {
     stagesByOrder.get(stage.order_id).push(stage);
   });
 
-  const lanes = Array.from(new Set(orderRows.map((row) => row.lane)));
+  const lanes = mergeCrmLanes(orderRows.map((row) => row.lane));
   const orders = orderRows.map((row) => {
     const stages = stagesByOrder.get(row.id) || [];
     const aggregates = computeOrderAggregates(row, stages);
@@ -509,7 +718,7 @@ const fetchCrmState = async () => {
       title: row.title,
       customer: row.customer,
       serviceTotal: row.service_total === null ? '' : Number(row.service_total),
-      lane: row.lane,
+      lane: row.lane || DEFAULT_CRM_LANES[0],
       isDone: boolFrom(row.is_done),
       parentOrderId: row.parent_order_id,
       boardKey: row.board_key,
@@ -538,18 +747,21 @@ const fetchCrmState = async () => {
     };
   });
 
+  const board = {
+    id: 'default',
+    name: 'Список заказов',
+    lanes,
+    orders
+  };
+
   return {
-    board: {
-      id: 'default',
-      name: 'Список заказов',
-      lanes,
-      orders
-    },
+    board,
     lanes,
     updatedAt: orderRows.reduce((latest, row) => {
       const ts = row.updated_at ? new Date(row.updated_at).getTime() : 0;
       return Math.max(latest, ts);
-    }, 0) || Date.now()
+    }, 0) || Date.now(),
+    plannerState: buildPlannerStateFromCrm(board)
   };
 };
 
@@ -577,6 +789,7 @@ const upsertOrder = async (payload, user) => {
   const numericTotal = numberOrNull(serviceTotal);
   const board = boardKey || 'default';
   const done = boolFrom(isDone);
+  const laneValue = lane || DEFAULT_CRM_LANES[0];
 
   let result;
   if (id) {
@@ -596,7 +809,7 @@ const upsertOrder = async (payload, user) => {
         WHERE id = $12
           AND deleted_at IS NULL
       RETURNING id`,
-      [orderNo, title, customer || null, numericTotal, lane, done, parentOrderId || null, board, notes || null, now, user?.email ?? null, id]
+      [orderNo, title, customer || null, numericTotal, laneValue, done, parentOrderId || null, board, notes || null, now, user?.email ?? null, id]
     );
     if (result.rowCount === 0) {
       const notFound = new Error('Order not found');
@@ -609,7 +822,7 @@ const upsertOrder = async (payload, user) => {
         (order_no, title, customer, service_total, lane, is_done, parent_order_id, board_key, notes, updated_at, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     RETURNING id`,
-      [orderNo, title, customer || null, numericTotal, lane, done, parentOrderId || null, board, notes || null, now, user?.email ?? null]
+      [orderNo, title, customer || null, numericTotal, laneValue, done, parentOrderId || null, board, notes || null, now, user?.email ?? null]
     );
   }
 
@@ -734,6 +947,18 @@ const softDeleteOrder = async (orderId, user) => {
   }
   await recordActivity({ entity: 'order', entityId: orderId, action: 'delete', userEmail: user?.email ?? null, payload: null });
   broadcastEvent({ type: 'update', entity: 'order', id: orderId, changed: { deleted: true }, by: user?.email ?? null });
+  const snapshot = await fetchCrmState();
+  broadcastEvent({
+    type: 'state-updated',
+    entity: 'planner',
+    mode: 'crm',
+    id: 'crm',
+    changed: { hash: simpleHash(snapshot.plannerState?.state || '') },
+    state: snapshot.plannerState,
+    board: snapshot.board,
+    lanes: snapshot.lanes,
+    by: user?.email ?? null
+  });
 };
 
 const parseCsvText = (text) => {
@@ -843,6 +1068,19 @@ const importCrmCsv = async (text, user) => {
 
   broadcastEvent({ type: 'bulk', entity: 'order', id: null, changed: { imported: processed.length }, by: user?.email ?? null });
 
+  const snapshot = await fetchCrmState();
+  broadcastEvent({
+    type: 'state-updated',
+    entity: 'planner',
+    mode: 'crm',
+    id: 'crm',
+    changed: { hash: simpleHash(snapshot.plannerState?.state || '') },
+    state: snapshot.plannerState,
+    board: snapshot.board,
+    lanes: snapshot.lanes,
+    by: user?.email ?? null
+  });
+
   return processed;
 };
 
@@ -943,7 +1181,9 @@ app.get('/api/events', requireAuth, async (req, res) => {
       entity: 'planner',
       mode: 'crm',
       version: globalEventVersion,
-      state: crm
+      state: crm.plannerState,
+      board: crm.board,
+      lanes: crm.lanes
     })}\n\n`);
   } catch (err) {
     console.error('Failed to stream CRM snapshot', err);
@@ -1074,6 +1314,15 @@ app.get('/api/crm/state', requireAuth, async (_req, res) => {
   res.json(payload);
 });
 
+app.get('/api/crm/planner_state', requireAuth, async (_req, res) => {
+  const { plannerState } = await fetchCrmState();
+  res.json(plannerState);
+});
+
+app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (_req, res) => {
+  res.json({ ok: true, readonly: true });
+});
+
 app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
   const { order, stages, delete: shouldDelete } = req.body || {};
   if (!order) {
@@ -1091,6 +1340,17 @@ app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
     const orderId = await upsertOrder(order, req.user);
     await syncStages(orderId, stages ?? order.stages ?? [], req.user);
     const updated = await fetchCrmState();
+    broadcastEvent({
+      type: 'state-updated',
+      entity: 'planner',
+      mode: 'crm',
+      id: 'crm',
+      changed: { hash: simpleHash(updated.plannerState?.state || '') },
+      state: updated.plannerState,
+      board: updated.board,
+      lanes: updated.lanes,
+      by: req.user?.email ?? null
+    });
     res.json({ ok: true, orderId, state: updated });
   } catch (err) {
     if (err.status) {
@@ -1111,6 +1371,17 @@ app.put('/api/crm/stages', requireRole('admin', 'worker'), async (req, res) => {
   try {
     await syncStages(orderId, stages, req.user);
     const updated = await fetchCrmState();
+    broadcastEvent({
+      type: 'state-updated',
+      entity: 'planner',
+      mode: 'crm',
+      id: 'crm',
+      changed: { hash: simpleHash(updated.plannerState?.state || '') },
+      state: updated.plannerState,
+      board: updated.board,
+      lanes: updated.lanes,
+      by: req.user?.email ?? null
+    });
     res.json({ ok: true, state: updated });
   } catch (err) {
     console.error('Stage update failed', err);
@@ -1159,12 +1430,16 @@ app.get(['/crm', '/crm/', '/crm.html', '/CRM.html'], (req, res) => {
   res.sendFile(path.join(__dirname, 'CRM.html'));
 });
 
-app.get('/', (req, res) => {
+app.get(['/planner', '/planner/'], (req, res) => {
   if (!req.user) {
     res.redirect(302, '/login.html');
     return;
   }
   res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
+});
+
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
 });
 
 app.use((err, _req, res, _next) => {

@@ -699,7 +699,7 @@ function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 /* TOP BAR & INIT */
 $('#addBoardBtn').onclick=()=>{showToast('В этой версии поддерживается только одна доска (board_key="default").','warn');};
 $('#editBoardBtn').onclick=openBoard; $('#newOrderBtn').onclick=()=>openOrder(null);
-if(plannerBtn) plannerBtn.onclick=()=>{window.location.href='/';};
+if(plannerBtn) plannerBtn.onclick=()=>{window.location.href='/planner';};
 if(importCsvBtn) importCsvBtn.onclick=()=>{importCsvInput?.click();};
 if(importCsvInput) importCsvInput.onchange=(e)=>{const file=e.target.files?.[0]; if(!file) return; if(!confirm('Импортировать CSV-файл в CRM? Текущие данные будут обновлены.')){e.target.value='';return;} file.text().then(text=>syncCsvImport(text)).catch(err=>showToast('Не удалось прочитать файл: '+err.message)).finally(()=>{e.target.value='';});};
 if(exportCsvBtn) exportCsvBtn.onclick=()=>{exportCrmCsv();};
@@ -836,7 +836,7 @@ function stopFallbackPolling(){clearInterval(remoteSync.pollTimer);remoteSync.po
 
 function connectSse(){if(!('EventSource'in window))return; if(remoteSync.sse)try{remoteSync.sse.close();}catch(_err){}
   const es=new EventSource('/api/events'); remoteSync.sse=es; updateConnectionStatus(true); stopFallbackPolling();
-  es.onmessage=(event)=>{if(!event?.data)return; try{const payload=JSON.parse(event.data); if(payload?.type==='state-snapshot'&&payload?.mode==='crm'){applyServerSnapshot(payload.state?.board||payload.state); updateConnectionStatus(true);} else if(payload?.entity==='order'||payload?.entity==='stage'){scheduleRefresh(350);} }catch(err){console.warn('SSE parse failed',err);} };
+  es.onmessage=(event)=>{if(!event?.data)return; try{const payload=JSON.parse(event.data); if(payload?.type==='state-snapshot'&&payload?.mode==='crm'){const boardPayload=payload.board||payload.state?.board||payload.state; applyServerSnapshot(boardPayload); updateConnectionStatus(true);} else if(payload?.entity==='order'||payload?.entity==='stage'){scheduleRefresh(350);} }catch(err){console.warn('SSE parse failed',err);} };
   es.onerror=()=>{updateConnectionStatus(false);startFallbackPolling();setTimeout(connectSse,4000);};
 }
 

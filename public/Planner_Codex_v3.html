@@ -1834,10 +1834,11 @@ function applyDataSourceMode(mode, opts={}){
     try{ localStorage.setItem(DATA_SOURCE_PREF_KEY, next); }catch(_){ }
   }
   $$('input[name="dataSourceMode"]').forEach(radio=>{ radio.checked = radio.value === next; });
-  remotePreferenceRequested = next === 'crm';
+  remotePreferenceRequested = true;
+  enableRemoteStore = true;
   if(next === 'crm'){
-    window.PLANNER_STATE_ENDPOINT = '/api/state';
-    window.PLANNER_STATE_METHOD = 'PUT';
+    window.PLANNER_STATE_ENDPOINT = '/api/crm/planner_state';
+    window.PLANNER_STATE_METHOD = 'POST';
     window.PLANNER_STATE_WRAP = true;
     setDataMode('remote');
     if(!opts.skipStorage){
@@ -1845,20 +1846,19 @@ function applyDataSourceMode(mode, opts={}){
     }
     toggleCsvUi(false);
   }else{
-    if(!enableLocalStore){ enableLocalStore = true; }
-    window.PLANNER_STATE_ENDPOINT = '';
+    window.PLANNER_STATE_ENDPOINT = '/api/state';
     window.PLANNER_STATE_METHOD = 'PUT';
     window.PLANNER_STATE_WRAP = true;
-    setDataMode(enableLocalStore ? 'local' : 'session');
+    setDataMode('remote');
     if(!opts.skipStorage){
-      applyStoragePrefs({ local:true, remote:false });
+      applyStoragePrefs({ remote:true, local:true });
     }
     toggleCsvUi(true);
   }
   const remBox = $('#storageRemote');
   if(remBox){
-    remBox.checked = next === 'crm' && enableRemoteStore;
-    remBox.disabled = next !== 'crm' || !remoteBridge.hasRemote;
+    remBox.checked = enableRemoteStore;
+    remBox.disabled = !remoteBridge.hasRemote;
     remBox.parentElement?.classList.toggle('muted', remBox.disabled);
   }
   if(remoteBridge && typeof remoteBridge.refresh === 'function'){
@@ -2013,7 +2013,7 @@ function applyStoragePrefs(changes={}){
   }else{
     updateRealtimeMode();
   }
-  applyDataSourceMode(remotePreferenceRequested ? 'crm' : 'csv', { skipStorage:true });
+  applyDataSourceMode(dataSourceMode, { skipStorage:true });
 }
 
 function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStore){
