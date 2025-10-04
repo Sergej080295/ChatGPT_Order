@@ -534,9 +534,8 @@ body.overview-fs-active{overflow:hidden}
     </label>
 
     <div class="tools">
-      <label class="btn">Импорт (.csv)
-        <input id="file" type="file" accept=".csv" style="display:none">
-      </label>
+      <button id="importCsvBtn" class="btn">Импорт (.csv)</button>
+      <input id="file" type="file" accept=".csv" style="display:none">
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
       <div class="optimize-group">
@@ -1751,7 +1750,7 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -10283,50 +10282,70 @@ function wireHandlers(){
 
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
-  // очистка
-  document.getElementById('clearAll')?.addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-        if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+  function resetPlannerData({ resetSettings = true } = {}){
+    tasks = [];
+    doneTasks = [];
+    exceptions = new Map();
+    reserves = new Map();
+    routeOverrides = new Map();
+    ordersByStage = new Map();
+    lockedUids = new Set();
+    pendingRows = null;
+    lastRows = null;
+    allTasksFromState = null;
+    trash = [];
+    localStorage.removeItem(LS_KEY);
+    lastSerializedState = '';
+    lastImportTime = '';
+    lastManualTime = '';
+    csvFreshnessStr = '—';
+    manualFreshnessStr = '—';
+    stateMeta.csvTimestamp = '';
+    stateMeta.manualTimestamp = '';
+    updateFreshnessUI();
+    updateTrashAttention?.();
 
-	tasks = [];
-	doneTasks = [];
-	exceptions = new Map();
-	reserves = new Map();
-	routeOverrides = new Map();
-	ordersByStage = new Map();
-	lockedUids = new Set();
-	lastRows = null;
-	allTasksFromState = null;
-	trash = [];
-        localStorage.removeItem(LS_KEY);
-        lastSerializedState = '';
-        lastImportTime = '';
-        lastManualTime = '';
-        csvFreshnessStr = '—';
-        manualFreshnessStr = '—';
-        stateMeta.csvTimestamp = '';
-	stateMeta.manualTimestamp = '';
-	updateFreshnessUI();
-	updateTrashAttention?.();
+    if(resetSettings){
+      capByProc      = { ...DEFAULT_CAP };
+      parallelByProc = { ...DEFAULT_PARALLEL };
+      stateMeta.settings = {
+        capacity: { ...capByProc },
+        parallel: { ...parallelByProc },
+        updatedAt: ''
+      };
+    } else {
+      stateMeta.settings = stateMeta.settings || {};
+      stateMeta.settings.capacity = { ...capByProc };
+      stateMeta.settings.parallel = { ...parallelByProc };
+      stateMeta.settings.updatedAt = stateMeta.settings.updatedAt || '';
+    }
 
-        capByProc      = { ...DEFAULT_CAP };
-        parallelByProc = { ...DEFAULT_PARALLEL };
-        stateMeta.settings = {
-          capacity: { ...capByProc },
-          parallel: { ...parallelByProc },
-          updatedAt: ''
-        };
-
-        // обновим UI под текущий выбранный передел
-        const cur = document.getElementById('process').value;
-        adjustUIForProcess(cur);
-        renderSystemSettingsUI();
+    // обновим UI под текущий выбранный передел
+    const cur = document.getElementById('process').value;
+    adjustUIForProcess(cur);
+    renderSystemSettingsUI();
 
     persistNow();
     recompute();
     if(!remoteSyncEnabled()){
       setDataMode(enableLocalStore ? 'local' : 'session');
     }
+  }
+
+  // очистка
+  document.getElementById('clearAll')?.addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+
+    resetPlannerData();
+  });
+
+  document.getElementById('importCsvBtn')?.addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    if(!confirm('Очистить текущие данные перед импортом нового файла CSV?')) return;
+
+    resetPlannerData();
+    document.getElementById('file')?.click();
   });
 
   // автосохранение / ручное сохранение
