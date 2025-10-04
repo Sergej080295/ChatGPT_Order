@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRM · Единая система</title>
+  <link rel="stylesheet" href="/assets/app.css" />
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="top-bar">
+      <h1>CRM</h1>
+      <nav>
+        <a href="/planner.html" data-nav="planner">Планировщик</a>
+        <a href="/crm.html" data-nav="crm">CRM</a>
+      </nav>
+      <div class="spacer"></div>
+      <span class="user-chip" id="crm-user"></span>
+      <button class="btn secondary" id="theme-toggle">Тёмная тема</button>
+      <button class="btn secondary" id="logout">Выход</button>
+    </div>
+    <div class="settings-bar">
+      <div class="setting">
+        <button class="btn" id="new-order">Добавить заказ</button>
+      </div>
+      <div class="setting">
+        <button class="btn secondary" id="import-csv">Импорт CSV</button>
+        <button class="btn secondary" id="export-csv">Экспорт CSV</button>
+      </div>
+      <div class="setting">
+        <span class="offline-indicator hidden" id="offline">🟡 Оффлайн</span>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section id="crm-status" class="surface">
+      <div id="crm-summary">Загрузка CRM...</div>
+    </section>
+    <section class="board" id="crm-board"></section>
+  </main>
+
+  <aside id="editor-panel">
+    <header>
+      <h2 id="editor-title">Новый заказ</h2>
+      <button class="btn secondary" type="button" id="close-editor">Закрыть</button>
+    </header>
+    <form id="order-form" class="panel">
+      <input type="hidden" name="id" />
+      <label class="field">
+        № заказа
+        <input type="text" name="orderNo" required />
+      </label>
+      <label class="field">
+        Название заказа
+        <input type="text" name="title" required />
+      </label>
+      <label class="field">
+        Клиент
+        <input type="text" name="customer" />
+      </label>
+      <label class="field">
+        Сумма услуг, ₽
+        <input type="number" name="serviceTotal" min="0" step="0.01" />
+      </label>
+      <label class="field">
+        Колонка CRM
+        <select name="lane" id="lane-select"></select>
+      </label>
+      <label class="checkbox-inline">
+        <input type="checkbox" name="isDone" /> Заказ завершён
+      </label>
+      <div class="modal-footer">
+        <span id="order-meta" class="muted"></span>
+        <button class="btn" type="submit">Сохранить</button>
+      </div>
+    </form>
+    <section class="panel">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <h3 style="margin:0; font-size:16px;">План переделов</h3>
+        <button class="btn secondary" id="add-stage" type="button">Добавить передел</button>
+      </div>
+      <div id="stages-container" style="display:flex; flex-direction:column; gap:12px; margin-top:12px;"></div>
+    </section>
+  </aside>
+
+  <input type="file" accept=".csv,text/csv" id="csv-input" class="hidden" />
+
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      App.markNavActive('crm');
+      const body = document.body;
+      const themeKey = 'crm.theme';
+      const storedTheme = App.readPreference(themeKey, 'dark');
+      body.dataset.theme = storedTheme;
+
+      const crmUser = document.getElementById('crm-user');
+      const board = document.getElementById('crm-board');
+      const summary = document.getElementById('crm-summary');
+      const offlineBadge = document.getElementById('offline');
+      const themeToggle = document.getElementById('theme-toggle');
+      const logoutBtn = document.getElementById('logout');
+      const newOrderBtn = document.getElementById('new-order');
+      const importBtn = document.getElementById('import-csv');
+      const exportBtn = document.getElementById('export-csv');
+      const csvInput = document.getElementById('csv-input');
+      const editorPanel = document.getElementById('editor-panel');
+      const editorTitle = document.getElementById('editor-title');
+      const closeEditorBtn = document.getElementById('close-editor');
+      const orderForm = document.getElementById('order-form');
+      const laneSelect = document.getElementById('lane-select');
+      const orderMeta = document.getElementById('order-meta');
+      const stagesContainer = document.getElementById('stages-container');
+      const addStageBtn = document.getElementById('add-stage');
+
+      let currentUser;
+      let crmState = null;
+      let selectedOrder = null;
+      let isAdmin = false;
+      let isWorker = false;
+
+      try {
+        currentUser = await App.fetchCurrentUser();
+        if (!currentUser) {
+          window.location.href = '/';
+          return;
+        }
+        crmUser.textContent = `${currentUser.displayName || currentUser.email} · ${currentUser.role}`;
+        isAdmin = currentUser.role === 'admin';
+        isWorker = currentUser.role === 'worker';
+      } catch (err) {
+        window.location.href = '/';
+        return;
+      }
+
+      function applyTheme(theme) {
+        body.dataset.theme = theme;
+        App.storePreference(themeKey, theme);
+        themeToggle.textContent = theme === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+      }
+
+      themeToggle.addEventListener('click', () => {
+        const next = body.dataset.theme === 'dark' ? 'light' : 'dark';
+        applyTheme(next);
+      });
+
+      logoutBtn.addEventListener('click', () => App.logout());
+
+      function openEditor(order) {
+        selectedOrder = order;
+        editorPanel.classList.add('open');
+        const isNew = !order || !order.id;
+        editorTitle.textContent = isNew ? 'Новый заказ' : `Заказ ${order.orderNo}`;
+        orderForm.reset();
+        stagesContainer.innerHTML = '';
+        orderMeta.textContent = '';
+
+        if (crmState?.lanes) {
+          laneSelect.innerHTML = '';
+          crmState.lanes.forEach((lane) => {
+            const option = document.createElement('option');
+            option.value = lane;
+            option.textContent = lane;
+            laneSelect.appendChild(option);
+          });
+        }
+
+        if (isNew) {
+        orderForm.elements['orderNo'].value = '';
+        orderForm.elements['title'].value = '';
+        orderForm.elements['customer'].value = '';
+        orderForm.elements['serviceTotal'].value = '';
+        if (crmState?.lanes?.length) {
+          laneSelect.value = crmState.lanes[0];
+        }
+        orderForm.elements['isDone'].checked = false;
+        addStageBtn.disabled = true;
+      } else {
+        orderForm.elements['orderNo'].value = order.orderNo;
+        orderForm.elements['title'].value = order.title || '';
+        orderForm.elements['customer'].value = order.customer || '';
+        orderForm.elements['serviceTotal'].value = order.serviceTotal ?? '';
+        if (!crmState?.lanes?.includes(order.lane)) {
+          const extra = document.createElement('option');
+          extra.value = order.lane;
+          extra.textContent = order.lane;
+          laneSelect.appendChild(extra);
+        }
+        laneSelect.value = order.lane;
+        orderForm.elements['isDone'].checked = !!order.isDone;
+        orderForm.querySelector('input[name="id"]').value = order.id;
+        orderMeta.textContent = `Обновлён: ${App.formatDateTime(order.updatedAt)} · ${order.updatedBy || 'неизвестно'}`;
+        addStageBtn.disabled = false;
+        renderStages(order.stages || []);
+      }
+
+      const canEditCore = isAdmin;
+      orderForm.elements['orderNo'].disabled = !canEditCore && !isNew;
+      orderForm.elements['title'].disabled = !canEditCore;
+      orderForm.elements['customer'].disabled = !canEditCore;
+      orderForm.elements['serviceTotal'].disabled = !canEditCore;
+      laneSelect.disabled = !(canEditCore || isWorker);
+      orderForm.elements['isDone'].disabled = !(canEditCore || isWorker);
+      }
+
+      function closeEditor() {
+        selectedOrder = null;
+        editorPanel.classList.remove('open');
+      }
+
+      closeEditorBtn.addEventListener('click', closeEditor);
+
+      function renderStages(stages) {
+        stagesContainer.innerHTML = '';
+        if (!Array.isArray(stages)) return;
+        stages.forEach((stage) => {
+          stagesContainer.appendChild(createStageForm(stage));
+        });
+      }
+
+      function createStageForm(stage) {
+        const wrapper = document.createElement('form');
+        wrapper.className = 'stage-form';
+        wrapper.dataset.stageId = stage.id;
+        wrapper.innerHTML = `
+          <h5>${stage.stageName}</h5>
+          <label class="field">
+            Часы
+            <input type="number" name="hours" step="0.1" value="${stage.hours ?? ''}" />
+          </label>
+          <label class="field">
+            Начало
+            <input type="date" name="dateStart" value="${stage.dateStart || ''}" />
+          </label>
+          <label class="field">
+            Конец
+            <input type="date" name="dateEnd" value="${stage.dateEnd || ''}" />
+          </label>
+          <label class="field">
+            % выполнения
+            <input type="number" name="percent" min="0" max="100" value="${stage.percent ?? ''}" />
+          </label>
+          <label class="checkbox-inline" style="grid-column:1/-1;">
+            <input type="checkbox" name="isReady" ${stage.isReady ? 'checked' : ''} /> Готово
+          </label>
+          <div class="actions">
+            <button class="btn secondary" type="submit">Сохранить</button>
+          </div>
+        `;
+        const canEditAdvanced = isAdmin;
+        const canChangeStatus = isAdmin || isWorker;
+        wrapper.querySelector('input[name="hours"]').disabled = !canEditAdvanced;
+        wrapper.querySelector('input[name="dateStart"]').disabled = !canEditAdvanced;
+        wrapper.querySelector('input[name="dateEnd"]').disabled = !canEditAdvanced;
+        wrapper.querySelector('input[name="percent"]').disabled = !canChangeStatus;
+        wrapper.querySelector('input[name="isReady"]').disabled = !canChangeStatus;
+
+        wrapper.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const formData = new FormData(wrapper);
+          const payload = {
+            id: stage.id,
+            orderId: selectedOrder.id,
+            hours: formData.get('hours') ? Number(formData.get('hours')) : null,
+            dateStart: formData.get('dateStart') || null,
+            dateEnd: formData.get('dateEnd') || null,
+            percent: formData.get('percent') ? Number(formData.get('percent')) : null,
+            isReady: formData.get('isReady') === 'on'
+          };
+          try {
+            await App.apiFetch('/api/crm/stages', { method: 'PUT', body: payload });
+          App.showToast('Передел обновлён', 'success');
+          scheduleReload(true);
+          } catch (err) {
+            App.showToast('Ошибка сохранения передела', 'error');
+          }
+        });
+        return wrapper;
+      }
+
+      addStageBtn.addEventListener('click', async () => {
+        if (!selectedOrder) return;
+        const stageName = prompt('Название нового передела');
+        if (!stageName) return;
+        try {
+          await App.apiFetch('/api/crm/stages', {
+            method: 'PUT',
+            body: {
+              orderId: selectedOrder.id,
+              stageName,
+              stageKey: App.createSlug(stageName) || 'custom',
+              hours: null,
+              percent: null,
+              isReady: false
+            }
+          });
+          App.showToast('Передел добавлен', 'success');
+          scheduleReload(true);
+        } catch (err) {
+          App.showToast('Не удалось добавить передел', 'error');
+        }
+      });
+
+      orderForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const formData = new FormData(orderForm);
+        const payload = {
+          id: formData.get('id') || undefined,
+          orderNo: formData.get('orderNo'),
+          title: formData.get('title'),
+          customer: formData.get('customer') || null,
+          serviceTotal: formData.get('serviceTotal') ? Number(formData.get('serviceTotal')) : null,
+          lane: formData.get('lane'),
+          isDone: formData.get('isDone') === 'on',
+          parentOrderId: selectedOrder?.parentOrderId || null
+        };
+        try {
+          await App.apiFetch('/api/crm/orders', { method: 'PUT', body: payload });
+          App.showToast('Заказ сохранён', 'success');
+          closeEditor();
+          scheduleReload(true);
+        } catch (err) {
+          if (err.status === 403) {
+            App.showToast('Недостаточно прав для изменения заказа', 'warning');
+          } else if (err.status === 422) {
+            App.showToast('Заполните обязательные поля', 'warning');
+          } else {
+            App.showToast('Не удалось сохранить заказ', 'error');
+          }
+        }
+      });
+
+      newOrderBtn.addEventListener('click', () => openEditor(null));
+
+      importBtn.addEventListener('click', () => {
+        csvInput.value = '';
+        csvInput.click();
+      });
+
+      csvInput.addEventListener('change', () => {
+        const file = csvInput.files?.[0];
+        if (!file) return;
+        if (file.name.toLowerCase().endsWith('.json')) {
+          App.showToast('Импорт JSON не синхронизируется с сервером. Используйте CSV.', 'warning');
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            await App.apiFetch('/api/crm/import_csv', { method: 'POST', body: { csv: event.target.result } });
+            App.showToast('Импорт CSV выполнен', 'success');
+            scheduleReload(true);
+          } catch (err) {
+            App.showToast('Импорт CSV завершился ошибкой', 'error');
+          }
+        };
+        reader.readAsText(file, 'utf-8');
+      });
+
+      exportBtn.addEventListener('click', () => {
+        window.location.href = '/api/crm/export_csv';
+      });
+
+      const laneDropHandlers = new Map();
+
+      function renderBoard() {
+        board.innerHTML = '';
+        if (!crmState) {
+          board.innerHTML = '<div class="surface">Загрузка...</div>';
+          return;
+        }
+        summary.textContent = `Заказов: ${crmState.orders.length}`;
+        const byLane = new Map();
+        crmState.orders.forEach((order) => {
+          if (!byLane.has(order.lane)) {
+            byLane.set(order.lane, []);
+          }
+          byLane.get(order.lane).push(order);
+        });
+        crmState.lanes.forEach((lane) => {
+          const column = document.createElement('div');
+          column.className = 'lane';
+          column.dataset.lane = lane;
+          column.innerHTML = `
+            <header>
+              <h3>${lane}</h3>
+              <span class="badge">${byLane.get(lane)?.length || 0}</span>
+            </header>
+            <div class="lane-body"></div>
+          `;
+          const bodyEl = column.querySelector('.lane-body');
+          const orders = byLane.get(lane) || [];
+          if (orders.length === 0) {
+            column.classList.add('empty');
+          } else {
+            orders.sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0));
+            orders.forEach((order) => {
+              const card = document.createElement('article');
+              card.className = 'order-card card-draggable';
+              card.draggable = isAdmin || isWorker;
+              card.dataset.orderId = order.id;
+              card.innerHTML = `
+                <header>
+                  <div>
+                    <h3>${order.orderNo}</h3>
+                    <p>${order.title || 'Без названия'}</p>
+                  </div>
+                  <div class="order-meta">
+                    <span class="badge">${order.stages.length} переделов</span>
+                    <span class="badge">${App.formatCurrency(order.serviceTotal)}</span>
+                  </div>
+                </header>
+                <div class="order-meta">
+                  <span>Клиент: <strong>${order.customer || '—'}</strong></span>
+                  <span>Готово: <strong>${order.isDone ? 'да' : 'нет'}</strong></span>
+                </div>
+              `;
+              card.addEventListener('click', (event) => {
+                if (event.target.closest('.stage-save')) return;
+                openEditor(order);
+              });
+              card.addEventListener('dragstart', (event) => {
+                event.dataTransfer.setData('text/plain', String(order.id));
+              });
+              bodyEl.appendChild(card);
+            });
+          }
+          if (isAdmin || isWorker) {
+            const handlers = laneDropHandlers.get(lane) || {
+              dragover: (event) => {
+                event.preventDefault();
+                column.classList.add('accent');
+              },
+              dragleave: () => column.classList.remove('accent'),
+              drop: async (event) => {
+                event.preventDefault();
+                column.classList.remove('accent');
+                const orderId = Number(event.dataTransfer.getData('text/plain'));
+                const order = crmState.orders.find((item) => item.id === orderId);
+                if (!order || order.lane === lane) return;
+                try {
+                  await App.apiFetch('/api/crm/orders', {
+                    method: 'PUT',
+                    body: {
+                      id: order.id,
+                      orderNo: order.orderNo,
+                      title: order.title,
+                      customer: order.customer,
+                      serviceTotal: order.serviceTotal,
+                      lane,
+                      isDone: order.isDone,
+                      parentOrderId: order.parentOrderId
+                    }
+                  });
+                  App.showToast(`Перемещено в колонку ${lane}`, 'info');
+                  scheduleReload(true);
+                } catch (err) {
+                  App.showToast('Не удалось переместить заказ', 'error');
+                }
+              }
+            };
+            laneDropHandlers.set(lane, handlers);
+            bodyEl.addEventListener('dragover', handlers.dragover);
+            bodyEl.addEventListener('dragleave', handlers.dragleave);
+            bodyEl.addEventListener('drop', handlers.drop);
+          }
+          board.appendChild(column);
+        });
+      }
+
+      let reloadTimer = null;
+      function scheduleReload(force = false) {
+        if (reloadTimer) {
+          clearTimeout(reloadTimer);
+        }
+        reloadTimer = setTimeout(() => {
+          loadCrmState(force);
+        }, 400);
+      }
+
+      async function loadCrmState(force = false) {
+        try {
+          if (force || !crmState) {
+            crmState = await App.apiFetch('/api/crm/state');
+          }
+          renderBoard();
+        } catch (err) {
+          App.showToast('Не удалось получить данные CRM', 'error');
+        }
+      }
+
+      const connection = App.connectSse((event) => {
+        if (event.changed?.mode === 'crm' && event.changed.state) {
+          crmState = event.changed.state;
+          renderBoard();
+        }
+        if (event.type === 'bulk' && event.changed?.mode === 'crm') {
+          scheduleReload(true);
+        }
+        if (event.entity === 'order' || event.entity === 'stage' || event.type === 'reorder') {
+          scheduleReload(true);
+        }
+      }, (status) => {
+        offlineBadge.classList.toggle('hidden', status !== 'offline' && status !== 'retrying');
+      });
+
+      window.addEventListener('beforeunload', () => connection.close());
+
+      loadCrmState(true);
+    });
+  </script>
+</body>
+</html>
