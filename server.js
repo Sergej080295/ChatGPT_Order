@@ -270,6 +270,8 @@ const ensureCrmSchema = async () => {
     )
   `);
 
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS notes TEXT');
+
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_board_lane_idx ON crm_orders (board_key, lane)');
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_updated_idx ON crm_orders (updated_at DESC)');
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_order_no_idx ON crm_orders (order_no)');
