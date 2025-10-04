@@ -534,9 +534,8 @@ body.overview-fs-active{overflow:hidden}
     </label>
 
     <div class="tools">
-      <label class="btn">Импорт (.csv)
-        <input id="file" type="file" accept=".csv" style="display:none">
-      </label>
+      <button id="importCsvBtn" class="btn">Импорт (.csv)</button>
+      <input id="file" type="file" accept=".csv" style="display:none">
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
       <div class="optimize-group">
@@ -562,7 +561,16 @@ body.overview-fs-active{overflow:hidden}
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
       <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
       <button id="saveBtn" class="btn small">Сохранить</button>
-      <button id="logBtn" class="btn small ghost">Журнал</button>
+      <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
+        <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
+          <rect x="4" y="3" width="14" height="18" rx="2" fill="#2563eb"/>
+          <rect x="6" y="5" width="10" height="14" rx="1" fill="#f8fafc"/>
+          <rect x="8" y="8" width="6" height="2" rx="1" fill="#2563eb"/>
+          <rect x="8" y="12" width="6" height="2" rx="1" fill="#2563eb"/>
+          <path d="M18 7h1a2 2 0 0 1 2 2v9c0 1.105-.895 2-2 2h-7" fill="#f59e0b"/>
+          <path d="M18 7v11a2 2 0 0 1-2 2h-5" fill="#fbbf24"/>
+        </svg>
+      </button>
       <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
     </div>
     <div class="row small muted" id="freshnessRow" style="margin-left:auto;gap:16px">
@@ -1280,6 +1288,9 @@ function cloneTaskRecord(task){
   const copy = {
     uid: task.uid,
     orderId: task.orderId || '',
+    orderNumber: task.orderNumber || '',
+    orderCustomer: task.orderCustomer || '',
+    orderIdentity: task.orderIdentity || '',
     stage: task.stage || '',
     childId: task.childId || '',
     parentId: task.parentId || '',
@@ -1318,6 +1329,7 @@ function cloneTaskRecord(task){
       copy.route[st] = null;
     }
   });
+  ensureOrderIdentity(copy);
   return copy;
 }
 
@@ -1738,7 +1750,7 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -2381,12 +2393,7 @@ function collectActiveTasksForOverview(){
   const doneParentKeys = new Set();
   const trashParentKeys = new Set();
 
-  const recordParentKey = rec => {
-    if(!rec) return '';
-    if(rec.parentId) return rec.parentId;
-    const orderId = rec.orderId ? String(rec.orderId).trim() : '';
-    return orderId ? `no-parent::${orderId}` : '';
-  };
+  const recordParentKey = rec => orderKeyForRecord(rec);
 
   doneTasks.forEach(rec => {
     const key = recordParentKey(rec);
@@ -2407,7 +2414,7 @@ function collectActiveTasksForOverview(){
     clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
     clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
     if(clone.isDone || clone.isTrash) return;
-    const orderKey = clone.parentId || (clone.orderId ? `no-parent::${clone.orderId}` : '');
+    const orderKey = orderKeyForRecord(clone);
     if(shouldSkipOrder(orderKey)) return;
     byUid.set(clone.uid, clone);
   };
@@ -2448,11 +2455,64 @@ function collectDoneStageKeys(){
   return keys;
 }
 
+function normalizeIdentityPart(value){
+  return String(value ?? '').replace(/\s+/g,' ').trim().toLowerCase();
+}
+
+function buildOrderIdentityKey(orderNumber, customer){
+  const numberNorm = normalizeIdentityPart(orderNumber);
+  const customerNorm = normalizeIdentityPart(customer);
+  if(!numberNorm && !customerNorm) return '';
+  return `${numberNorm}::${customerNorm}`;
+}
+
+function ensureOrderIdentity(target){
+  if(!target || typeof target !== 'object') return '';
+  const existing = target.orderIdentity ? String(target.orderIdentity).trim() : '';
+  if(existing){
+    target.orderIdentity = existing;
+    return existing;
+  }
+
+  let orderNumber = target.orderNumber != null ? target.orderNumber : '';
+  let orderCustomer = target.orderCustomer != null ? target.orderCustomer : '';
+
+  if((!orderNumber && !orderCustomer) || (!orderNumber || !orderCustomer)){
+    const parts = target.parts || parseOrderParts(target.orderId || '');
+    if(parts){
+      if(!orderNumber && parts.number) orderNumber = parts.number;
+      if(!orderCustomer && parts.customer) orderCustomer = parts.customer;
+    }
+  }
+
+  if(orderNumber && target.orderNumber == null) target.orderNumber = orderNumber;
+  if(orderCustomer && target.orderCustomer == null) target.orderCustomer = orderCustomer;
+
+  const identity = buildOrderIdentityKey(orderNumber, orderCustomer);
+  if(identity){
+    target.orderIdentity = identity;
+    return identity;
+  }
+
+  const orderIdNorm = normalizeIdentityPart(target.orderId || '');
+  if(orderIdNorm){
+    const fallback = `order::${orderIdNorm}`;
+    target.orderIdentity = fallback;
+    return fallback;
+  }
+
+  const parent = target.parentId ? String(target.parentId).trim() : '';
+  if(parent){
+    const fallback = `parent::${parent}`;
+    target.orderIdentity = fallback;
+    return fallback;
+  }
+
+  return '';
+}
+
 function orderKeyForRecord(rec){
-  if(!rec) return '';
-  if(rec.parentId) return String(rec.parentId);
-  const orderId = rec.orderId ? String(rec.orderId).trim() : '';
-  return orderId ? `no-parent::${orderId}` : '';
+  return ensureOrderIdentity(rec) || '';
 }
 
 function safeDateValue(val){
@@ -2482,6 +2542,9 @@ function buildDoneTaskRecord(rec){
   const pseudo = {
     uid: rec.uid || (`done::${Date.now()}::${Math.random()}`),
     orderId: rec.orderId || '',
+    orderNumber: rec.orderNumber || '',
+    orderCustomer: rec.orderCustomer || '',
+    orderIdentity: rec.orderIdentity || '',
     stage,
     childId: rec.childId || '',
     parentId: rec.parentId || '',
@@ -2505,6 +2568,12 @@ function buildDoneTaskRecord(rec){
     if(doneAt) seg.doneAt = new Date(doneAt);
     pseudo.route[stage] = seg;
   }
+  if(!pseudo.orderNumber || !pseudo.orderCustomer){
+    const parts = parseOrderParts(pseudo.orderId);
+    if(!pseudo.orderNumber && parts.number) pseudo.orderNumber = parts.number;
+    if(!pseudo.orderCustomer && parts.customer) pseudo.orderCustomer = parts.customer;
+  }
+  ensureOrderIdentity(pseudo);
   return pseudo;
 }
 
@@ -2532,6 +2601,9 @@ function restoreDoneRecordAtIndex(idx, stage){
   const restored = {
     uid: record.uid || ('restored::' + Date.now()),
     orderId: record.orderId,
+    orderNumber: record.orderNumber || '',
+    orderCustomer: record.orderCustomer || '',
+    orderIdentity: record.orderIdentity || '',
     stage: stageForTask,
     childId,
     parentId,
@@ -2550,6 +2622,7 @@ function restoreDoneRecordAtIndex(idx, stage){
     isNew: true
   };
   applyIgnoredStateToTask(restored);
+  ensureOrderIdentity(restored);
   doneTasks.splice(idx,1);
   tasks.push(restored);
   if(typeof sortTasksByStart === 'function') sortTasksByStart();
@@ -2585,6 +2658,24 @@ function formatHoursToHMS(hours){
   const m = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2,'0');
   const s = String(totalSeconds % 60).padStart(2,'0');
   return `${h}:${m}:${s}`;
+}
+
+function formatStageHoursWithDays(stage, hours){
+  const hoursText = formatHoursToHMS(hours);
+  const storedCap = capByProc?.[stage];
+  let capacity = Number(storedCap);
+  if(!Number.isFinite(capacity) || capacity <= 0){
+    const fallback = DEFAULT_CAP?.[stage];
+    capacity = Number(fallback);
+  }
+  if(!Number.isFinite(capacity) || capacity <= 0){
+    return hoursText;
+  }
+  const safeHours = Math.max(0, Number(hours) || 0);
+  const days = safeHours / capacity;
+  const rounded = Math.round(days * 10) / 10;
+  const daysText = rounded.toFixed(1).replace('.',',').replace(/,0$/, '');
+  return `${hoursText} (${daysText}д)`;
 }
 
 function clampProgressValue(value){
@@ -2898,6 +2989,9 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
   const record = {
     uid: task.uid,
     orderId: task.orderId,
+    orderNumber: task.orderNumber || '',
+    orderCustomer: task.orderCustomer || '',
+    orderIdentity: task.orderIdentity || '',
     stage: task.stage,
     parentId: task.parentId,
     childId: task.childId,
@@ -2911,6 +3005,7 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
     doneAt: stamp,
     source: source || 'cascade'
   };
+  ensureOrderIdentity(record);
   doneTasks.push(record);
   return record;
 }
@@ -3880,11 +3975,11 @@ function renderOrdersOverviewTable(){
     setCell('shear', `${totals.shear} шт`);
     setCell('pack', `${totals.pack} шт`);
     setCell('ship', `${totals.ship} шт`);
-    setCell('draw', formatHoursToHMS(totals.draw));
-    setCell('laser', formatHoursToHMS(totals.laser));
-    setCell('bend', formatHoursToHMS(totals.bend));
-    setCell('weld', formatHoursToHMS(totals.weld));
-    setCell('mech', formatHoursToHMS(totals.mech));
+    setCell('draw', formatStageHoursWithDays('draw', totals.draw));
+    setCell('laser', formatStageHoursWithDays('laser', totals.laser));
+    setCell('bend', formatStageHoursWithDays('bend', totals.bend));
+    setCell('weld', formatStageHoursWithDays('weld', totals.weld));
+    setCell('mech', formatStageHoursWithDays('mech', totals.mech));
   };
 
   updateTotalsUI({ orders: 0, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 });
@@ -3969,10 +4064,25 @@ function renderOrdersOverviewTable(){
       return `<span class="stage-check" data-state="${state}"${slipAttr}></span>`;
     };
 
+    const rawTitle = (parts.raw || '').replace(/^№+/i,'').trim();
+    const displayTitle = (parts.display || '').replace(/^№+/i,'').trim();
+    const numberPart = (parts.number || rawTitle || '').replace(/^№+/i,'').trim();
+    const customerPart = (parts.customer || '').trim();
+    let orderTitle = '';
+    if(numberPart && customerPart){
+      orderTitle = `${numberPart} ${customerPart}`;
+    } else if(numberPart){
+      orderTitle = numberPart;
+    } else if(customerPart){
+      orderTitle = customerPart;
+    } else {
+      orderTitle = displayTitle || rawTitle || (parts.display || '');
+    }
+
     tr.innerHTML = `
       <td>${entry.order.number}</td>
       <td><button class="order-eye-btn" title="Маршрут заказа">👁</button></td>
-      <td>${parts.display}</td>
+      <td>${orderTitle}</td>
       <td>${renderIndicator('proc')}</td>
       <td>${renderIndicator('shear')}</td>
       <td class="progress-cell">${renderProgress('draw')}</td>
@@ -4233,7 +4343,8 @@ function buildOverviewOrderRanks(byStage){
     tasksForStage.forEach(task=>{
       const idx = posMap.get(task.uid);
       if(idx == null) return;
-      const key = task.parentId || ('no-parent::'+task.orderId);
+      const key = orderKeyForRecord(task);
+      if(!key) return;
       const current = ranks.get(key);
       if(!current
         || stageIdx < current.stageIdx
@@ -4464,7 +4575,7 @@ function updateExcludedAttention(){
   const btn = document.getElementById('showExcluded');
   if(!btn) return;
   const currentStage = document.getElementById('process')?.value || currentProc || '';
-  const count = tasks.filter(t=> t && (!currentStage || t.stage === currentStage) && t.hiddenByState).length;
+  const count = collectExcludedForStage(currentStage).length;
   btn.classList.toggle('attn', count > 0);
 }
 
@@ -4512,7 +4623,20 @@ function setIgnoredStates(list, opts={}){
 
 function collectExcludedForStage(stage){
   const key = stage || document.getElementById('process')?.value || currentProc || '';
-  return tasks.filter(task=> task && task.stage === key && task.hiddenByState);
+  const source = (()=>{
+    if(key === 'orders' || !key){
+      return Array.isArray(allTasksFromState) && allTasksFromState.length ? allTasksFromState : tasks;
+    }
+    if(Array.isArray(tasks) && tasks.length && tasks[0]?.stage === key){
+      return tasks;
+    }
+    return Array.isArray(allTasksFromState) ? allTasksFromState : tasks;
+  })();
+  if(!Array.isArray(source) || !source.length) return [];
+  if(!key || key === 'orders'){
+    return source.filter(task=> task && task.hiddenByState);
+  }
+  return source.filter(task=> task && task.stage === key && task.hiddenByState);
 }
 
 function renderIgnoredStatesDialog(){
@@ -4587,14 +4711,68 @@ function renderExcludedList(){
     tbody.appendChild(tr);
     return;
   }
+  if(stage === 'orders'){
+    const grouped = [];
+    const byOrder = new Map();
+    let missingKeyCounter = 0;
+    list.forEach(task=>{
+      const parts = parseOrderParts(task.orderId || '');
+      let mapKey = parts.raw || task.orderId || '';
+      if(!mapKey){
+        mapKey = `__missing__${missingKeyCounter++}`;
+      }
+      let group = byOrder.get(mapKey);
+      if(!group){
+        group = {
+          parts,
+          tasks: [],
+          states: [],
+          stateSeen: new Set()
+        };
+        byOrder.set(mapKey, group);
+        grouped.push(group);
+      }else if(!group.parts?.raw && parts.raw){
+        group.parts = parts;
+      }
+      group.tasks.push(task);
+      const stateLabel = typeof task.state === 'string' ? task.state.trim() : '';
+      const label = stateLabel || '—';
+      if(!group.stateSeen.has(label)){
+        group.stateSeen.add(label);
+        group.states.push(label);
+      }
+    });
+    grouped.forEach((group, idx)=>{
+      const parts = group.parts || {};
+      const numberCell = parts.number || parts.display || parts.raw || group.tasks[0]?.orderId || '—';
+      const customerCell = parts.customer || '';
+      const stateCell = group.states.length ? group.states.join('; ') : '—';
+      const tr = document.createElement('tr');
+      [
+        String(idx + 1),
+        numberCell,
+        customerCell,
+        stateCell
+      ].forEach(text=>{
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    return;
+  }
   list.forEach((task, idx)=>{
     const parts = parseOrderParts(task.orderId || '');
+    const stageTitle = STAGE_TITLE[task.stage] || task.stage || '';
+    const stateLabel = typeof task.state === 'string' ? task.state.trim() : '';
+    const stateText = stageTitle ? (stateLabel ? `${stageTitle} — ${stateLabel}` : stageTitle) : (stateLabel || '—');
     const tr = document.createElement('tr');
     const cells = [
       String(idx + 1),
       parts.number || parts.display || task.orderId || '—',
       parts.customer || '',
-      task.state || '—'
+      stateText
     ];
     cells.forEach(text=>{
       const td = document.createElement('td');
@@ -4716,7 +4894,7 @@ function mapRows(rows, process='bend'){
       if(!orderId || (!sd && !ed)) return null;
       const uid = 'fallback::'+orderId+'::'+process;
       const extraBase = Math.max(0.25,(isFinite(hours)?hours:0)*0.05);
-      const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:roundExtraForStage(process, extraBase),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
+      const rec={uid,orderId,orderNumber:orderId,orderCustomer:'',orderIdentity:'',stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:roundExtraForStage(process, extraBase),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
 
 	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
           if(rec.parentId){
@@ -4734,6 +4912,7 @@ function mapRows(rows, process='bend'){
 
           rec.startDate.setHours(0,0,0,0);
           applyIgnoredStateToTask(rec);
+          ensureOrderIdentity(rec);
       return rec;
     }).filter(Boolean);
   }
@@ -4827,6 +5006,9 @@ function mapRows(rows, process='bend'){
     const rec={
       uid,
       orderId,
+      orderNumber: orderNum,
+      orderCustomer: customer,
+      orderIdentity: '',
       stage:process,
       childId:String(ch[IDX.id]).trim(),
       parentId:pid,
@@ -4845,6 +5027,7 @@ function mapRows(rows, process='bend'){
     };
     rec.startDate.setHours(0,0,0,0);
     applyIgnoredStateToTask(rec);
+    ensureOrderIdentity(rec);
     out.push(rec);
   }
   return out;
@@ -5119,7 +5302,7 @@ function applyEditImmediate(cell, task){
   if(!cell || !task) return false;
   const field = cell.dataset.field;
   const val = cell.textContent.trim();
-  if(field==='orderId'){ if(val) task.orderId=val; }
+  if(field==='orderId'){ if(val) task.orderId=val; ensureOrderIdentity(task); }
   else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=Math.max(0.25,h*0.05); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
   else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=roundExtraForStage(task.stage, e); }
   
@@ -5682,19 +5865,35 @@ function bindOverviewScroll(compact=false){
 
 function mapAllProcessesFromRows(rows){
   const byStage = {}; STAGES.forEach(s=> byStage[s] = mapRows(rows, s));
-  const orders = new Map(); // parentId => {parentId, orderId, stages:{stage:{start,end,hours}}, number}
+  const orders = new Map(); // identityKey => {parentId, orderId, stages:{stage:{start,end,hours}}, number}
   for(const st of STAGES){
     for(const t of byStage[st]){
-      const key = t.parentId || ('no-parent::'+t.orderId);
-      if(!orders.has(key)) orders.set(key,{parentId:key, orderId:t.orderId, stages:{}, number:0});
+      const key = orderKeyForRecord(t);
+      if(!key) continue;
+      if(!orders.has(key)){
+        orders.set(key, {
+          identityKey: key,
+          parentId: t.parentId ? String(t.parentId).trim() : '',
+          orderId: t.orderId,
+          orderNumber: t.orderNumber || '',
+          orderCustomer: t.orderCustomer || '',
+          orderIdentity: key,
+          stages:{},
+          number:0
+        });
+      }
+      const orderInfo = orders.get(key);
+      if(!orderInfo.parentId && t.parentId) orderInfo.parentId = String(t.parentId).trim();
+      if(!orderInfo.orderId && t.orderId) orderInfo.orderId = t.orderId;
+      if(!orderInfo.orderNumber && t.orderNumber) orderInfo.orderNumber = t.orderNumber;
+      if(!orderInfo.orderCustomer && t.orderCustomer) orderInfo.orderCustomer = t.orderCustomer;
+      ensureOrderIdentity(orderInfo);
 
       const hours=(+t.hours||0)+(+t.extraHours||0);
 
-      // 1) плановые даты из маршрута/CSV
       let startPlanned = t.route?.[st]?.start || t.startDate || null;
       let endPlanned   = t.route?.[st]?.end   || t.endDate   || null;
 
-      // 2) если этап совпадает с выбранным в UI — берём ФАКТ из allocate (как в Ганте)
       if (st === $("#process").value && schedule?.perTask) {
         const fact = schedule.perTask.get(t.uid);
         if (fact && Array.isArray(fact.segments) && fact.segments.length){
@@ -5703,16 +5902,11 @@ function mapAllProcessesFromRows(rows){
         }
       }
 
-
-      // 3) поверх — возможные ручные правки пользователя (overrides)
       const ovr = routeOverrides.get(`${t.parentId}::${st}`);
 
-      // --- агрегируем этап по РОДИТЕЛЮ: сумма часов, мин(старт), макс(конец) ---
-      // 1) базовые (план/маршрут)
       let sEff = startPlanned;
       let eEff = endPlanned;
 
-      // 2) если этот передел выбран в UI — берём ФАКТ из allocate (как в Ганте) по этой дочке
       if (st === $("#process").value && schedule?.perTask) {
         const fact = schedule.perTask.get(t.uid);
         if (fact && Array.isArray(fact.segments) && fact.segments.length){
@@ -5721,32 +5915,30 @@ function mapAllProcessesFromRows(rows){
         }
       }
 
-      // 3) учтём пользовательские правки (overrides) на уровне родителя::этап
       if (ovr?.start) sEff = new Date(ovr.start);
       if (ovr && 'end' in ovr) eEff = ovr.end ? new Date(ovr.end) : null;
 
-      // 4) накопительный объект по родителю
-      const agg = orders.get(key).stages[st] || {start:null,end:null,hours:0};
+      const agg = orderInfo.stages[st] || {start:null,end:null,hours:0};
       agg.hours += (+hours||0);
       if (sEff && (!agg.start || sEff < agg.start)) agg.start = new Date(sEff);
       if (eEff && (!agg.end   || eEff > agg.end))   agg.end   = new Date(eEff);
-      orders.get(key).stages[st] = agg;
+      orderInfo.stages[st] = agg;
 
     }
   }
-  
-  // === Поверх: фактические даты из allocate по текущему выбранному этапу (агрегация по всем дочкам родителя)
+
   if(schedule && schedule.perTask){
-    const cur = $("#process").value; // bend/laser/...
-    // сгруппируем все дочерние задачи текущего этапа по parentId из активного списка (tasks)
-    const byParent = new Map();
+    const cur = $("#process").value;
+    const byIdentity = new Map();
     tasks.forEach(t=>{
       if(t.stage===cur){
-        if(!byParent.has(t.parentId)) byParent.set(t.parentId, []);
-        byParent.get(t.parentId).push(t.uid);
+        const key = orderKeyForRecord(t);
+        if(!key) return;
+        if(!byIdentity.has(key)) byIdentity.set(key, []);
+        byIdentity.get(key).push(t.uid);
       }
     });
-    for(const [pid,uids] of byParent.entries()){
+    for(const [key,uids] of byIdentity.entries()){
       let sMin=null, sMax=null;
       uids.forEach(uid=>{
         const fact = schedule.perTask.get(uid);
@@ -5757,7 +5949,7 @@ function mapAllProcessesFromRows(rows){
         if(!sMax || locMax > sMax) sMax = locMax;
       });
       if(sMin || sMax){
-        const o = orders.get(pid);
+        const o = orders.get(key);
         if(o){
           const seg = o.stages[cur] || {start:null,end:null,hours:0};
           if(sMin) seg.start = sMin;
@@ -5775,14 +5967,32 @@ function mapAllProcessesFromRows(rows){
 
 // fallback: когда нет lastRows (работаем только по текущим tasks)
 function mapOrdersFromTasks(ts){
-  const orders = new Map(); // key = parentId || 'no-parent::<orderId>'
+  const orders = new Map(); // key = stable identity
   const fallbackByOrder = new Map(); // key -> Map(stage -> [routeSeg,...])
 
   for(const t of ts){
     if(!t) continue;
-    const key = t.parentId || ('no-parent::'+t.orderId);
-    if(!orders.has(key)) orders.set(key, { parentId:key, orderId:t.orderId, stages:{}, number:0 });
+    const key = orderKeyForRecord(t);
+    if(!key) continue;
+    if(!orders.has(key)){
+      orders.set(key, {
+        identityKey: key,
+        parentId: t.parentId ? String(t.parentId).trim() : '',
+        orderId: t.orderId,
+        orderNumber: t.orderNumber || '',
+        orderCustomer: t.orderCustomer || '',
+        orderIdentity: key,
+        stages:{},
+        number:0
+      });
+    }
     const order = orders.get(key);
+
+    if(!order.parentId && t.parentId) order.parentId = String(t.parentId).trim();
+    if(!order.orderId && t.orderId) order.orderId = t.orderId;
+    if(!order.orderNumber && t.orderNumber) order.orderNumber = t.orderNumber;
+    if(!order.orderCustomer && t.orderCustomer) order.orderCustomer = t.orderCustomer;
+    ensureOrderIdentity(order);
 
     if(t.stage){
       const stage = t.stage;
@@ -5980,11 +6190,13 @@ function renderOverview(){
   let orders = mapOrdersFromTasks(activeTasks);
   const doneStageKeys = collectDoneStageKeys();
 
-  const rankByParent = buildOverviewOrderRanks(byStage);
-  if(rankByParent.size){
+  const rankByIdentity = buildOverviewOrderRanks(byStage);
+  if(rankByIdentity.size){
     orders.sort((a,b)=>{
-      const aRank = rankByParent.get(a.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
-      const bRank = rankByParent.get(b.parentId) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      const aKey = orderKeyForRecord(a);
+      const bKey = orderKeyForRecord(b);
+      const aRank = (aKey && rankByIdentity.get(aKey)) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
+      const bRank = (bKey && rankByIdentity.get(bKey)) || { stageIdx:Number.MAX_SAFE_INTEGER, pos:Number.MAX_SAFE_INTEGER };
       if(aRank.stageIdx !== bRank.stageIdx) return aRank.stageIdx - bRank.stageIdx;
       if(aRank.pos !== bRank.pos) return aRank.pos - bRank.pos;
       return a.orderId.localeCompare(b.orderId);
@@ -5997,7 +6209,7 @@ function renderOverview(){
   // применим несохранённые правки поверх
   for(const [k,ov] of routeEditsWorking.entries()){
     const [pid, st] = k.split('::');
-    const o = orders.find(x=>x.parentId===pid);
+    const o = orders.find(x=>x.parentId===pid || orderKeyForRecord(x)===pid || x.identityKey===pid);
     if(o && o.stages[st]){
       if(ov.start) o.stages[st].start = new Date(ov.start);
       if('end' in ov) o.stages[st].end = ov.end ? new Date(ov.end) : null;
@@ -6944,15 +7156,43 @@ function importStateFromCSV(text){
    ИМПОРТ / ДЕЛЬТА (с превью и откатом)
 ========= */
 function buildDeltaPreview(current, incoming){
-  const curBy = new Map(current.map(t=>[t.uid,t]));
-  const inBy  = new Map(incoming.map(t=>[t.uid,t]));
+  const keyFor = task => {
+    if(!task) return '';
+    const identity = orderKeyForRecord(task);
+    const stage = task.stage || '';
+    if(identity){
+      return `${identity}::${stage}`;
+    }
+    return task.uid || '';
+  };
+
+  const curBy = new Map();
+  current.forEach(task => {
+    const key = keyFor(task);
+    if(!key) return;
+    if(!curBy.has(key)) curBy.set(key, task);
+  });
+
+  const inBy = new Map();
+  incoming.forEach(task => {
+    const key = keyFor(task);
+    if(!key) return;
+    if(!inBy.has(key)) inBy.set(key, task);
+  });
   const added=[], removed=[], changed=[], toDone=[];
+  const matched = new Set();
 
   incoming.forEach(n=>{
     if(isDoneStatus(n.status)){ toDone.push(n); return; }
-    if(!curBy.has(n.uid)){ added.push(n); }
+    const key = keyFor(n);
+    const currentMatch = key ? curBy.get(key) : null;
+    if(!currentMatch){
+      added.push(n);
+      if(key) matched.add(key);
+    }
     else{
-      const c=curBy.get(n.uid);
+      matched.add(key);
+      const c=currentMatch;
       const diff = [];
       if((c.hours||0)!==(n.hours||0)) diff.push('часы');
       const sd1=c.startDate?+c.startDate:0, sd2=n.startDate?+n.startDate:0;
@@ -6964,7 +7204,11 @@ function buildDeltaPreview(current, incoming){
       if(diff.length) changed.push({from:c,to:n,fields:diff});
     }
   });
-  current.forEach(c=>{ if(!inBy.has(c.uid)) removed.push(c); });
+  current.forEach(c=>{
+    const key = keyFor(c);
+    if(key && (matched.has(key) || inBy.has(key))) return;
+    removed.push(c);
+  });
   return {added, removed, changed, toDone};
 }
 
@@ -7361,12 +7605,14 @@ function buildStateObject(){
     };
   };
   const t = mergedTasks.map(x=>{
+    const identity = ensureOrderIdentity(x);
     const doneWhenIso = toIso(x.doneMeta?.when || (x.route?.[x.stage]?.doneAt ?? ''));
     const doneMetaOut = doneWhenIso
       ? { when: doneWhenIso, source: x.doneMeta?.source || '' }
       : null;
     return {
-      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+      uid:x.uid, orderId:x.orderId, orderNumber:x.orderNumber||'', orderCustomer:x.orderCustomer||'', orderIdentity: identity,
+      stage:x.stage, childId:x.childId, parentId:x.parentId,
       hours:x.hours, extraHours:x.extraHours,
       startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
       startMissing:!!x.startMissing, endMissing:!!x.endMissing,
@@ -7388,21 +7634,29 @@ function buildStateObject(){
       doneMeta: doneMetaOut
     };
   });
-  const done = doneTasks.map(x=>({
-    uid:x.uid, orderId:x.orderId, stage:x.stage||'',
-    parentId:x.parentId||'', childId:x.childId||'',
-    hours:x.hours, extra:x.extra,
-    start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-    when:x.when?x.when.toISOString():'', doneAt:x.doneAt?x.doneAt.toISOString():'', source:x.source||''
-  }));
+  const done = doneTasks.map(x=>{
+    const identity = ensureOrderIdentity(x);
+    return {
+      uid:x.uid, orderId:x.orderId, orderNumber:x.orderNumber||'', orderCustomer:x.orderCustomer||'', orderIdentity: identity,
+      stage:x.stage||'',
+      parentId:x.parentId||'', childId:x.childId||'',
+      hours:x.hours, extra:x.extra,
+      start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
+      when:x.when?x.when.toISOString():'', doneAt:x.doneAt?x.doneAt.toISOString():'', source:x.source||''
+    };
+  });
 
-  const trashArr = trash.map(x=>({
-    uid:x.uid, orderId:x.orderId, stage:x.stage||'',
-    parentId:x.parentId||'', childId:x.childId||'',
-    hours:x.hours, extra:x.extra,
-    start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-    when:x.when?x.when.toISOString():'', source:x.source||''
-  }));
+  const trashArr = trash.map(x=>{
+    const identity = ensureOrderIdentity(x);
+    return {
+      uid:x.uid, orderId:x.orderId, orderNumber:x.orderNumber||'', orderCustomer:x.orderCustomer||'', orderIdentity: identity,
+      stage:x.stage||'',
+      parentId:x.parentId||'', childId:x.childId||'',
+      hours:x.hours, extra:x.extra,
+      start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
+      when:x.when?x.when.toISOString():'', source:x.source||''
+    };
+  });
 
   const exc=[...exceptions.entries()];
   const res=[...reserves.entries()];
@@ -10011,8 +10265,9 @@ function wireHandlers(){
     const stageKey = $("#process").value;
     const uid='user-'+Date.now()+'::'+stageKey;
     const newExtra = roundExtraForStage(stageKey, Math.max(0.25,1*0.05));
-    const t={uid,orderId:'Новый заказ',stage:stageKey,childId:'',parentId:'',hours:1,extraHours:newExtra,startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
+    const t={uid,orderId:'Новый заказ',orderNumber:'',orderCustomer:'',orderIdentity:'',stage:stageKey,childId:'',parentId:'',hours:1,extraHours:newExtra,startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     applyIgnoredStateToTask(t);
+    ensureOrderIdentity(t);
     tasks.push(t);
     if(lockNewOrders){
       lockedUids.add(uid);
@@ -10027,50 +10282,70 @@ function wireHandlers(){
 
   $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe('ui'); });
 
-  // очистка
-  document.getElementById('clearAll')?.addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-        if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+  function resetPlannerData({ resetSettings = true } = {}){
+    tasks = [];
+    doneTasks = [];
+    exceptions = new Map();
+    reserves = new Map();
+    routeOverrides = new Map();
+    ordersByStage = new Map();
+    lockedUids = new Set();
+    pendingRows = null;
+    lastRows = null;
+    allTasksFromState = null;
+    trash = [];
+    localStorage.removeItem(LS_KEY);
+    lastSerializedState = '';
+    lastImportTime = '';
+    lastManualTime = '';
+    csvFreshnessStr = '—';
+    manualFreshnessStr = '—';
+    stateMeta.csvTimestamp = '';
+    stateMeta.manualTimestamp = '';
+    updateFreshnessUI();
+    updateTrashAttention?.();
 
-	tasks = [];
-	doneTasks = [];
-	exceptions = new Map();
-	reserves = new Map();
-	routeOverrides = new Map();
-	ordersByStage = new Map();
-	lockedUids = new Set();
-	lastRows = null;
-	allTasksFromState = null;
-	trash = [];
-        localStorage.removeItem(LS_KEY);
-        lastSerializedState = '';
-        lastImportTime = '';
-        lastManualTime = '';
-        csvFreshnessStr = '—';
-        manualFreshnessStr = '—';
-        stateMeta.csvTimestamp = '';
-	stateMeta.manualTimestamp = '';
-	updateFreshnessUI();
-	updateTrashAttention?.();
+    if(resetSettings){
+      capByProc      = { ...DEFAULT_CAP };
+      parallelByProc = { ...DEFAULT_PARALLEL };
+      stateMeta.settings = {
+        capacity: { ...capByProc },
+        parallel: { ...parallelByProc },
+        updatedAt: ''
+      };
+    } else {
+      stateMeta.settings = stateMeta.settings || {};
+      stateMeta.settings.capacity = { ...capByProc };
+      stateMeta.settings.parallel = { ...parallelByProc };
+      stateMeta.settings.updatedAt = stateMeta.settings.updatedAt || '';
+    }
 
-        capByProc      = { ...DEFAULT_CAP };
-        parallelByProc = { ...DEFAULT_PARALLEL };
-        stateMeta.settings = {
-          capacity: { ...capByProc },
-          parallel: { ...parallelByProc },
-          updatedAt: ''
-        };
-
-        // обновим UI под текущий выбранный передел
-        const cur = document.getElementById('process').value;
-        adjustUIForProcess(cur);
-        renderSystemSettingsUI();
+    // обновим UI под текущий выбранный передел
+    const cur = document.getElementById('process').value;
+    adjustUIForProcess(cur);
+    renderSystemSettingsUI();
 
     persistNow();
     recompute();
     if(!remoteSyncEnabled()){
       setDataMode(enableLocalStore ? 'local' : 'session');
     }
+  }
+
+  // очистка
+  document.getElementById('clearAll')?.addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+
+    resetPlannerData();
+  });
+
+  document.getElementById('importCsvBtn')?.addEventListener('click', ()=>{
+    if(!userCanEdit()){ notifyReadOnly(); return; }
+    if(!confirm('Очистить текущие данные перед импортом нового файла CSV?')) return;
+
+    resetPlannerData();
+    document.getElementById('file')?.click();
   });
 
   // автосохранение / ручное сохранение
@@ -10198,6 +10473,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(keep.has(n.uid) && keep.get(n.uid)==='add') return; // пользователь хочет удалить — уже удалено restoreState-ом
             if(!byId.has(n.uid)){
               applyIgnoredStateToTask(n);
+              ensureOrderIdentity(n);
               tasks.push(n);
               byId.set(n.uid, tasks.length-1);
             }
@@ -10220,8 +10496,12 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
               t.state=to.state||t.state;
               t.status=to.status||t.status;
               t.orderId=to.orderId||t.orderId;
+              t.orderNumber = to.orderNumber || t.orderNumber || '';
+              t.orderCustomer = to.orderCustomer || t.orderCustomer || '';
+              t.orderIdentity = to.orderIdentity || t.orderIdentity || '';
               t.route=to.route||t.route;
               applyIgnoredStateToTask(t);
+              ensureOrderIdentity(t);
             }
           });
           // toDone — опять увести в архив, если пользователь не отметил «вернуть»
