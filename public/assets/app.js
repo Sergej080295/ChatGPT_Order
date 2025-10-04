@@ -72,12 +72,11 @@
 
     const response = await fetch(url, fetchOptions);
 
-    if (response.status === 401) {
+    if (response.status === 401 && !options.allowUnauthorized) {
       state.user = null;
       if (!options.silent) {
         window.location.href = '/';
       }
-      throw new Error('unauthorized');
     }
 
     if (options.raw) {
