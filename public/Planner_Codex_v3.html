@@ -1796,6 +1796,37 @@ function applySyncSpeed(mode, opts={}){
   }
 }
 
+function toggleCsvUi(visible){
+  const importBtn = $('#importCsvBtn');
+  if(importBtn){
+    importBtn.style.display = visible ? '' : 'none';
+    importBtn.disabled = !visible;
+  }
+  const undoBtn = $('#undoImport');
+  if(undoBtn){
+    undoBtn.style.display = visible ? '' : 'none';
+    undoBtn.disabled = !visible;
+  }
+  const importStateInput = $('#stateFile');
+  const importStateLabel = importStateInput ? importStateInput.closest('label') : null;
+  if(importStateLabel){
+    importStateLabel.style.display = visible ? '' : 'none';
+  }
+  if(importStateInput){
+    importStateInput.disabled = !visible;
+    if(!visible){
+      importStateInput.value = '';
+    }
+  }
+  const csvFileInput = $('#file');
+  if(csvFileInput){
+    csvFileInput.disabled = !visible;
+    if(!visible){
+      csvFileInput.value = '';
+    }
+  }
+}
+
 function applyDataSourceMode(mode, opts={}){
   const next = mode === 'csv' ? 'csv' : 'crm';
   dataSourceMode = next;
@@ -1812,6 +1843,7 @@ function applyDataSourceMode(mode, opts={}){
     if(!opts.skipStorage){
       applyStoragePrefs({ remote:true });
     }
+    toggleCsvUi(false);
   }else{
     if(!enableLocalStore){ enableLocalStore = true; }
     window.PLANNER_STATE_ENDPOINT = '';
@@ -1821,6 +1853,7 @@ function applyDataSourceMode(mode, opts={}){
     if(!opts.skipStorage){
       applyStoragePrefs({ local:true, remote:false });
     }
+    toggleCsvUi(true);
   }
   const remBox = $('#storageRemote');
   if(remBox){
