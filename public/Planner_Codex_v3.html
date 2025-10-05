@@ -547,7 +547,7 @@ body.overview-fs-active{overflow:hidden}
     </label>
 
     <div class="tools">
-      <button id="importCsvBtn" class="btn">Импорт (.csv)</button>
+      <button id="importCsvBtn" class="btn" data-mode-visible="csv">Импорт (.csv)</button>
       <input id="file" type="file" accept=".csv" style="display:none">
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
@@ -563,12 +563,12 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
-      <button id="undoImport" class="btn">Откат импорта</button>
-          <button id="exportCSV" class="btn">Экспорт (.csv)</button>
-	  <label class="btn">Импорт состояния
-	    <input id="stateFile" type="file" accept=".csv" style="display:none">
-	  </label>
-      <button id="clearAll" class="btn">Очистить</button>
+      <button id="undoImport" class="btn" data-mode-visible="csv">Откат импорта</button>
+          <button id="exportCSV" class="btn" data-mode-visible="csv">Экспорт (.csv)</button>
+          <label class="btn" data-mode-visible="csv">Импорт состояния
+            <input id="stateFile" type="file" accept=".csv" style="display:none">
+          </label>
+      <button id="clearAll" class="btn" data-mode-visible="csv">Очистить</button>
     </div>
 
     <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
@@ -2264,6 +2264,111 @@ let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
 let crmStageTasks = [];
+const MODE_SCOPED_KEYS = [PLANNER_MODES.csv, PLANNER_MODES.crm];
+function createModeScopedSnapshot(){
+  return {
+    exceptions: [],
+    reserves: [],
+    routeOverrides: [],
+    orders: [],
+    locked: [],
+    ignored: [],
+    stageFilters: {}
+  };
+}
+let modeScopedState = {
+  [PLANNER_MODES.csv]: createModeScopedSnapshot(),
+  [PLANNER_MODES.crm]: createModeScopedSnapshot()
+};
+function captureModeScopedState(mode){
+  const key = MODE_SCOPED_KEYS.includes(mode) ? mode : PLANNER_MODES.csv;
+  const toIso = value => {
+    if(!value) return '';
+    const date = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+  };
+  const snapshot = {
+    exceptions: [...exceptions.entries()],
+    reserves: [...reserves.entries()],
+    routeOverrides: [...routeOverrides.entries()].map(([k,v])=>[
+      k,
+      {
+        start: toIso(v?.start || null),
+        end: toIso(v?.end || null)
+      }
+    ]),
+    orders: [...ordersByStage.entries()],
+    locked: [...lockedUids],
+    ignored: ignoredStates.slice(),
+    stageFilters: Object.fromEntries(stageListFilterByStage.entries())
+  };
+  modeScopedState[key] = snapshot;
+}
+function applyModeScopedState(mode){
+  const key = MODE_SCOPED_KEYS.includes(mode) ? mode : PLANNER_MODES.csv;
+  const snapshot = modeScopedState[key] || createModeScopedSnapshot();
+  exceptions = new Map(Array.isArray(snapshot.exceptions) ? snapshot.exceptions : []);
+  reserves = new Map(Array.isArray(snapshot.reserves) ? snapshot.reserves : []);
+  routeOverrides = new Map((Array.isArray(snapshot.routeOverrides) ? snapshot.routeOverrides : []).map(([k,v])=>{
+    const start = v && v.start ? new Date(v.start) : null;
+    const end = v && v.end ? new Date(v.end) : null;
+    return [k, {
+      start: start && !Number.isNaN(start.getTime()) ? start : null,
+      end: end && !Number.isNaN(end.getTime()) ? end : null
+    }];
+  }));
+  ordersByStage = new Map(Array.isArray(snapshot.orders) ? snapshot.orders : []);
+  lockedUids = new Set(Array.isArray(snapshot.locked) ? snapshot.locked : []);
+  ignoredStates = Array.isArray(snapshot.ignored) ? snapshot.ignored.slice() : [];
+  ignoredStateSet = new Set(ignoredStates);
+  const filterEntries = snapshot.stageFilters && typeof snapshot.stageFilters === 'object'
+    ? Object.entries(snapshot.stageFilters)
+    : [];
+  stageListFilterByStage.clear();
+  filterEntries.forEach(([stage, modeValue])=>{
+    const normalized = ORDER_LIST_FILTERS.has(modeValue) ? modeValue : ORDER_FILTER_DEFAULT;
+    stageListFilterByStage.set(stage, normalized);
+  });
+  refreshIgnoredStateFlags();
+}
+function normalizeModeScopedState(raw){
+  const normalized = {
+    [PLANNER_MODES.csv]: createModeScopedSnapshot(),
+    [PLANNER_MODES.crm]: createModeScopedSnapshot()
+  };
+  if(raw && typeof raw === 'object'){
+    MODE_SCOPED_KEYS.forEach(modeKey => {
+      const source = raw[modeKey];
+      if(!source || typeof source !== 'object') return;
+      normalized[modeKey] = {
+        exceptions: Array.isArray(source.exceptions) ? source.exceptions.slice() : [],
+        reserves: Array.isArray(source.reserves) ? source.reserves.slice() : [],
+        routeOverrides: Array.isArray(source.routeOverrides) ? source.routeOverrides.slice() : [],
+        orders: Array.isArray(source.orders) ? source.orders.slice() : [],
+        locked: Array.isArray(source.locked) ? source.locked.slice() : [],
+        ignored: Array.isArray(source.ignored) ? source.ignored.slice() : [],
+        stageFilters: (source.stageFilters && typeof source.stageFilters === 'object') ? { ...source.stageFilters } : {}
+      };
+    });
+  }
+  return normalized;
+}
+function cloneModeScopedStateForSave(){
+  const result = {};
+  MODE_SCOPED_KEYS.forEach(modeKey => {
+    const snapshot = modeScopedState[modeKey] || createModeScopedSnapshot();
+    result[modeKey] = {
+      exceptions: Array.isArray(snapshot.exceptions) ? snapshot.exceptions.slice() : [],
+      reserves: Array.isArray(snapshot.reserves) ? snapshot.reserves.slice() : [],
+      routeOverrides: Array.isArray(snapshot.routeOverrides) ? snapshot.routeOverrides.slice() : [],
+      orders: Array.isArray(snapshot.orders) ? snapshot.orders.slice() : [],
+      locked: Array.isArray(snapshot.locked) ? snapshot.locked.slice() : [],
+      ignored: Array.isArray(snapshot.ignored) ? snapshot.ignored.slice() : [],
+      stageFilters: (snapshot.stageFilters && typeof snapshot.stageFilters === 'object') ? { ...snapshot.stageFilters } : {}
+    };
+  });
+  return result;
+}
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -2449,6 +2554,14 @@ function refreshPlannerModeUI(){
       radio.parentElement.classList.toggle('muted', radio.disabled);
     }
   });
+  document.querySelectorAll('[data-mode-visible]').forEach(el => {
+    const required = el.getAttribute('data-mode-visible');
+    const shouldShow = !required || required === plannerMode;
+    el.style.display = shouldShow ? '' : 'none';
+    if(el instanceof HTMLButtonElement){
+      el.disabled = !shouldShow || !canEdit;
+    }
+  });
 }
 
 function cloneCrmState(state){
@@ -2565,6 +2678,7 @@ function buildPlannerOrderFromCrm(crmOrder){
       const doneAt = safeDateTimeValue(stage.doneAt);
       if(doneAt) segment.doneAt = doneAt;
     }
+    if(stage.useReserve !== undefined) segment.useReserve = !!stage.useReserve;
     if(stage.comments !== undefined) segment.comments = stage.comments;
     if(stage.id !== undefined) segment.crmStageId = stage.id;
     segment.crmStageName = stage.name || '';
@@ -2614,6 +2728,7 @@ function mergeCrmOrderInto(target, source){
     if(seg.progress != null) existing.progress = seg.progress;
     if(seg.doneAt && (!existing.doneAt || seg.doneAt > existing.doneAt)) existing.doneAt = seg.doneAt;
     if(seg.comments !== undefined && existing.comments === undefined) existing.comments = seg.comments;
+    if(seg.useReserve !== undefined) existing.useReserve = !!seg.useReserve;
     if(!PARALLEL_STAGES.has(stage)){
       const hoursNum = Number(seg.hours);
       if(Number.isFinite(hoursNum)){
@@ -2681,6 +2796,7 @@ function cloneCrmRoute(route){
     if(seg.crmStageId !== undefined) result[stage].crmStageId = seg.crmStageId;
     if(seg.crmStageName !== undefined) result[stage].crmStageName = seg.crmStageName;
     if(seg.crmStageKey !== undefined) result[stage].crmStageKey = seg.crmStageKey;
+    if(seg.useReserve !== undefined) result[stage].useReserve = !!seg.useReserve;
   });
   return result;
 }
@@ -2713,7 +2829,7 @@ function buildCrmStageTask(order, stageKey, segment, meta){
     endMissing: !segment.end,
     state: meta?.lane || order.crm?.lane || order.crm?.status || '',
     status: segment.done ? 'Готово (CRM)' : 'CRM',
-    useReserve: false,
+    useReserve: !!segment.useReserve,
     progress,
     origStartDate: segment.start ? new Date(segment.start) : null,
     route,
@@ -2819,10 +2935,14 @@ function injectCrmTasksIntoCaches(){
     const existing = Array.isArray(ordersByStage.get(stage)) ? ordersByStage.get(stage) : [];
     const filtered = existing.filter(uid => !isCrmTaskUid(uid));
     const stageUids = clones.filter(task => task.stage === stage).map(task => task.uid);
-    ordersByStage.set(stage, filtered.concat(stageUids));
+    const previousCrmOrder = existing.filter(uid => isCrmTaskUid(uid));
+    const preserved = previousCrmOrder.filter(uid => stageUids.includes(uid));
+    const appended = stageUids.filter(uid => !preserved.includes(uid));
+    ordersByStage.set(stage, filtered.concat(preserved, appended));
     if(currentProc === stage){
       const stageTasks = allTasksFromState.filter(task => task && task.stage === stage);
       tasks = stageTasks.map(cloneTaskRecord);
+      sortBySavedOrder(tasks, stage);
       lockedUids = new Set(stageTasks.filter(task => task && task.locked).map(task => task.uid));
     }else{
       stagesDirtyFromRoute.add(stage);
@@ -2862,21 +2982,55 @@ function refreshCrmDerivedData(options={}){
 function applyPlannerMode(mode, options={}){
   const normalized = normalizePlannerMode(mode);
   const prev = plannerMode;
+  captureModeScopedState(prev);
   plannerMode = normalized;
   if(!stateMeta.settings) stateMeta.settings = { capacity: { ...DEFAULT_CAP }, parallel: { ...DEFAULT_PARALLEL }, plannerMode: normalized };
   else stateMeta.settings.plannerMode = normalized;
+  applyModeScopedState(plannerMode);
   refreshPlannerModeUI();
   refreshCrmDerivedData({
     recompute: options.recompute !== false,
     rebuildOverview: options.rebuildOverview !== false,
     allowDuringInit: options.allowDuringInit || false
   });
+  updateStageFilterControls();
   const changed = prev !== normalized;
   if(options.persist && changed){
     try{ persistSharedPreference('plannerMode', 'Режим планировщика', normalized); }
     catch(_err){ /* ignore */ }
   }
   return changed;
+}
+
+function buildCrmUpdateFromTask(task, stage, extras={}){
+  if(!task || !stage || !task.crmMeta) return null;
+  const meta = { ...task.crmMeta };
+  if(!meta.stageKey) meta.stageKey = stage;
+  const seg = task.route?.[stage] || {};
+  const startVal = seg.start instanceof Date ? seg.start : (task.startDate instanceof Date ? task.startDate : null);
+  const endVal = seg.end instanceof Date ? seg.end : (task.endDate instanceof Date ? task.endDate : null);
+  const update = {
+    meta,
+    progress: extras.progress != null ? clampCrmProgress(extras.progress) : clampCrmProgress(task.progress),
+    start: startVal ? new Date(startVal) : null,
+    end: endVal ? new Date(endVal) : null,
+    useReserve: task.useReserve
+  };
+  if('done' in extras){
+    update.done = !!extras.done;
+  }else if(extras.inferDone !== false){
+    update.done = clampProgressValue(task.progress) >= 100 || !!task.isDone;
+  }
+  if('doneAt' in extras){
+    update.doneAt = extras.doneAt;
+  }else if(update.done){
+    const doneSource = extras.doneSource || task.doneMeta?.when || seg.doneAt || null;
+    if(doneSource){
+      const doneMoment = doneSource instanceof Date ? doneSource : new Date(doneSource);
+      if(!Number.isNaN(doneMoment.getTime())) update.doneAt = doneMoment;
+    }
+  }
+  return update;
 }
 
 function applyCrmProgressUpdates(updates){
@@ -2937,25 +3091,51 @@ function applyCrmProgressUpdates(updates){
     if(update.progress != null){
       stageRecord.progress = clampCrmProgress(update.progress);
     }
-    if(update.done){
-      stageRecord.done = true;
-      stageRecord.isReady = true;
-      if(update.doneAt){
-        const doneAt = update.doneAt instanceof Date ? update.doneAt : new Date(update.doneAt);
-        if(!Number.isNaN(doneAt.getTime())) stageRecord.doneAt = doneAt.toISOString();
+    if('start' in update){
+      if(update.start){
+        const start = update.start instanceof Date ? update.start : new Date(update.start);
+        if(!Number.isNaN(start.getTime())) stageRecord.start = start.toISOString();
       }else{
-        stageRecord.doneAt = new Date().toISOString();
+        delete stageRecord.start;
       }
-    }else if(update.done === false){
-      stageRecord.done = false;
-      stageRecord.isReady = false;
-      if(stageRecord.doneAt) delete stageRecord.doneAt;
+    }
+    if('end' in update){
+      if(update.end){
+        const end = update.end instanceof Date ? update.end : new Date(update.end);
+        if(!Number.isNaN(end.getTime())) stageRecord.end = end.toISOString();
+      }else{
+        delete stageRecord.end;
+      }
+    }
+    if('useReserve' in update){
+      stageRecord.useReserve = !!update.useReserve;
+    }
+    if('done' in update){
+      if(update.done){
+        stageRecord.done = true;
+        stageRecord.isReady = true;
+        if(update.doneAt){
+          const doneAt = update.doneAt instanceof Date ? update.doneAt : new Date(update.doneAt);
+          if(!Number.isNaN(doneAt.getTime())) stageRecord.doneAt = doneAt.toISOString();
+        }else{
+          stageRecord.doneAt = new Date().toISOString();
+        }
+      }else{
+        stageRecord.done = false;
+        stageRecord.isReady = false;
+        if(stageRecord.doneAt) delete stageRecord.doneAt;
+      }
     }
     mutated = true;
   });
   if(mutated){
     crmState.updatedAt = new Date().toISOString();
     updateCrmBadge();
+    try{
+      refreshCrmDerivedData({ recompute: false, rebuildOverview: true });
+    }catch(err){
+      console.warn('CRM refresh failed', err);
+    }
   }
 }
 
@@ -4292,12 +4472,15 @@ function applyStageProgress(identity, stage, value, options={}){
   const crmUpdates = [];
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment)=>{
     if(!taskObj || !taskObj.crmMeta) return;
-    crmUpdates.push({
-      meta: { ...taskObj.crmMeta },
-      progress: clampProgressValue(progressValue),
+    const payload = buildCrmUpdateFromTask(taskObj, stage, {
+      progress: progressValue,
       done: !!doneFlag,
-      doneAt: doneFlag && doneMoment ? new Date(doneMoment) : null
+      doneAt: doneFlag && doneMoment ? new Date(doneMoment) : undefined,
+      inferDone: false
     });
+    if(!payload) return;
+    if(!doneFlag && 'doneAt' in payload) delete payload.doneAt;
+    crmUpdates.push(payload);
   };
 
   if(markDone && confirmReadyTimeOn && interactive && !options.skipReadyPrompt){
@@ -6083,35 +6266,43 @@ function applyEditImmediate(cell, task){
   else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=Math.max(0.25,h*0.05); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
   else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=roundExtraForStage(task.stage, e); }
   
-	// --- НАЧАЛО: robust-парсер даты из первой строки ячейки ---
-	else if(field==='startDate'){
-	  // В ячейке может быть "ДД-ММ-ГГГГ\nисх.: ДД-ММ-ГГГГ".
-	  // Берём ТОЛЬКО первую найденную дату.
-	  const txt = cell.textContent || '';
-	  const m = txt.match(/\b(\d{2}[.\-]\d{2}[.\-]\d{4})\b/); // первая дата
-	  const d = m ? parseDate(m[1]) : null;
-
-	  if(d){
-		if(!task.origStartDate) task.origStartDate = task.startDate;  // сохраним исходник один раз
-		task.startDate = d;
-		task.startMissing = false;
-		cell.classList.remove('error');
-
-		// синхронизируем маршрут текущего передела
-		task.route[task.stage] = { ...(task.route[task.stage]||{}), start: d };
-		// если конец раньше старта — подтянем конец к старту (см. безопасный фикс ниже)
-		if(task.endDate && task.endDate < task.startDate){
-		  task.endDate = new Date(task.startDate);
-		  task.endMissing = false;
-		}
-	  } else {
-		cell.classList.add('error');
-	  }
-	}
-	// --- КОНЕЦ замены ---
-  
-  
-  else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null}; }
+  else if(field==='startDate'){
+    const txt = cell.textContent || '';
+    const match = txt.match(/\b(\d{2}[.\-]\d{2}[.\-]\d{4})\b/);
+    const d = match ? parseDate(match[1]) : null;
+    if(d){
+      if(!task.origStartDate) task.origStartDate = task.startDate;
+      if(task.origStartDate instanceof Date && task.startDate instanceof Date && (+task.origStartDate === +task.startDate)){
+        task.origStartDate = task.startDate;
+      }
+      task.startDate = d;
+      task.startMissing = false;
+      cell.classList.remove('error');
+      task.route[task.stage] = { ...(task.route[task.stage]||{}), start: d };
+      if(task.endDate && task.endDate < task.startDate){
+        task.endDate = new Date(task.startDate);
+        task.endMissing = false;
+      }
+      if(isCrmMode()){
+        const update = buildCrmUpdateFromTask(task, task.stage);
+        if(update) applyCrmProgressUpdates([update]);
+      }
+    }else{
+      cell.classList.add('error');
+    }
+  }
+  else if(field==='endDate'){
+    const d=parseDate(val);
+    task.endDate=d||null;
+    task.endMissing=!d;
+    cell.textContent=d?fmtDate(d):'—';
+    cell.classList.toggle('error',!d);
+    task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null};
+    if(isCrmMode()){
+      const update = buildCrmUpdateFromTask(task, task.stage);
+      if(update) applyCrmProgressUpdates([update]);
+    }
+  }
   else if(field==='state'){ task.state = val; applyIgnoredStateToTask(task); }
   else if(field==='progress'){
     const p = parseHours(val);
@@ -6164,7 +6355,14 @@ function renderTasksTable(){
   const includeDone = filterMode !== 'current';
 
   const activeEntriesBase = includeActive
-    ? tasks.map((task, index)=>({ task, index, source:'active' })).filter(entry=> !entry.task.hiddenByState)
+    ? tasks
+        .map((task, index)=>({ task, index, source:'active' }))
+        .filter(entry=>{
+          if(!entry.task || entry.task.hiddenByState) return false;
+          if(entry.task.isDone || isDoneStatus(entry.task.status)) return false;
+          if(clampProgressValue(entry.task.progress) >= 100) return false;
+          return true;
+        })
     : [];
   const filteredActive = orderSearchNormalized
     ? activeEntriesBase.filter(({ task })=> taskMatchesSearch(task))
@@ -6180,6 +6378,13 @@ function renderTasksTable(){
         return task ? { task, doneIndex: idx, source:'done' } : null;
       })
       .filter(Boolean);
+    const doneUidSet = new Set(doneEntries.map(entry => entry?.task?.uid).filter(Boolean));
+    const crmDone = tasks
+      .map(task => task ? cloneTaskRecord(task) : null)
+      .filter(task => task && !task.hiddenByState && !doneUidSet.has(task.uid) && (task.isDone || isDoneStatus(task.status) || clampProgressValue(task.progress) >= 100));
+    if(crmDone.length){
+      crmDone.forEach(task => doneEntries.push({ task, doneIndex: -1, source:'crm-done' }));
+    }
     if(orderSearchNormalized){
       doneEntries = doneEntries.filter(entry => taskMatchesSearch(entry.task));
     }
@@ -6195,7 +6400,7 @@ function renderTasksTable(){
   }
 
   rowsToRender.forEach((entry, visibleIndex)=>{
-    const isDoneRecord = entry.source === 'done';
+    const isDoneRecord = entry.source === 'done' || entry.source === 'crm-done';
     const t = entry.task;
     const taskIndex = isDoneRecord ? -1 : entry.index;
     const status = isDoneRecord ? { text: 'Готово', cls: 'status-done' } : statusForTask(t);
@@ -6256,13 +6461,19 @@ function renderTasksTable(){
       if(!canEdit){
         doneBox.disabled = true;
       } else if(isDoneRecord){
-        doneBox.addEventListener('change', e=>{
-          if(!e.target.checked){
-            restoreDoneRecordAtIndex(entry.doneIndex, stage);
-          } else {
+        if(entry.source === 'done'){
+          doneBox.addEventListener('change', e=>{
+            if(!e.target.checked){
+              restoreDoneRecordAtIndex(entry.doneIndex, stage);
+            } else {
+              e.target.checked = true;
+            }
+          });
+        }else{
+          doneBox.addEventListener('change', e=>{
             e.target.checked = true;
-          }
-        });
+          });
+        }
       } else {
         doneBox.addEventListener('change', e=>{
           if(e.target.checked){
@@ -6355,6 +6566,11 @@ function renderTasksTable(){
       if(allowEdit){
         reserveBox.addEventListener('change', e=>{
           t.useReserve = !!e.target.checked;
+          t.route[t.stage] = { ...(t.route[t.stage]||{}), useReserve: t.useReserve };
+          if(isCrmMode()){
+            const update = buildCrmUpdateFromTask(t, t.stage);
+            if(update) applyCrmProgressUpdates([update]);
+          }
           recompute();
           persistMaybe();
         });
@@ -8348,6 +8564,7 @@ async function importRows(rows){
 ========= */
 const LS_KEY='yougile_planner_state_v5';
 function buildStateObject(){
+  captureModeScopedState(plannerMode);
   const curStage = $("#process").value;
   const combined = new Map();
   tasks.forEach(x=>{ if(x && x.uid) combined.set(x.uid, x); });
@@ -8501,7 +8718,8 @@ function buildStateObject(){
       },
       ignoredStates: ignoredStates.slice(),
       storage: storageMeta
-    }
+    },
+    modeScoped: cloneModeScopedStateForSave()
   };
 }
 
@@ -9393,6 +9611,7 @@ function restoreState(json, opts={}){
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     if(s && typeof s === 'object'){
       setCrmState(s.crm);
+      modeScopedState = normalizeModeScopedState(s.modeScoped);
     }
     const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>{
@@ -9490,6 +9709,10 @@ function restoreState(json, opts={}){
     };
     plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
     stateMeta.settings.plannerMode = plannerMode;
+    if(!s.modeScoped || !s.modeScoped[plannerMode]){
+      captureModeScopedState(plannerMode);
+    }
+    applyModeScopedState(plannerMode);
     renderSystemSettingsUI();
 
     if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
