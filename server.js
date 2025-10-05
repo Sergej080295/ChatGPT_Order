@@ -130,6 +130,8 @@ const CRM_STAGE_LABELS = {
   stage: 'Передел'
 };
 
+const ISO_EPOCH = '1970-01-01T00:00:00.000Z';
+
 const DEFAULT_STATE = {
   t: [],
   orders: [],
@@ -914,15 +916,58 @@ const deriveOrdersFromPlannerState = (stateObj) => {
   return finalizeOrderAggregates(ordersMap);
 };
 
-const safeDate = (value) => {
+const toMillis = (value) => {
   if (!value) return null;
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
+  const time = date.getTime();
+  return Number.isNaN(time) ? null : time;
+};
+
+const safeDate = (value) => {
+  const millis = toMillis(value);
+  if (millis === null) return null;
+  return new Date(millis).toISOString();
+};
+
+const computeBoardAnchorMillis = (board) => {
+  let latest = 0;
+  const consider = (candidate) => {
+    const millis = toMillis(candidate);
+    if (millis !== null && millis > latest) {
+      latest = millis;
+    }
+  };
+
+  (board?.orders || []).forEach((order) => {
+    consider(order.updatedAt);
+    consider(order.createdAt);
+    consider(order.start);
+    consider(order.end);
+    (order.stages || []).forEach((stage) => {
+      consider(stage.updatedAt);
+      consider(stage.dateStart);
+      consider(stage.dateEnd);
+    });
+  });
+
+  return latest;
+};
+
+const computeBoardAnchorIso = (board) => {
+  const millis = computeBoardAnchorMillis(board);
+  if (!millis) {
+    return ISO_EPOCH;
+  }
+  return new Date(millis).toISOString();
 };
 
 const buildPlannerStateFromCrm = (board) => {
-  const nowIso = new Date().toISOString();
+  const anchorIso = computeBoardAnchorIso(board);
+  const anchorMillis = toMillis(anchorIso) ?? 0;
   const tasks = [];
   const perStage = new Map(PLANNER_STAGE_KEYS.map((key) => [key, []]));
 
@@ -958,7 +1003,7 @@ const buildPlannerStateFromCrm = (board) => {
             hours,
             start: startIso,
             end: endIso,
-            ...(stage.isReady ? { doneAt: stage.updatedAt ? safeDate(stage.updatedAt) : nowIso } : {})
+            ...(stage.isReady ? { doneAt: stage.updatedAt ? safeDate(stage.updatedAt) : anchorIso } : {})
           };
         } else {
           stageRoute[key] = null;
@@ -993,7 +1038,7 @@ const buildPlannerStateFromCrm = (board) => {
         locked: false,
         hiddenByState: false,
         doneMeta: stage.isReady || order.isDone
-          ? { when: stage.updatedAt ? safeDate(stage.updatedAt) : nowIso, source: 'crm' }
+          ? { when: stage.updatedAt ? safeDate(stage.updatedAt) : anchorIso, source: 'crm' }
           : null
       };
 
@@ -1017,7 +1062,7 @@ const buildPlannerStateFromCrm = (board) => {
             hours: 0,
             start: startIso,
             end: endIso,
-            ...(order.isDone ? { doneAt: order.updatedAt ? safeDate(order.updatedAt) : nowIso } : {})
+            ...(order.isDone ? { doneAt: order.updatedAt ? safeDate(order.updatedAt) : anchorIso } : {})
           };
         } else {
           stageRoute[key] = null;
@@ -1052,7 +1097,7 @@ const buildPlannerStateFromCrm = (board) => {
         locked: false,
         hiddenByState: false,
         doneMeta: order.isDone
-          ? { when: order.updatedAt ? safeDate(order.updatedAt) : nowIso, source: 'crm' }
+          ? { when: order.updatedAt ? safeDate(order.updatedAt) : anchorIso, source: 'crm' }
           : null
       };
 
@@ -1083,10 +1128,10 @@ const buildPlannerStateFromCrm = (board) => {
     filter: 'all',
     locked: [],
     orders: ordersMatrix,
-    freshness: nowIso,
-    freshnessCsv: nowIso,
+    freshness: anchorIso,
+    freshnessCsv: anchorIso,
     freshnessManual: '',
-    lastImportTime: nowIso,
+    lastImportTime: anchorIso,
     lastManualTime: '',
     autosaveOn: true,
     autoOptimizeOn: true,
@@ -1094,7 +1139,7 @@ const buildPlannerStateFromCrm = (board) => {
     meta: {
       versions: {},
       lastAuthors: {},
-      csvTimestamp: nowIso,
+      csvTimestamp: anchorIso,
       manualTimestamp: '',
       history: [],
       storage: { local: true, remote: true, remotePreferred: true, mode: 'remote' },
@@ -1112,9 +1157,9 @@ const buildPlannerStateFromCrm = (board) => {
     state: JSON.stringify(baseState),
     meta: {
       stage: 'crm-sync',
-      version: Date.now(),
+      version: anchorMillis || 0,
       source: 'crm',
-      generatedAt: nowIso,
+      generatedAt: anchorIso,
       orders: board?.orders?.length ?? 0
     }
   };
@@ -1247,6 +1292,45 @@ const upsertOrder = async (payload, user) => {
 
   let result;
   if (id) {
+    const existingRes = await pool.query(
+      `SELECT id, order_no, title, customer, service_total, lane, is_done, parent_order_id, board_key, notes
+         FROM crm_orders
+        WHERE id = $1 AND deleted_at IS NULL`,
+      [id]
+    );
+    if (existingRes.rowCount === 0) {
+      const notFound = new Error('Order not found');
+      notFound.status = 404;
+      throw notFound;
+    }
+
+    const existingRow = existingRes.rows[0];
+    const existingServiceTotal = existingRow.service_total === null ? null : Number(existingRow.service_total);
+    const existingParentId = existingRow.parent_order_id == null ? null : Number(existingRow.parent_order_id);
+    const existingLane = (existingRow.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
+    const existingNotes = existingRow.notes || null;
+    const existingCustomer = existingRow.customer || null;
+    const nextServiceTotal = numericTotal === null ? null : Number(numericTotal);
+    const nextParentId = parentOrderId == null ? null : Number(parentOrderId);
+    const nextNotes = notes ? notes : null;
+    const nextCustomer = customer ? customer : null;
+
+    const changed = (
+      existingRow.order_no !== orderNo
+      || existingRow.title !== title
+      || existingCustomer !== nextCustomer
+      || existingServiceTotal !== nextServiceTotal
+      || existingLane !== laneValue
+      || boolFrom(existingRow.is_done) !== done
+      || existingParentId !== nextParentId
+      || (existingRow.board_key || 'default') !== board
+      || existingNotes !== nextNotes
+    );
+
+    if (!changed) {
+      return Number(existingRow.id);
+    }
+
     result = await pool.query(
       `UPDATE crm_orders
           SET order_no = $1,
@@ -1263,13 +1347,8 @@ const upsertOrder = async (payload, user) => {
         WHERE id = $12
           AND deleted_at IS NULL
       RETURNING id`,
-      [orderNo, title, customer || null, numericTotal, laneValue, done, parentOrderId || null, board, notes || null, now, user?.email ?? null, id]
+      [orderNo, title, nextCustomer, nextServiceTotal, laneValue, done, nextParentId, board, nextNotes, now, user?.email ?? null, id]
     );
-    if (result.rowCount === 0) {
-      const notFound = new Error('Order not found');
-      notFound.status = 404;
-      throw notFound;
-    }
   } else {
     result = await pool.query(
       `INSERT INTO crm_orders
@@ -1314,21 +1393,66 @@ const upsertOrder = async (payload, user) => {
 const syncStages = async (orderId, stages, user, opts = {}) => {
   if (!Array.isArray(stages)) return;
   const { trimMissing = true } = opts;
-  const existing = await pool.query('SELECT id FROM crm_stages WHERE order_id = $1', [orderId]);
-  const existingIds = new Set(existing.rows.map((row) => row.id));
+  const existingRes = await pool.query(
+    'SELECT id, stage_key, stage_name, hours, date_start, date_end, percent, is_ready FROM crm_stages WHERE order_id = $1',
+    [orderId]
+  );
+  const existingIds = new Set();
+  const existingById = new Map();
+  existingRes.rows.forEach((row) => {
+    existingIds.add(row.id);
+    existingById.set(row.id, row);
+  });
+
   const seenIds = new Set();
+  const pendingBroadcasts = [];
 
   for (const stage of stages) {
     const stageId = stage.id ? Number(stage.id) : null;
     const key = stage.stageKey || stageKeyFromName(stage.stageName || stage.name || '');
-    const name = stage.stageName || stage.name || 'Передел';
-    const hours = numberOrNull(stage.hours ?? stage.value);
-    const startDate = stage.dateStart || stage.start || '';
-    const endDate = stage.dateEnd || stage.end || '';
-    const percent = numberOrNull(stage.percent ?? stage.progress) ?? (boolFrom(stage.isReady ?? stage.done) ? 100 : 0);
+    const nameRaw = stage.stageName || stage.name || CRM_STAGE_LABELS[key] || 'Передел';
+    const name = safeString(nameRaw) || CRM_STAGE_LABELS[key] || 'Передел';
+    const hoursRaw = numberOrNull(stage.hours ?? stage.value);
+    const hoursValue = hoursRaw === null ? null : Number(hoursRaw);
+    const startCandidate = stage.dateStart || stage.start || '';
+    const endCandidate = stage.dateEnd || stage.end || '';
+    const startIso = safeDate(startCandidate);
+    const endIso = safeDate(endCandidate);
+    const normalizedStart = startIso ? startIso.slice(0, 10) : null;
+    const normalizedEnd = endIso ? endIso.slice(0, 10) : null;
     const ready = boolFrom(stage.isReady ?? stage.done);
+    const percentValueRaw = numberOrNull(stage.percent ?? stage.progress);
+    const percentValue = percentValueRaw !== null ? Number(percentValueRaw) : (ready ? 100 : 0);
+    const percentClamped = Number.isFinite(percentValue)
+      ? Math.max(0, Math.min(100, percentValue))
+      : 0;
 
-    if (stageId) {
+    if (stageId && existingById.has(stageId)) {
+      const existingRow = existingById.get(stageId);
+      const existingHours = existingRow.hours === null ? null : Number(existingRow.hours);
+      const existingStart = existingRow.date_start ? existingRow.date_start.toISOString().slice(0, 10) : null;
+      const existingEnd = existingRow.date_end ? existingRow.date_end.toISOString().slice(0, 10) : null;
+      const existingPercent = numberOrNull(existingRow.percent) ?? 0;
+      const existingReady = boolFrom(existingRow.is_ready);
+      const existingKey = existingRow.stage_key;
+      const existingName = safeString(existingRow.stage_name || CRM_STAGE_LABELS[existingKey] || 'Передел') || CRM_STAGE_LABELS[existingKey] || 'Передел';
+
+      const changed = (
+        existingKey !== key
+        || existingName !== name
+        || existingHours !== hoursValue
+        || existingStart !== normalizedStart
+        || existingEnd !== normalizedEnd
+        || existingPercent !== percentClamped
+        || existingReady !== ready
+      );
+
+      seenIds.add(stageId);
+
+      if (!changed) {
+        continue;
+      }
+
       await pool.query(
         `UPDATE crm_stages
             SET stage_key = $1,
@@ -1342,37 +1466,83 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
                 updated_by = $9
           WHERE id = $10
             AND order_id = $11`,
-        [key, name, hours, startDate || null, endDate || null, percent, ready, new Date(), user?.email ?? null, stageId, orderId]
+        [
+          key,
+          name,
+          hoursValue,
+          normalizedStart,
+          normalizedEnd,
+          percentClamped,
+          ready,
+          new Date(),
+          user?.email ?? null,
+          stageId,
+          orderId
+        ]
       );
-      seenIds.add(stageId);
+
+      pendingBroadcasts.push({
+        id: stageId,
+        key,
+        name,
+        hours: hoursValue,
+        start: normalizedStart,
+        end: normalizedEnd,
+        percent: percentClamped,
+        ready
+      });
     } else {
       const inserted = await pool.query(
         `INSERT INTO crm_stages
           (order_id, stage_key, stage_name, hours, date_start, date_end, percent, is_ready, updated_at, updated_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING id`,
-        [orderId, key, name, hours, startDate || null, endDate || null, percent, ready, new Date(), user?.email ?? null]
+        [
+          orderId,
+          key,
+          name,
+          hoursValue,
+          normalizedStart,
+          normalizedEnd,
+          percentClamped,
+          ready,
+          new Date(),
+          user?.email ?? null
+        ]
       );
-      seenIds.add(inserted.rows[0].id);
+      const newId = inserted.rows[0].id;
+      seenIds.add(newId);
+      pendingBroadcasts.push({
+        id: newId,
+        key,
+        name,
+        hours: hoursValue,
+        start: normalizedStart,
+        end: normalizedEnd,
+        percent: percentClamped,
+        ready
+      });
     }
+  }
 
+  pendingBroadcasts.forEach((entry) => {
     broadcastEvent({
       type: 'update',
       entity: 'stage',
-      id: stageId || null,
+      id: entry.id,
       parentId: orderId,
       changed: {
-        stageKey: key,
-        stageName: name,
-        hours,
-        dateStart: startDate || null,
-        dateEnd: endDate || null,
-        percent,
-        isReady: ready
+        stageKey: entry.key,
+        stageName: entry.name,
+        hours: entry.hours,
+        dateStart: entry.start,
+        dateEnd: entry.end,
+        percent: entry.percent,
+        isReady: entry.ready
       },
       by: user?.email ?? null
     });
-  }
+  });
 
   if (trimMissing) {
     for (const id of existingIds) {
