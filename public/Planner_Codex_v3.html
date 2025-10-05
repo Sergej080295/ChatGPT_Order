@@ -919,6 +919,12 @@ body.overview-fs-active{overflow:hidden}
         </div>
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
+        <div class="muted small">Режим работы Планировщика:</div>
+        <label class="small"><input type="radio" name="plannerMode" value="csv"> CSV (импорт файла)</label>
+        <label class="small"><input type="radio" name="plannerMode" value="crm"> CRM (синхронизация)</label>
+        <div class="small muted">Режим применяется для всех пользователей и определяет источник данных.</div>
+      </div>
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
@@ -1281,6 +1287,8 @@ const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
 const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
+const PLANNER_MODES = { csv:'csv', crm:'crm' };
+const CRM_TASK_PREFIX = 'crm-task::';
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
   local:{label:'Локальный кэш'},
@@ -1295,6 +1303,8 @@ let currentDataOrigin = 'unknown';
 let lastSerializedState = '';
 let remoteSubscriptionStop = null;
 let preferredStartStage = 'orders';
+let plannerMode = PLANNER_MODES.crm;
+let plannerStateReady = false;
 
 function cloneTaskRecord(task){
   if(!task) return null;
@@ -1327,7 +1337,9 @@ function cloneTaskRecord(task){
     hiddenByState: !!task.hiddenByState,
     doneMeta: task.doneMeta && task.doneMeta.when
       ? { when: new Date(task.doneMeta.when), source: task.doneMeta.source || '' }
-      : (task.doneMeta ? { ...task.doneMeta } : null)
+      : (task.doneMeta ? { ...task.doneMeta } : null),
+    crmMeta: task.crmMeta ? { ...task.crmMeta } : null,
+    crmOrigin: !!task.crmOrigin
   };
   STAGES.forEach(st=>{
     const seg = task.route?.[st];
@@ -1799,6 +1811,7 @@ function applyAccessMode(){
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
   refreshSystemSettingsAccess();
   refreshNewOrderPrefUI();
+  refreshPlannerModeUI();
 }
 
 function setAccessMode(mode, opts={}){
@@ -2157,8 +2170,29 @@ async function bootstrapState(){
     adjustUIForProcess(st);
     const prefs = loadUiPreferences();
     applyUiPreferences(prefs);
-    recompute();
+    const initialMode = normalizePlannerMode(stateMeta.settings?.plannerMode || determinePlannerModeFallback());
+    plannerMode = initialMode;
+    if(!stateMeta.settings){
+      stateMeta.settings = {
+        capacity: { ...DEFAULT_CAP },
+        parallel: { ...DEFAULT_PARALLEL },
+        plannerMode: initialMode,
+        updatedAt: ''
+      };
+    }else{
+      stateMeta.settings.plannerMode = initialMode;
+    }
+    refreshPlannerModeUI();
+    plannerStateReady = true;
+    try{
+      refreshCrmDerivedData({ allowDuringInit:true });
+    }catch(err){
+      console.warn('initial CRM refresh failed', err);
+    }
     setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
+  }
+  if(!plannerStateReady){
+    plannerStateReady = true;
   }
   updateRealtimeMode();
 }
@@ -2195,7 +2229,8 @@ let stateMeta = {
   history:[],
   settings:{
     capacity: { ...DEFAULT_CAP },
-    parallel: { ...DEFAULT_PARALLEL }
+    parallel: { ...DEFAULT_PARALLEL },
+    plannerMode: plannerMode
   },
   ignoredStates: []
 };
@@ -2228,6 +2263,7 @@ let lastManualTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
+let crmStageTasks = [];
 let activityLog = [];
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
@@ -2385,6 +2421,36 @@ function normalizeCrmState(raw){
   };
 }
 
+function normalizePlannerMode(value){
+  if(!value) return PLANNER_MODES.csv;
+  const trimmed = String(value).trim().toLowerCase();
+  return trimmed === PLANNER_MODES.crm ? PLANNER_MODES.crm : PLANNER_MODES.csv;
+}
+
+function determinePlannerModeFallback(){
+  if(crmState && Array.isArray(crmState.boards) && crmState.boards.length){
+    return PLANNER_MODES.crm;
+  }
+  return PLANNER_MODES.csv;
+}
+
+function isCrmMode(){
+  return plannerMode === PLANNER_MODES.crm;
+}
+
+function refreshPlannerModeUI(){
+  const radios = document.querySelectorAll('input[name="plannerMode"]');
+  const canEdit = userCanEdit();
+  radios.forEach(radio => {
+    if(!(radio instanceof HTMLInputElement)) return;
+    radio.checked = (radio.value === plannerMode);
+    radio.disabled = !canEdit;
+    if(radio.parentElement){
+      radio.parentElement.classList.toggle('muted', radio.disabled);
+    }
+  });
+}
+
 function cloneCrmState(state){
   if(!state || typeof state !== 'object') return { boards: [], currentBoardId: null, updatedAt: '' };
   try{
@@ -2397,6 +2463,7 @@ function cloneCrmState(state){
 function setCrmState(raw){
   crmState = normalizeCrmState(raw);
   updateCrmBadge();
+  refreshCrmDerivedData({ recompute: false, rebuildOverview: plannerStateReady });
   try{
     const processSelect = document.getElementById('process');
     const currentStage = processSelect ? processSelect.value : currentProc;
@@ -2455,7 +2522,8 @@ function buildPlannerOrderFromCrm(crmOrder){
       start: crmOrder.start || '',
       end: crmOrder.end || '',
       notes: crmOrder.notes || '',
-      comments: crmOrder.comments || ''
+      comments: crmOrder.comments || '',
+      boardId: crmOrder.boardId || ''
     }
   };
   if(crmOrder.childIds && Array.isArray(crmOrder.childIds)){
@@ -2467,6 +2535,7 @@ function buildPlannerOrderFromCrm(crmOrder){
   ensureOrderIdentity(order);
 
   const doneStages = new Set();
+  const stageMeta = {};
   const stageList = Array.isArray(crmOrder.stages) ? crmOrder.stages : [];
   stageList.forEach(stage => {
     if(!stage) return;
@@ -2497,12 +2566,24 @@ function buildPlannerOrderFromCrm(crmOrder){
       if(doneAt) segment.doneAt = doneAt;
     }
     if(stage.comments !== undefined) segment.comments = stage.comments;
+    if(stage.id !== undefined) segment.crmStageId = stage.id;
+    segment.crmStageName = stage.name || '';
+    segment.crmStageKey = stageKey;
+    stageMeta[stageKey] = {
+      id: stage.id,
+      name: stage.name || '',
+      stageKey,
+      boardId: crmOrder.boardId || '',
+      orderId: crmOrder.id || '',
+      orderIdentity: crmOrder.orderIdentity || '',
+      lane: crmOrder.lane || crmOrder.status || ''
+    };
     order.stages[stageKey] = segment;
   });
   if(crmOrder.done){
     doneStages.add('ship');
   }
-  return { order, doneStages };
+  return { order, doneStages, stageMeta };
 }
 
 function mergeCrmOrderInto(target, source){
@@ -2544,11 +2625,13 @@ function mergeCrmOrderInto(target, source){
 }
 
 function integrateCrmOrdersIntoAggregated(list, map, doneStageSet){
-  const board = getActiveCrmBoard();
   const activeKeys = new Set();
+  if(!isCrmMode()) return activeKeys;
+  const board = getActiveCrmBoard();
   if(!board) return activeKeys;
   board.orders.forEach(crmOrder => {
-    const built = buildPlannerOrderFromCrm(crmOrder);
+    const enrichedOrder = { ...crmOrder, boardId: board.id };
+    const built = buildPlannerOrderFromCrm(enrichedOrder);
     if(!built) return;
     const { order, doneStages } = built;
     const key = orderKeyForRecord(order);
@@ -2571,6 +2654,309 @@ function integrateCrmOrdersIntoAggregated(list, map, doneStageSet){
     }
   });
   return activeKeys;
+}
+
+function isCrmTask(task){
+  return !!(task && typeof task.uid === 'string' && task.uid.startsWith(CRM_TASK_PREFIX));
+}
+
+function isCrmTaskUid(uid){
+  return typeof uid === 'string' && uid.startsWith(CRM_TASK_PREFIX);
+}
+
+function cloneCrmRoute(route){
+  const result = {};
+  STAGES.forEach(stage => {
+    const seg = route?.[stage];
+    if(!seg) return;
+    result[stage] = {
+      hours: Number(seg.hours)||0,
+      start: seg.start ? new Date(seg.start) : null,
+      end: seg.end ? new Date(seg.end) : null
+    };
+    if(seg.doneAt) result[stage].doneAt = new Date(seg.doneAt);
+    if(seg.progress != null) result[stage].progress = Number(seg.progress)||0;
+    if(seg.done) result[stage].done = !!seg.done;
+    if(seg.comments !== undefined) result[stage].comments = seg.comments;
+    if(seg.crmStageId !== undefined) result[stage].crmStageId = seg.crmStageId;
+    if(seg.crmStageName !== undefined) result[stage].crmStageName = seg.crmStageName;
+    if(seg.crmStageKey !== undefined) result[stage].crmStageKey = seg.crmStageKey;
+  });
+  return result;
+}
+
+function buildCrmStageTask(order, stageKey, segment, meta){
+  if(!order || !stageKey || !segment) return null;
+  const baseHours = Number(segment.hours)||0;
+  const hours = PARALLEL_STAGES.has(stageKey) ? 0 : Math.max(0, baseHours);
+  const startDate = segment.start ? new Date(segment.start) : today0();
+  const endDate = segment.end ? new Date(segment.end) : null;
+  const progress = segment.progress != null ? clampProgressValue(segment.progress) : (segment.done ? 100 : 0);
+  const crmId = order.crm?.id || order.orderIdentity || order.orderId || order.parentId || Math.random().toString(16).slice(2,10);
+  const uidBase = String(crmId).replace(/\s+/g,'_');
+  const uid = `${CRM_TASK_PREFIX}${uidBase}::${stageKey}`;
+  const route = cloneCrmRoute(order.stages || {});
+  const task = {
+    uid,
+    orderId: order.orderId || '',
+    orderNumber: order.orderNumber || '',
+    orderCustomer: order.orderCustomer || '',
+    orderIdentity: order.orderIdentity || '',
+    stage: stageKey,
+    childId: '',
+    parentId: order.parentId || '',
+    hours,
+    extraHours: roundExtraForStage(stageKey, Math.max(0.25, hours * 0.05)),
+    startDate,
+    endDate,
+    startMissing: !segment.start,
+    endMissing: !segment.end,
+    state: meta?.lane || order.crm?.lane || order.crm?.status || '',
+    status: segment.done ? 'Готово (CRM)' : 'CRM',
+    useReserve: false,
+    progress,
+    origStartDate: segment.start ? new Date(segment.start) : null,
+    route,
+    isDone: segment.done || progress >= 100,
+    crmMeta: {
+      boardId: meta?.boardId || '',
+      crmOrderId: meta?.orderId || order.crm?.id || '',
+      orderId: order.orderId || '',
+      orderIdentity: order.orderIdentity || '',
+      stageKey,
+      stageId: meta?.id ?? segment.crmStageId ?? '',
+      stageName: meta?.name || segment.crmStageName || stageKey,
+      lane: meta?.lane || order.crm?.lane || order.crm?.status || ''
+    },
+    crmOrigin: true
+  };
+  if(segment.doneAt){
+    const doneAt = safeDateTimeValue(segment.doneAt);
+    if(doneAt){
+      task.doneMeta = { when: new Date(doneAt), source: 'crm' };
+    }
+  }
+  applyIgnoredStateToTask(task);
+  ensureOrderIdentity(task);
+  return task;
+}
+
+function buildCrmStageTasks(){
+  if(!isCrmMode()) return [];
+  if(!crmState || !Array.isArray(crmState.boards)) return [];
+  const tasks = [];
+  crmState.boards.forEach(board => {
+    if(!board || !Array.isArray(board.orders)) return;
+    board.orders.forEach(order => {
+      if(!order) return;
+      const enrichedOrder = { ...order, boardId: board.id };
+      const built = buildPlannerOrderFromCrm(enrichedOrder);
+      if(!built) return;
+      const { order: plannerOrder, stageMeta } = built;
+      STAGES.forEach(stageKey => {
+        const seg = plannerOrder.stages?.[stageKey];
+        if(!seg) return;
+        const meta = stageMeta?.[stageKey] ? { ...stageMeta[stageKey], boardId: board.id } : { boardId: board.id };
+        const task = buildCrmStageTask(plannerOrder, stageKey, seg, meta);
+        if(task) tasks.push(task);
+      });
+    });
+  });
+  return tasks;
+}
+
+function findCrmStageTaskForIdentity(identity, stage){
+  if(!identity || !stage || !Array.isArray(crmStageTasks) || !crmStageTasks.length) return null;
+  const targetKey = identity.orderKey ? String(identity.orderKey).trim() : '';
+  const targetParent = identity.parentId ? String(identity.parentId).trim() : '';
+  const targetNorm = identity.orderIdNorm || normalizeOrderSearch(identity.orderId || '');
+  for(const task of crmStageTasks){
+    if(!task || task.stage !== stage) continue;
+    const key = orderKeyForRecord(task);
+    if(targetKey && key && key === targetKey) return task;
+    const parent = task.parentId ? String(task.parentId).trim() : '';
+    if(targetParent && parent && parent === targetParent) return task;
+    const norm = normalizeOrderSearch(task.orderId || '');
+    if(targetNorm && norm && norm === targetNorm) return task;
+  }
+  return null;
+}
+
+function purgeCrmTasksFromCaches(){
+  if(Array.isArray(allTasksFromState)){
+    allTasksFromState = allTasksFromState.filter(task => !isCrmTask(task));
+  }
+  STAGES.forEach(stage => {
+    const existing = ordersByStage.get(stage);
+    if(Array.isArray(existing)){
+      ordersByStage.set(stage, existing.filter(uid => !isCrmTaskUid(uid)));
+    }
+  });
+  if(currentProc && STAGES.includes(currentProc)){
+    tasks = tasks.filter(task => !isCrmTask(task));
+    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+  }
+}
+
+function injectCrmTasksIntoCaches(){
+  if(!Array.isArray(crmStageTasks) || !crmStageTasks.length){
+    purgeCrmTasksFromCaches();
+    return;
+  }
+  if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+  allTasksFromState = allTasksFromState.filter(task => !isCrmTask(task));
+  const clones = crmStageTasks.map(task => {
+    const copy = cloneTaskRecord(task);
+    copy.crmMeta = task.crmMeta ? { ...task.crmMeta } : null;
+    copy.crmOrigin = true;
+    if(task.doneMeta && task.doneMeta.when){
+      copy.doneMeta = { when: new Date(task.doneMeta.when), source: task.doneMeta.source || 'crm' };
+    }
+    return copy;
+  });
+  allTasksFromState = allTasksFromState.concat(clones);
+  STAGES.forEach(stage => {
+    const existing = Array.isArray(ordersByStage.get(stage)) ? ordersByStage.get(stage) : [];
+    const filtered = existing.filter(uid => !isCrmTaskUid(uid));
+    const stageUids = clones.filter(task => task.stage === stage).map(task => task.uid);
+    ordersByStage.set(stage, filtered.concat(stageUids));
+    if(currentProc === stage){
+      const stageTasks = allTasksFromState.filter(task => task && task.stage === stage);
+      tasks = stageTasks.map(cloneTaskRecord);
+      lockedUids = new Set(stageTasks.filter(task => task && task.locked).map(task => task.uid));
+    }else{
+      stagesDirtyFromRoute.add(stage);
+    }
+  });
+}
+
+function refreshCrmDerivedData(options={}){
+  const {
+    recompute: shouldRecompute = true,
+    rebuildOverview = true,
+    allowDuringInit = false
+  } = options;
+  if(!plannerStateReady && !allowDuringInit) return;
+  if(!isCrmMode()){
+    purgeCrmTasksFromCaches();
+    if(shouldRecompute) recompute();
+    if(rebuildOverview){
+      if(document.getElementById('process')?.value === OVERVIEW_STAGE){
+        renderOrdersOverviewTable();
+      }
+      rebuildAndRenderMasterRoute();
+    }
+    return;
+  }
+  crmStageTasks = buildCrmStageTasks();
+  injectCrmTasksIntoCaches();
+  if(shouldRecompute) recompute();
+  if(rebuildOverview){
+    if(document.getElementById('process')?.value === OVERVIEW_STAGE){
+      renderOrdersOverviewTable();
+    }
+    rebuildAndRenderMasterRoute();
+  }
+}
+
+function applyPlannerMode(mode, options={}){
+  const normalized = normalizePlannerMode(mode);
+  const prev = plannerMode;
+  plannerMode = normalized;
+  if(!stateMeta.settings) stateMeta.settings = { capacity: { ...DEFAULT_CAP }, parallel: { ...DEFAULT_PARALLEL }, plannerMode: normalized };
+  else stateMeta.settings.plannerMode = normalized;
+  refreshPlannerModeUI();
+  refreshCrmDerivedData({
+    recompute: options.recompute !== false,
+    rebuildOverview: options.rebuildOverview !== false,
+    allowDuringInit: options.allowDuringInit || false
+  });
+  const changed = prev !== normalized;
+  if(options.persist && changed){
+    try{ persistSharedPreference('plannerMode', 'Режим планировщика', normalized); }
+    catch(_err){ /* ignore */ }
+  }
+  return changed;
+}
+
+function applyCrmProgressUpdates(updates){
+  if(!Array.isArray(updates) || !updates.length) return;
+  if(!crmState || !Array.isArray(crmState.boards)) return;
+  let mutated = false;
+  updates.forEach(update => {
+    const meta = update?.meta;
+    if(!meta || !meta.stageKey) return;
+    const stageKey = meta.stageKey;
+    const boards = crmState.boards;
+    let targetOrder = null;
+    for(const board of boards){
+      if(!board || !Array.isArray(board.orders)) continue;
+      if(meta.boardId && board.id !== meta.boardId) continue;
+      targetOrder = board.orders.find(order => {
+        if(!order) return false;
+        if(meta.crmOrderId && order.id === meta.crmOrderId) return true;
+        if(meta.orderIdentity && order.orderIdentity === meta.orderIdentity) return true;
+        if(meta.orderId && order.orderId === meta.orderId) return true;
+        return false;
+      });
+      if(targetOrder) break;
+    }
+    if(!targetOrder){
+      for(const board of boards){
+        if(!board || !Array.isArray(board.orders)) continue;
+        const found = board.orders.find(order => {
+          if(!order) return false;
+          if(meta.crmOrderId && order.id === meta.crmOrderId) return true;
+          if(meta.orderIdentity && order.orderIdentity === meta.orderIdentity) return true;
+          if(meta.orderId && order.orderId === meta.orderId) return true;
+          return false;
+        });
+        if(found){
+          targetOrder = found;
+          break;
+        }
+      }
+    }
+    if(!targetOrder) return;
+    if(!Array.isArray(targetOrder.stages)) targetOrder.stages = [];
+    let stageRecord = targetOrder.stages.find(stage => {
+      const key = stage?.stageKey || mapCrmStageName(stage?.name);
+      return key === stageKey;
+    });
+    if(!stageRecord){
+      stageRecord = {
+        stageKey,
+        name: meta.stageName || stageKey,
+        hours: 0,
+        progress: 0,
+        done: false
+      };
+      targetOrder.stages.push(stageRecord);
+    }
+    if(meta.stageId != null) stageRecord.id = meta.stageId;
+    if(update.progress != null){
+      stageRecord.progress = clampCrmProgress(update.progress);
+    }
+    if(update.done){
+      stageRecord.done = true;
+      stageRecord.isReady = true;
+      if(update.doneAt){
+        const doneAt = update.doneAt instanceof Date ? update.doneAt : new Date(update.doneAt);
+        if(!Number.isNaN(doneAt.getTime())) stageRecord.doneAt = doneAt.toISOString();
+      }else{
+        stageRecord.doneAt = new Date().toISOString();
+      }
+    }else if(update.done === false){
+      stageRecord.done = false;
+      stageRecord.isReady = false;
+      if(stageRecord.doneAt) delete stageRecord.doneAt;
+    }
+    mutated = true;
+  });
+  if(mutated){
+    crmState.updatedAt = new Date().toISOString();
+    updateCrmBadge();
+  }
 }
 
 function normalizeOrderSearch(value){
@@ -3325,6 +3711,7 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
     existing.when = stamp;
     existing.doneAt = stamp;
     if(source) existing.source = source;
+    if(task.crmMeta) existing.crmMeta = { ...task.crmMeta };
     return existing;
   }
   if(orderKey){
@@ -3333,6 +3720,7 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
       existingByStage.when = stamp;
       existingByStage.doneAt = stamp;
       if(source) existingByStage.source = source;
+      if(task.crmMeta) existingByStage.crmMeta = { ...task.crmMeta };
       return existingByStage;
     }
   }
@@ -3359,7 +3747,8 @@ function ensureDoneRecordFromTask(task, source='cascade', when){
     status: task.status || '',
     when: stamp,
     doneAt: stamp,
-    source: source || 'cascade'
+    source: source || 'cascade',
+    crmMeta: task.crmMeta ? { ...task.crmMeta } : null
   };
   ensureOrderIdentity(record);
   doneTasks.push(record);
@@ -3702,7 +4091,7 @@ function renderRouteDialog(context){
       toggle.dataset.progress = formatProgressForInput(toggleProgress);
       toggle.dataset.hasTasks = item.hasDetails ? '1' : '0';
       if(slipSet.has(item.stage)) toggle.dataset.slip = 'true';
-      const canToggle = item.hasDetails || item.done;
+      const canToggle = item.hasDetails || item.done || !!item.seg;
       toggle.setAttribute('aria-disabled', canToggle ? 'false' : 'true');
       toggle.setAttribute('role', 'button');
       toggle.tabIndex = canToggle ? 0 : -1;
@@ -3900,6 +4289,16 @@ function applyStageProgress(identity, stage, value, options={}){
   const summaryRecords = new Map();
   let summaryOrderId = identity?.orderId || '';
   let summaryOrderKey = identity?.orderKey || '';
+  const crmUpdates = [];
+  const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment)=>{
+    if(!taskObj || !taskObj.crmMeta) return;
+    crmUpdates.push({
+      meta: { ...taskObj.crmMeta },
+      progress: clampProgressValue(progressValue),
+      done: !!doneFlag,
+      doneAt: doneFlag && doneMoment ? new Date(doneMoment) : null
+    });
+  };
 
   if(markDone && confirmReadyTimeOn && interactive && !options.skipReadyPrompt){
     const defaultText = fmtDateTimeLocal(completionMoment);
@@ -3924,6 +4323,17 @@ function applyStageProgress(identity, stage, value, options={}){
   const activeMatches = Array.isArray(matches?.active) ? matches.active : [];
   const storedMatches = Array.isArray(matches?.stored) ? matches.stored : [];
   const doneMatches = Array.isArray(matches?.done) ? matches.done : [];
+
+  if(!activeMatches.length && !storedMatches.length && !doneMatches.length && isCrmMode()){
+    ensureAllTasksCache();
+    const crmCandidate = findCrmStageTaskForIdentity(identity, stage);
+    if(crmCandidate){
+      if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+      const clone = cloneTaskRecord(crmCandidate);
+      allTasksFromState.push(clone);
+      storedMatches.push({ task: clone, index: allTasksFromState.length - 1 });
+    }
+  }
 
   if(!activeMatches.length && !storedMatches.length && !doneMatches.length){
     if(!options.silent) alert('Нет данных для выбранного передела.');
@@ -4025,6 +4435,7 @@ function applyStageProgress(identity, stage, value, options={}){
       ensureDoneRecordFromTask(target, source, completionMoment);
       cascadeCompletionForTask(target, { when: completionMoment, updateUI:false });
       removeSet.add(uid);
+      queueCrmUpdate(target, 100, true, completionMoment);
     });
 
     if(!removeSet.size) return false;
@@ -4083,6 +4494,7 @@ function applyStageProgress(identity, stage, value, options={}){
         stored.isDone = false;
         clearCompletionMeta(stored, stage);
         updatedStored.set(uid, stored);
+        queueCrmUpdate(stored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         return;
       }
 
@@ -4105,6 +4517,7 @@ function applyStageProgress(identity, stage, value, options={}){
         clearCompletionMeta(copy, stage);
         allTasksFromState.push(copy);
         updatedStored.set(uid, copy);
+        queueCrmUpdate(copy, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         return;
       }
 
@@ -4128,6 +4541,7 @@ function applyStageProgress(identity, stage, value, options={}){
           allTasksFromState.push(restored);
           updatedStored.set(uid, restored);
           changed = true;
+          queueCrmUpdate(restored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         }
       }
     });
@@ -4246,6 +4660,10 @@ function applyStageProgress(identity, stage, value, options={}){
         }]
       }]
     };
+  }
+
+  if(crmUpdates.length){
+    applyCrmProgressUpdates(crmUpdates);
   }
 
   updateDoneAttention();
@@ -7990,7 +8408,9 @@ function buildStateObject(){
         ship:  serializeRouteSeg(x.route?.ship)
       },
       locked: !!x.locked || lockedUids.has(x.uid),
-      doneMeta: doneMetaOut
+      doneMeta: doneMetaOut,
+      crmMeta: x.crmMeta ? { ...x.crmMeta } : null,
+      crmOrigin: !!x.crmOrigin
     };
   });
   const done = doneTasks.map(x=>{
@@ -8001,7 +8421,8 @@ function buildStateObject(){
       parentId:x.parentId||'', childId:x.childId||'',
       hours:x.hours, extra:x.extra,
       start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-      when:x.when?x.when.toISOString():'', doneAt:x.doneAt?x.doneAt.toISOString():'', source:x.source||''
+      when:x.when?x.when.toISOString():'', doneAt:x.doneAt?x.doneAt.toISOString():'', source:x.source||'',
+      crmMeta: x.crmMeta ? { ...x.crmMeta } : null
     };
   });
 
@@ -8013,7 +8434,8 @@ function buildStateObject(){
       parentId:x.parentId||'', childId:x.childId||'',
       hours:x.hours, extra:x.extra,
       start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
-      when:x.when?x.when.toISOString():'', source:x.source||''
+      when:x.when?x.when.toISOString():'', source:x.source||'',
+      crmMeta: x.crmMeta ? { ...x.crmMeta } : null
     };
   });
 
@@ -8032,7 +8454,8 @@ function buildStateObject(){
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
   stateMeta.settings = {
     capacity: { ...capOut },
-    parallel: { ...parallelOut }
+    parallel: { ...parallelOut },
+    plannerMode: plannerMode
   };
   const storageMeta = {
     local: enableLocalStore,
@@ -8965,6 +9388,7 @@ function setupRealtimeSync(){
 
 function restoreState(json, opts={}){
   try{
+    plannerStateReady = false;
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     if(s && typeof s === 'object'){
@@ -8995,7 +9419,9 @@ function restoreState(json, opts={}){
           pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,     end:x.route.pack.end?new Date(x.route.pack.end):null, doneAt:x.route.pack.doneAt?new Date(x.route.pack.doneAt):null}     : null,
           ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,     end:x.route.ship.end?new Date(x.route.ship.end):null, doneAt:x.route.ship.doneAt?new Date(x.route.ship.doneAt):null}     : null
         },
-        locked: lockedSet.has(x.uid) || !!x.locked
+        locked: lockedSet.has(x.uid) || !!x.locked,
+        crmMeta: x.crmMeta ? { ...x.crmMeta } : null,
+        crmOrigin: !!x.crmOrigin
       };
       if(x.doneMeta && x.doneMeta.when){
         rec.doneMeta = { when: new Date(x.doneMeta.when), source: x.doneMeta.source || '' };
@@ -9017,7 +9443,8 @@ function restoreState(json, opts={}){
       parentId:x.parentId||'', childId:x.childId||'',
       hours:x.hours, extra:x.extra,
       start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
-      when:x.when?new Date(x.when):null, doneAt:x.doneAt?new Date(x.doneAt): (x.when? new Date(x.when): null), source:x.source||''
+      when:x.when?new Date(x.when):null, doneAt:x.doneAt?new Date(x.doneAt): (x.when? new Date(x.when): null), source:x.source||'',
+      crmMeta: x.crmMeta ? { ...x.crmMeta } : null
     }));
 
     trash = (s.trash||[]).map(x=>({
@@ -9058,8 +9485,11 @@ function restoreState(json, opts={}){
     stateMeta.settings = {
       capacity: { ...capByProc },
       parallel: { ...parallelByProc },
+      plannerMode: normalizePlannerMode(metaSettings.plannerMode || s.plannerMode || stateMeta.settings?.plannerMode || determinePlannerModeFallback()),
       updatedAt: typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''
     };
+    plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
+    stateMeta.settings.plannerMode = plannerMode;
     renderSystemSettingsUI();
 
     if(migrated){ try{ persistNow(undefined,{source:'system', announce:false, force:true}); }catch(_){ /* ignore */ } }
@@ -9157,6 +9587,10 @@ function restoreState(json, opts={}){
       }
     }
 
+    refreshPlannerModeUI();
+    plannerStateReady = true;
+    refreshCrmDerivedData({ allowDuringInit:true, recompute:false, rebuildOverview:false });
+
     sortBySavedOrder(tasks, $("#process").value);
     recompute();
     updateTrashAttention?.();
@@ -9166,8 +9600,10 @@ function restoreState(json, opts={}){
     if(priorityElRestore) priorityElRestore.checked = !!priorityChangeLoggingOn;
     const routeElRestore = $("#notifyRouteDates");
     if(routeElRestore) routeElRestore.checked = !!routeDateChangeLoggingOn;
+    refreshCrmDerivedData({ recompute:false, rebuildOverview:true });
   }catch(e){ console.warn('restoreState failed', e); }
   refreshDataModeIndicator();
+  plannerStateReady = true;
 }
 
 function loadStageFromLS(stage){
@@ -9706,6 +10142,7 @@ function persistNow(stageOverride, opts={}){
       settings: {
         capacity: { ...(stateMeta.settings?.capacity || {}) },
         parallel: { ...(stateMeta.settings?.parallel || {}) },
+        plannerMode: stateMeta.settings?.plannerMode || plannerMode,
         updatedAt: stateMeta.settings?.updatedAt || ''
       },
       ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
@@ -9942,6 +10379,7 @@ function persistSystemSettingsChange(entries){
     stateMeta.settings = {
       capacity: { ...DEFAULT_CAP, ...capByProc },
       parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
+      plannerMode: plannerMode,
       updatedAt: timestamp
     };
     persistNow(undefined, {
@@ -9987,10 +10425,12 @@ function persistSharedPreferencesChange(entries){
       stateMeta.settings = {
         capacity: { ...DEFAULT_CAP, ...capByProc },
         parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
+        plannerMode: plannerMode,
         updatedAt: timestamp
       };
     }else{
       stateMeta.settings.updatedAt = timestamp;
+      stateMeta.settings.plannerMode = plannerMode;
     }
     persistNow(undefined, {
       source:'settings',
@@ -10538,6 +10978,22 @@ function wireHandlers(){
     });
   }
 
+  const plannerModeRadios = document.querySelectorAll('input[name="plannerMode"]');
+  if(plannerModeRadios.length){
+    plannerModeRadios.forEach(radio => {
+      radio.addEventListener('change', e=>{
+        if(!(e.target instanceof HTMLInputElement) || !e.target.checked) return;
+        if(!userCanEdit()){
+          refreshPlannerModeUI();
+          notifyReadOnly();
+          return;
+        }
+        applyPlannerMode(e.target.value, { persist:true });
+      });
+    });
+    refreshPlannerModeUI();
+  }
+
   const overviewFilter = $("#ordersOverviewFilter");
   if(overviewFilter){
     overviewFilter.addEventListener('change', ()=> renderOrdersOverviewTable());
@@ -11006,6 +11462,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             renderSystemSettingsUI();
             refreshDataModeIndicator();
             refreshNewOrderPrefUI();
+            refreshPlannerModeUI();
             activateSettingsTab('personal');
             $('#settingsDlg').showModal();
           });

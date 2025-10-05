@@ -868,6 +868,20 @@ function loadDemo(){
 /* === CRM ↔ Planner Sync === */
 const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
 const toastLayer=document.getElementById('toastLayer');
+function positionToastLayer(){
+  if(!toastLayer) return;
+  let offset=20;
+  const header=document.querySelector('header');
+  if(header){
+    const rect=header.getBoundingClientRect();
+    if(rect && !Number.isNaN(rect.bottom)){
+      offset=Math.max(20, rect.bottom + 16);
+    }
+  }
+  toastLayer.style.top=`${offset}px`;
+}
+positionToastLayer();
+window.addEventListener('resize', positionToastLayer);
 let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
@@ -885,6 +899,7 @@ function setCrmAlias(name){
 
 function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
   if(!toastLayer) return;
+  positionToastLayer();
   const toast=document.createElement('div');
   toast.className=`toast ${tone==='success'?'success':tone==='warn'?'warn':tone==='error'?'error':''}`.trim();
   toast.innerHTML=`<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`;
