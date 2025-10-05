@@ -297,7 +297,7 @@ const serializeUser = (row) => {
   return {
     id: row.id,
     email: row.email,
-    name: row.name,
+    name: row.name || row.email || 'Пользователь',
     role: row.role,
   };
 };
@@ -492,14 +492,18 @@ const toIsoString = (value) => {
 
 const cloneRouteMap = (route) => {
   const cloned = {};
-  Object.entries(route).forEach(([key, info]) => {
-    if (!info) return;
-    cloned[key] = {
-      hours: info.hours ?? 0,
-      start: info.start ?? null,
-      end: info.end ?? null,
-      doneAt: info.doneAt ?? null,
-    };
+  CRM_STAGE_KEYS.forEach((key) => {
+    const info = route?.[key];
+    if (info && typeof info === 'object') {
+      cloned[key] = {
+        hours: info.hours ?? 0,
+        start: info.start ?? null,
+        end: info.end ?? null,
+        doneAt: info.doneAt ?? null,
+      };
+    } else {
+      cloned[key] = null;
+    }
   });
   return cloned;
 };
@@ -527,11 +531,14 @@ const buildPlannerStateFromCrm = async (boardKey = 'default') => {
   snapshot.orders.forEach((order) => {
     const orderNumber = order.orderNumber ?? order.order_number ?? '';
     const customer = order.customer ?? '';
-    const orderId = [orderNumber, customer].filter(Boolean).join(' · ') || `Заказ #${order.id}`;
+    const orderId = orderNumber || `Заказ #${order.id}`;
     const orderIdentity = buildOrderIdentityKey(orderNumber, customer) || `order::${order.id}`;
     const stages = Array.isArray(order.stages) ? order.stages : [];
     const stageCount = stages.length;
     const routeBase = {};
+    CRM_STAGE_KEYS.forEach((key) => {
+      routeBase[key] = null;
+    });
 
     stages.forEach((stage) => {
       const stageKey = detectCrmStageKey(stage?.name);
@@ -616,24 +623,26 @@ const buildPlannerStateFromCrm = async (boardKey = 'default') => {
   };
 
   const summaryText = `CRM: ${readyOrders}/${totalOrders} заказов · ${readyStages}/${totalStages} переделов`;
+  const orderEntries = CRM_STAGE_KEYS.map((key) => [key, ordersByStage.get(key) || []]);
+  const defaultStage = orderEntries.find(([, list]) => list.length > 0)?.[0] || 'laser';
 
   const state = {
     source: 'crm',
     boardKey,
     generatedAt: nowIso,
-    process: 'orders',
-    freshness: nowHuman,
+    process: defaultStage,
+    freshness: nowIso,
     freshnessCsv: '',
-    freshnessManual: nowHuman,
+    freshnessManual: nowIso,
     lastImportTime: '',
-    lastManualTime: nowHuman,
+    lastManualTime: nowIso,
     t: tasks,
     done: [],
     trash: [],
     exc: [],
     res: [],
     locked: [],
-    orders: [...ordersByStage.entries()],
+    orders: orderEntries,
     capByProc: { ...CRM_CAPACITY_DEFAULTS },
     parallelByProc: { ...CRM_PARALLEL_DEFAULTS },
     meta: {
@@ -645,9 +654,10 @@ const buildPlannerStateFromCrm = async (boardKey = 'default') => {
       lastChange: {
         summary: summaryText,
         time: nowHuman,
-        stage: 'multi',
+        stage: defaultStage,
         source: 'crm-sync',
         ordersSummary,
+        user: 'CRM',
       },
       settings: {
         capacity: { ...CRM_CAPACITY_DEFAULTS },
@@ -660,6 +670,14 @@ const buildPlannerStateFromCrm = async (boardKey = 'default') => {
         local: false,
         remotePreferred: false,
       },
+      lastAuthors: tasks.length
+        ? {
+            [defaultStage]: {
+              name: 'CRM',
+              at: nowIso,
+            },
+          }
+        : {},
     },
   };
 
@@ -816,6 +834,31 @@ const ensureDatabase = async () => {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query("UPDATE users SET name = CASE WHEN name IS NULL OR name = '' THEN email ELSE name END");
+  await pool.query("UPDATE users SET role = CASE WHEN role IS NULL OR role = '' THEN 'viewer' ELSE role END");
+  await pool.query('UPDATE users SET created_at = COALESCE(created_at, NOW())');
+  await pool.query('UPDATE users SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query("ALTER TABLE users ALTER COLUMN name SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN role SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN created_at SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN updated_at SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'viewer'");
+  const { rows: userConstraints } = await pool.query(`
+    SELECT constraint_name
+    FROM information_schema.table_constraints
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+      AND constraint_type = 'CHECK'
+  `);
+  const hasRoleConstraint = userConstraints.some((row) => row.constraint_name === 'users_role_check');
+  if (!hasRoleConstraint) {
+    await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','worker','viewer'))");
+  }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS crm_orders (

@@ -510,6 +510,23 @@ body.overview-fs-active{overflow:hidden}
 .settings-tab{flex:0 0 auto;padding:6px 14px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#1f2937;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;}
 .settings-tab:hover{border-color:#94a3b8;}
 .settings-tab.active{background:#2563eb;color:#fff;border-color:#2563eb;box-shadow:0 2px 6px rgba(37,99,235,0.3);}
+.crm-auth-overlay{position:fixed;inset:0;background:rgba(15,23,42,.78);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:4000;padding:16px;}
+.crm-auth-overlay.hidden{display:none;}
+.crm-auth-card{background:#fff;border-radius:16px;box-shadow:0 18px 48px rgba(15,23,42,.35);padding:24px;max-width:360px;width:100%;display:flex;flex-direction:column;gap:16px;border:1px solid #d4dbe9;}
+.crm-auth-card h2{margin:0;font-size:18px;color:#0f172a;}
+.crm-auth-card .crm-auth-hint{margin:0;font-size:13px;color:#475569;line-height:1.4;}
+.crm-auth-card form{display:flex;flex-direction:column;gap:12px;}
+.crm-auth-card label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:.04em;}
+.crm-auth-card input{padding:10px 12px;border-radius:12px;border:1px solid #cbd5e1;font-size:14px;}
+.crm-auth-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;}
+.crm-auth-error{min-height:18px;font-size:12px;color:#dc2626;}
+.crm-auth-helpers{font-size:12px;color:#1d4ed8;background:#eff6ff;padding:10px 12px;border-radius:12px;line-height:1.5;}
+.crm-auth-helpers code{background:#e0edff;padding:2px 6px;border-radius:6px;font-family:inherit;font-weight:600;}
+.crm-auth-overlay button{padding:8px 12px;border-radius:10px;border:1px solid #cbd5e1;background:#1d4ed8;color:#fff;font-weight:600;cursor:pointer;transition:transform .1s ease,box-shadow .15s ease;}
+.crm-auth-overlay button:disabled{opacity:.6;cursor:not-allowed;}
+.crm-auth-overlay button.secondary{background:#fff;color:#1f2937;}
+.crm-auth-overlay button:active{transform:translateY(1px);}
+.crm-auth-overlay button:focus-visible{outline:2px solid #1d4ed8;outline-offset:2px;}
 .settings-panels{min-width:320px;}
 .settings-panel{display:none;flex-direction:column;gap:10px;}
 .settings-panel.active{display:flex;}
@@ -536,6 +553,27 @@ body.overview-fs-active{overflow:hidden}
 </style>
 </head>
 <body>
+
+<div id="crmAuthOverlay" class="crm-auth-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="crmAuthTitle">
+  <div class="crm-auth-card">
+    <h2 id="crmAuthTitle">Вход в систему</h2>
+    <p class="crm-auth-hint">Для работы в CRM режиме авторизуйтесь с учётной записью CRM.</p>
+    <div class="crm-auth-helpers">Демо-доступ: <code>admin@example.com</code> / <code>admin123</code></div>
+    <form id="crmAuthForm" novalidate>
+      <label for="crmAuthEmail">Email
+        <input id="crmAuthEmail" name="email" type="email" autocomplete="username" required />
+      </label>
+      <label for="crmAuthPassword">Пароль
+        <input id="crmAuthPassword" name="password" type="password" autocomplete="current-password" required />
+      </label>
+      <div class="crm-auth-error" id="crmAuthError" role="alert"></div>
+      <div class="crm-auth-actions">
+        <button type="button" class="secondary" id="crmAuthFallback">CSV режим</button>
+        <button type="submit" id="crmAuthSubmit">Войти</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <header>
   <nav class="nav-switcher" aria-label="Основная навигация">
@@ -1977,13 +2015,8 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
-  if(payload){
-    const skip = skipRealtimeToastOnce;
-    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
-    if(skipRealtimeToastOnce){
-      skipRealtimeToastOnce = false;
-    }
-  }else{
+  if(!payload){
+    if(crmModeActive) return;
     const skip = skipRealtimeToastOnce;
     fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
       .then(applied=>{
@@ -1991,6 +2024,34 @@ function handleRemoteBridgeEvent(evt){
           skipRealtimeToastOnce = false;
         }
       });
+    return;
+  }
+
+  if(payload && typeof payload === 'object' && payload.type === 'crm-update'){
+    if(crmModeActive){
+      const skip = skipRealtimeToastOnce;
+      loadCrmSnapshot({ preserveProcess:true, skipToasts: skip })
+        .finally(()=>{
+          if(skipRealtimeToastOnce){
+            skipRealtimeToastOnce = false;
+          }
+        });
+    }
+    return;
+  }
+
+  if(crmModeActive){
+    return;
+  }
+
+  const skip = skipRealtimeToastOnce;
+  if(payload && typeof payload === 'object' && payload.type === 'planner-state'){
+    applyStateFromExternal(payload.state, {preserveProcess:true, origin:'remote', skipToasts: skip, meta: payload.meta || null});
+  }else{
+    applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
+  }
+  if(skipRealtimeToastOnce){
+    skipRealtimeToastOnce = false;
   }
 }
 
@@ -2288,6 +2349,113 @@ let plannerSyncSpeed = loadSyncSpeedPreference();
 let crmModeActive = plannerDataSource === 'crm';
 let crmPollTimer = null;
 let crmLastSyncOk = true;
+let crmSessionUser = null;
+let crmAuthOverlayEl = null;
+let crmAuthFormEl = null;
+let crmAuthErrorEl = null;
+let crmAuthSubmitBtn = null;
+let crmAuthFallbackBtn = null;
+let crmAuthEmailInput = null;
+
+function setupCrmAuthUi(){
+  crmAuthOverlayEl = document.getElementById('crmAuthOverlay');
+  crmAuthFormEl = document.getElementById('crmAuthForm');
+  crmAuthErrorEl = document.getElementById('crmAuthError');
+  crmAuthSubmitBtn = document.getElementById('crmAuthSubmit');
+  crmAuthFallbackBtn = document.getElementById('crmAuthFallback');
+  crmAuthEmailInput = document.getElementById('crmAuthEmail');
+  if(crmAuthFormEl){
+    crmAuthFormEl.addEventListener('submit', handleCrmAuthSubmit);
+  }
+  if(crmAuthFallbackBtn){
+    crmAuthFallbackBtn.addEventListener('click', ()=>{
+      hideCrmAuthOverlay();
+      setPlannerDataSource('csv', { force:true, reload:true });
+    });
+  }
+}
+
+function showCrmAuthOverlay(message){
+  if(crmAuthOverlayEl){
+    crmAuthOverlayEl.classList.remove('hidden');
+  }
+  if(crmAuthErrorEl){
+    crmAuthErrorEl.textContent = message || '';
+  }
+  if(crmAuthEmailInput){
+    setTimeout(()=>{ crmAuthEmailInput.focus(); crmAuthEmailInput.select?.(); }, 0);
+  }
+}
+
+function hideCrmAuthOverlay(){
+  if(crmAuthOverlayEl){
+    crmAuthOverlayEl.classList.add('hidden');
+  }
+  if(crmAuthErrorEl){
+    crmAuthErrorEl.textContent = '';
+  }
+}
+
+async function ensureCrmSession(opts={}){
+  if(crmSessionUser){
+    return crmSessionUser;
+  }
+  try{
+    const res = await fetch('/api/auth/me',{ headers:{'Accept':'application/json'}, credentials:'include' });
+    if(!res.ok) throw new Error('unauthorized');
+    const data = await res.json();
+    crmSessionUser = data;
+    hideCrmAuthOverlay();
+    return data;
+  }catch(err){
+    crmSessionUser = null;
+    if(!opts.silent){
+      showCrmAuthOverlay(opts.message || 'Войдите для работы в CRM режиме.');
+    }
+    return null;
+  }
+}
+
+async function handleCrmAuthSubmit(event){
+  event.preventDefault();
+  if(!crmAuthFormEl) return;
+  const formData = new FormData(crmAuthFormEl);
+  const email = String(formData.get('email') || '').trim();
+  const password = String(formData.get('password') || '');
+  if(!email || !password){
+    if(crmAuthErrorEl){ crmAuthErrorEl.textContent = 'Введите email и пароль.'; }
+    return;
+  }
+  if(crmAuthSubmitBtn){ crmAuthSubmitBtn.disabled = true; }
+  if(crmAuthErrorEl){ crmAuthErrorEl.textContent = ''; }
+  try{
+    const res = await fetch('/api/auth/login', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      credentials:'include',
+      body:JSON.stringify({ email, password })
+    });
+    let payload = null;
+    try{ payload = await res.json(); }
+    catch(_){ payload = null; }
+    if(!res.ok){
+      const message = payload?.error || payload?.message || 'Ошибка входа';
+      throw new Error(message);
+    }
+    crmSessionUser = payload;
+    hideCrmAuthOverlay();
+    if(crmModeActive){
+      loadCrmSnapshot({ preserveProcess:true, skipToasts:true }).then(()=>{
+        startCrmPolling();
+      });
+    }
+  }catch(err){
+    if(crmAuthErrorEl){ crmAuthErrorEl.textContent = err.message || 'Не удалось войти.'; }
+  }finally{
+    if(crmAuthSubmitBtn){ crmAuthSubmitBtn.disabled = false; }
+  }
+}
+
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -2353,6 +2521,9 @@ function setPlannerDataSource(mode, opts={}){
   if(plannerDataSource === normalized && !opts.force) return;
   plannerDataSource = normalized;
   saveDataSourcePreference(normalized);
+  if(normalized !== 'crm'){
+    hideCrmAuthOverlay();
+  }
   applyDataSourceMode(opts);
 }
 
@@ -2385,12 +2556,28 @@ function applySyncSpeedPreference(opts={}){
 
 async function loadCrmSnapshot(opts={}){
   if(!crmModeActive) return false;
+  if(!crmSessionUser){
+    const session = await ensureCrmSession({ silent: !!opts.silent });
+    if(!session){
+      crmLastSyncOk = false;
+      return false;
+    }
+  }
   try{
     const res = await fetch('/api/crm/planner_state', {
       headers:{ 'Accept':'application/json' },
       credentials:'include'
     });
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    if(res.status === 401){
+      crmSessionUser = null;
+      crmLastSyncOk = false;
+      await ensureCrmSession({ silent:false, message:'Сессия истекла. Войдите снова.' });
+      return false;
+    }
+    if(!res.ok){
+      const text = await res.text().catch(()=> '');
+      throw new Error(text || `HTTP ${res.status}`);
+    }
     const text = await res.text();
     if(!text) return false;
     let payload = null;
@@ -2404,10 +2591,14 @@ async function loadCrmSnapshot(opts={}){
     });
     setDataMode('crm');
     crmLastSyncOk = true;
+    hideCrmAuthOverlay();
     return true;
   }catch(err){
     console.warn('CRM snapshot fetch failed', err);
     crmLastSyncOk = false;
+    if(!opts.silent){
+      showCrmAuthOverlay(err.message);
+    }
     return false;
   }
 }
@@ -2442,10 +2633,29 @@ function applyDataSourceMode(opts={}){
   if(crmModeActive){
     window.PLANNER_STATE_ENDPOINT = '';
     window.PLANNER_STATE_METHOD = 'PUT';
-    if(!opts.deferLoad){
-      loadCrmSnapshot({ preserveProcess: opts.preserveProcess !== false, skipToasts: !!opts.skipToasts })
-        .then(()=>{ if(opts.startPolling !== false) startCrmPolling(); });
-    }
+    const shouldStartPolling = opts.startPolling !== false;
+    const loadOptions = { preserveProcess: opts.preserveProcess !== false, skipToasts: !!opts.skipToasts };
+    const beginPolling = ()=>{ if(shouldStartPolling){ startCrmPolling(); } };
+    const performLoad = ()=>{
+      loadCrmSnapshot(loadOptions).then(success=>{
+        if(success){
+          beginPolling();
+        }
+      });
+    };
+    ensureCrmSession({ silent: !!opts.deferLoad, message:'Войдите для синхронизации с CRM.' })
+      .then(session=>{
+        if(!session){
+          crmLastSyncOk = false;
+          return;
+        }
+        if(!opts.deferLoad){
+          performLoad();
+        }else{
+          beginPolling();
+        }
+      })
+      .catch(err=>{ console.warn('CRM session check failed', err); });
     applySyncSpeedPreference({ restart:true, deferStart: opts.deferLoad });
   }else{
     if(wasCrm){
@@ -10969,6 +11179,9 @@ document.addEventListener('keydown', e=>{
   }
 });
 document.addEventListener('DOMContentLoaded', ()=>{
+
+  setupCrmAuthUi();
+  ensureCrmSession({ silent:true }).catch(err=> console.warn('CRM session probe failed', err));
 
   applySyncSpeedPreference({ restart:false, deferStart:true });
   applyDataSourceMode({ initial:true, deferLoad:true, updateRealtime:false, startPolling:false, preserveProcess:false, skipToasts:true });
