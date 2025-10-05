@@ -169,7 +169,11 @@ npm start
 8. После входа убедитесь, что CRM-API отвечает:
    ```bash
    curl -i -b cookies.txt http://localhost:3000/api/crm/state
+   curl -i -b cookies.txt -X PUT http://localhost:3000/api/crm/state \
+     -H 'Content-Type: application/json' \
+     -d '{"boardKey":"default","lanes":["Не запланированное","Клиент"],"orders":[]}'
    ```
+   Эндпоинт `PUT /api/crm/state` выполняет атомарную замену списка заказов и переделов (именно его вызывает веб-CRM при каждом сохранении).
 
 ## 8. Эксплуатация и надёжность
 

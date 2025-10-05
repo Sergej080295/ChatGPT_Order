@@ -93,6 +93,22 @@
   .chip.danger{color:#ff9f9f;border-color:#4a1719}
   .chip.ok{color:#b6ff8a;border-color:#173a15}
   body[data-theme="light"] .chip{ color:#0e1320 }
+  .hidden{display:none!important}
+  .auth-overlay{position:fixed;inset:0;background:rgba(9,12,18,.85);display:flex;align-items:center;justify-content:center;z-index:3000}
+  body[data-theme="light"] .auth-overlay{background:rgba(240,244,252,.92)}
+  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px 28px;box-shadow:0 18px 48px rgba(0,0,0,.4);min-width:320px;max-width:360px;display:flex;flex-direction:column;gap:16px}
+  body[data-theme="light"] .auth-card{box-shadow:0 18px 34px rgba(27,92,255,.15)}
+  .auth-card h2{margin:0;font-size:18px}
+  .auth-card .field{display:flex;flex-direction:column;gap:6px}
+  .auth-card .field label{font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.05em}
+  .auth-card .actions{display:flex;gap:8px;justify-content:flex-end}
+  .auth-card .error{color:var(--danger);font-size:12px;min-height:16px}
+  .sync-badge{margin-left:auto;padding:4px 10px;border-radius:999px;border:1px solid rgba(77,163,255,.35);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+  .sync-badge[data-state="ok"]{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.4)}
+  .sync-badge[data-state="saving"],.sync-badge[data-state="loading"]{background:rgba(37,99,235,.12);border-color:rgba(37,99,235,.4)}
+  .sync-badge[data-state="error"]{background:rgba(220,38,38,.12);border-color:rgba(220,38,38,.4)}
+  .sync-badge[data-state="offline"]{background:rgba(234,179,8,.15);border-color:rgba(234,179,8,.5)}
+  .sync-badge[data-state="auth"]{background:rgba(148,163,184,.25);border-color:rgba(148,163,184,.4)}
   .kebab{margin-left:auto}
   .muted{color:var(--muted)}
   .foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
@@ -313,6 +329,7 @@
       <button id="addBoardBtn">+ Доска</button>
       <button id="editBoardBtn">Настроить</button>
       <span class="pill muted" id="stats">—</span>
+      <span id="syncBadge" class="sync-badge" data-state="loading">Синхронизация…</span>
     </div>
     <input id="q" class="grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
     <button id="newOrderBtn" class="primary">+ Заказ</button>
@@ -408,6 +425,24 @@
   </form>
 </dialog>
 
+<div id="authOverlay" class="auth-overlay hidden">
+  <form id="loginForm" class="auth-card">
+    <h2>Вход в систему</h2>
+    <div class="field">
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" name="email" type="email" required autocomplete="username" />
+    </div>
+    <div class="field">
+      <label for="loginPassword">Пароль</label>
+      <input id="loginPassword" name="password" type="password" required autocomplete="current-password" />
+    </div>
+    <div class="error" id="authError"></div>
+    <div class="actions">
+      <button type="submit" class="primary">Войти</button>
+    </div>
+  </form>
+</div>
+
 <script>
 const KEY='mini_crm_v13c';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -418,11 +453,302 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Упаковка','Отгрузка'];
-const defaultBoard=()=>({id:crypto.randomUUID(),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const BOARD_KEY='default';
+const defaultBoard=()=>({id:`board-${BOARD_KEY}`,name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 
-let state=load()??{boards:[defaultBoard()],currentBoardId:null}; if(!state.currentBoardId) state.currentBoardId=state.boards[0].id; save();
-function load(){try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}}
-function save(){localStorage.setItem(KEY,JSON.stringify(state))}
+function loadLocal(){try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}}
+function saveLocal(){try{localStorage.setItem(KEY,JSON.stringify(state))}catch(err){console.warn('local save failed',err)}}
+
+let state=loadLocal()??{boards:[defaultBoard()],currentBoardId:`board-${BOARD_KEY}`};
+if(!state.currentBoardId) state.currentBoardId=state.boards[0].id;
+
+let sessionUser=null;
+let suppressSave=false;
+let initialSyncComplete=false;
+let syncTimer=null;
+let syncInFlight=false;
+let syncQueued=false;
+let lastSyncError=null;
+let sseSource=null;
+let pendingRemoteRefresh=false;
+let authOverlay=null;
+let loginForm=null;
+let authError=null;
+let syncBadge=null;
+
+function save(){
+  saveLocal();
+  if(suppressSave) return;
+  if(!sessionUser) return;
+  if(!initialSyncComplete) return;
+  queueServerSync();
+}
+
+function updateSyncBadge(state,message){
+  if(!syncBadge) return;
+  syncBadge.dataset.state=state;
+  if(message){syncBadge.title=message;}else{syncBadge.removeAttribute('title');}
+  switch(state){
+    case'auth':syncBadge.textContent='Требуется вход';break;
+    case'loading':syncBadge.textContent='Загрузка…';break;
+    case'saving':syncBadge.textContent='Сохранение…';break;
+    case'error':syncBadge.textContent='Ошибка синхронизации';if(message)syncBadge.textContent=`Ошибка: ${message}`;break;
+    case'offline':syncBadge.textContent='Оффлайн режим';break;
+    case'ok':
+    default:
+      syncBadge.textContent='Синхронизировано';
+      break;
+  }
+}
+
+function queueServerSync(){
+  if(syncInFlight){
+    syncQueued=true;
+    return;
+  }
+  if(syncTimer){
+    clearTimeout(syncTimer);
+  }
+  syncTimer=setTimeout(()=>{
+    syncTimer=null;
+    pushStateToServer();
+  },400);
+  updateSyncBadge('saving');
+}
+
+function normalizeMoneyValue(value){
+  if(typeof window._parseMoney==='function'){
+    const parsed=window._parseMoney(value);
+    return parsed===''?null:parsed;
+  }
+  if(value===''||value==null) return null;
+  const cleaned=String(value).replace(/\s+/g,'').replace(',','.');
+  const num=Number(cleaned);
+  return Number.isFinite(num)?num:null;
+}
+
+function serializeStateForServer(){
+  const board=currentBoard();
+  const lanes=(board?.lanes?.length?board.lanes:[...DEFAULT_LANES]).map(x=>String(x)).filter(Boolean);
+  const orders=(board?.orders??[]).map((order)=>{
+    const amount=normalizeMoneyValue(order.serviceTotal);
+    return {
+      id:order.id,
+      title:order.title,
+      orderNo:order.orderNo,
+      customer:order.customer,
+      notes:order.notes,
+      status:order.status,
+      done:!!order.done,
+      progress:Number(order.progress??0),
+      amount,
+      serviceTotal:amount,
+      stages:(order.stages||[]).map((stage,index)=>({
+        id:stage.id,
+        name:stage.name,
+        start:stage.start||'',
+        end:stage.end||'',
+        value:stage.value??'',
+        done:!!stage.done,
+        progress:Number(stage.progress??0),
+        position:index,
+      })),
+    };
+  });
+  return {boardKey:BOARD_KEY,lanes,orders};
+}
+
+function mapStageFromSnapshot(stage,index){
+  if(!stage) return {id:`stage-${index}`,name:`Этап ${index+1}`,start:'',end:'',value:'',done:false,progress:0};
+  const meta=stage.meta||{};
+  const value=meta.sourceValue ?? meta.value ?? meta.hours ?? '';
+  return {
+    id:(meta.clientStageId??stage.id??`stage-${index}`)+'' ,
+    name:stage.name||`Этап ${index+1}`,
+    start:stage.plannedStart?stage.plannedStart.slice(0,10):'',
+    end:stage.plannedEnd?stage.plannedEnd.slice(0,10):'',
+    value:value==null?'':value,
+    done:!!stage.ready,
+    progress:Number(stage.progress??0),
+  };
+}
+
+function mapOrderFromSnapshot(order,lanes){
+  const meta=order.meta||{};
+  const id=meta.clientId?String(meta.clientId):String(order.id);
+  const statusRaw=String(order.state??'').trim();
+  const status=lanes.includes(statusRaw)?statusRaw:lanes[0];
+  const stagesRaw=Array.isArray(order.stages)?order.stages:[];
+  const stages=stagesRaw.map((stage,index)=>mapStageFromSnapshot(stage,index));
+  const mapped={
+    id,
+    title:meta.title||order.orderNumber||`Заказ ${order.id}`,
+    orderNo:order.orderNumber||'',
+    customer:order.customer||'',
+    notes:meta.notes||'',
+    status,
+    done:!!order.ready,
+    progress:Number(order.progress??0),
+    serviceTotal:meta.serviceTotal!=null?meta.serviceTotal:(order.amount!=null?Number(order.amount):''),
+    stages,
+    createdAt:order.createdAt,
+    updatedAt:order.updatedAt,
+  };
+  computeOrderDatesFromStages(mapped);
+  mapped.progress=calcAutoProgress(mapped.stages);
+  return mapped;
+}
+
+async function pushStateToServer(){
+  if(syncInFlight){
+    syncQueued=true;
+    return;
+  }
+  syncInFlight=true;
+  updateSyncBadge('saving');
+  try{
+    const payload=serializeStateForServer();
+    const res=await fetch('/api/crm/state',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(res.status===401){
+      sessionUser=null;
+      updateSyncBadge('auth');
+      showAuthOverlay('Сессия истекла. Войдите заново.');
+      return;
+    }
+    if(!res.ok){
+      const text=await res.text().catch(()=> '');
+      throw new Error(text||`HTTP ${res.status}`);
+    }
+    const snapshot=await res.json();
+    suppressSave=true;
+    applyServerSnapshot(snapshot,{preserveSelection:true});
+    suppressSave=false;
+    initialSyncComplete=true;
+    lastSyncError=null;
+    updateSyncBadge('ok');
+  }catch(err){
+    suppressSave=false;
+    lastSyncError=err;
+    console.error('CRM sync failed',err);
+    updateSyncBadge('error',err.message);
+  }finally{
+    syncInFlight=false;
+    if(syncQueued){
+      syncQueued=false;
+      queueServerSync();
+    }
+  }
+}
+
+function applyServerSnapshot(snapshot,{preserveSelection=false}={}){
+  if(!snapshot||typeof snapshot!=='object') return;
+  const lanes=Array.isArray(snapshot.lanes)&&snapshot.lanes.length?snapshot.lanes.map(x=>String(x)):[...DEFAULT_LANES];
+  const boardId=`board-${snapshot.boardKey||BOARD_KEY}`;
+  const board={id:boardId,name:'Список заказов',lanes:[...lanes],orders:[]};
+  const dialogOpen=typeof orderDlg!=='undefined'&&orderDlg?.open;
+  const activeId=dialogOpen?orderForm.id.value:null;
+  const orders=Array.isArray(snapshot.orders)?snapshot.orders:[];
+  orders.forEach((order)=>{board.orders.push(mapOrderFromSnapshot(order,board.lanes));});
+  state={boards:[board],currentBoardId:board.id};
+  saveLocal();
+  renderAll();
+  if(preserveSelection&&dialogOpen&&activeId){
+    const next=board.orders.find(o=>o.id===activeId);
+    if(next){setTimeout(()=>openOrder(next.id),0);}else{orderDlg.close();}
+  }
+}
+
+async function loadFromServer(opts={}){
+  if(!sessionUser) return false;
+  if(!opts.silent) updateSyncBadge('loading');
+  try{
+    const res=await fetch(`/api/crm/state?board=${encodeURIComponent(BOARD_KEY)}`,{headers:{'Accept':'application/json'}});
+    if(res.status===401){
+      sessionUser=null;
+      updateSyncBadge('auth');
+      showAuthOverlay('Сессия истекла. Войдите заново.');
+      return false;
+    }
+    if(!res.ok){
+      const text=await res.text().catch(()=> '');
+      throw new Error(text||`HTTP ${res.status}`);
+    }
+    const snapshot=await res.json();
+    suppressSave=true;
+    applyServerSnapshot(snapshot,{preserveSelection:opts.preserveSelection});
+    suppressSave=false;
+    initialSyncComplete=true;
+    pendingRemoteRefresh=false;
+    updateSyncBadge('ok');
+    return true;
+  }catch(err){
+    suppressSave=false;
+    lastSyncError=err;
+    console.error('CRM load failed',err);
+    updateSyncBadge('error',err.message);
+    return false;
+  }
+}
+
+async function checkSession(){
+  try{
+    const res=await fetch('/api/auth/me',{headers:{'Accept':'application/json'}});
+    if(!res.ok) throw new Error('unauthorized');
+    sessionUser=await res.json();
+    hideAuthOverlay();
+    updateSyncBadge('loading');
+    return true;
+  }catch(err){
+    sessionUser=null;
+    showAuthOverlay();
+    updateSyncBadge('auth');
+    return false;
+  }
+}
+
+function showAuthOverlay(message){
+  if(authOverlay){authOverlay.classList.remove('hidden');}
+  if(authError){authError.textContent=message||'';}
+}
+
+function hideAuthOverlay(){
+  if(authOverlay){authOverlay.classList.add('hidden');}
+  if(authError){authError.textContent='';}
+}
+
+function shouldDeferServerRefresh(){
+  return (typeof orderDlg!=='undefined'&&orderDlg?.open)||(typeof boardDlg!=='undefined'&&boardDlg?.open)||(typeof splitDlg!=='undefined'&&splitDlg?.open);
+}
+
+function handleSsePayload(payload){
+  if(!payload||typeof payload!=='object') return;
+  if(payload.type==='crm-update'){
+    if(!sessionUser) return;
+    if(shouldDeferServerRefresh()){pendingRemoteRefresh=true;return;}
+    loadFromServer({preserveSelection:false,silent:true});
+  }
+}
+
+function connectSse(){
+  if(!('EventSource'in window)) return;
+  if(sseSource){try{sseSource.close();}catch(_err){}}
+  sseSource=new EventSource('/api/events');
+  sseSource.onmessage=(event)=>{
+    if(!event?.data) return;
+    try{handleSsePayload(JSON.parse(event.data));}
+    catch(err){console.warn('SSE parse failed',err);}
+  };
+  sseSource.onerror=()=>{
+    updateSyncBadge('offline');
+    try{sseSource.close();}catch(_err){}
+    sseSource=null;
+    if(sessionUser){setTimeout(connectSse,5000);}
+  };
+}
 function currentBoard(){return state.boards.find(b=>b.id===state.currentBoardId)}
 
 const THEME_KEY='mini_crm_theme';
@@ -434,6 +760,10 @@ function spanMuted(t){const s=document.createElement('span');s.className='muted'
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
 const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+authOverlay=$('#authOverlay');
+loginForm=$('#loginForm');
+authError=$('#authError');
+syncBadge=$('#syncBadge');
 
 function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
 function renderColumns(){const b=currentBoard();columns.innerHTML='';b.lanes.forEach(l=>{const c=document.createElement('div');c.className='col';c.innerHTML=`<header><h2>${escapeHtml(l)}</h2></header><div class="drop" data-lane="${escapeHtml(l)}"></div>`;columns.appendChild(c)});enableDnd()}
@@ -683,6 +1013,65 @@ $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;tr
 
 $('#exportBtn').insertAdjacentHTML('afterend','<button id="demoBtn" title="Загрузить демо">☆</button>');
 $('#demoBtn').onclick=()=>{loadDemo();save();renderAll();alert('Загружено 12 демо-заказов')};
+
+if(loginForm){
+  loginForm.addEventListener('submit',async e=>{
+    e.preventDefault();
+    const formData=new FormData(loginForm);
+    const email=String(formData.get('email')||'').trim();
+    const password=String(formData.get('password')||'');
+    if(!email||!password){
+      if(authError) authError.textContent='Введите email и пароль';
+      return;
+    }
+    try{
+      if(authError) authError.textContent='';
+      const res=await fetch('/api/auth/login',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Accept':'application/json'},
+        body:JSON.stringify({email,password})
+      });
+      if(!res.ok){
+        const text=await res.text().catch(()=> '');
+        throw new Error(text||`HTTP ${res.status}`);
+      }
+      await res.json().catch(()=>({}));
+      const ok=await checkSession();
+      if(ok){
+        await loadFromServer({preserveSelection:false});
+        connectSse();
+      }
+    }catch(err){
+      console.error('Login failed',err);
+      if(authError) authError.textContent=err?.message?`Ошибка: ${err.message}`:'Не удалось войти';
+    }finally{
+      const pwd=loginForm.querySelector('input[name="password"]');
+      if(pwd) pwd.value='';
+    }
+  });
+}
+
+const dialogCloseHandler=()=>{
+  if(pendingRemoteRefresh){
+    pendingRemoteRefresh=false;
+    loadFromServer({preserveSelection:false});
+  }
+};
+
+if(typeof orderDlg!=='undefined'){orderDlg.addEventListener('close',dialogCloseHandler);}
+if(typeof boardDlg!=='undefined'){boardDlg.addEventListener('close',dialogCloseHandler);}
+if(typeof splitDlg!=='undefined'){splitDlg.addEventListener('close',dialogCloseHandler);}
+
+async function bootstrapCrm(){
+  updateSyncBadge('loading');
+  const ok=await checkSession();
+  if(ok){
+    await loadFromServer({preserveSelection:false});
+    connectSse();
+  }
+}
+
+bootstrapCrm();
 
 function loadDemo(){
   const b=currentBoard(); b.orders=[]; const lanes=b.lanes; const today=new Date(); today.setHours(0,0,0,0);

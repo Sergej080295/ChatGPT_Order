@@ -208,6 +208,18 @@ const CRM_STAGE_MAPPINGS = [
 
 const CRM_STAGE_KEYS = CRM_STAGE_MAPPINGS.map((item) => item.key);
 
+const CRM_DEFAULT_LANES = Object.freeze([
+  'Не запланированное',
+  'Клиент',
+  'Отдел продаж',
+  'Технологи',
+  'Производство',
+  'Закупка',
+  'Упаковка',
+  'Готово (Ож. отгрузки)',
+  'Отгружено',
+]);
+
 const CRM_CAPACITY_DEFAULTS = Object.freeze({
   bend: 15,
   laser: 36,
@@ -374,7 +386,19 @@ const fetchCrmState = async (boardKey = 'default') => {
     stages: stageMap.get(row.id) || [],
   }));
 
-  return { boardKey, orders };
+  let lanes = CRM_DEFAULT_LANES;
+  for (const order of orders) {
+    const candidate = order.meta?.lanes;
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      lanes = candidate.map((lane) => String(lane ?? '').trim()).filter(Boolean);
+      if (lanes.length === 0) {
+        lanes = CRM_DEFAULT_LANES;
+      }
+      break;
+    }
+  }
+
+  return { boardKey, lanes, orders };
 };
 
 const normalizeIdentityPart = (value) => {
@@ -1116,6 +1140,198 @@ app.get('/api/state', async (_req, res) => {
 
 app.get('/api/crm/state', requireAuth, wrapAsync(async (req, res) => {
   const boardKey = typeof req.query.board === 'string' && req.query.board.trim() ? req.query.board.trim() : 'default';
+  const snapshot = await fetchCrmState(boardKey);
+  res.json(snapshot);
+}));
+
+const parseLanesFromPayload = (lanes) => {
+  if (!Array.isArray(lanes)) {
+    return [...CRM_DEFAULT_LANES];
+  }
+  const normalized = lanes
+    .map((lane) => String(lane ?? '').trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : [...CRM_DEFAULT_LANES];
+};
+
+const parseOrderImportPayload = (order, lanes) => {
+  if (!order || typeof order !== 'object') {
+    return null;
+  }
+  const title = String(order.title ?? '').trim();
+  const orderNumber = String(order.orderNo ?? '').trim() || title || null;
+  const customer = String(order.customer ?? '').trim() || null;
+  const amountRaw = order.amount ?? order.serviceTotal ?? null;
+  const amount = normalizeAmount(amountRaw);
+  const stateLane = String(order.status ?? '').trim();
+  const ready = normalizeBoolean(order.done);
+  const progress = (() => {
+    const val = normalizeProgress(order.progress);
+    if (val != null) return val;
+    return ready ? 100 : 0;
+  })();
+  const notes = String(order.notes ?? '').trim();
+  const boardState = lanes.includes(stateLane) ? stateLane : lanes[0];
+  const serviceTotalValue = (() => {
+    if (amount != null) return amount;
+    if (typeof amountRaw === 'number') return amountRaw;
+    const parsed = normalizeAmount(typeof amountRaw === 'string' ? amountRaw.replace(/\s+/g, '') : null);
+    return parsed != null ? parsed : null;
+  })();
+
+  const meta = {
+    title,
+    notes,
+    serviceTotal: serviceTotalValue,
+    lanes,
+    clientId: order.id ?? null,
+  };
+
+  const stages = Array.isArray(order.stages)
+    ? order.stages.map((stage, index) => ({ stage, index })).filter(({ stage }) => stage && typeof stage === 'object')
+    : [];
+
+  return {
+    orderNumber,
+    customer,
+    amount: amount != null ? amount : null,
+    state: boardState,
+    ready,
+    progress,
+    meta,
+    notes,
+    stages,
+  };
+};
+
+const parseStageImportPayload = (input, index) => {
+  const name = String(input?.name ?? '').trim() || `Этап ${index + 1}`;
+  const ready = normalizeBoolean(input?.done);
+  const progress = (() => {
+    const val = normalizeProgress(input?.progress);
+    if (val != null) return val;
+    return ready ? 100 : 0;
+  })();
+  const plannedStart = normalizeDateTime(input?.start);
+  const plannedEnd = normalizeDateTime(input?.end);
+  const valueRaw = input?.value;
+  const numericValue = normalizeAmount(valueRaw);
+  const meta = {
+    value: valueRaw ?? '',
+    hours: numericValue != null ? numericValue : null,
+    rubPerHour: numericValue != null ? numericValue : null,
+    sourceValue: valueRaw ?? '',
+  };
+
+  return {
+    name,
+    ready,
+    progress,
+    plannedStart,
+    plannedEnd,
+    position: index,
+    meta,
+  };
+};
+
+app.put('/api/crm/state', requireRole('admin'), wrapAsync(async (req, res) => {
+  await poolReady;
+  const boardKey = typeof req.body?.boardKey === 'string' && req.body.boardKey.trim()
+    ? req.body.boardKey.trim()
+    : 'default';
+
+  const lanes = parseLanesFromPayload(req.body?.lanes);
+  const ordersPayload = Array.isArray(req.body?.orders) ? req.body.orders : [];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query('DELETE FROM crm_orders WHERE board_key = $1', [boardKey]);
+
+    let insertedOrders = 0;
+    let insertedStages = 0;
+
+    for (const orderPayload of ordersPayload) {
+      const parsedOrder = parseOrderImportPayload(orderPayload, lanes);
+      if (!parsedOrder) continue;
+
+      const { rows } = await client.query(
+        `INSERT INTO crm_orders (order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, NOW(), NOW())
+         RETURNING id`,
+        [
+          parsedOrder.orderNumber,
+          parsedOrder.customer,
+          parsedOrder.amount,
+          parsedOrder.state,
+          parsedOrder.ready,
+          parsedOrder.progress,
+          boardKey,
+          parsedOrder.meta,
+          req.user.id,
+        ]
+      );
+
+      if (rows.length === 0) {
+        continue;
+      }
+
+      insertedOrders += 1;
+      const orderId = rows[0].id;
+
+      for (const { stage, index } of parsedOrder.stages) {
+        const parsedStage = parseStageImportPayload(stage, index);
+        await client.query(
+          `INSERT INTO crm_stages (order_id, name, ready, progress, planned_start, planned_end, position, meta, updated_by, updated_at, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+          [
+            orderId,
+            parsedStage.name,
+            parsedStage.ready,
+            parsedStage.progress,
+            parsedStage.plannedStart,
+            parsedStage.plannedEnd,
+            parsedStage.position,
+            parsedStage.meta,
+            req.user.id,
+          ]
+        );
+        insertedStages += 1;
+      }
+    }
+
+    await appendCrmActivity({
+      entity: 'crm',
+      entityId: null,
+      action: 'bulk-import',
+      payload: {
+        boardKey,
+        lanes,
+        orders: insertedOrders,
+        stages: insertedStages,
+      },
+      userId: req.user.id,
+      userName: req.user.name,
+    }, client);
+
+    await client.query('COMMIT');
+
+    broadcastCrmEvent({
+      entity: 'crm',
+      type: 'bulk',
+      boardKey,
+      changed: { orders: insertedOrders, stages: insertedStages, lanes },
+      by: req.user.email,
+      timestamp: nowIso(),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
   const snapshot = await fetchCrmState(boardKey);
   res.json(snapshot);
 }));
