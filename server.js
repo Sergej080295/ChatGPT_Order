@@ -84,6 +84,7 @@ const DEFAULT_CRM_LANES = [
 ];
 
 const PLANNER_STAGE_KEYS = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'pack', 'ship'];
+const OVERVIEW_STAGE_KEY = 'orders';
 
 const CRM_STAGE_ALIASES = new Map([
   ['laser', 'laser'],
@@ -1011,11 +1012,97 @@ const computeBoardAnchorIso = (board) => {
   return new Date(millis).toISOString();
 };
 
+const toIsoDate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return null;
+    }
+    return value.toISOString();
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const dateCandidate = new Date(value);
+    if (!Number.isNaN(dateCandidate.getTime())) {
+      return dateCandidate.toISOString();
+    }
+    const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) {
+      const iso = new Date(`${match[1]}T00:00:00Z`);
+      if (!Number.isNaN(iso.getTime())) {
+        return iso.toISOString();
+      }
+    }
+  }
+  return null;
+};
+
+const buildOrderStageRoutes = (stages, anchorIso) => {
+  const routes = {};
+  PLANNER_STAGE_KEYS.forEach((key) => {
+    routes[key] = null;
+  });
+
+  let totalHours = 0;
+  let latestDoneAt = null;
+
+  stages.forEach((stage) => {
+    const stageKey = normalizePlannerStage(stage.stage_key ?? stage.stageKey, stage.stage_name ?? stage.stageName ?? '');
+    const startIso = toIsoDate(stage.date_start ?? stage.dateStart ?? null);
+    const endIso = toIsoDate(stage.date_end ?? stage.dateEnd ?? null);
+    const hoursValue = numberOrNull(stage.hours);
+    const isReady = boolFrom(stage.is_ready ?? stage.isReady);
+    const entry = {
+      hours: hoursValue === null ? 0 : Number(hoursValue),
+      start: startIso,
+      end: endIso
+    };
+    if (isReady) {
+      entry.doneAt = toIsoDate(stage.updated_at ?? stage.updatedAt ?? anchorIso) ?? anchorIso;
+    }
+    routes[stageKey] = entry;
+    if (hoursValue !== null) {
+      totalHours += Number(hoursValue);
+    }
+    if (entry.doneAt) {
+      const millis = toMillis(entry.doneAt);
+      if (millis !== null && (!latestDoneAt || millis > latestDoneAt)) {
+        latestDoneAt = millis;
+      }
+    }
+  });
+
+  return {
+    routes,
+    totalHours,
+    latestDoneIso: latestDoneAt ? new Date(latestDoneAt).toISOString() : null
+  };
+};
+
+const cloneRouteMap = (routes) => {
+  const clone = {};
+  PLANNER_STAGE_KEYS.forEach((key) => {
+    const entry = routes[key];
+    if (entry) {
+      const { hours = 0, start = null, end = null, doneAt = null } = entry;
+      clone[key] = {
+        hours,
+        start,
+        end,
+        ...(doneAt ? { doneAt } : {})
+      };
+    } else {
+      clone[key] = null;
+    }
+  });
+  return clone;
+};
+
 const buildPlannerStateFromCrm = (board) => {
   const anchorIso = computeBoardAnchorIso(board);
   const anchorMillis = toMillis(anchorIso) ?? 0;
   const tasks = [];
   const perStage = new Map(PLANNER_STAGE_KEYS.map((key) => [key, []]));
+  perStage.set(OVERVIEW_STAGE_KEY, []);
 
   (board?.orders || []).forEach((order) => {
     const numericId = order.id != null ? Number(order.id) : null;
@@ -1032,6 +1119,8 @@ const buildPlannerStateFromCrm = (board) => {
     const baseIdentity = orderNumber || baseKey;
     const lane = (order.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
     const stages = Array.isArray(order.stages) && order.stages.length ? order.stages : [];
+    const stageRoutesSnapshot = buildOrderStageRoutes(stages, anchorIso);
+    const stageRoutes = stageRoutesSnapshot.routes;
     let stageCount = 0;
 
     stages.forEach((stage) => {
@@ -1042,19 +1131,7 @@ const buildPlannerStateFromCrm = (board) => {
       const endIso = safeDate(stage.dateEnd ? `${stage.dateEnd}T00:00:00Z` : null);
       const hours = numberOrNull(stage.hours) ?? 0;
       const percent = numberOrNull(stage.percent) ?? 0;
-      const stageRoute = {};
-      PLANNER_STAGE_KEYS.forEach((key) => {
-        if (key === plannerStage) {
-          stageRoute[key] = {
-            hours,
-            start: startIso,
-            end: endIso,
-            ...(stage.isReady ? { doneAt: stage.updatedAt ? safeDate(stage.updatedAt) : anchorIso } : {})
-          };
-        } else {
-          stageRoute[key] = null;
-        }
-      });
+      const stageRoute = cloneRouteMap(stageRoutes);
 
       const task = {
         uid,
@@ -1101,19 +1178,14 @@ const buildPlannerStateFromCrm = (board) => {
       const uid = `${baseKey}::${plannerStage}-auto`;
       const startIso = safeDate(order.start ? `${order.start}T00:00:00Z` : null);
       const endIso = safeDate(order.end ? `${order.end}T00:00:00Z` : null);
-      const stageRoute = {};
-      PLANNER_STAGE_KEYS.forEach((key) => {
-        if (key === plannerStage) {
-          stageRoute[key] = {
-            hours: 0,
-            start: startIso,
-            end: endIso,
-            ...(order.isDone ? { doneAt: order.updatedAt ? safeDate(order.updatedAt) : anchorIso } : {})
-          };
-        } else {
-          stageRoute[key] = null;
-        }
-      });
+      const stageRoute = cloneRouteMap(stageRoutes);
+      stageRoute.proc = {
+        hours: 0,
+        start: startIso,
+        end: endIso,
+        ...(order.isDone ? { doneAt: order.updatedAt ? safeDate(order.updatedAt) : anchorIso } : {})
+      };
+      stageRoutes.proc = stageRoute.proc;
 
       const task = {
         uid,
@@ -1153,10 +1225,55 @@ const buildPlannerStateFromCrm = (board) => {
       }
       perStage.get(plannerStage).push(uid);
     }
+
+    const summaryStartIso = safeDate(order.start ? `${order.start}T00:00:00Z` : (aggregates.start ? `${aggregates.start}T00:00:00Z` : null));
+    const summaryEndIso = safeDate(order.end ? `${order.end}T00:00:00Z` : (aggregates.end ? `${aggregates.end}T00:00:00Z` : null));
+    const summaryUid = `${baseKey}::${OVERVIEW_STAGE_KEY}`;
+    const summaryProgress = aggregates.percent;
+    const summaryRoute = cloneRouteMap(stageRoutes);
+    const stagesAllReady = normalizedStages.length > 0
+      ? normalizedStages.every((stage) => boolFrom(stage.is_ready))
+      : false;
+    const orderDone = boolFrom(order.isDone) || stagesAllReady;
+    const summaryDoneAt = orderDone
+      ? (stageRoutesSnapshot.latestDoneIso || (order.updatedAt ? safeDate(order.updatedAt) : anchorIso))
+      : null;
+
+    const summaryTask = {
+      uid: summaryUid,
+      orderId: displayOrderId,
+      orderNumber,
+      orderCustomer: customer,
+      orderIdentity: baseIdentity,
+      stage: OVERVIEW_STAGE_KEY,
+      childId: `${baseKey}-${OVERVIEW_STAGE_KEY}`,
+      parentId: baseKey,
+      hours: stageRoutesSnapshot.totalHours,
+      extraHours: 0,
+      startDate: summaryStartIso,
+      endDate: summaryEndIso,
+      startMissing: !summaryStartIso,
+      endMissing: !summaryEndIso,
+      state: lane,
+      status: orderDone ? 'Готово' : 'В работе',
+      useReserve: false,
+      progress: Number.isFinite(summaryProgress) ? summaryProgress : 0,
+      origStartDate: summaryStartIso,
+      route: summaryRoute,
+      isUserNew: false,
+      isNew: false,
+      isDone: orderDone,
+      isTrash: false,
+      locked: false,
+      hiddenByState: false,
+      doneMeta: summaryDoneAt ? { when: summaryDoneAt, source: 'crm' } : null
+    };
+
+    tasks.push(summaryTask);
+    perStage.get(OVERVIEW_STAGE_KEY).push(summaryUid);
   });
 
-  const allTaskUids = tasks.map((task) => task.uid);
-  const ordersMatrix = [['orders', allTaskUids]];
+  const ordersMatrix = [[OVERVIEW_STAGE_KEY, perStage.get(OVERVIEW_STAGE_KEY) || []]];
   PLANNER_STAGE_KEYS.forEach((stage) => {
     ordersMatrix.push([stage, perStage.get(stage) || []]);
   });
@@ -1168,7 +1285,7 @@ const buildPlannerStateFromCrm = (board) => {
     trash: [],
     exc: [],
     res: [],
-    process: 'laser',
+    process: OVERVIEW_STAGE_KEY,
     capByProc: { laser: 0, bend: 0, draw: 0, weld: 0, mech: 0, proc: 0 },
     parallelByProc: { proc: 0, shear: 0, pack: 0, ship: 0 },
     filter: 'all',
