@@ -206,6 +206,13 @@ body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
 
 /* верхняя панель */
 header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:12px 20px}
+header .top-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+header .top-bar h1{margin:0;font-size:22px;line-height:1.2}
+header .nav-links{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.crm-badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#e0f2fe;border:1px solid #bae6fd;color:#0c4a6e;font-size:12px;font-weight:600}
+.crm-badge small{font-weight:500;color:#0369a1}
+.btn.nav{background:#f8fafc;border:1px solid #d1d5db;color:#1e293b}
+.btn.nav:hover{background:#eff6ff}
 .badgeDot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#aaa;vertical-align:middle}
 .badgeDot.on{background:#22c55e}
 
@@ -515,7 +522,13 @@ body.overview-fs-active{overflow:hidden}
 <body>
 
 <header>
-  <h1 id="pageTitle">Планировщик — <span id="procTitle">Общий список заказов</span></h1>
+  <div class="top-bar">
+    <h1 id="pageTitle">Планировщик — <span id="procTitle">Общий список заказов</span></h1>
+    <div class="nav-links">
+      <span class="crm-badge" id="crmBadge">CRM: —</span>
+      <a class="btn nav" id="openCrmLink" href="/CRM.html">Открыть CRM</a>
+    </div>
+  </div>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
@@ -2235,6 +2248,89 @@ let currentProc = '';
 let orderSearchRaw = '';
 let orderSearchNormalized = '';
 const stagesDirtyFromRoute = new Set();
+function cloneCrmState(state){
+  if(!state||typeof state!=='object') return { boards: [], currentBoardId: null, updatedAt: '' };
+  try{return JSON.parse(JSON.stringify(state));}
+  catch(_err){
+    return {
+      boards:Array.isArray(state.boards)?state.boards.map(b=>({
+        id:b.id||'',
+        name:b.name||'',
+        lanes:Array.isArray(b.lanes)?b.lanes.slice():[],
+        orders:Array.isArray(b.orders)?b.orders.map(o=>({
+          id:o.id||'',
+          orderNo:o.orderNo||'',
+          title:o.title||'',
+          customer:o.customer||'',
+          status:o.status||'',
+          done:!!o.done,
+          progress:Number(o.progress||0)
+        })) : []
+      })) : [],
+      currentBoardId:state.currentBoardId||null,
+      updatedAt:state.updatedAt||''
+    };
+  }
+}
+
+function normalizeCrmState(raw){
+  if(!raw||typeof raw!=='object') return { boards: [], currentBoardId: null, updatedAt: '' };
+  const boards=Array.isArray(raw.boards)?raw.boards.filter(Boolean).map(board=>{
+    const lanes=Array.isArray(board.lanes)&&board.lanes.length
+      ? board.lanes.map(l=>String(l||'').trim()).filter(Boolean)
+      : ['Не запланированное'];
+    const orders=Array.isArray(board.orders)?board.orders.filter(Boolean).map(order=>({
+      id:order.id||'',
+      orderNo:order.orderNo||'',
+      title:order.title||'',
+      customer:order.customer||'',
+      status:order.status||'',
+      done:!!order.done,
+      progress:Number(order.progress||0)
+    })):[];
+    return {
+      id:typeof board.id==='string'&&board.id?board.id:`crm-${Math.random().toString(16).slice(2,8)}`,
+      name:typeof board.name==='string'&&board.name.trim()?board.name.trim():'CRM доска',
+      lanes,
+      orders
+    };
+  }):[];
+  const currentId = typeof raw.currentBoardId==='string' && boards.some(b=>b.id===raw.currentBoardId)
+    ? raw.currentBoardId
+    : (boards[0]?.id || null);
+  return {
+    boards,
+    currentBoardId: currentId,
+    updatedAt: typeof raw.updatedAt==='string'?raw.updatedAt:''
+  };
+}
+
+function setCrmState(raw){
+  crmState = normalizeCrmState(raw);
+  updateCrmBadge();
+}
+
+function updateCrmBadge(){
+  const badge=document.getElementById('crmBadge');
+  if(!badge) return;
+  if(!crmState.boards.length){
+    badge.textContent='CRM: нет данных';
+    return;
+  }
+  const board = crmState.boards.find(b=>b.id===crmState.currentBoardId) || crmState.boards[0];
+  const total = board.orders.length;
+  const ready = board.orders.filter(order=>order.done).length;
+  const infoParts = [];
+  infoParts.push(`${ready}/${total} готово`);
+  if(crmState.updatedAt){
+    const when = new Date(crmState.updatedAt);
+    if(!Number.isNaN(when.getTime())){
+      infoParts.push(when.toLocaleString());
+    }
+  }
+  badge.innerHTML = `CRM: ${total} <small>${escapeHtml(infoParts.join(' · '))}</small>`;
+}
+let crmState = { boards: [], currentBoardId: null, updatedAt: '' };
 
 function normalizeOrderSearch(value){
   return String(value ?? '').replace(/\s+/g,' ').trim().toLowerCase();
@@ -7703,6 +7799,7 @@ function buildStateObject(){
     confirmReadyTimeOn,
     priorityChangeLoggingOn,
     routeDateChangeLoggingOn,
+    crm: cloneCrmState(crmState),
     shiftOnProgress,
     ignoredStates: ignoredStates.slice(),
     meta: {
@@ -8607,6 +8704,9 @@ function restoreState(json, opts={}){
   try{
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
+    if(s && typeof s === 'object'){
+      setCrmState(s.crm);
+    }
     const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>{
       const rec = {
@@ -10682,6 +10782,7 @@ document.addEventListener('keydown', e=>{
 document.addEventListener('DOMContentLoaded', ()=>{
 
   setupRealtimeSync();
+  updateCrmBadge();
   wireHandlers();
   applyAccessMode();
   refreshDataModeIndicator();
