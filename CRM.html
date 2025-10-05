@@ -418,6 +418,14 @@ const DEFAULT_LANES=['Не запланированное','Клиент','От�
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Упаковка','Отгрузка'];
 const defaultBoard=()=>({id:crypto.randomUUID(),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 
+function mergeLanes(list){
+  const seen=new Set();
+  const merged=[];
+  DEFAULT_LANES.forEach(l=>{const lane=l||'';if(!lane)return;if(!seen.has(lane)){seen.add(lane);merged.push(lane);}});
+  (list||[]).forEach(raw=>{const lane=(raw||'').trim();if(!lane||seen.has(lane))return;seen.add(lane);merged.push(lane);});
+  return merged;
+}
+
 let toastTimer=null;
 function showToast(message,type='info'){
   if(!toastEl) return;
@@ -524,7 +532,7 @@ function enableDnd(){
   $$('.drop',columns).forEach(d=>{
     d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
     d.addEventListener('dragleave',()=>{d.style.outline='none'});
-    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);if(!o)return;o.status=d.dataset.lane;save();renderCards();syncOrderToServer(o,{silent:true}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});});
+    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);if(!o)return;o.status=d.dataset.lane;save();renderCards();syncOrderToServer(o,{silent:true,includeStages:false}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});});
   });
 }
 
@@ -532,7 +540,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save();renderCards();syncOrderToServer(order,{silent:true}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save();renderCards();syncOrderToServer(order,{silent:true,includeStages:false}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -754,7 +762,7 @@ function mapServerOrder(order){const stages=(order.stages||[]).map(mapServerStag
   progress:Number(order.percent??calcAutoProgress(stages)),
   progressManual:false,
   notes:order.notes||'',
-  status:order.lane||DEFAULT_LANES[0],
+  status:(order.lane||DEFAULT_LANES[0]).trim()||DEFAULT_LANES[0],
   serviceTotal:order.serviceTotal===''||order.serviceTotal==null?'':Number(order.serviceTotal),
   stages,
   createdAt:order.createdAt||new Date().toISOString(),
@@ -774,7 +782,7 @@ function mapLocalOrderToServer(order){const parseId=(val)=>{if(!val)return null;
     title:order.title,
     customer:order.customer,
     serviceTotal:normalizeServiceTotal(order.serviceTotal),
-    lane:order.status||DEFAULT_LANES[0],
+    lane:(order.status||DEFAULT_LANES[0]).trim()||DEFAULT_LANES[0],
     isDone:!!order.done,
     parentOrderId:parseId(order.parentId),
     boardKey:'default',
@@ -806,13 +814,22 @@ async function pullFromServer(){
   finally{remoteSync.refreshing=false;}
 }
 
-function applyServerSnapshot(board){if(!board)return;const lanes=(board.lanes&&board.lanes.length?board.lanes:[...DEFAULT_LANES]);const orders=(board.orders||[]).map(mapServerOrder);
+function applyServerSnapshot(board){if(!board)return;const lanes=mergeLanes(board.lanes);
+  const orders=(board.orders||[]).map(o=>{const mapped=mapServerOrder(o);if(!lanes.includes(mapped.status)){mapped.status=lanes[0]||DEFAULT_LANES[0];}return mapped;});
   state.boards=[{id:'server-default',name:board.name||'Список заказов',lanes:[...lanes],orders}];
   state.currentBoardId='server-default';
   save();renderAll();renderCards();}
 
 async function syncOrderToServer(order,opts={}){try{
-    const payload={order:mapLocalOrderToServer(order),stages:mapLocalStagesToServer(order)};
+    const includeStages=opts.includeStages!==false;
+    const trimPref=opts.trimMissingStages;
+    const payload={order:mapLocalOrderToServer(order)};
+    if(includeStages&&Array.isArray(order?.stages)){
+      payload.stages=mapLocalStagesToServer(order);
+      payload.trimMissingStages=trimPref===false?false:true;
+    }else{
+      payload.trimMissingStages=false;
+    }
     const res=await fetch('/api/crm/orders',{method:'PUT',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
     if(res.status===401){window.location.href='/login.html';return;}
     if(!res.ok){const detail=await res.json().catch(()=>({}));throw new Error(detail.error||'Сервер вернул ошибку');}

@@ -555,6 +555,7 @@ const buildPlannerStateFromCrm = (board) => {
     const baseIdentity = orderNumber;
     const lane = order.lane || DEFAULT_CRM_LANES[0];
     const stages = Array.isArray(order.stages) && order.stages.length ? order.stages : [];
+    let stageCount = 0;
 
     stages.forEach((stage) => {
       const plannerStage = normalizePlannerStage(stage.stageKey, stage.stageName);
@@ -614,7 +615,66 @@ const buildPlannerStateFromCrm = (board) => {
         perStage.set(plannerStage, []);
       }
       perStage.get(plannerStage).push(uid);
+      stageCount += 1;
     });
+
+    if (stageCount === 0) {
+      const plannerStage = 'proc';
+      const uid = `${orderId}::${plannerStage}-auto`;
+      const startIso = safeDate(order.start ? `${order.start}T00:00:00Z` : null);
+      const endIso = safeDate(order.end ? `${order.end}T00:00:00Z` : null);
+      const stageRoute = {};
+      PLANNER_STAGE_KEYS.forEach((key) => {
+        if (key === plannerStage) {
+          stageRoute[key] = {
+            hours: 0,
+            start: startIso,
+            end: endIso,
+            ...(order.isDone ? { doneAt: order.updatedAt ? safeDate(order.updatedAt) : nowIso } : {})
+          };
+        } else {
+          stageRoute[key] = null;
+        }
+      });
+
+      const task = {
+        uid,
+        orderId,
+        orderNumber,
+        orderCustomer: order.customer || '',
+        orderIdentity: baseIdentity,
+        stage: plannerStage,
+        childId: `${orderId}-${plannerStage}`,
+        parentId: orderId,
+        hours: 0,
+        extraHours: 0,
+        startDate: startIso,
+        endDate: endIso,
+        startMissing: !startIso,
+        endMissing: !endIso,
+        state: lane,
+        status: order.isDone ? 'Готово' : 'В работе',
+        useReserve: false,
+        progress: order.isDone ? 100 : 0,
+        origStartDate: startIso,
+        route: stageRoute,
+        isUserNew: false,
+        isNew: false,
+        isDone: !!order.isDone,
+        isTrash: false,
+        locked: false,
+        hiddenByState: false,
+        doneMeta: order.isDone
+          ? { when: order.updatedAt ? safeDate(order.updatedAt) : nowIso, source: 'crm' }
+          : null
+      };
+
+      tasks.push(task);
+      if (!perStage.has(plannerStage)) {
+        perStage.set(plannerStage, []);
+      }
+      perStage.get(plannerStage).push(uid);
+    }
   });
 
   const ordersMatrix = PLANNER_STAGE_KEYS.map((stage) => [stage, perStage.get(stage) || []]);
@@ -789,7 +849,7 @@ const upsertOrder = async (payload, user) => {
   const numericTotal = numberOrNull(serviceTotal);
   const board = boardKey || 'default';
   const done = boolFrom(isDone);
-  const laneValue = lane || DEFAULT_CRM_LANES[0];
+  const laneValue = (lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
 
   let result;
   if (id) {
@@ -857,8 +917,9 @@ const upsertOrder = async (payload, user) => {
   return orderId;
 };
 
-const syncStages = async (orderId, stages, user) => {
+const syncStages = async (orderId, stages, user, opts = {}) => {
   if (!Array.isArray(stages)) return;
+  const { trimMissing = true } = opts;
   const existing = await pool.query('SELECT id FROM crm_stages WHERE order_id = $1', [orderId]);
   const existingIds = new Set(existing.rows.map((row) => row.id));
   const seenIds = new Set();
@@ -919,17 +980,19 @@ const syncStages = async (orderId, stages, user) => {
     });
   }
 
-  for (const id of existingIds) {
-    if (!seenIds.has(id)) {
-      await pool.query('DELETE FROM crm_stages WHERE id = $1', [id]);
-      broadcastEvent({
-        type: 'update',
-        entity: 'stage',
-        id,
-        parentId: orderId,
-        changed: { deleted: true },
-        by: user?.email ?? null
-      });
+  if (trimMissing) {
+    for (const id of existingIds) {
+      if (!seenIds.has(id)) {
+        await pool.query('DELETE FROM crm_stages WHERE id = $1', [id]);
+        broadcastEvent({
+          type: 'update',
+          entity: 'stage',
+          id,
+          parentId: orderId,
+          changed: { deleted: true },
+          by: user?.email ?? null
+        });
+      }
     }
   }
 };
@@ -1324,7 +1387,7 @@ app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (_req, 
 });
 
 app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
-  const { order, stages, delete: shouldDelete } = req.body || {};
+  const { order, stages, delete: shouldDelete, trimMissingStages } = req.body || {};
   if (!order) {
     res.status(422).json({ error: 'Order payload required' });
     return;
@@ -1338,7 +1401,10 @@ app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
     }
 
     const orderId = await upsertOrder(order, req.user);
-    await syncStages(orderId, stages ?? order.stages ?? [], req.user);
+    if (Array.isArray(stages ?? order.stages)) {
+      const stagePayload = stages ?? order.stages;
+      await syncStages(orderId, stagePayload, req.user, { trimMissing: trimMissingStages !== false });
+    }
     const updated = await fetchCrmState();
     broadcastEvent({
       type: 'state-updated',
@@ -1363,13 +1429,13 @@ app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
 });
 
 app.put('/api/crm/stages', requireRole('admin', 'worker'), async (req, res) => {
-  const { orderId, stages } = req.body || {};
+  const { orderId, stages, trimMissingStages } = req.body || {};
   if (!orderId) {
     res.status(422).json({ error: 'orderId is required' });
     return;
   }
   try {
-    await syncStages(orderId, stages, req.user);
+    await syncStages(orderId, stages, req.user, { trimMissing: trimMissingStages !== false });
     const updated = await fetchCrmState();
     broadcastEvent({
       type: 'state-updated',
