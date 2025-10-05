@@ -514,6 +514,37 @@ const ensureDatabase = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS customer TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2)');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS state TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS ready BOOLEAN');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS progress INTEGER');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS parent_order_id BIGINT REFERENCES crm_orders(id) ON DELETE SET NULL');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS board_key TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id)');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+
+  await pool.query("UPDATE crm_orders SET state = COALESCE(state, 'new')");
+  await pool.query('UPDATE crm_orders SET ready = COALESCE(ready, FALSE)');
+  await pool.query('UPDATE crm_orders SET progress = COALESCE(progress, 0)');
+  await pool.query("UPDATE crm_orders SET board_key = COALESCE(NULLIF(board_key, ''), 'default')");
+  await pool.query('UPDATE crm_orders SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query('UPDATE crm_orders SET created_at = COALESCE(created_at, NOW())');
+
+  await pool.query("ALTER TABLE crm_orders ALTER COLUMN state SET DEFAULT 'new'");
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN state SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN ready SET DEFAULT FALSE');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN ready SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN progress SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN progress SET NOT NULL');
+  await pool.query("ALTER TABLE crm_orders ALTER COLUMN board_key SET DEFAULT 'default'");
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN board_key SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN updated_at SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN created_at SET NOT NULL');
+
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_board_idx ON crm_orders (board_key)');
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_state_idx ON crm_orders (state)');
   await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_parent_idx ON crm_orders (parent_order_id)');
@@ -534,6 +565,32 @@ const ensureDatabase = async () => {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS ready BOOLEAN');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS progress INTEGER');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS planned_start TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS planned_end TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS position INTEGER');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id)');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+
+  await pool.query('UPDATE crm_stages SET ready = COALESCE(ready, FALSE)');
+  await pool.query('UPDATE crm_stages SET progress = COALESCE(progress, 0)');
+  await pool.query('UPDATE crm_stages SET position = COALESCE(position, 0)');
+  await pool.query('UPDATE crm_stages SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query('UPDATE crm_stages SET created_at = COALESCE(created_at, NOW())');
+
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN ready SET DEFAULT FALSE');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN ready SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN progress SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN progress SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN position SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN position SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN updated_at SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN created_at SET NOT NULL');
+
   await pool.query('CREATE INDEX IF NOT EXISTS crm_stages_order_idx ON crm_stages (order_id)');
   await pool.query('CREATE INDEX IF NOT EXISTS crm_stages_position_idx ON crm_stages (order_id, position)');
 
