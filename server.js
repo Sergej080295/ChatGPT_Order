@@ -3,32 +3,686 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const PLANNER_FILE = path.join(PUBLIC_DIR, 'Planner_Codex_v3.html');
+const CRM_FILE = path.join(PUBLIC_DIR, 'CRM.html');
 
 const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true';
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
-  max: Number.parseInt(process.env.PGPOOL_MAX || '10', 10),
-  idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
-});
+
+let pool = null;
+let usingPgMem = false;
+let pgMemDatabase = null;
+
+const initRealPostgresPool = async () => {
+  const candidate = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
+    max: Number.parseInt(process.env.PGPOOL_MAX || '10', 10),
+    idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
+  });
+
+  candidate.on('error', (err) => {
+    console.error('Unexpected PostgreSQL client error', err);
+  });
+
+  try {
+    await candidate.query('SELECT 1');
+    return candidate;
+  } catch (err) {
+    await candidate.end().catch(() => {});
+    throw err;
+  }
+};
+
+const initPgMemPool = (reason, error) => {
+  const { newDb } = require('pg-mem');
+  pgMemDatabase = newDb({ autoCreateForeignKeyIndices: true });
+  const adapter = pgMemDatabase.adapters.createPg();
+  const memPool = new adapter.Pool();
+  usingPgMem = true;
+  const messageParts = ['Using in-memory PostgreSQL (pg-mem)'];
+  if (reason) {
+    messageParts.push(`reason: ${reason}`);
+  }
+  if (error) {
+    messageParts.push(`details: ${error.message}`);
+  }
+  console.warn(messageParts.join(' | '));
+  return memPool;
+};
+
+const createDatabasePool = async () => {
+  if (pool) {
+    return pool;
+  }
+
+  if (process.env.USE_PGMEM === 'true') {
+    pool = initPgMemPool('forced by USE_PGMEM');
+    return pool;
+  }
+
+  try {
+    pool = await initRealPostgresPool();
+    return pool;
+  } catch (err) {
+    console.warn('Failed to connect to PostgreSQL, attempting pg-mem fallback');
+    if (process.env.PGMEM_FALLBACK === 'false') {
+      throw err;
+    }
+    try {
+      pool = initPgMemPool('fallback after connection failure', err);
+      return pool;
+    } catch (memErr) {
+      console.error('Failed to initialize pg-mem fallback', memErr);
+      throw err;
+    }
+  }
+};
+
+const poolReady = createDatabasePool();
+
+const wrapAsync = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
+const JWT_COOKIE_NAME = 'planner_token';
+const JWT_TTL_SECONDS = Number.parseInt(process.env.JWT_TTL || '86400', 10);
+const DEFAULT_ADMIN_EMAIL = process.env.DEFAULT_ADMIN_EMAIL || 'admin@example.com';
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+const DEFAULT_ADMIN_NAME = process.env.DEFAULT_ADMIN_NAME || 'Admin';
 
 const LEGACY_IMPORT_ENABLED = process.env.PLANNER_SKIP_LEGACY_IMPORT !== 'true';
 
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error', err);
-});
-
+app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.text({ limit: '10mb', type: ['text/plain', 'text/*'] }));
 
+app.use(wrapAsync(async (req, _res, next) => {
+  const cookieToken = req.cookies?.[JWT_COOKIE_NAME];
+  let bearerToken = null;
+  const authHeader = req.get('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    bearerToken = authHeader.slice('Bearer '.length).trim();
+  }
+  const token = cookieToken || bearerToken;
+  if (!token) {
+    req.user = null;
+    next();
+    return;
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const userRow = await getUserById(payload?.sub);
+    req.user = serializeUser(userRow);
+  } catch (err) {
+    req.user = null;
+  }
+  next();
+}));
+
+const requireAuth = (req, res, next) => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+};
+
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.user) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!roles.includes(req.user.role)) {
+    res.status(403).json({ error: 'Forbidden' });
+    return;
+  }
+  next();
+};
+
+const respondAuthPayload = (res, userRow) => {
+  const user = serializeUser(userRow);
+  const token = signToken(user);
+  attachAuthCookie(res, token);
+  res.json({
+    user: user.name,
+    email: user.email,
+    role: user.role,
+    token,
+    expires_in: JWT_TTL_SECONDS,
+  });
+};
+
 const sseClients = new Set();
+
+const AUTH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: 'strict',
+  secure: process.env.NODE_ENV === 'production',
+  path: '/',
+};
+
+const ORDER_FIELD_CONFIG = {
+  orderNumber: { column: 'order_number', roles: ['admin'] },
+  customer: { column: 'customer', roles: ['admin'] },
+  amount: { column: 'amount', roles: ['admin'] },
+  state: { column: 'state', roles: ['admin'] },
+  ready: { column: 'ready', roles: ['admin', 'worker'] },
+  progress: { column: 'progress', roles: ['admin', 'worker'] },
+  parentOrderId: { column: 'parent_order_id', roles: ['admin'] },
+  boardKey: { column: 'board_key', roles: ['admin'] },
+  meta: { column: 'meta', roles: ['admin'] },
+};
+
+const STAGE_FIELD_CONFIG = {
+  name: { column: 'name', roles: ['admin'] },
+  ready: { column: 'ready', roles: ['admin', 'worker'] },
+  progress: { column: 'progress', roles: ['admin', 'worker'] },
+  plannedStart: { column: 'planned_start', roles: ['admin'] },
+  plannedEnd: { column: 'planned_end', roles: ['admin'] },
+  position: { column: 'position', roles: ['admin'] },
+  meta: { column: 'meta', roles: ['admin'] },
+};
+
+const CRM_STAGE_MAPPINGS = [
+  { key: 'draw', rx: /(подготовка|технолог|обработк[аи]\s*черт)/i, title: 'Подготовка в работу' },
+  { key: 'laser', rx: /(лазер|резк)/i, title: 'Лазер' },
+  { key: 'bend', rx: /гибк/i, title: 'Гибка' },
+  { key: 'weld', rx: /свар/i, title: 'Сварка' },
+  { key: 'mech', rx: /мехо?бработ/i, title: 'Мехобработка' },
+  { key: 'proc', rx: /закуп/i, title: 'Закупка' },
+  { key: 'shear', rx: /рубк/i, title: 'Рубка' },
+  { key: 'pack', rx: /упаков/i, title: 'Упаковка' },
+  { key: 'ship', rx: /отгруз/i, title: 'Отгрузка' },
+];
+
+const CRM_STAGE_KEYS = CRM_STAGE_MAPPINGS.map((item) => item.key);
+
+const CRM_DEFAULT_LANES = Object.freeze([
+  'Не запланированное',
+  'Клиент',
+  'Отдел продаж',
+  'Технологи',
+  'Производство',
+  'Закупка',
+  'Упаковка',
+  'Готово (Ож. отгрузки)',
+  'Отгружено',
+]);
+
+const CRM_CAPACITY_DEFAULTS = Object.freeze({
+  bend: 15,
+  laser: 36,
+  draw: 8,
+  weld: 4,
+  mech: 8,
+});
+
+const CRM_PARALLEL_DEFAULTS = Object.freeze({
+  proc: 5,
+  shear: 5,
+  pack: 3,
+  ship: 5,
+});
+
+const isFieldAllowed = (config, key, role) => {
+  const descriptor = config[key];
+  if (!descriptor) return false;
+  return descriptor.roles.includes(role);
+};
+
+const normalizeBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'да'].includes(normalized)) return true;
+    if (['false', '0', 'no', 'n', 'нет'].includes(normalized)) return false;
+  }
+  return Boolean(value);
+};
+
+const normalizeProgress = (value) => {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return Math.min(100, Math.max(0, Math.round(num)));
+};
+
+const normalizeAmount = (value) => {
+  if (value == null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num;
+};
+
+const normalizeMeta = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'object') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (err) {
+      return null;
+    }
+  }
+  return null;
+};
+
+const normalizeDateTime = (value) => {
+  if (value == null || value === '') return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
+};
+
+const nowIso = () => new Date().toISOString();
+
+const serializeUser = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    name: row.name || row.email || 'Пользователь',
+    role: row.role,
+  };
+};
+
+const signToken = (user) => jwt.sign({
+  sub: user.id,
+  role: user.role,
+  name: user.name,
+  email: user.email,
+}, JWT_SECRET, { expiresIn: JWT_TTL_SECONDS });
+
+const attachAuthCookie = (res, token) => {
+  res.cookie(JWT_COOKIE_NAME, token, {
+    ...AUTH_COOKIE_OPTIONS,
+    maxAge: JWT_TTL_SECONDS * 1000,
+  });
+};
+
+const clearAuthCookie = (res) => {
+  res.clearCookie(JWT_COOKIE_NAME, AUTH_COOKIE_OPTIONS);
+};
+
+const mapOrderRow = (row) => ({
+  id: row.id,
+  orderNumber: row.order_number,
+  customer: row.customer,
+  amount: row.amount != null ? Number(row.amount) : null,
+  state: row.state,
+  ready: row.ready,
+  progress: row.progress,
+  parentOrderId: row.parent_order_id,
+  boardKey: row.board_key,
+  meta: row.meta ?? null,
+  updatedBy: row.updated_by,
+  updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+});
+
+const mapStageRow = (row) => ({
+  id: row.id,
+  orderId: row.order_id,
+  name: row.name,
+  ready: row.ready,
+  progress: row.progress,
+  plannedStart: row.planned_start ? new Date(row.planned_start).toISOString() : null,
+  plannedEnd: row.planned_end ? new Date(row.planned_end).toISOString() : null,
+  position: row.position,
+  meta: row.meta ?? null,
+  updatedBy: row.updated_by,
+  updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+});
+
+const fetchCrmState = async (boardKey = 'default') => {
+  await ensureBootstrap();
+  const { rows: orderRows } = await pool.query(
+    `SELECT id, order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at
+     FROM crm_orders
+     WHERE board_key = $1
+     ORDER BY created_at ASC, id ASC`,
+    [boardKey]
+  );
+
+  const orderIds = orderRows.map((row) => row.id);
+  let stageRows = [];
+  if (orderIds.length > 0) {
+    const { rows } = await pool.query(
+      `SELECT id, order_id, name, ready, progress, planned_start, planned_end, position, meta, updated_by, updated_at, created_at
+       FROM crm_stages
+       WHERE order_id = ANY($1::bigint[])
+       ORDER BY order_id ASC, position ASC, id ASC`,
+      [orderIds]
+    );
+    stageRows = rows;
+  }
+
+  const stageMap = new Map();
+  stageRows.forEach((row) => {
+    const list = stageMap.get(row.order_id) || [];
+    list.push(mapStageRow(row));
+    stageMap.set(row.order_id, list);
+  });
+
+  const orders = orderRows.map((row) => ({
+    ...mapOrderRow(row),
+    stages: stageMap.get(row.id) || [],
+  }));
+
+  let lanes = CRM_DEFAULT_LANES;
+  for (const order of orders) {
+    const candidate = order.meta?.lanes;
+    if (Array.isArray(candidate) && candidate.length > 0) {
+      lanes = candidate.map((lane) => String(lane ?? '').trim()).filter(Boolean);
+      if (lanes.length === 0) {
+        lanes = CRM_DEFAULT_LANES;
+      }
+      break;
+    }
+  }
+
+  return { boardKey, lanes, orders };
+};
+
+const normalizeIdentityPart = (value) => {
+  return String(value ?? '').trim().toLowerCase();
+};
+
+const buildOrderIdentityKey = (orderNumber, customer) => {
+  const numberPart = normalizeIdentityPart(orderNumber);
+  const customerPart = normalizeIdentityPart(customer);
+  if (!numberPart && !customerPart) return '';
+  return `${numberPart}::${customerPart}`;
+};
+
+const detectCrmStageKey = (name) => {
+  if (!name) return null;
+  const normalized = String(name).trim();
+  for (const mapping of CRM_STAGE_MAPPINGS) {
+    if (mapping.rx.test(normalized)) {
+      return mapping.key;
+    }
+  }
+  switch (normalized.toLowerCase()) {
+    case 'лазер':
+      return 'laser';
+    case 'резка':
+      return 'laser';
+    case 'гибка':
+      return 'bend';
+    case 'сварка':
+      return 'weld';
+    case 'мехобработка':
+      return 'mech';
+    case 'подготовка в работу':
+    case 'технологи':
+      return 'draw';
+    case 'закупка':
+      return 'proc';
+    case 'рубка':
+      return 'shear';
+    case 'упаковка':
+      return 'pack';
+    case 'отгрузка':
+      return 'ship';
+    default:
+      return null;
+  }
+};
+
+const parseNumericValue = (value) => {
+  if (value == null || value === '') return null;
+  const str = String(value).trim().replace(/,/g, '.');
+  const parsed = Number.parseFloat(str);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+};
+
+const extractStageHours = (stage) => {
+  if (!stage) return 0;
+  const direct = parseNumericValue(stage.hours);
+  if (direct != null) return direct;
+  const meta = stage.meta || {};
+  const candidates = [
+    meta.hours,
+    meta.value,
+    meta.hoursPlanned,
+    meta.hours_total,
+    meta.hoursTotal,
+    meta.amount,
+    meta.amountHours,
+    meta['руб/часов'],
+    meta.rubPerHour,
+    meta.hoursPerOrder,
+    meta.hours_per_order,
+    meta.hoursPerHour,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseNumericValue(candidate);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+  return 0;
+};
+
+const toIsoString = (value) => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+};
+
+const cloneRouteMap = (route) => {
+  const cloned = {};
+  CRM_STAGE_KEYS.forEach((key) => {
+    const info = route?.[key];
+    if (info && typeof info === 'object') {
+      cloned[key] = {
+        hours: info.hours ?? 0,
+        start: info.start ?? null,
+        end: info.end ?? null,
+        doneAt: info.doneAt ?? null,
+      };
+    } else {
+      cloned[key] = null;
+    }
+  });
+  return cloned;
+};
+
+const computeExtraHours = (stageKey, hours) => {
+  if (!Number.isFinite(hours) || hours <= 0) return 0;
+  const base = Math.max(0.25, hours * 0.05);
+  const scaled = stageKey === 'laser' ? Math.max(base, hours * 0.02) : base;
+  return Math.round(scaled * 100) / 100;
+};
+
+const buildPlannerStateFromCrm = async (boardKey = 'default') => {
+  const snapshot = await fetchCrmState(boardKey);
+  const stageKeySet = new Set(CRM_STAGE_KEYS);
+  const ordersByStage = new Map();
+  stageKeySet.forEach((key) => ordersByStage.set(key, []));
+  const tasks = [];
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const nowHuman = now.toLocaleString('ru-RU');
+
+  let totalStages = 0;
+  let readyStages = 0;
+
+  snapshot.orders.forEach((order) => {
+    const orderNumber = order.orderNumber ?? order.order_number ?? '';
+    const customer = order.customer ?? '';
+    const orderId = orderNumber || `Заказ #${order.id}`;
+    const orderIdentity = buildOrderIdentityKey(orderNumber, customer) || `order::${order.id}`;
+    const stages = Array.isArray(order.stages) ? order.stages : [];
+    const stageCount = stages.length;
+    const routeBase = {};
+    CRM_STAGE_KEYS.forEach((key) => {
+      routeBase[key] = null;
+    });
+
+    stages.forEach((stage) => {
+      const stageKey = detectCrmStageKey(stage?.name);
+      if (!stageKey) return;
+      const hours = extractStageHours(stage);
+      routeBase[stageKey] = {
+        hours,
+        start: toIsoString(stage?.plannedStart),
+        end: toIsoString(stage?.plannedEnd),
+        doneAt: stage?.ready ? (toIsoString(stage?.updatedAt) || nowIso) : null,
+      };
+    });
+
+    stages.forEach((stage) => {
+      const stageKey = detectCrmStageKey(stage?.name);
+      if (!stageKey) return;
+      if (!ordersByStage.has(stageKey)) {
+        ordersByStage.set(stageKey, []);
+      }
+
+      const hours = extractStageHours(stage);
+      const progressRaw = stage?.progress != null ? Number(stage.progress) : null;
+      const progress = Number.isFinite(progressRaw) ? Math.max(0, Math.min(100, progressRaw)) : (stage?.ready ? 100 : 0);
+      const startIso = toIsoString(stage?.plannedStart);
+      const endIso = toIsoString(stage?.plannedEnd);
+      const uid = `crm:${order.id}:${stage?.id ?? stageKey}`;
+      const task = {
+        uid,
+        orderId,
+        orderNumber,
+        orderCustomer: customer,
+        orderIdentity,
+        stage: stageKey,
+        childId: stage?.id != null ? String(stage.id) : `${order.id}-${stageKey}`,
+        parentId: String(order.id),
+        hours,
+        extraHours: computeExtraHours(stageKey, hours),
+        startDate: startIso,
+        endDate: endIso,
+        startMissing: !startIso,
+        endMissing: !endIso,
+        state: order.state ?? '',
+        status: stage?.ready ? 'done' : (order.ready ? 'done' : 'new'),
+        useReserve: false,
+        progress,
+        origStartDate: startIso,
+        route: cloneRouteMap(routeBase),
+        meta: {
+          stageName: stage?.name ?? '',
+          stagePosition: stage?.position ?? null,
+          stageCount,
+          orderId,
+          boardKey,
+          updatedAt: toIsoString(stage?.updatedAt) || nowIso,
+          updatedBy: stage?.updatedBy ?? order.updatedBy ?? null,
+        },
+      };
+
+      tasks.push(task);
+      ordersByStage.get(stageKey).push(uid);
+      totalStages += 1;
+      if (task.status === 'done' || progress >= 100) {
+        readyStages += 1;
+      }
+    });
+  });
+
+  const totalOrders = snapshot.orders.length;
+  const readyOrders = snapshot.orders.filter((order) => {
+    if (order.ready) return true;
+    const stages = Array.isArray(order.stages) ? order.stages : [];
+    if (!stages.length) return false;
+    return stages.every((stage) => stage?.ready || Number(stage?.progress ?? 0) >= 100);
+  }).length;
+
+  const ordersSummary = {
+    totalOrders,
+    readyOrders,
+    totalStages,
+    readyStages,
+    boardKey,
+  };
+
+  const summaryText = `CRM: ${readyOrders}/${totalOrders} заказов · ${readyStages}/${totalStages} переделов`;
+  const orderEntries = CRM_STAGE_KEYS.map((key) => [key, ordersByStage.get(key) || []]);
+  const defaultStage = orderEntries.find(([, list]) => list.length > 0)?.[0] || 'laser';
+
+  const state = {
+    source: 'crm',
+    boardKey,
+    generatedAt: nowIso,
+    process: defaultStage,
+    freshness: nowIso,
+    freshnessCsv: '',
+    freshnessManual: nowIso,
+    lastImportTime: '',
+    lastManualTime: nowIso,
+    t: tasks,
+    done: [],
+    trash: [],
+    exc: [],
+    res: [],
+    locked: [],
+    orders: orderEntries,
+    capByProc: { ...CRM_CAPACITY_DEFAULTS },
+    parallelByProc: { ...CRM_PARALLEL_DEFAULTS },
+    meta: {
+      source: 'crm',
+      boardKey,
+      generatedAt: nowIso,
+      summary: summaryText,
+      ordersSummary,
+      lastChange: {
+        summary: summaryText,
+        time: nowHuman,
+        stage: defaultStage,
+        source: 'crm-sync',
+        ordersSummary,
+        user: 'CRM',
+      },
+      settings: {
+        capacity: { ...CRM_CAPACITY_DEFAULTS },
+        parallel: { ...CRM_PARALLEL_DEFAULTS },
+        updatedAt: nowIso,
+      },
+      storage: {
+        mode: 'crm',
+        remote: true,
+        local: false,
+        remotePreferred: false,
+      },
+      lastAuthors: tasks.length
+        ? {
+            [defaultStage]: {
+              name: 'CRM',
+              at: nowIso,
+            },
+          }
+        : {},
+    },
+  };
+
+  return state;
+};
 
 const simpleHash = (str) => {
   if (!str) return '';
@@ -95,15 +749,58 @@ const loadLegacyStateFromDisk = async () => {
 };
 
 const ensureDatabase = async () => {
+  await poolReady;
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS planner_state (
-      id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+      id BIGSERIAL PRIMARY KEY,
       state TEXT NOT NULL,
       meta JSONB,
       hash TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  const { rows: plannerColumns } = await pool.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'planner_state'
+  `);
+  const plannerColumnSet = new Set(plannerColumns.map((row) => row.column_name));
+
+  if (plannerColumnSet.has('data') && !plannerColumnSet.has('state')) {
+    try {
+      await pool.query('ALTER TABLE planner_state RENAME COLUMN data TO state');
+      plannerColumnSet.add('state');
+    } catch (err) {
+      console.warn('Failed to rename planner_state.data to state', err.message);
+    }
+  }
+
+  if (plannerColumnSet.has('state_json') && !plannerColumnSet.has('state')) {
+    try {
+      await pool.query('ALTER TABLE planner_state RENAME COLUMN state_json TO state');
+      plannerColumnSet.add('state');
+    } catch (err) {
+      console.warn('Failed to rename planner_state.state_json to state', err.message);
+    }
+  }
+
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS state TEXT');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS hash TEXT');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  const fallbackState = createInitialState();
+  await pool.query('UPDATE planner_state SET state = $1 WHERE state IS NULL', [fallbackState.state]);
+  await pool.query('UPDATE planner_state SET meta = COALESCE(meta, $1::jsonb)', [JSON.stringify(fallbackState.meta)]);
+  await pool.query('UPDATE planner_state SET updated_at = COALESCE(updated_at, NOW())');
+  const { rows: plannerRows } = await pool.query("SELECT id, state, hash FROM planner_state WHERE hash IS NULL OR hash = ''");
+  for (const row of plannerRows) {
+    const computedHash = simpleHash(row.state || '');
+    await pool.query('UPDATE planner_state SET hash = $1 WHERE id = $2', [computedHash, row.id]);
+  }
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN state SET NOT NULL");
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN hash SET NOT NULL");
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN updated_at SET NOT NULL");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS planner_activity_log (
@@ -125,9 +822,198 @@ const ensureDatabase = async () => {
   await pool.query('CREATE INDEX IF NOT EXISTS planner_activity_log_stage_idx ON planner_activity_log (stage)');
 
   await pool.query('ALTER TABLE planner_activity_log ADD COLUMN IF NOT EXISTS orders_summary JSONB');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGSERIAL PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      name TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('admin', 'worker', 'viewer')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query("UPDATE users SET name = CASE WHEN name IS NULL OR name = '' THEN email ELSE name END");
+  await pool.query("UPDATE users SET role = CASE WHEN role IS NULL OR role = '' THEN 'viewer' ELSE role END");
+  await pool.query('UPDATE users SET created_at = COALESCE(created_at, NOW())');
+  await pool.query('UPDATE users SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query("ALTER TABLE users ALTER COLUMN name SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN role SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN created_at SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN updated_at SET NOT NULL");
+  await pool.query("ALTER TABLE users ALTER COLUMN role SET DEFAULT 'viewer'");
+  const { rows: userConstraints } = await pool.query(`
+    SELECT constraint_name
+    FROM information_schema.table_constraints
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+      AND constraint_type = 'CHECK'
+  `);
+  const hasRoleConstraint = userConstraints.some((row) => row.constraint_name === 'users_role_check');
+  if (!hasRoleConstraint) {
+    await pool.query("ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','worker','viewer'))");
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crm_orders (
+      id BIGSERIAL PRIMARY KEY,
+      order_number TEXT NOT NULL,
+      customer TEXT,
+      amount NUMERIC(12,2),
+      state TEXT NOT NULL DEFAULT 'new',
+      ready BOOLEAN NOT NULL DEFAULT FALSE,
+      progress INTEGER NOT NULL DEFAULT 0,
+      parent_order_id BIGINT REFERENCES crm_orders(id) ON DELETE SET NULL,
+      board_key TEXT NOT NULL DEFAULT 'default',
+      meta JSONB,
+      updated_by BIGINT REFERENCES users(id),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS customer TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS amount NUMERIC(12,2)');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS state TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS ready BOOLEAN');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS progress INTEGER');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS parent_order_id BIGINT REFERENCES crm_orders(id) ON DELETE SET NULL');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS board_key TEXT');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id)');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+
+  await pool.query("UPDATE crm_orders SET state = COALESCE(state, 'new')");
+  await pool.query('UPDATE crm_orders SET ready = COALESCE(ready, FALSE)');
+  await pool.query('UPDATE crm_orders SET progress = COALESCE(progress, 0)');
+  await pool.query("UPDATE crm_orders SET board_key = CASE WHEN board_key IS NULL OR board_key = '' THEN 'default' ELSE board_key END");
+  await pool.query('UPDATE crm_orders SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query('UPDATE crm_orders SET created_at = COALESCE(created_at, NOW())');
+
+  await pool.query("ALTER TABLE crm_orders ALTER COLUMN state SET DEFAULT 'new'");
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN state SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN ready SET DEFAULT FALSE');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN ready SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN progress SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN progress SET NOT NULL');
+  await pool.query("ALTER TABLE crm_orders ALTER COLUMN board_key SET DEFAULT 'default'");
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN board_key SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN updated_at SET NOT NULL');
+  await pool.query('ALTER TABLE crm_orders ALTER COLUMN created_at SET NOT NULL');
+
+  await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_board_idx ON crm_orders (board_key)');
+  await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_state_idx ON crm_orders (state)');
+  await pool.query('CREATE INDEX IF NOT EXISTS crm_orders_parent_idx ON crm_orders (parent_order_id)');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS crm_stages (
+      id BIGSERIAL PRIMARY KEY,
+      order_id BIGINT NOT NULL REFERENCES crm_orders(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      ready BOOLEAN NOT NULL DEFAULT FALSE,
+      progress INTEGER NOT NULL DEFAULT 0,
+      planned_start TIMESTAMPTZ,
+      planned_end TIMESTAMPTZ,
+      position INTEGER NOT NULL DEFAULT 0,
+      meta JSONB,
+      updated_by BIGINT REFERENCES users(id),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS ready BOOLEAN');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS progress INTEGER');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS planned_start TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS planned_end TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS position INTEGER');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS updated_by BIGINT REFERENCES users(id)');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  await pool.query('ALTER TABLE crm_stages ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ');
+
+  await pool.query('UPDATE crm_stages SET ready = COALESCE(ready, FALSE)');
+  await pool.query('UPDATE crm_stages SET progress = COALESCE(progress, 0)');
+  await pool.query('UPDATE crm_stages SET position = COALESCE(position, 0)');
+  await pool.query('UPDATE crm_stages SET updated_at = COALESCE(updated_at, NOW())');
+  await pool.query('UPDATE crm_stages SET created_at = COALESCE(created_at, NOW())');
+
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN ready SET DEFAULT FALSE');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN ready SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN progress SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN progress SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN position SET DEFAULT 0');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN position SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN updated_at SET NOT NULL');
+  await pool.query('ALTER TABLE crm_stages ALTER COLUMN created_at SET NOT NULL');
+
+  await pool.query('CREATE INDEX IF NOT EXISTS crm_stages_order_idx ON crm_stages (order_id)');
+  await pool.query('CREATE INDEX IF NOT EXISTS crm_stages_position_idx ON crm_stages (order_id, position)');
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id BIGSERIAL PRIMARY KEY,
+      entity TEXT NOT NULL,
+      entity_id BIGINT,
+      action TEXT NOT NULL,
+      payload JSONB,
+      user_id BIGINT REFERENCES users(id),
+      user_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+};
+
+const ensureDefaultAdmin = async () => {
+  await poolReady;
+  const { rows } = await pool.query('SELECT id FROM users LIMIT 1');
+  if (rows.length > 0) {
+    return;
+  }
+  const email = DEFAULT_ADMIN_EMAIL.trim().toLowerCase();
+  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 10);
+  await pool.query(
+    'INSERT INTO users (email, password_hash, name, role) VALUES ($1, $2, $3, $4)',
+    [email, passwordHash, DEFAULT_ADMIN_NAME, 'admin']
+  );
+  console.log(`Seeded default admin user ${email}`);
+};
+
+const bootstrapReadyPromiseRef = { current: null };
+
+const ensureBootstrap = async () => {
+  if (!bootstrapReadyPromiseRef.current) {
+    bootstrapReadyPromiseRef.current = (async () => {
+      await ensureDatabase();
+      await ensureDefaultAdmin();
+    })();
+  }
+  await bootstrapReadyPromiseRef.current;
+};
+
+const getUserByEmail = async (email) => {
+  if (!email) return null;
+  await ensureBootstrap();
+  const { rows } = await pool.query('SELECT id, email, password_hash, name, role FROM users WHERE email = $1 LIMIT 1', [email]);
+  return rows[0] ?? null;
+};
+
+const getUserById = async (id) => {
+  if (!id) return null;
+  await ensureBootstrap();
+  const { rows } = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1', [id]);
+  return rows[0] ?? null;
 };
 
 const readStateFromDatabase = async () => {
+  await ensureBootstrap();
   const { rows } = await pool.query('SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1');
   if (rows.length > 0) {
     const row = rows[0];
@@ -164,7 +1050,7 @@ const normalizeStoredState = async () => {
     return cachedState;
   }
 
-  await ensureDatabase();
+  await ensureBootstrap();
 
   const existing = await readStateFromDatabase();
   if (existing) {
@@ -201,6 +1087,7 @@ const normalizeStoredState = async () => {
 };
 
 const appendLog = async (entry) => {
+  await ensureBootstrap();
   await pool.query(
     `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -219,12 +1106,69 @@ const appendLog = async (entry) => {
   );
 };
 
+const appendCrmActivity = async (entry, client = pool) => {
+  await ensureBootstrap();
+  await client.query(
+    `INSERT INTO activity_log (entity, entity_id, action, payload, user_id, user_name)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      entry.entity,
+      entry.entityId ?? null,
+      entry.action,
+      entry.payload ?? null,
+      entry.userId ?? null,
+      entry.userName ?? null,
+    ]
+  );
+};
+
 const broadcast = (payload) => {
   const data = `data: ${JSON.stringify(payload)}\n\n`;
   sseClients.forEach((res) => {
     res.write(data);
   });
 };
+
+const broadcastPlannerState = (state, meta, updatedAt) => {
+  broadcast({ type: 'planner-state', state, meta, updatedAt });
+};
+
+const broadcastCrmEvent = (event) => {
+  broadcast({ type: 'crm-update', event });
+};
+
+app.post('/api/auth/login', wrapAsync(async (req, res) => {
+  const { email, password } = req.body ?? {};
+  if (!email || !password) {
+    res.status(400).json({ error: 'Email and password are required' });
+    return;
+  }
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const userRow = await getUserByEmail(normalizedEmail);
+  if (!userRow) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
+  const ok = await bcrypt.compare(String(password), userRow.password_hash);
+  if (!ok) {
+    res.status(401).json({ error: 'Invalid credentials' });
+    return;
+  }
+  respondAuthPayload(res, userRow);
+}));
+
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({
+    user: req.user.name,
+    email: req.user.email,
+    role: req.user.role,
+  });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.json({ ok: true });
+});
 
 app.get('/api/events', async (req, res) => {
   res.setHeader('Cache-Control', 'no-cache');
@@ -239,13 +1183,526 @@ app.get('/api/events', async (req, res) => {
   });
 
   const current = cachedState || await normalizeStoredState();
-  res.write(`data: ${JSON.stringify({ state: current.state, meta: current.meta, updatedAt: current.updatedAt })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'planner-state', state: current.state, meta: current.meta, updatedAt: current.updatedAt })}\n\n`);
 });
 
 app.get('/api/state', async (_req, res) => {
   const current = cachedState || await normalizeStoredState();
   res.type('application/json').send(current.state);
 });
+
+app.get('/api/crm/state', requireAuth, wrapAsync(async (req, res) => {
+  const boardKey = typeof req.query.board === 'string' && req.query.board.trim() ? req.query.board.trim() : 'default';
+  const snapshot = await fetchCrmState(boardKey);
+  res.json(snapshot);
+}));
+
+const parseLanesFromPayload = (lanes) => {
+  if (!Array.isArray(lanes)) {
+    return [...CRM_DEFAULT_LANES];
+  }
+  const normalized = lanes
+    .map((lane) => String(lane ?? '').trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : [...CRM_DEFAULT_LANES];
+};
+
+const parseOrderImportPayload = (order, lanes) => {
+  if (!order || typeof order !== 'object') {
+    return null;
+  }
+  const title = String(order.title ?? '').trim();
+  const orderNumber = String(order.orderNo ?? '').trim() || title || null;
+  const customer = String(order.customer ?? '').trim() || null;
+  const amountRaw = order.amount ?? order.serviceTotal ?? null;
+  const amount = normalizeAmount(amountRaw);
+  const stateLane = String(order.status ?? '').trim();
+  const ready = normalizeBoolean(order.done);
+  const progress = (() => {
+    const val = normalizeProgress(order.progress);
+    if (val != null) return val;
+    return ready ? 100 : 0;
+  })();
+  const notes = String(order.notes ?? '').trim();
+  const boardState = lanes.includes(stateLane) ? stateLane : lanes[0];
+  const serviceTotalValue = (() => {
+    if (amount != null) return amount;
+    if (typeof amountRaw === 'number') return amountRaw;
+    const parsed = normalizeAmount(typeof amountRaw === 'string' ? amountRaw.replace(/\s+/g, '') : null);
+    return parsed != null ? parsed : null;
+  })();
+
+  const meta = {
+    title,
+    notes,
+    serviceTotal: serviceTotalValue,
+    lanes,
+    clientId: order.id ?? null,
+  };
+
+  const stages = Array.isArray(order.stages)
+    ? order.stages.map((stage, index) => ({ stage, index })).filter(({ stage }) => stage && typeof stage === 'object')
+    : [];
+
+  return {
+    orderNumber,
+    customer,
+    amount: amount != null ? amount : null,
+    state: boardState,
+    ready,
+    progress,
+    meta,
+    notes,
+    stages,
+  };
+};
+
+const parseStageImportPayload = (input, index) => {
+  const name = String(input?.name ?? '').trim() || `Этап ${index + 1}`;
+  const ready = normalizeBoolean(input?.done);
+  const progress = (() => {
+    const val = normalizeProgress(input?.progress);
+    if (val != null) return val;
+    return ready ? 100 : 0;
+  })();
+  const plannedStart = normalizeDateTime(input?.start);
+  const plannedEnd = normalizeDateTime(input?.end);
+  const valueRaw = input?.value;
+  const numericValue = normalizeAmount(valueRaw);
+  const meta = {
+    value: valueRaw ?? '',
+    hours: numericValue != null ? numericValue : null,
+    rubPerHour: numericValue != null ? numericValue : null,
+    sourceValue: valueRaw ?? '',
+  };
+
+  return {
+    name,
+    ready,
+    progress,
+    plannedStart,
+    plannedEnd,
+    position: index,
+    meta,
+  };
+};
+
+app.put('/api/crm/state', requireRole('admin'), wrapAsync(async (req, res) => {
+  await poolReady;
+  const boardKey = typeof req.body?.boardKey === 'string' && req.body.boardKey.trim()
+    ? req.body.boardKey.trim()
+    : 'default';
+
+  const lanes = parseLanesFromPayload(req.body?.lanes);
+  const ordersPayload = Array.isArray(req.body?.orders) ? req.body.orders : [];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query('DELETE FROM crm_orders WHERE board_key = $1', [boardKey]);
+
+    let insertedOrders = 0;
+    let insertedStages = 0;
+
+    for (const orderPayload of ordersPayload) {
+      const parsedOrder = parseOrderImportPayload(orderPayload, lanes);
+      if (!parsedOrder) continue;
+
+      const { rows } = await client.query(
+        `INSERT INTO crm_orders (order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, NOW(), NOW())
+         RETURNING id`,
+        [
+          parsedOrder.orderNumber,
+          parsedOrder.customer,
+          parsedOrder.amount,
+          parsedOrder.state,
+          parsedOrder.ready,
+          parsedOrder.progress,
+          boardKey,
+          parsedOrder.meta,
+          req.user.id,
+        ]
+      );
+
+      if (rows.length === 0) {
+        continue;
+      }
+
+      insertedOrders += 1;
+      const orderId = rows[0].id;
+
+      for (const { stage, index } of parsedOrder.stages) {
+        const parsedStage = parseStageImportPayload(stage, index);
+        await client.query(
+          `INSERT INTO crm_stages (order_id, name, ready, progress, planned_start, planned_end, position, meta, updated_by, updated_at, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+          [
+            orderId,
+            parsedStage.name,
+            parsedStage.ready,
+            parsedStage.progress,
+            parsedStage.plannedStart,
+            parsedStage.plannedEnd,
+            parsedStage.position,
+            parsedStage.meta,
+            req.user.id,
+          ]
+        );
+        insertedStages += 1;
+      }
+    }
+
+    await appendCrmActivity({
+      entity: 'crm',
+      entityId: null,
+      action: 'bulk-import',
+      payload: {
+        boardKey,
+        lanes,
+        orders: insertedOrders,
+        stages: insertedStages,
+      },
+      userId: req.user.id,
+      userName: req.user.name,
+    }, client);
+
+    await client.query('COMMIT');
+
+    broadcastCrmEvent({
+      entity: 'crm',
+      type: 'bulk',
+      boardKey,
+      changed: { orders: insertedOrders, stages: insertedStages, lanes },
+      by: req.user.email,
+      timestamp: nowIso(),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const snapshot = await fetchCrmState(boardKey);
+  res.json(snapshot);
+}));
+
+app.get('/api/crm/planner_state', requireAuth, wrapAsync(async (req, res) => {
+  const boardKey = typeof req.query.board === 'string' && req.query.board.trim() ? req.query.board.trim() : 'default';
+  const state = await buildPlannerStateFromCrm(boardKey);
+  res.json(state);
+}));
+
+app.put('/api/crm/orders', requireRole('worker', 'admin'), wrapAsync(async (req, res) => {
+  await poolReady;
+  const raw = Array.isArray(req.body?.orders)
+    ? req.body.orders
+    : Array.isArray(req.body)
+      ? req.body
+      : req.body
+        ? [req.body]
+        : [];
+
+  const updates = raw
+    .map((item) => (typeof item === 'object' && item !== null ? item : null))
+    .filter(Boolean);
+
+  if (updates.length === 0) {
+    res.status(400).json({ error: 'No order updates provided' });
+    return;
+  }
+
+  const client = await pool.connect();
+  const updatedOrders = [];
+  const pendingEvents = [];
+  try {
+    await client.query('BEGIN');
+    for (const patch of updates) {
+      const id = Number(patch.id ?? patch.orderId ?? patch.order_id);
+      if (!Number.isFinite(id) || id <= 0) {
+        continue;
+      }
+
+      const setClauses = [];
+      const values = [];
+      const changed = {};
+
+      for (const [key, descriptor] of Object.entries(ORDER_FIELD_CONFIG)) {
+        if (!isFieldAllowed(ORDER_FIELD_CONFIG, key, req.user.role)) continue;
+        if (!(key in patch)) continue;
+
+        let value = patch[key];
+        switch (key) {
+          case 'ready':
+            value = normalizeBoolean(value);
+            break;
+          case 'progress': {
+            const normalized = normalizeProgress(value);
+            if (normalized == null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'amount': {
+            const normalized = normalizeAmount(value);
+            if (normalized == null && value !== null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'meta': {
+            const normalized = normalizeMeta(value);
+            if (normalized == null && value !== null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'parentOrderId':
+            value = value == null || value === '' ? null : Number(value);
+            if (value != null && !Number.isFinite(value)) {
+              continue;
+            }
+            break;
+          case 'orderNumber':
+          case 'state':
+          case 'boardKey':
+            value = value == null ? null : String(value).trim();
+            break;
+          case 'customer':
+            value = value == null ? null : String(value).trim();
+            break;
+          default:
+            if (value == null) {
+              value = null;
+            }
+            break;
+        }
+
+        const column = descriptor.column;
+        values.push(value);
+        setClauses.push(`${column} = $${values.length}`);
+        changed[key] = value;
+      }
+
+      if (setClauses.length === 0) {
+        continue;
+      }
+
+      setClauses.push(`updated_by = $${values.length + 1}`);
+      values.push(req.user.id);
+      setClauses.push('updated_at = NOW()');
+
+      const { rows } = await client.query(
+        `UPDATE crm_orders SET ${setClauses.join(', ')} WHERE id = $${values.length + 1}
+         RETURNING id, order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at`,
+        [...values, id]
+      );
+
+      if (rows.length === 0) {
+        continue;
+      }
+
+      const order = mapOrderRow(rows[0]);
+      updatedOrders.push(order);
+
+      await appendCrmActivity({
+        entity: 'order',
+        entityId: order.id,
+        action: 'update',
+        payload: { changed },
+        userId: req.user.id,
+        userName: req.user.name,
+      }, client);
+
+      pendingEvents.push({
+        entity: 'order',
+        type: 'update',
+        id: order.id,
+        changed,
+        data: order,
+        by: req.user.email,
+        timestamp: nowIso(),
+      });
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  pendingEvents.forEach((event) => broadcastCrmEvent(event));
+
+  if (updatedOrders.length === 0) {
+    res.status(404).json({ error: 'No matching orders updated' });
+    return;
+  }
+
+  res.json({ updated: updatedOrders.length, orders: updatedOrders });
+}));
+
+app.put('/api/crm/stages', requireRole('worker', 'admin'), wrapAsync(async (req, res) => {
+  await poolReady;
+  const raw = Array.isArray(req.body?.stages)
+    ? req.body.stages
+    : Array.isArray(req.body)
+      ? req.body
+      : req.body
+        ? [req.body]
+        : [];
+
+  const updates = raw
+    .map((item) => (typeof item === 'object' && item !== null ? item : null))
+    .filter(Boolean);
+
+  if (updates.length === 0) {
+    res.status(400).json({ error: 'No stage updates provided' });
+    return;
+  }
+
+  const client = await pool.connect();
+  const updatedStages = [];
+  const pendingEvents = [];
+  try {
+    await client.query('BEGIN');
+    for (const patch of updates) {
+      const id = Number(patch.id ?? patch.stageId ?? patch.stage_id);
+      if (!Number.isFinite(id) || id <= 0) {
+        continue;
+      }
+
+      const setClauses = [];
+      const values = [];
+      const changed = {};
+
+      for (const [key, descriptor] of Object.entries(STAGE_FIELD_CONFIG)) {
+        if (!isFieldAllowed(STAGE_FIELD_CONFIG, key, req.user.role)) continue;
+        if (!(key in patch)) continue;
+
+        let value = patch[key];
+        switch (key) {
+          case 'ready':
+            value = normalizeBoolean(value);
+            break;
+          case 'progress': {
+            const normalized = normalizeProgress(value);
+            if (normalized == null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'position': {
+            const normalized = Number(value);
+            if (!Number.isFinite(normalized)) {
+              continue;
+            }
+            value = Math.max(0, Math.round(normalized));
+            break;
+          }
+          case 'meta': {
+            const normalized = normalizeMeta(value);
+            if (normalized == null && value !== null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'plannedStart':
+          case 'plannedEnd': {
+            if (value == null || value === '') {
+              value = null;
+              break;
+            }
+            const normalized = normalizeDateTime(value);
+            if (normalized == null) {
+              continue;
+            }
+            value = normalized;
+            break;
+          }
+          case 'name':
+            value = value == null ? null : String(value).trim();
+            break;
+          default:
+            if (value == null) {
+              value = null;
+            }
+            break;
+        }
+
+        const column = descriptor.column;
+        values.push(value);
+        setClauses.push(`${column} = $${values.length}`);
+        changed[key] = value;
+      }
+
+      if (setClauses.length === 0) {
+        continue;
+      }
+
+      setClauses.push(`updated_by = $${values.length + 1}`);
+      values.push(req.user.id);
+      setClauses.push('updated_at = NOW()');
+
+      const { rows } = await client.query(
+        `UPDATE crm_stages SET ${setClauses.join(', ')} WHERE id = $${values.length + 1}
+         RETURNING id, order_id, name, ready, progress, planned_start, planned_end, position, meta, updated_by, updated_at, created_at`,
+        [...values, id]
+      );
+
+      if (rows.length === 0) {
+        continue;
+      }
+
+      const stage = mapStageRow(rows[0]);
+      updatedStages.push(stage);
+
+      await appendCrmActivity({
+        entity: 'stage',
+        entityId: stage.id,
+        action: 'update',
+        payload: { changed },
+        userId: req.user.id,
+        userName: req.user.name,
+      }, client);
+
+      pendingEvents.push({
+        entity: 'stage',
+        type: 'update',
+        id: stage.id,
+        orderId: stage.orderId,
+        changed,
+        data: stage,
+        by: req.user.email,
+        timestamp: nowIso(),
+      });
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  pendingEvents.forEach((event) => broadcastCrmEvent(event));
+
+  if (updatedStages.length === 0) {
+    res.status(404).json({ error: 'No matching stages updated' });
+    return;
+  }
+
+  res.json({ updated: updatedStages.length, stages: updatedStages });
+}));
 
 const extractStateFromBody = (body) => {
   if (!body) return { state: null, meta: null };
@@ -274,6 +1731,7 @@ const extractStateFromBody = (body) => {
 };
 
 app.put('/api/state', async (req, res) => {
+  await poolReady;
   const { state, meta } = extractStateFromBody(req.body);
   if (!state) {
     res.status(400).send('Invalid state payload');
@@ -376,14 +1834,22 @@ app.put('/api/state', async (req, res) => {
   }
   await appendLog(logEntry);
 
-  broadcast({ state, meta: meta || null, updatedAt });
+  broadcastPlannerState(state, meta || null, updatedAt);
   res.json({ ok: true, hash, updatedAt });
 });
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
+  res.redirect('/planner');
+});
+
+app.get('/planner', (_req, res) => {
+  res.sendFile(PLANNER_FILE);
+});
+
+app.get('/crm', (_req, res) => {
+  res.sendFile(CRM_FILE);
 });
 
 app.use((err, _req, res, _next) => {
@@ -404,7 +1870,10 @@ const shutdown = async (signal = 'SIGTERM') => {
     serverInstance.close();
   }
   try {
-    await pool.end();
+    await poolReady;
+    if (pool && typeof pool.end === 'function') {
+      await pool.end();
+    }
   } catch (err) {
     console.error('Error while closing PostgreSQL pool', err);
   }
