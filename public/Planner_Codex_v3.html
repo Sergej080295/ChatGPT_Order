@@ -2284,6 +2284,220 @@ let lastDiffApplied=null;    // запомненный diff для выборо�
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
 let crmStageTasks = [];
 const MODE_SCOPED_KEYS = [PLANNER_MODES.csv, PLANNER_MODES.crm];
+function toIsoSafe(value){
+  if(!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+function serializeRouteSegmentForMode(seg){
+  if(!seg) return null;
+  return {
+    hours: Number(seg.hours) || 0,
+    start: toIsoSafe(seg.start || null),
+    end: toIsoSafe(seg.end || null),
+    origStart: toIsoSafe(seg.origStart || seg.originalStart || null),
+    doneAt: toIsoSafe(seg.doneAt || null)
+  };
+}
+function serializeTaskForModeSnapshot(task){
+  if(!task) return null;
+  ensureOrderIdentity(task);
+  return {
+    uid: task.uid,
+    orderId: task.orderId || '',
+    orderNumber: task.orderNumber || '',
+    orderCustomer: task.orderCustomer || '',
+    orderIdentity: task.orderIdentity || '',
+    stage: task.stage || '',
+    childId: task.childId || '',
+    parentId: task.parentId || '',
+    hours: Number(task.hours) || 0,
+    extraHours: Number(task.extraHours) || 0,
+    startDate: toIsoSafe(task.startDate || null),
+    endDate: toIsoSafe(task.endDate || null),
+    startMissing: !!task.startMissing,
+    endMissing: !!task.endMissing,
+    state: task.state || '',
+    status: task.status || '',
+    useReserve: !!task.useReserve,
+    progress: Number(task.progress) || 0,
+    origStartDate: toIsoSafe(task.origStartDate || null),
+    route: {
+      laser: serializeRouteSegmentForMode(task.route?.laser),
+      bend:  serializeRouteSegmentForMode(task.route?.bend),
+      draw:  serializeRouteSegmentForMode(task.route?.draw),
+      weld:  serializeRouteSegmentForMode(task.route?.weld),
+      mech:  serializeRouteSegmentForMode(task.route?.mech),
+      proc:  serializeRouteSegmentForMode(task.route?.proc),
+      shear: serializeRouteSegmentForMode(task.route?.shear),
+      pack:  serializeRouteSegmentForMode(task.route?.pack),
+      ship:  serializeRouteSegmentForMode(task.route?.ship)
+    },
+    locked: !!task.locked || lockedUids.has(task.uid),
+    hiddenByState: !!task.hiddenByState,
+    doneMeta: task.doneMeta && task.doneMeta.when
+      ? { when: toIsoSafe(task.doneMeta.when), source: task.doneMeta.source || '' }
+      : (task.doneMeta ? { ...task.doneMeta } : null),
+    crmMeta: task.crmMeta ? { ...task.crmMeta } : null,
+    crmOrigin: !!task.crmOrigin
+  };
+}
+function serializeDoneForModeSnapshot(entry){
+  if(!entry) return null;
+  return {
+    uid: entry.uid,
+    orderId: entry.orderId || '',
+    stage: entry.stage || '',
+    parentId: entry.parentId || '',
+    childId: entry.childId || '',
+    hours: Number(entry.hours) || 0,
+    extra: Number(entry.extra) || 0,
+    start: toIsoSafe(entry.start || null),
+    end: toIsoSafe(entry.end || null),
+    when: toIsoSafe(entry.when || null),
+    doneAt: toIsoSafe(entry.doneAt || entry.when || null),
+    source: entry.source || '',
+    crmMeta: entry.crmMeta ? { ...entry.crmMeta } : null
+  };
+}
+function serializeTrashForModeSnapshot(entry){
+  if(!entry) return null;
+  return {
+    uid: entry.uid,
+    orderId: entry.orderId || '',
+    stage: entry.stage || '',
+    parentId: entry.parentId || '',
+    childId: entry.childId || '',
+    hours: Number(entry.hours) || 0,
+    extra: Number(entry.extra) || 0,
+    start: toIsoSafe(entry.start || null),
+    end: toIsoSafe(entry.end || null),
+    when: toIsoSafe(entry.when || null),
+    source: entry.source || '',
+    crmMeta: entry.crmMeta ? { ...entry.crmMeta } : null,
+    crmStage: entry.crmStage ? cloneCrmStageSnapshot(entry.crmStage) : null
+  };
+}
+function deserializeRouteSegmentFromMode(seg){
+  if(!seg) return null;
+  return {
+    hours: Number(seg.hours) || 0,
+    start: seg.start ? new Date(seg.start) : null,
+    end: seg.end ? new Date(seg.end) : null,
+    origStart: seg.origStart ? new Date(seg.origStart) : null,
+    doneAt: seg.doneAt ? new Date(seg.doneAt) : null
+  };
+}
+function deserializeTaskFromModeSnapshot(raw){
+  if(!raw) return null;
+  const task = {
+    uid: raw.uid,
+    orderId: raw.orderId || '',
+    orderNumber: raw.orderNumber || '',
+    orderCustomer: raw.orderCustomer || '',
+    orderIdentity: raw.orderIdentity || '',
+    stage: raw.stage || '',
+    childId: raw.childId || '',
+    parentId: raw.parentId || '',
+    hours: Number(raw.hours) || 0,
+    extraHours: Number(raw.extraHours) || 0,
+    startDate: raw.startDate ? new Date(raw.startDate) : today0(),
+    endDate: raw.endDate ? new Date(raw.endDate) : null,
+    startMissing: !!raw.startMissing,
+    endMissing: !!raw.endMissing,
+    state: raw.state || '',
+    status: raw.status || '',
+    useReserve: !!raw.useReserve,
+    progress: Number(raw.progress) || 0,
+    origStartDate: raw.origStartDate ? new Date(raw.origStartDate) : null,
+    route: {
+      laser: deserializeRouteSegmentFromMode(raw.route?.laser),
+      bend:  deserializeRouteSegmentFromMode(raw.route?.bend),
+      draw:  deserializeRouteSegmentFromMode(raw.route?.draw),
+      weld:  deserializeRouteSegmentFromMode(raw.route?.weld),
+      mech:  deserializeRouteSegmentFromMode(raw.route?.mech),
+      proc:  deserializeRouteSegmentFromMode(raw.route?.proc),
+      shear: deserializeRouteSegmentFromMode(raw.route?.shear),
+      pack:  deserializeRouteSegmentFromMode(raw.route?.pack),
+      ship:  deserializeRouteSegmentFromMode(raw.route?.ship)
+    },
+    locked: !!raw.locked,
+    hiddenByState: !!raw.hiddenByState,
+    crmMeta: raw.crmMeta ? { ...raw.crmMeta } : null,
+    crmOrigin: !!raw.crmOrigin
+  };
+  if(raw.doneMeta && raw.doneMeta.when){
+    task.doneMeta = {
+      when: new Date(raw.doneMeta.when),
+      source: raw.doneMeta.source || ''
+    };
+  }
+  applyIgnoredStateToTask(task);
+  ensureOrderIdentity(task);
+  return task;
+}
+function deserializeDoneFromModeSnapshot(raw){
+  if(!raw) return null;
+  return {
+    uid: raw.uid,
+    orderId: raw.orderId || '',
+    stage: raw.stage || '',
+    parentId: raw.parentId || '',
+    childId: raw.childId || '',
+    hours: Number(raw.hours) || 0,
+    extra: Number(raw.extra) || 0,
+    start: raw.start ? new Date(raw.start) : null,
+    end: raw.end ? new Date(raw.end) : null,
+    when: raw.when ? new Date(raw.when) : null,
+    doneAt: raw.doneAt ? new Date(raw.doneAt) : (raw.when ? new Date(raw.when) : null),
+    source: raw.source || '',
+    crmMeta: raw.crmMeta ? { ...raw.crmMeta } : null
+  };
+}
+function deserializeTrashFromModeSnapshot(raw){
+  if(!raw) return null;
+  const rec = {
+    uid: raw.uid,
+    orderId: raw.orderId || '',
+    stage: raw.stage || '',
+    parentId: raw.parentId || '',
+    childId: raw.childId || '',
+    hours: Number(raw.hours) || 0,
+    extra: Number(raw.extra) || 0,
+    start: raw.start ? new Date(raw.start) : null,
+    end: raw.end ? new Date(raw.end) : null,
+    when: raw.when ? new Date(raw.when) : null,
+    source: raw.source || '',
+    crmMeta: raw.crmMeta ? { ...raw.crmMeta } : null
+  };
+  if(raw.crmStage) rec.crmStage = cloneCrmStageSnapshot(raw.crmStage);
+  return rec;
+}
+function snapshotRowsForMode(rows){
+  if(!Array.isArray(rows)) return null;
+  try{ return JSON.parse(JSON.stringify(rows)); }
+  catch(_err){
+    return rows.map(item => Array.isArray(item) ? item.slice() : item);
+  }
+}
+function cloneStageTasksEntries(entries){
+  if(!Array.isArray(entries)) return [];
+  return entries.map(entry => {
+    const stage = Array.isArray(entry) ? entry[0] : null;
+    const list = Array.isArray(entry) ? entry[1] : null;
+    let clonedList = [];
+    if(Array.isArray(list)){
+      try{ clonedList = JSON.parse(JSON.stringify(list)); }
+      catch(_err){ clonedList = list.map(item => item ? { ...item } : item); }
+    }
+    return [stage, clonedList];
+  });
+}
+function cloneModeSimpleList(entries){
+  if(!Array.isArray(entries)) return [];
+  try{ return JSON.parse(JSON.stringify(entries)); }
+  catch(_err){ return entries.map(item => item ? { ...item } : item); }
+}
 function createModeScopedSnapshot(){
   return {
     exceptions: [],
@@ -2292,7 +2506,15 @@ function createModeScopedSnapshot(){
     orders: [],
     locked: [],
     ignored: [],
-    stageFilters: {}
+    stageFilters: {},
+    stageTasks: [],
+    done: [],
+    trash: [],
+    lastRows: null,
+    csvFreshness: '',
+    manualFreshness: '',
+    lastImportTime: '',
+    lastManualTime: ''
   };
 }
 let modeScopedState = {
@@ -2321,6 +2543,22 @@ function captureModeScopedState(mode){
     ignored: ignoredStates.slice(),
     stageFilters: Object.fromEntries(stageListFilterByStage.entries())
   };
+  const stageSnapshots = collectStageTasksSnapshot();
+  const stageEntries = [];
+  stageSnapshots.forEach((list, stage)=>{
+    const serialized = Array.isArray(list)
+      ? list.map(serializeTaskForModeSnapshot).filter(Boolean)
+      : [];
+    stageEntries.push([stage, serialized]);
+  });
+  snapshot.stageTasks = stageEntries;
+  snapshot.done = doneTasks.map(serializeDoneForModeSnapshot).filter(Boolean);
+  snapshot.trash = trash.map(serializeTrashForModeSnapshot).filter(Boolean);
+  snapshot.lastRows = snapshotRowsForMode(lastRows);
+  snapshot.csvFreshness = csvFreshnessStr || '';
+  snapshot.manualFreshness = manualFreshnessStr || '';
+  snapshot.lastImportTime = lastImportTime || '';
+  snapshot.lastManualTime = lastManualTime || '';
   modeScopedState[key] = snapshot;
 }
 function applyModeScopedState(mode){
@@ -2349,6 +2587,43 @@ function applyModeScopedState(mode){
     stageListFilterByStage.set(stage, normalized);
   });
   refreshIgnoredStateFlags();
+  const stageEntries = Array.isArray(snapshot.stageTasks) ? snapshot.stageTasks : [];
+  const stageMap = new Map();
+  stageEntries.forEach(([stage, list])=>{
+    if(!stage) return;
+    const tasksArr = Array.isArray(list)
+      ? list.map(deserializeTaskFromModeSnapshot).filter(Boolean)
+      : [];
+    stageMap.set(stage, tasksArr);
+  });
+  const aggregated = [];
+  stageMap.forEach(list => {
+    list.forEach(task => {
+      if(task) aggregated.push(cloneTaskRecord(task));
+    });
+  });
+  allTasksFromState = aggregated;
+  const currentStage = document.getElementById('process')?.value || currentProc || OVERVIEW_STAGE;
+  if(currentStage && currentStage !== OVERVIEW_STAGE){
+    const stageTasks = stageMap.get(currentStage) || [];
+    tasks = stageTasks.map(cloneTaskRecord);
+    sortBySavedOrder(tasks, currentStage);
+    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+  }else{
+    tasks = [];
+  }
+  doneTasks = Array.isArray(snapshot.done)
+    ? snapshot.done.map(deserializeDoneFromModeSnapshot).filter(Boolean)
+    : [];
+  trash = Array.isArray(snapshot.trash)
+    ? snapshot.trash.map(deserializeTrashFromModeSnapshot).filter(Boolean)
+    : [];
+  lastRows = snapshot.lastRows ? snapshotRowsForMode(snapshot.lastRows) : null;
+  csvFreshnessStr = snapshot.csvFreshness || '—';
+  manualFreshnessStr = snapshot.manualFreshness || '—';
+  lastImportTime = snapshot.lastImportTime || '';
+  lastManualTime = snapshot.lastManualTime || '';
+  updateFreshnessUI();
 }
 function normalizeModeScopedState(raw){
   const normalized = {
@@ -2366,7 +2641,15 @@ function normalizeModeScopedState(raw){
         orders: Array.isArray(source.orders) ? source.orders.slice() : [],
         locked: Array.isArray(source.locked) ? source.locked.slice() : [],
         ignored: Array.isArray(source.ignored) ? source.ignored.slice() : [],
-        stageFilters: (source.stageFilters && typeof source.stageFilters === 'object') ? { ...source.stageFilters } : {}
+        stageFilters: (source.stageFilters && typeof source.stageFilters === 'object') ? { ...source.stageFilters } : {},
+        stageTasks: cloneStageTasksEntries(source.stageTasks),
+        done: cloneModeSimpleList(source.done),
+        trash: cloneModeSimpleList(source.trash),
+        lastRows: snapshotRowsForMode(source.lastRows),
+        csvFreshness: typeof source.csvFreshness === 'string' ? source.csvFreshness : '',
+        manualFreshness: typeof source.manualFreshness === 'string' ? source.manualFreshness : '',
+        lastImportTime: typeof source.lastImportTime === 'string' ? source.lastImportTime : '',
+        lastManualTime: typeof source.lastManualTime === 'string' ? source.lastManualTime : ''
       };
     });
   }
@@ -2383,7 +2666,15 @@ function cloneModeScopedStateForSave(){
       orders: Array.isArray(snapshot.orders) ? snapshot.orders.slice() : [],
       locked: Array.isArray(snapshot.locked) ? snapshot.locked.slice() : [],
       ignored: Array.isArray(snapshot.ignored) ? snapshot.ignored.slice() : [],
-      stageFilters: (snapshot.stageFilters && typeof snapshot.stageFilters === 'object') ? { ...snapshot.stageFilters } : {}
+      stageFilters: (snapshot.stageFilters && typeof snapshot.stageFilters === 'object') ? { ...snapshot.stageFilters } : {},
+      stageTasks: cloneStageTasksEntries(snapshot.stageTasks),
+      done: cloneModeSimpleList(snapshot.done),
+      trash: cloneModeSimpleList(snapshot.trash),
+      lastRows: snapshotRowsForMode(snapshot.lastRows),
+      csvFreshness: typeof snapshot.csvFreshness === 'string' ? snapshot.csvFreshness : '',
+      manualFreshness: typeof snapshot.manualFreshness === 'string' ? snapshot.manualFreshness : '',
+      lastImportTime: typeof snapshot.lastImportTime === 'string' ? snapshot.lastImportTime : '',
+      lastManualTime: typeof snapshot.lastManualTime === 'string' ? snapshot.lastManualTime : ''
     };
   });
   return result;
