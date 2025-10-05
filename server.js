@@ -634,7 +634,16 @@ const parseDateCandidate = (value) => {
   return null;
 };
 
-const toDateOnly = (date) => (date ? date.toISOString().slice(0, 10) : '');
+const toDateOnly = (value) => {
+  const millis = toMillis(value);
+  if (millis === null) return '';
+  return new Date(millis).toISOString().slice(0, 10);
+};
+
+const toDateOnlyOrNull = (value) => {
+  const str = toDateOnly(value);
+  return str || null;
+};
 
 const chooseLaneFromCounts = (counts) => {
   if (!counts || counts.size === 0) return '';
@@ -1316,15 +1325,20 @@ const buildPlannerStateFromCrm = (board) => {
     }
   };
 
+  const stateText = JSON.stringify(baseState);
+  const hash = simpleHash(stateText);
+
   return {
-    state: JSON.stringify(baseState),
+    state: stateText,
     meta: {
       stage: 'crm-sync',
       version: anchorMillis || 0,
       source: 'crm',
       generatedAt: anchorIso,
       orders: board?.orders?.length ?? 0
-    }
+    },
+    hash,
+    updatedAt: anchorIso
   };
 };
 
@@ -1398,8 +1412,8 @@ const fetchCrmState = async () => {
         stageKey: stage.stage_key,
         stageName: stage.stage_name,
         hours: stage.hours === null ? null : Number(stage.hours),
-        dateStart: stage.date_start ? stage.date_start.toISOString().slice(0, 10) : '',
-        dateEnd: stage.date_end ? stage.date_end.toISOString().slice(0, 10) : '',
+        dateStart: toDateOnly(stage.date_start),
+        dateEnd: toDateOnly(stage.date_end),
         percent: stage.percent === null ? 0 : Number(stage.percent),
         isReady: boolFrom(stage.is_ready),
         updatedAt: stage.updated_at,
@@ -1417,14 +1431,22 @@ const fetchCrmState = async () => {
     orders
   };
 
+  const updatedMillis = orderRows.reduce((latest, row) => {
+    const ts = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+    return Math.max(latest, ts);
+  }, 0) || Date.now();
+  const updatedAtIso = new Date(updatedMillis).toISOString();
+  const plannerState = buildPlannerStateFromCrm(board);
+
+  if (!plannerState.updatedAt) {
+    plannerState.updatedAt = updatedAtIso;
+  }
+
   return {
     board,
     lanes,
-    updatedAt: orderRows.reduce((latest, row) => {
-      const ts = row.updated_at ? new Date(row.updated_at).getTime() : 0;
-      return Math.max(latest, ts);
-    }, 0) || Date.now(),
-    plannerState: buildPlannerStateFromCrm(board)
+    updatedAt: updatedAtIso,
+    plannerState
   };
 };
 
@@ -1696,8 +1718,8 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
 
     if (existingRow) {
       const existingHours = existingRow.hours === null ? null : Number(existingRow.hours);
-      const existingStart = existingRow.date_start ? existingRow.date_start.toISOString().slice(0, 10) : null;
-      const existingEnd = existingRow.date_end ? existingRow.date_end.toISOString().slice(0, 10) : null;
+      const existingStart = toDateOnlyOrNull(existingRow.date_start);
+      const existingEnd = toDateOnlyOrNull(existingRow.date_end);
       const existingPercent = numberOrNull(existingRow.percent) ?? 0;
       const existingReady = boolFrom(existingRow.is_ready);
       const existingKey = normalizePlannerStage(existingRow.stage_key, existingRow.stage_name);
@@ -2293,7 +2315,8 @@ app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (req, r
         targetId = Number(existing.id);
       }
 
-      const fallbackIdentity = order.identity || order.orderNo || order.title || `ORD-${Date.now()}`;
+      const identitySource = order.identity || order.orderNo || order.title || (order.stageKeys.size ? Array.from(order.stageKeys).sort().join('-') : 'order');
+      const fallbackIdentity = identitySource ? `ORD-${simpleHash(identitySource)}` : 'ORD-unknown';
       const existingCustomer = existing?.customer || '';
       const existingTitle = existing?.title || '';
       const existingOrderNo = existing?.orderNo || '';
