@@ -15,12 +15,78 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true';
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
-  max: Number.parseInt(process.env.PGPOOL_MAX || '10', 10),
-  idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
-});
+
+let pool = null;
+let usingPgMem = false;
+let pgMemDatabase = null;
+
+const initRealPostgresPool = async () => {
+  const candidate = new Pool({
+    connectionString: DATABASE_URL,
+    ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
+    max: Number.parseInt(process.env.PGPOOL_MAX || '10', 10),
+    idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
+  });
+
+  candidate.on('error', (err) => {
+    console.error('Unexpected PostgreSQL client error', err);
+  });
+
+  try {
+    await candidate.query('SELECT 1');
+    return candidate;
+  } catch (err) {
+    await candidate.end().catch(() => {});
+    throw err;
+  }
+};
+
+const initPgMemPool = (reason, error) => {
+  const { newDb } = require('pg-mem');
+  pgMemDatabase = newDb({ autoCreateForeignKeyIndices: true });
+  const adapter = pgMemDatabase.adapters.createPg();
+  const memPool = new adapter.Pool();
+  usingPgMem = true;
+  const messageParts = ['Using in-memory PostgreSQL (pg-mem)'];
+  if (reason) {
+    messageParts.push(`reason: ${reason}`);
+  }
+  if (error) {
+    messageParts.push(`details: ${error.message}`);
+  }
+  console.warn(messageParts.join(' | '));
+  return memPool;
+};
+
+const createDatabasePool = async () => {
+  if (pool) {
+    return pool;
+  }
+
+  if (process.env.USE_PGMEM === 'true') {
+    pool = initPgMemPool('forced by USE_PGMEM');
+    return pool;
+  }
+
+  try {
+    pool = await initRealPostgresPool();
+    return pool;
+  } catch (err) {
+    console.warn('Failed to connect to PostgreSQL, attempting pg-mem fallback');
+    if (process.env.PGMEM_FALLBACK === 'false') {
+      throw err;
+    }
+    try {
+      pool = initPgMemPool('fallback after connection failure', err);
+      return pool;
+    } catch (memErr) {
+      console.error('Failed to initialize pg-mem fallback', memErr);
+      throw err;
+    }
+  }
+};
+
+const poolReady = createDatabasePool();
 
 const wrapAsync = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch(next);
@@ -34,10 +100,6 @@ const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
 const DEFAULT_ADMIN_NAME = process.env.DEFAULT_ADMIN_NAME || 'Admin';
 
 const LEGACY_IMPORT_ENABLED = process.env.PLANNER_SKIP_LEGACY_IMPORT !== 'true';
-
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error', err);
-});
 
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
@@ -247,6 +309,7 @@ const mapStageRow = (row) => ({
 });
 
 const fetchCrmState = async (boardKey = 'default') => {
+  await poolReady;
   const { rows: orderRows } = await pool.query(
     `SELECT id, order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at
      FROM crm_orders
@@ -348,40 +411,42 @@ const loadLegacyStateFromDisk = async () => {
 };
 
 const ensureDatabase = async () => {
+  await poolReady;
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS planner_state (
-      id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+      id BIGSERIAL PRIMARY KEY,
       state TEXT NOT NULL,
       meta JSONB,
       hash TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'planner_state' AND column_name = 'data'
-      ) THEN
-        BEGIN
-          EXECUTE 'ALTER TABLE planner_state RENAME COLUMN data TO state';
-        EXCEPTION WHEN duplicate_column THEN
-          NULL;
-        END;
-      END IF;
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'planner_state' AND column_name = 'state_json'
-      ) THEN
-        BEGIN
-          EXECUTE 'ALTER TABLE planner_state RENAME COLUMN state_json TO state';
-        EXCEPTION WHEN duplicate_column THEN
-          NULL;
-        END;
-      END IF;
-    END$$;
+
+  const { rows: plannerColumns } = await pool.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'planner_state'
   `);
+  const plannerColumnSet = new Set(plannerColumns.map((row) => row.column_name));
+
+  if (plannerColumnSet.has('data') && !plannerColumnSet.has('state')) {
+    try {
+      await pool.query('ALTER TABLE planner_state RENAME COLUMN data TO state');
+      plannerColumnSet.add('state');
+    } catch (err) {
+      console.warn('Failed to rename planner_state.data to state', err.message);
+    }
+  }
+
+  if (plannerColumnSet.has('state_json') && !plannerColumnSet.has('state')) {
+    try {
+      await pool.query('ALTER TABLE planner_state RENAME COLUMN state_json TO state');
+      plannerColumnSet.add('state');
+    } catch (err) {
+      console.warn('Failed to rename planner_state.state_json to state', err.message);
+    }
+  }
+
   await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS state TEXT');
   await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS meta JSONB');
   await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS hash TEXT');
@@ -487,6 +552,7 @@ const ensureDatabase = async () => {
 };
 
 const ensureDefaultAdmin = async () => {
+  await poolReady;
   const { rows } = await pool.query('SELECT id FROM users LIMIT 1');
   if (rows.length > 0) {
     return;
@@ -502,17 +568,20 @@ const ensureDefaultAdmin = async () => {
 
 const getUserByEmail = async (email) => {
   if (!email) return null;
+  await poolReady;
   const { rows } = await pool.query('SELECT id, email, password_hash, name, role FROM users WHERE email = $1 LIMIT 1', [email]);
   return rows[0] ?? null;
 };
 
 const getUserById = async (id) => {
   if (!id) return null;
+  await poolReady;
   const { rows } = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1', [id]);
   return rows[0] ?? null;
 };
 
 const readStateFromDatabase = async () => {
+  await poolReady;
   const { rows } = await pool.query('SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1');
   if (rows.length > 0) {
     const row = rows[0];
@@ -549,6 +618,7 @@ const normalizeStoredState = async () => {
     return cachedState;
   }
 
+  await poolReady;
   await ensureDatabase();
   await ensureDefaultAdmin();
 
@@ -587,6 +657,7 @@ const normalizeStoredState = async () => {
 };
 
 const appendLog = async (entry) => {
+  await poolReady;
   await pool.query(
     `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -606,6 +677,7 @@ const appendLog = async (entry) => {
 };
 
 const appendCrmActivity = async (entry, client = pool) => {
+  await poolReady;
   await client.query(
     `INSERT INTO activity_log (entity, entity_id, action, payload, user_id, user_name)
      VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -696,6 +768,7 @@ app.get('/api/crm/state', requireAuth, wrapAsync(async (req, res) => {
 }));
 
 app.put('/api/crm/orders', requireRole('worker', 'admin'), wrapAsync(async (req, res) => {
+  await poolReady;
   const raw = Array.isArray(req.body?.orders)
     ? req.body.orders
     : Array.isArray(req.body)
@@ -848,6 +921,7 @@ app.put('/api/crm/orders', requireRole('worker', 'admin'), wrapAsync(async (req,
 }));
 
 app.put('/api/crm/stages', requireRole('worker', 'admin'), wrapAsync(async (req, res) => {
+  await poolReady;
   const raw = Array.isArray(req.body?.stages)
     ? req.body.stages
     : Array.isArray(req.body)
@@ -1029,6 +1103,7 @@ const extractStateFromBody = (body) => {
 };
 
 app.put('/api/state', async (req, res) => {
+  await poolReady;
   const { state, meta } = extractStateFromBody(req.body);
   if (!state) {
     res.status(400).send('Invalid state payload');
@@ -1159,7 +1234,10 @@ const shutdown = async (signal = 'SIGTERM') => {
     serverInstance.close();
   }
   try {
-    await pool.end();
+    await poolReady;
+    if (pool && typeof pool.end === 'function') {
+      await pool.end();
+    }
   } catch (err) {
     console.error('Error while closing PostgreSQL pool', err);
   }
