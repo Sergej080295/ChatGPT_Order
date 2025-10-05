@@ -357,6 +357,47 @@ const ensureDatabase = async () => {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'planner_state' AND column_name = 'data'
+      ) THEN
+        BEGIN
+          EXECUTE 'ALTER TABLE planner_state RENAME COLUMN data TO state';
+        EXCEPTION WHEN duplicate_column THEN
+          NULL;
+        END;
+      END IF;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'planner_state' AND column_name = 'state_json'
+      ) THEN
+        BEGIN
+          EXECUTE 'ALTER TABLE planner_state RENAME COLUMN state_json TO state';
+        EXCEPTION WHEN duplicate_column THEN
+          NULL;
+        END;
+      END IF;
+    END$$;
+  `);
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS state TEXT');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS meta JSONB');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS hash TEXT');
+  await pool.query('ALTER TABLE planner_state ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ');
+  const fallbackState = createInitialState();
+  await pool.query('UPDATE planner_state SET state = $1 WHERE state IS NULL', [fallbackState.state]);
+  await pool.query('UPDATE planner_state SET meta = COALESCE(meta, $1::jsonb)', [JSON.stringify(fallbackState.meta)]);
+  await pool.query('UPDATE planner_state SET updated_at = COALESCE(updated_at, NOW())');
+  const { rows: plannerRows } = await pool.query("SELECT id, state, hash FROM planner_state WHERE hash IS NULL OR hash = ''");
+  for (const row of plannerRows) {
+    const computedHash = simpleHash(row.state || '');
+    await pool.query('UPDATE planner_state SET hash = $1 WHERE id = $2', [computedHash, row.id]);
+  }
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN state SET NOT NULL");
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN hash SET NOT NULL");
+  await pool.query("ALTER TABLE planner_state ALTER COLUMN updated_at SET NOT NULL");
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS planner_activity_log (
