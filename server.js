@@ -11,6 +11,8 @@ const { Pool } = require('pg');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const PLANNER_FILE = path.join(PUBLIC_DIR, 'Planner_Codex_v3.html');
+const CRM_FILE = path.join(PUBLIC_DIR, 'CRM.html');
 
 const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
@@ -530,7 +532,7 @@ const ensureDatabase = async () => {
   await pool.query("UPDATE crm_orders SET state = COALESCE(state, 'new')");
   await pool.query('UPDATE crm_orders SET ready = COALESCE(ready, FALSE)');
   await pool.query('UPDATE crm_orders SET progress = COALESCE(progress, 0)');
-  await pool.query("UPDATE crm_orders SET board_key = COALESCE(NULLIF(board_key, ''), 'default')");
+  await pool.query("UPDATE crm_orders SET board_key = CASE WHEN board_key IS NULL OR board_key = '' THEN 'default' ELSE board_key END");
   await pool.query('UPDATE crm_orders SET updated_at = COALESCE(updated_at, NOW())');
   await pool.query('UPDATE crm_orders SET created_at = COALESCE(created_at, NOW())');
 
@@ -1270,7 +1272,15 @@ app.put('/api/state', async (req, res) => {
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
 app.get('/', (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
+  res.redirect('/planner');
+});
+
+app.get('/planner', (_req, res) => {
+  res.sendFile(PLANNER_FILE);
+});
+
+app.get('/crm', (_req, res) => {
+  res.sendFile(CRM_FILE);
 });
 
 app.use((err, _req, res, _next) => {
