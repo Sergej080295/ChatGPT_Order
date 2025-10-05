@@ -194,6 +194,35 @@ const STAGE_FIELD_CONFIG = {
   meta: { column: 'meta', roles: ['admin'] },
 };
 
+const CRM_STAGE_MAPPINGS = [
+  { key: 'draw', rx: /(подготовка|технолог|обработк[аи]\s*черт)/i, title: 'Подготовка в работу' },
+  { key: 'laser', rx: /(лазер|резк)/i, title: 'Лазер' },
+  { key: 'bend', rx: /гибк/i, title: 'Гибка' },
+  { key: 'weld', rx: /свар/i, title: 'Сварка' },
+  { key: 'mech', rx: /мехо?бработ/i, title: 'Мехобработка' },
+  { key: 'proc', rx: /закуп/i, title: 'Закупка' },
+  { key: 'shear', rx: /рубк/i, title: 'Рубка' },
+  { key: 'pack', rx: /упаков/i, title: 'Упаковка' },
+  { key: 'ship', rx: /отгруз/i, title: 'Отгрузка' },
+];
+
+const CRM_STAGE_KEYS = CRM_STAGE_MAPPINGS.map((item) => item.key);
+
+const CRM_CAPACITY_DEFAULTS = Object.freeze({
+  bend: 15,
+  laser: 36,
+  draw: 8,
+  weld: 4,
+  mech: 8,
+});
+
+const CRM_PARALLEL_DEFAULTS = Object.freeze({
+  proc: 5,
+  shear: 5,
+  pack: 3,
+  ship: 5,
+});
+
 const isFieldAllowed = (config, key, role) => {
   const descriptor = config[key];
   if (!descriptor) return false;
@@ -346,6 +375,271 @@ const fetchCrmState = async (boardKey = 'default') => {
   }));
 
   return { boardKey, orders };
+};
+
+const normalizeIdentityPart = (value) => {
+  return String(value ?? '').trim().toLowerCase();
+};
+
+const buildOrderIdentityKey = (orderNumber, customer) => {
+  const numberPart = normalizeIdentityPart(orderNumber);
+  const customerPart = normalizeIdentityPart(customer);
+  if (!numberPart && !customerPart) return '';
+  return `${numberPart}::${customerPart}`;
+};
+
+const detectCrmStageKey = (name) => {
+  if (!name) return null;
+  const normalized = String(name).trim();
+  for (const mapping of CRM_STAGE_MAPPINGS) {
+    if (mapping.rx.test(normalized)) {
+      return mapping.key;
+    }
+  }
+  switch (normalized.toLowerCase()) {
+    case 'лазер':
+      return 'laser';
+    case 'резка':
+      return 'laser';
+    case 'гибка':
+      return 'bend';
+    case 'сварка':
+      return 'weld';
+    case 'мехобработка':
+      return 'mech';
+    case 'подготовка в работу':
+    case 'технологи':
+      return 'draw';
+    case 'закупка':
+      return 'proc';
+    case 'рубка':
+      return 'shear';
+    case 'упаковка':
+      return 'pack';
+    case 'отгрузка':
+      return 'ship';
+    default:
+      return null;
+  }
+};
+
+const parseNumericValue = (value) => {
+  if (value == null || value === '') return null;
+  const str = String(value).trim().replace(/,/g, '.');
+  const parsed = Number.parseFloat(str);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+};
+
+const extractStageHours = (stage) => {
+  if (!stage) return 0;
+  const direct = parseNumericValue(stage.hours);
+  if (direct != null) return direct;
+  const meta = stage.meta || {};
+  const candidates = [
+    meta.hours,
+    meta.value,
+    meta.hoursPlanned,
+    meta.hours_total,
+    meta.hoursTotal,
+    meta.amount,
+    meta.amountHours,
+    meta['руб/часов'],
+    meta.rubPerHour,
+    meta.hoursPerOrder,
+    meta.hours_per_order,
+    meta.hoursPerHour,
+  ];
+  for (const candidate of candidates) {
+    const parsed = parseNumericValue(candidate);
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+  return 0;
+};
+
+const toIsoString = (value) => {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+};
+
+const cloneRouteMap = (route) => {
+  const cloned = {};
+  Object.entries(route).forEach(([key, info]) => {
+    if (!info) return;
+    cloned[key] = {
+      hours: info.hours ?? 0,
+      start: info.start ?? null,
+      end: info.end ?? null,
+      doneAt: info.doneAt ?? null,
+    };
+  });
+  return cloned;
+};
+
+const computeExtraHours = (stageKey, hours) => {
+  if (!Number.isFinite(hours) || hours <= 0) return 0;
+  const base = Math.max(0.25, hours * 0.05);
+  const scaled = stageKey === 'laser' ? Math.max(base, hours * 0.02) : base;
+  return Math.round(scaled * 100) / 100;
+};
+
+const buildPlannerStateFromCrm = async (boardKey = 'default') => {
+  const snapshot = await fetchCrmState(boardKey);
+  const stageKeySet = new Set(CRM_STAGE_KEYS);
+  const ordersByStage = new Map();
+  stageKeySet.forEach((key) => ordersByStage.set(key, []));
+  const tasks = [];
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const nowHuman = now.toLocaleString('ru-RU');
+
+  let totalStages = 0;
+  let readyStages = 0;
+
+  snapshot.orders.forEach((order) => {
+    const orderNumber = order.orderNumber ?? order.order_number ?? '';
+    const customer = order.customer ?? '';
+    const orderId = [orderNumber, customer].filter(Boolean).join(' · ') || `Заказ #${order.id}`;
+    const orderIdentity = buildOrderIdentityKey(orderNumber, customer) || `order::${order.id}`;
+    const stages = Array.isArray(order.stages) ? order.stages : [];
+    const stageCount = stages.length;
+    const routeBase = {};
+
+    stages.forEach((stage) => {
+      const stageKey = detectCrmStageKey(stage?.name);
+      if (!stageKey) return;
+      const hours = extractStageHours(stage);
+      routeBase[stageKey] = {
+        hours,
+        start: toIsoString(stage?.plannedStart),
+        end: toIsoString(stage?.plannedEnd),
+        doneAt: stage?.ready ? (toIsoString(stage?.updatedAt) || nowIso) : null,
+      };
+    });
+
+    stages.forEach((stage) => {
+      const stageKey = detectCrmStageKey(stage?.name);
+      if (!stageKey) return;
+      if (!ordersByStage.has(stageKey)) {
+        ordersByStage.set(stageKey, []);
+      }
+
+      const hours = extractStageHours(stage);
+      const progressRaw = stage?.progress != null ? Number(stage.progress) : null;
+      const progress = Number.isFinite(progressRaw) ? Math.max(0, Math.min(100, progressRaw)) : (stage?.ready ? 100 : 0);
+      const startIso = toIsoString(stage?.plannedStart);
+      const endIso = toIsoString(stage?.plannedEnd);
+      const uid = `crm:${order.id}:${stage?.id ?? stageKey}`;
+      const task = {
+        uid,
+        orderId,
+        orderNumber,
+        orderCustomer: customer,
+        orderIdentity,
+        stage: stageKey,
+        childId: stage?.id != null ? String(stage.id) : `${order.id}-${stageKey}`,
+        parentId: String(order.id),
+        hours,
+        extraHours: computeExtraHours(stageKey, hours),
+        startDate: startIso,
+        endDate: endIso,
+        startMissing: !startIso,
+        endMissing: !endIso,
+        state: order.state ?? '',
+        status: stage?.ready ? 'done' : (order.ready ? 'done' : 'new'),
+        useReserve: false,
+        progress,
+        origStartDate: startIso,
+        route: cloneRouteMap(routeBase),
+        meta: {
+          stageName: stage?.name ?? '',
+          stagePosition: stage?.position ?? null,
+          stageCount,
+          orderId,
+          boardKey,
+          updatedAt: toIsoString(stage?.updatedAt) || nowIso,
+          updatedBy: stage?.updatedBy ?? order.updatedBy ?? null,
+        },
+      };
+
+      tasks.push(task);
+      ordersByStage.get(stageKey).push(uid);
+      totalStages += 1;
+      if (task.status === 'done' || progress >= 100) {
+        readyStages += 1;
+      }
+    });
+  });
+
+  const totalOrders = snapshot.orders.length;
+  const readyOrders = snapshot.orders.filter((order) => {
+    if (order.ready) return true;
+    const stages = Array.isArray(order.stages) ? order.stages : [];
+    if (!stages.length) return false;
+    return stages.every((stage) => stage?.ready || Number(stage?.progress ?? 0) >= 100);
+  }).length;
+
+  const ordersSummary = {
+    totalOrders,
+    readyOrders,
+    totalStages,
+    readyStages,
+    boardKey,
+  };
+
+  const summaryText = `CRM: ${readyOrders}/${totalOrders} заказов · ${readyStages}/${totalStages} переделов`;
+
+  const state = {
+    source: 'crm',
+    boardKey,
+    generatedAt: nowIso,
+    process: 'orders',
+    freshness: nowHuman,
+    freshnessCsv: '',
+    freshnessManual: nowHuman,
+    lastImportTime: '',
+    lastManualTime: nowHuman,
+    t: tasks,
+    done: [],
+    trash: [],
+    exc: [],
+    res: [],
+    locked: [],
+    orders: [...ordersByStage.entries()],
+    capByProc: { ...CRM_CAPACITY_DEFAULTS },
+    parallelByProc: { ...CRM_PARALLEL_DEFAULTS },
+    meta: {
+      source: 'crm',
+      boardKey,
+      generatedAt: nowIso,
+      summary: summaryText,
+      ordersSummary,
+      lastChange: {
+        summary: summaryText,
+        time: nowHuman,
+        stage: 'multi',
+        source: 'crm-sync',
+        ordersSummary,
+      },
+      settings: {
+        capacity: { ...CRM_CAPACITY_DEFAULTS },
+        parallel: { ...CRM_PARALLEL_DEFAULTS },
+        updatedAt: nowIso,
+      },
+      storage: {
+        mode: 'crm',
+        remote: true,
+        local: false,
+        remotePreferred: false,
+      },
+    },
+  };
+
+  return state;
 };
 
 const simpleHash = (str) => {
@@ -824,6 +1118,12 @@ app.get('/api/crm/state', requireAuth, wrapAsync(async (req, res) => {
   const boardKey = typeof req.query.board === 'string' && req.query.board.trim() ? req.query.board.trim() : 'default';
   const snapshot = await fetchCrmState(boardKey);
   res.json(snapshot);
+}));
+
+app.get('/api/crm/planner_state', requireAuth, wrapAsync(async (req, res) => {
+  const boardKey = typeof req.query.board === 'string' && req.query.board.trim() ? req.query.board.trim() : 'default';
+  const state = await buildPlannerStateFromCrm(boardKey);
+  res.json(state);
 }));
 
 app.put('/api/crm/orders', requireRole('worker', 'admin'), wrapAsync(async (req, res) => {

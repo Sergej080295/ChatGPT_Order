@@ -160,6 +160,7 @@ h3{margin:0 0 10px;font-size:16px}
 .mode-pill[data-mode="hybrid"]::before{background:#7c3aed}
 .uid-badge{display:none;margin-left:6px;padding:0 6px;border-radius:999px;background:#e2e8f0;color:#475569;font-size:11px;font-weight:600;line-height:18px;vertical-align:middle}
 body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
+body.crm-source [data-csv-only]{display:none!important}
 .change-group{margin-bottom:12px}
 .change-group:last-child{margin-bottom:0}
 .change-group-head{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px;font-weight:600;color:#1e293b}
@@ -560,7 +561,7 @@ body.overview-fs-active{overflow:hidden}
     </label>
 
     <div class="tools">
-      <button id="importCsvBtn" class="btn">Импорт (.csv)</button>
+      <button id="importCsvBtn" class="btn" data-csv-only>Импорт (.csv)</button>
       <input id="file" type="file" accept=".csv" style="display:none">
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
@@ -578,7 +579,7 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <button id="undoImport" class="btn">Откат импорта</button>
           <button id="exportCSV" class="btn">Экспорт (.csv)</button>
-	  <label class="btn">Импорт состояния
+      <label class="btn" data-csv-only>Импорт состояния
 	    <input id="stateFile" type="file" accept=".csv" style="display:none">
 	  </label>
       <button id="clearAll" class="btn">Очистить</button>
@@ -1294,11 +1295,23 @@ const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
 const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
+const DATA_SOURCE_PREF_KEY = 'planner_data_source_pref_v1';
+const SYNC_SPEED_PREF_KEY = 'planner_sync_speed_pref_v1';
+const DATA_SOURCE_OPTIONS = {
+  csv: { value:'csv', label:'CSV (автономно)' },
+  crm: { value:'crm', label:'CRM / SQL база' }
+};
+const SYNC_SPEED_OPTIONS = {
+  fast: { value:'fast', label:'Быстро (0.5–1 c)', interval: 900 },
+  standard: { value:'standard', label:'Стандарт (1–2 c)', interval: 1800 },
+  calm: { value:'calm', label:'Спокойно (3–5 c)', interval: 4000 }
+};
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
   local:{label:'Локальный кэш'},
   session:{label:'Сеанс (память)'},
   hybrid:{label:'Гибридные данные'},
+  crm:{label:'CRM база'},
   unknown:{label:'—'}
 };
 let enableLocalStore = true;
@@ -1732,24 +1745,36 @@ function createRemoteBridge(){
 }
 
 function remoteSyncEnabled(){
-  return !!(remoteBridge.hasRemote && enableRemoteStore);
+  return !crmModeActive && !!(remoteBridge.hasRemote && enableRemoteStore);
 }
 
 function refreshDataModeIndicator(){
   const badge = $("#dataModeBadge");
   const active = [];
   if(enableLocalStore) active.push('локальный кэш');
-  if(remoteSyncEnabled()) active.push('SQL база');
-  else if(!remoteBridge.hasRemote) active.push('SQL (недоступно)');
-  else if(enableRemoteStore) active.push('SQL (отключено)');
+  if(crmModeActive){
+    active.push('CRM режим');
+  }else if(remoteSyncEnabled()){
+    active.push('SQL база');
+  }else if(!remoteBridge.hasRemote){
+    active.push('SQL (недоступно)');
+  }else if(enableRemoteStore){
+    active.push('SQL (отключено)');
+  }
   if(!active.length) active.push('только текущий сеанс');
   if(badge){
     let mode = currentDataOrigin;
-    if((mode === 'remote' || mode === 'hybrid') && !remoteSyncEnabled()){
+    if(mode === 'crm' && !crmModeActive){
+      mode = remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session');
+    }else if((mode === 'remote' || mode === 'hybrid') && !remoteSyncEnabled()){
       mode = enableLocalStore ? 'local' : 'session';
     }
     if(!mode || mode === 'unknown'){
-      mode = remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session');
+      if(crmModeActive){
+        mode = 'crm';
+      }else{
+        mode = remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session');
+      }
     }
     const meta = DATA_MODE_LABELS[mode] || DATA_MODE_LABELS.unknown;
     badge.dataset.mode = mode;
@@ -1852,6 +1877,32 @@ function loadStoragePrefs(){
     pref.local = true;
   }
   return pref;
+}
+
+function loadDataSourcePreference(){
+  try{
+    const raw = localStorage.getItem(DATA_SOURCE_PREF_KEY);
+    if(raw === 'crm' || raw === 'csv') return raw;
+  }catch(_){ /* ignore */ }
+  return 'csv';
+}
+
+function saveDataSourcePreference(mode){
+  try{ localStorage.setItem(DATA_SOURCE_PREF_KEY, mode); }
+  catch(_){ /* ignore */ }
+}
+
+function loadSyncSpeedPreference(){
+  try{
+    const raw = localStorage.getItem(SYNC_SPEED_PREF_KEY);
+    if(raw && Object.prototype.hasOwnProperty.call(SYNC_SPEED_OPTIONS, raw)) return raw;
+  }catch(_){ /* ignore */ }
+  return 'standard';
+}
+
+function saveSyncSpeedPreference(speed){
+  try{ localStorage.setItem(SYNC_SPEED_PREF_KEY, speed); }
+  catch(_){ /* ignore */ }
 }
 
 function applyStoragePrefs(changes={}){
@@ -1959,6 +2010,11 @@ function updateRealtimeMode(){
   }else{
     if(remotePollTimer){ clearTimeout(remotePollTimer); remotePollTimer = null; }
   }
+  if(crmModeActive){
+    startCrmPolling();
+  }else{
+    stopCrmPolling();
+  }
   refreshDataModeIndicator();
 }
 
@@ -1985,6 +2041,12 @@ function readLocalSnapshot(){
 }
 
 async function fetchLatestFromRemote(opts={}){
+  if(crmModeActive){
+    return loadCrmSnapshot({
+      preserveProcess: opts.preserveProcess !== false,
+      skipToasts: !!opts.skipToasts
+    });
+  }
   if(!remoteSyncEnabled()) return false;
   try{
     const raw = await remoteBridge.pull();
@@ -2001,6 +2063,7 @@ async function fetchLatestFromRemote(opts={}){
 }
 
 function startRemotePolling(){
+  if(crmModeActive){ return; }
   if(remotePollTimer) clearTimeout(remotePollTimer);
   if(!remoteSyncEnabled()){ remotePollTimer = null; return; }
   const interval = remoteBridge.pollInterval || REMOTE_POLL_INTERVAL;
@@ -2148,6 +2211,11 @@ function applyStateFromExternal(raw, opts={}){
 }
 
 async function bootstrapState(){
+  if(crmModeActive){
+    await loadCrmSnapshot({ preserveProcess:false, skipToasts:true });
+    updateRealtimeMode();
+    return;
+  }
   let loaded = null;
   let loadedFromRemote = false;
   if(remoteSyncEnabled()){
@@ -2215,6 +2283,11 @@ let stateMeta = {
 
 let capByProc = { ...stateMeta.settings.capacity };
 let parallelByProc = { ...stateMeta.settings.parallel };
+let plannerDataSource = loadDataSourcePreference();
+let plannerSyncSpeed = loadSyncSpeedPreference();
+let crmModeActive = plannerDataSource === 'crm';
+let crmPollTimer = null;
+let crmLastSyncOk = true;
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -2255,6 +2328,138 @@ const storagePref = loadStoragePrefs();
 enableLocalStore = storagePref.local;
 remotePreferenceRequested = storagePref.remote;
 enableRemoteStore = remoteBridge.hasRemote && remotePreferenceRequested;
+
+function getSyncInterval(){
+  const entry = SYNC_SPEED_OPTIONS[plannerSyncSpeed] || SYNC_SPEED_OPTIONS.standard;
+  return entry.interval;
+}
+
+function refreshDataSourceUI(){
+  const sourceSelect = document.getElementById('dataSourceSelect');
+  if(sourceSelect && sourceSelect.value !== plannerDataSource){
+    sourceSelect.value = plannerDataSource;
+  }
+  const syncSelect = document.getElementById('syncSpeedSelect');
+  if(syncSelect && syncSelect.value !== plannerSyncSpeed){
+    syncSelect.value = plannerSyncSpeed;
+  }
+  if(document.body){
+    document.body.classList.toggle('crm-source', plannerDataSource === 'crm');
+  }
+}
+
+function setPlannerDataSource(mode, opts={}){
+  const normalized = mode === 'crm' ? 'crm' : 'csv';
+  if(plannerDataSource === normalized && !opts.force) return;
+  plannerDataSource = normalized;
+  saveDataSourcePreference(normalized);
+  applyDataSourceMode(opts);
+}
+
+function setPlannerSyncSpeed(speed, opts={}){
+  const normalized = Object.prototype.hasOwnProperty.call(SYNC_SPEED_OPTIONS, speed) ? speed : 'standard';
+  if(plannerSyncSpeed === normalized && !opts.force) return;
+  plannerSyncSpeed = normalized;
+  saveSyncSpeedPreference(normalized);
+  applySyncSpeedPreference(opts);
+}
+
+function applySyncSpeedPreference(opts={}){
+  const interval = getSyncInterval();
+  window.PLANNER_SYNC_INTERVAL = interval;
+  if(crmModeActive){
+    if(opts.restart !== false){
+      stopCrmPolling();
+      if(opts.deferStart){
+        // no immediate restart
+      }else{
+        startCrmPolling();
+      }
+    }
+  }else if(remoteBridge && typeof remoteBridge.refresh === 'function'){
+    try{ remoteBridge.refresh(); }
+    catch(_){ /* ignore */ }
+  }
+  refreshDataSourceUI();
+}
+
+async function loadCrmSnapshot(opts={}){
+  if(!crmModeActive) return false;
+  try{
+    const res = await fetch('/api/crm/planner_state', { headers:{ 'Accept':'application/json' } });
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+    if(!text) return false;
+    let payload = null;
+    try{ payload = JSON.parse(text); }
+    catch(err){ console.warn('CRM snapshot parse failed', err); return false; }
+    applyStateFromExternal(payload, {
+      preserveProcess: opts.preserveProcess !== false,
+      origin: 'crm',
+      skipToasts: !!opts.skipToasts,
+      meta: payload?.meta || null
+    });
+    setDataMode('crm');
+    crmLastSyncOk = true;
+    return true;
+  }catch(err){
+    console.warn('CRM snapshot fetch failed', err);
+    crmLastSyncOk = false;
+    return false;
+  }
+}
+
+function stopCrmPolling(){
+  if(crmPollTimer){
+    clearTimeout(crmPollTimer);
+    crmPollTimer = null;
+  }
+}
+
+function startCrmPolling(){
+  if(!crmModeActive) return;
+  stopCrmPolling();
+  const interval = getSyncInterval();
+  const tick = async ()=>{
+    if(!crmModeActive){
+      crmPollTimer = null;
+      return;
+    }
+    await loadCrmSnapshot({ preserveProcess:true, skipToasts:true });
+    crmPollTimer = setTimeout(tick, interval);
+  };
+  crmPollTimer = setTimeout(tick, interval);
+}
+
+function applyDataSourceMode(opts={}){
+  const wasCrm = crmModeActive;
+  crmModeActive = plannerDataSource === 'crm';
+  refreshDataSourceUI();
+
+  if(crmModeActive){
+    window.PLANNER_STATE_ENDPOINT = '';
+    window.PLANNER_STATE_METHOD = 'PUT';
+    if(!opts.deferLoad){
+      loadCrmSnapshot({ preserveProcess: opts.preserveProcess !== false, skipToasts: !!opts.skipToasts })
+        .then(()=>{ if(opts.startPolling !== false) startCrmPolling(); });
+    }
+    applySyncSpeedPreference({ restart:true, deferStart: opts.deferLoad });
+  }else{
+    if(wasCrm){
+      stopCrmPolling();
+    }
+    window.PLANNER_STATE_ENDPOINT = '/api/state';
+    window.PLANNER_STATE_METHOD = 'PUT';
+    if(!opts.deferLoad && opts.reload !== false){
+      fetchLatestFromRemote({ preserveProcess: opts.preserveProcess !== false, origin:'remote' });
+    }
+    applySyncSpeedPreference({ restart:false });
+  }
+
+  if(opts.updateRealtime !== false){
+    updateRealtimeMode();
+  }
+}
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -9672,6 +9877,60 @@ function renderSystemSettingsUI(){
   if(!container) return;
   container.innerHTML = '';
   const frag = document.createDocumentFragment();
+  const sourceRow = document.createElement('div');
+  sourceRow.className = 'settings-system-row';
+  const sourceLabel = document.createElement('div');
+  sourceLabel.className = 'label';
+  const sourceTitle = document.createElement('strong');
+  sourceTitle.textContent = 'Источник данных';
+  const sourceHint = document.createElement('span');
+  sourceHint.textContent = 'CSV (локально) или CRM (SQL)';
+  sourceLabel.appendChild(sourceTitle);
+  sourceLabel.appendChild(sourceHint);
+  const sourceControls = document.createElement('div');
+  sourceControls.className = 'controls';
+  const sourceSelect = document.createElement('select');
+  sourceSelect.id = 'dataSourceSelect';
+  Object.values(DATA_SOURCE_OPTIONS).forEach(opt=>{
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    sourceSelect.appendChild(option);
+  });
+  sourceSelect.value = plannerDataSource;
+  sourceSelect.addEventListener('change', e=> setPlannerDataSource(e.target.value));
+  sourceControls.appendChild(sourceSelect);
+  sourceRow.appendChild(sourceLabel);
+  sourceRow.appendChild(sourceControls);
+  frag.appendChild(sourceRow);
+
+  const speedRow = document.createElement('div');
+  speedRow.className = 'settings-system-row';
+  const speedLabel = document.createElement('div');
+  speedLabel.className = 'label';
+  const speedTitle = document.createElement('strong');
+  speedTitle.textContent = 'Скорость синхронизации';
+  const speedHint = document.createElement('span');
+  speedHint.textContent = 'Интервал fallback-поллинга';
+  speedLabel.appendChild(speedTitle);
+  speedLabel.appendChild(speedHint);
+  const speedControls = document.createElement('div');
+  speedControls.className = 'controls';
+  const speedSelect = document.createElement('select');
+  speedSelect.id = 'syncSpeedSelect';
+  Object.values(SYNC_SPEED_OPTIONS).forEach(opt=>{
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    speedSelect.appendChild(option);
+  });
+  speedSelect.value = plannerSyncSpeed;
+  speedSelect.addEventListener('change', e=> setPlannerSyncSpeed(e.target.value));
+  speedControls.appendChild(speedSelect);
+  speedRow.appendChild(speedLabel);
+  speedRow.appendChild(speedControls);
+  frag.appendChild(speedRow);
+
   STAGES.forEach(stage=>{
     const row = document.createElement('div');
     row.className = 'settings-system-row';
@@ -9715,6 +9974,7 @@ function renderSystemSettingsUI(){
   note.className = 'settings-system-note';
   note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
   container.appendChild(note);
+  refreshDataSourceUI();
   refreshSystemSettingsAccess();
 }
 
@@ -10707,6 +10967,8 @@ document.addEventListener('keydown', e=>{
 });
 document.addEventListener('DOMContentLoaded', ()=>{
 
+  applySyncSpeedPreference({ restart:false, deferStart:true });
+  applyDataSourceMode({ initial:true, deferLoad:true, updateRealtime:false, startPolling:false, preserveProcess:false, skipToasts:true });
   setupRealtimeSync();
   wireHandlers();
   applyAccessMode();
