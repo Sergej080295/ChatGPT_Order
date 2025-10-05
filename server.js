@@ -112,8 +112,23 @@ const CRM_STAGE_ALIASES = new Map([
   ['упаковка', 'pack'],
   ['ship', 'ship'],
   ['отгрузка', 'ship'],
-  ['отгружено', 'ship']
+  ['отгружено', 'ship'],
+  ['рубка', 'shear'],
+  ['shear', 'shear']
 ]);
+
+const CRM_STAGE_LABELS = {
+  draw: 'Подготовка в работу',
+  proc: 'Закупка',
+  shear: 'Рубка',
+  laser: 'Лазер',
+  bend: 'Гибка',
+  weld: 'Сварка',
+  mech: 'Мехобработка',
+  pack: 'Упаковка',
+  ship: 'Отгрузка',
+  stage: 'Передел'
+};
 
 const DEFAULT_STATE = {
   t: [],
@@ -535,6 +550,368 @@ const normalizePlannerStage = (stageKey, stageName) => {
     }
   }
   return 'proc';
+};
+
+const safeString = (value) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  return String(value).trim();
+};
+
+const parseDateCandidate = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'number') {
+    const numericDate = new Date(value);
+    return Number.isNaN(numericDate.getTime()) ? null : numericDate;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const iso = new Date(trimmed);
+    if (!Number.isNaN(iso.getTime())) {
+      return iso;
+    }
+    const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) {
+      const normalized = new Date(`${match[1]}T00:00:00Z`);
+      if (!Number.isNaN(normalized.getTime())) {
+        return normalized;
+      }
+    }
+  }
+  return null;
+};
+
+const toDateOnly = (date) => (date ? date.toISOString().slice(0, 10) : '');
+
+const chooseLaneFromCounts = (counts) => {
+  if (!counts || counts.size === 0) return '';
+  let chosen = '';
+  let bestCount = -1;
+  counts.forEach((count, lane) => {
+    if (count > bestCount) {
+      chosen = lane;
+      bestCount = count;
+    }
+  });
+  return chosen;
+};
+
+const extractServerId = (task, identity) => {
+  const candidates = [
+    task?.serverId,
+    task?.orderServerId,
+    task?.order_id,
+    identity,
+    task?.parentId,
+    task?.orderIdentity,
+    task?.uid,
+    task?.orderId
+  ];
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined) continue;
+    if (typeof candidate === 'number' && Number.isInteger(candidate) && candidate > 0) {
+      return candidate;
+    }
+    const match = String(candidate).match(/srv-(\d+)/i);
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+  return null;
+};
+
+const collectPlannerTasks = (stateObj) => {
+  if (!stateObj || typeof stateObj !== 'object') return [];
+  const buckets = [];
+  if (Array.isArray(stateObj.t)) buckets.push(...stateObj.t);
+  if (Array.isArray(stateObj.done)) buckets.push(...stateObj.done);
+  return buckets.filter((item) => item && typeof item === 'object');
+};
+
+const finalizeOrderAggregates = (ordersMap) => {
+  const results = [];
+  ordersMap.forEach((aggregate) => {
+    const lane = chooseLaneFromCounts(aggregate.laneCounts);
+    const stageEntries = [];
+
+    aggregate.stageMap.forEach((stage) => {
+      let hours = null;
+      if (stage.hasHours) {
+        const normalizedHours = Number(stage.hours);
+        hours = Number.isFinite(normalizedHours) ? Number(normalizedHours.toFixed(2)) : null;
+      }
+
+      let startDate = '';
+      if (stage.startDates.length) {
+        const earliest = new Date(Math.min(...stage.startDates.map((d) => d.getTime())));
+        startDate = toDateOnly(earliest);
+      }
+
+      let endDate = '';
+      if (stage.endDates.length) {
+        const latest = new Date(Math.max(...stage.endDates.map((d) => d.getTime())));
+        endDate = toDateOnly(latest);
+      }
+
+      let percent = null;
+      if (stage.percentValues.length) {
+        const avg = stage.percentValues.reduce((sum, val) => sum + val, 0) / stage.percentValues.length;
+        percent = Math.max(0, Math.min(100, Math.round(avg)));
+      }
+
+      const ready = stage.hasReady ? stage.readyFlags.some(Boolean) : null;
+
+      if (stage.hasStart && startDate) {
+        aggregate.startDates.push(parseDateCandidate(`${startDate}T00:00:00Z`));
+      }
+      if (stage.hasEnd && endDate) {
+        aggregate.endDates.push(parseDateCandidate(`${endDate}T00:00:00Z`));
+      }
+      if (stage.percentValues.length) {
+        aggregate.percentValues.push(percent ?? 0);
+      }
+      if (stage.hasReady) {
+        aggregate.readyFlags.push(ready === true);
+      }
+
+      stageEntries.push({
+        stageKey: stage.stageKey,
+        stageName: CRM_STAGE_LABELS[stage.stageKey] || stage.stageKey,
+        hours,
+        hasHours: stage.hasHours,
+        dateStart: startDate,
+        hasStart: stage.hasStart && !!startDate,
+        dateEnd: endDate,
+        hasEnd: stage.hasEnd && !!endDate,
+        percent: percent ?? 0,
+        hasPercent: stage.percentValues.length > 0,
+        isReady: ready === null ? false : ready,
+        hasReady: stage.hasReady
+      });
+    });
+
+    stageEntries.sort((a, b) => {
+      const aIdx = PLANNER_STAGE_KEYS.indexOf(a.stageKey);
+      const bIdx = PLANNER_STAGE_KEYS.indexOf(b.stageKey);
+      if (aIdx === -1 && bIdx === -1) return a.stageKey.localeCompare(b.stageKey);
+      if (aIdx === -1) return 1;
+      if (bIdx === -1) return -1;
+      return aIdx - bIdx;
+    });
+
+    let orderPercent = null;
+    if (aggregate.percentValues.length) {
+      const avg = aggregate.percentValues.reduce((sum, val) => sum + val, 0) / aggregate.percentValues.length;
+      orderPercent = Math.max(0, Math.min(100, Math.round(avg)));
+    }
+
+    let orderStart = '';
+    if (aggregate.startDates.length) {
+      const earliest = new Date(Math.min(...aggregate.startDates.map((d) => d.getTime())));
+      orderStart = toDateOnly(earliest);
+    }
+
+    let orderEnd = '';
+    if (aggregate.endDates.length) {
+      const latest = new Date(Math.max(...aggregate.endDates.map((d) => d.getTime())));
+      orderEnd = toDateOnly(latest);
+    }
+
+    let orderIsDone = null;
+    if (aggregate.readyFlags.length && aggregate.readyFlags.length === stageEntries.length) {
+      orderIsDone = aggregate.readyFlags.every(Boolean);
+    }
+    const laneLower = lane.toLowerCase();
+    if (laneLower && (laneLower.includes('отгруж') || laneLower.includes('готов'))) {
+      orderIsDone = true;
+    }
+
+    results.push({
+      identity: aggregate.identity,
+      serverId: aggregate.serverId,
+      orderNo: aggregate.orderNo,
+      hasOrderNo: aggregate.hasOrderNo,
+      title: aggregate.title,
+      hasTitle: aggregate.hasTitle,
+      customer: aggregate.customer,
+      hasCustomer: aggregate.hasCustomer,
+      lane,
+      hasLane: aggregate.laneCounts.size > 0,
+      stages: stageEntries,
+      stageKeys: aggregate.stageKeys,
+      start: orderStart,
+      hasStart: !!orderStart,
+      end: orderEnd,
+      hasEnd: !!orderEnd,
+      percent: orderPercent ?? 0,
+      hasPercent: aggregate.percentValues.length > 0,
+      isDone: orderIsDone ?? false,
+      hasDone: orderIsDone !== null
+    });
+  });
+  return results;
+};
+
+const deriveOrdersFromPlannerState = (stateObj) => {
+  const tasks = collectPlannerTasks(stateObj);
+  const ordersMap = new Map();
+
+  tasks.forEach((task) => {
+    const identityRaw = task.parentId ?? task.orderIdentity ?? task.orderId ?? task.orderNumber ?? task.uid;
+    const identity = safeString(identityRaw);
+    if (!identity) return;
+
+    if (!ordersMap.has(identity)) {
+      ordersMap.set(identity, {
+        identity,
+        serverId: null,
+        orderNo: '',
+        hasOrderNo: false,
+        title: '',
+        hasTitle: false,
+        customer: '',
+        hasCustomer: false,
+        laneCounts: new Map(),
+        stageMap: new Map(),
+        stageKeys: new Set(),
+        startDates: [],
+        endDates: [],
+        percentValues: [],
+        readyFlags: []
+      });
+    }
+
+    const aggregate = ordersMap.get(identity);
+    if (!aggregate.serverId) {
+      const serverId = extractServerId(task, identity);
+      if (serverId) aggregate.serverId = serverId;
+    }
+
+    const orderNoCandidate = safeString(task.orderNumber);
+    if (orderNoCandidate) {
+      aggregate.orderNo = orderNoCandidate;
+      aggregate.hasOrderNo = true;
+    }
+
+    const titleCandidate = safeString(task.orderId);
+    if (titleCandidate) {
+      aggregate.title = titleCandidate;
+      aggregate.hasTitle = true;
+    }
+
+    const customerCandidate = safeString(task.orderCustomer);
+    if (customerCandidate) {
+      aggregate.customer = customerCandidate;
+      aggregate.hasCustomer = true;
+    }
+
+    const laneCandidate = safeString(task.state);
+    if (laneCandidate) {
+      aggregate.laneCounts.set(laneCandidate, (aggregate.laneCounts.get(laneCandidate) || 0) + 1);
+    }
+
+    const stageKey = normalizePlannerStage(task.stage, task.stageName);
+    aggregate.stageKeys.add(stageKey);
+
+    let stage = aggregate.stageMap.get(stageKey);
+    if (!stage) {
+      stage = {
+        stageKey,
+        hours: 0,
+        hasHours: false,
+        startDates: [],
+        hasStart: false,
+        endDates: [],
+        hasEnd: false,
+        percentValues: [],
+        readyFlags: [],
+        hasPercent: false,
+        hasReady: false
+      };
+      aggregate.stageMap.set(stageKey, stage);
+    }
+
+    const routeSeg = task?.route?.[stageKey];
+
+    const routeHours = numberOrNull(routeSeg?.hours);
+    let hoursAdded = false;
+    if (routeHours !== null) {
+      stage.hours += routeHours;
+      stage.hasHours = true;
+      hoursAdded = true;
+    }
+
+    const taskHours = numberOrNull(task.hours);
+    if (taskHours !== null && !hoursAdded) {
+      stage.hours += taskHours;
+      stage.hasHours = true;
+      hoursAdded = true;
+    }
+
+    const extraHours = numberOrNull(task.extraHours);
+    if (extraHours !== null && !hoursAdded) {
+      stage.hours += extraHours;
+      stage.hasHours = true;
+    }
+
+    const startCandidates = [task.startDate, task.start, routeSeg?.start];
+    startCandidates.forEach((candidate) => {
+      const parsed = parseDateCandidate(candidate);
+      if (parsed) {
+        stage.startDates.push(parsed);
+        stage.hasStart = true;
+      }
+    });
+
+    const endCandidates = [task.endDate, task.end, routeSeg?.end];
+    endCandidates.forEach((candidate) => {
+      const parsed = parseDateCandidate(candidate);
+      if (parsed) {
+        stage.endDates.push(parsed);
+        stage.hasEnd = true;
+      }
+    });
+
+    const progress = numberOrNull(task.progress);
+    if (progress !== null) {
+      stage.percentValues.push(progress);
+      stage.hasPercent = true;
+    }
+
+    const statusText = safeString(task.status).toLowerCase();
+    if (task.isDone === true) {
+      stage.readyFlags.push(true);
+      stage.hasReady = true;
+    }
+    if (progress !== null && progress >= 100) {
+      stage.readyFlags.push(true);
+      stage.hasReady = true;
+    }
+    if (statusText && /готов|done|complete|заверш/i.test(statusText)) {
+      stage.readyFlags.push(true);
+      stage.hasReady = true;
+    }
+    if (routeSeg?.doneAt) {
+      const done = parseDateCandidate(routeSeg.doneAt);
+      if (done) {
+        stage.readyFlags.push(true);
+        stage.hasReady = true;
+      }
+    }
+    if (task.doneMeta?.when) {
+      const done = parseDateCandidate(task.doneMeta.when);
+      if (done) {
+        stage.readyFlags.push(true);
+        stage.hasReady = true;
+      }
+    }
+  });
+
+  return finalizeOrderAggregates(ordersMap);
 };
 
 const safeDate = (value) => {
@@ -1399,8 +1776,184 @@ app.get('/api/crm/planner_state', requireAuth, async (_req, res) => {
   res.json(plannerState);
 });
 
-app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (_req, res) => {
-  res.json({ ok: true, readonly: true });
+app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (req, res) => {
+  const { state, meta } = extractStateFromBody(req.body);
+  if (!state) {
+    res.status(400).json({ error: 'Invalid state payload' });
+    return;
+  }
+
+  let parsedState;
+  if (typeof state === 'string') {
+    try {
+      parsedState = JSON.parse(state);
+    } catch (err) {
+      res.status(400).json({ error: 'State must be valid JSON' });
+      return;
+    }
+  } else if (typeof state === 'object' && state !== null) {
+    parsedState = state;
+  } else {
+    res.status(400).json({ error: 'State must be a JSON object' });
+    return;
+  }
+
+  if (!parsedState || typeof parsedState !== 'object') {
+    res.status(400).json({ error: 'State must be a JSON object' });
+    return;
+  }
+
+  try {
+    const plannerOrders = deriveOrdersFromPlannerState(parsedState);
+    const current = await fetchCrmState();
+    const existingOrders = current.board.orders || [];
+
+    const ordersById = new Map();
+    const ordersByOrderNo = new Map();
+    const stagesByOrderId = new Map();
+
+    existingOrders.forEach((order) => {
+      const numericId = Number(order.id);
+      if (Number.isInteger(numericId)) {
+        ordersById.set(numericId, order);
+      }
+      if (order.orderNo) {
+        ordersByOrderNo.set(order.orderNo, order);
+      }
+      const stageMap = new Map();
+      (order.stages || []).forEach((stage) => {
+        const key = normalizePlannerStage(stage.stageKey, stage.stageName);
+        stageMap.set(key, {
+          id: stage.id,
+          stageKey: key,
+          stageName: stage.stageName || CRM_STAGE_LABELS[key] || key,
+          hours: numberOrNull(stage.hours),
+          dateStart: stage.dateStart || '',
+          dateEnd: stage.dateEnd || '',
+          percent: numberOrNull(stage.percent) ?? 0,
+          isReady: boolFrom(stage.isReady)
+        });
+      });
+      stagesByOrderId.set(numericId, stageMap);
+    });
+
+    const touchedOrders = new Set();
+
+    for (const order of plannerOrders) {
+      let existing = null;
+      let targetId = order.serverId && ordersById.has(order.serverId) ? order.serverId : null;
+      if (targetId != null) {
+        existing = ordersById.get(targetId);
+      } else if (order.hasOrderNo && ordersByOrderNo.has(order.orderNo)) {
+        existing = ordersByOrderNo.get(order.orderNo);
+        targetId = Number(existing.id);
+      }
+
+      const fallbackIdentity = order.identity || order.orderNo || order.title || `ORD-${Date.now()}`;
+      const existingCustomer = existing?.customer || '';
+      const existingTitle = existing?.title || '';
+      const existingOrderNo = existing?.orderNo || '';
+
+      let resolvedOrderNo = order.hasOrderNo ? order.orderNo : existingOrderNo;
+      if (!resolvedOrderNo) {
+        resolvedOrderNo = order.hasTitle ? order.title : fallbackIdentity;
+      }
+      let resolvedTitle = order.hasTitle ? order.title : existingTitle;
+      if (!resolvedTitle) {
+        resolvedTitle = resolvedOrderNo;
+      }
+      const resolvedCustomer = order.hasCustomer ? order.customer : existingCustomer;
+      const resolvedLaneRaw = order.hasLane ? order.lane : (existing?.lane || DEFAULT_CRM_LANES[0]);
+      const resolvedLane = safeString(resolvedLaneRaw) || DEFAULT_CRM_LANES[0];
+      const resolvedDone = order.hasDone ? order.isDone : (existing?.isDone ?? false);
+
+      const payload = {
+        id: existing?.id ?? null,
+        orderNo: resolvedOrderNo,
+        title: resolvedTitle,
+        customer: resolvedCustomer,
+        serviceTotal: existing?.serviceTotal ?? null,
+        lane: resolvedLane,
+        isDone: resolvedDone,
+        parentOrderId: existing?.parentOrderId ?? null,
+        boardKey: existing?.boardKey || 'default',
+        notes: existing?.notes ?? ''
+      };
+
+      const savedOrderId = await upsertOrder(payload, req.user);
+      touchedOrders.add(savedOrderId);
+
+      const existingStageMap = stagesByOrderId.get(savedOrderId) || new Map();
+      const nextStagesMap = new Map();
+
+      order.stages.forEach((stage) => {
+        const key = stage.stageKey;
+        const existingStage = existingStageMap.get(key);
+        const stageName = existingStage?.stageName || CRM_STAGE_LABELS[key] || stage.stageName || key;
+
+        const mergedStage = {
+          id: existingStage?.id ?? null,
+          stageKey: key,
+          stageName,
+          hours: stage.hasHours ? stage.hours : (existingStage?.hours ?? null),
+          dateStart: stage.hasStart ? stage.dateStart : (existingStage?.dateStart || ''),
+          dateEnd: stage.hasEnd ? stage.dateEnd : (existingStage?.dateEnd || ''),
+          percent: stage.hasPercent ? stage.percent : (existingStage?.percent ?? 0),
+          isReady: stage.hasReady ? stage.isReady : boolFrom(existingStage?.isReady)
+        };
+
+        nextStagesMap.set(key, mergedStage);
+      });
+
+      existingStageMap.forEach((existingStage, key) => {
+        if (!nextStagesMap.has(key)) {
+          nextStagesMap.set(key, {
+            id: existingStage.id,
+            stageKey: existingStage.stageKey || key,
+            stageName: existingStage.stageName || CRM_STAGE_LABELS[key] || key,
+            hours: existingStage.hours ?? null,
+            dateStart: existingStage.dateStart || '',
+            dateEnd: existingStage.dateEnd || '',
+            percent: existingStage.percent ?? 0,
+            isReady: boolFrom(existingStage.isReady)
+          });
+        }
+      });
+
+      const nextStages = Array.from(nextStagesMap.values());
+      await syncStages(savedOrderId, nextStages, req.user, { trimMissing: false });
+
+      ordersById.set(savedOrderId, {
+        ...(existing || {}),
+        id: savedOrderId,
+        orderNo: payload.orderNo,
+        title: payload.title,
+        customer: payload.customer,
+        lane: payload.lane,
+        isDone: payload.isDone
+      });
+      ordersByOrderNo.set(payload.orderNo, ordersById.get(savedOrderId));
+      stagesByOrderId.set(savedOrderId, nextStagesMap);
+    }
+
+    const updated = await fetchCrmState();
+    broadcastEvent({
+      type: meta?.autoOptimize ? 'reorder' : 'state-updated',
+      entity: 'planner',
+      mode: 'crm',
+      id: 'crm',
+      changed: { hash: simpleHash(updated.plannerState?.state || '') },
+      state: updated.plannerState,
+      board: updated.board,
+      lanes: updated.lanes,
+      by: req.user?.email ?? null
+    });
+
+    res.json({ ok: true, state: updated.plannerState, board: updated.board, lanes: updated.lanes, touched: Array.from(touchedOrders) });
+  } catch (err) {
+    console.error('Failed to apply CRM planner state', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
