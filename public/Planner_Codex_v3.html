@@ -2248,66 +2248,162 @@ let currentProc = '';
 let orderSearchRaw = '';
 let orderSearchNormalized = '';
 const stagesDirtyFromRoute = new Set();
-function cloneCrmState(state){
-  if(!state||typeof state!=='object') return { boards: [], currentBoardId: null, updatedAt: '' };
-  try{return JSON.parse(JSON.stringify(state));}
-  catch(_err){
-    return {
-      boards:Array.isArray(state.boards)?state.boards.map(b=>({
-        id:b.id||'',
-        name:b.name||'',
-        lanes:Array.isArray(b.lanes)?b.lanes.slice():[],
-        orders:Array.isArray(b.orders)?b.orders.map(o=>({
-          id:o.id||'',
-          orderNo:o.orderNo||'',
-          title:o.title||'',
-          customer:o.customer||'',
-          status:o.status||'',
-          done:!!o.done,
-          progress:Number(o.progress||0)
-        })) : []
-      })) : [],
-      currentBoardId:state.currentBoardId||null,
-      updatedAt:state.updatedAt||''
-    };
+const CRM_STAGE_NAME_MAP = new Map([
+  ['подготовка в работу','draw'],
+  ['технологи: подготовка в работу','draw'],
+  ['техподготовка','draw'],
+  ['закупка','proc'],
+  ['покупка','proc'],
+  ['снабжение','proc'],
+  ['рубка','shear'],
+  ['резка','shear'],
+  ['лазер','laser'],
+  ['гибка','bend'],
+  ['сварка','weld'],
+  ['мехобработка','mech'],
+  ['мех.обработка','mech'],
+  ['мех. обработка','mech'],
+  ['мех-обработка','mech'],
+  ['упаковка','pack'],
+  ['отгрузка','ship']
+]);
+
+function mapCrmStageName(name){
+  const normalized = String(name || '').trim().toLowerCase();
+  if(!normalized) return '';
+  return CRM_STAGE_NAME_MAP.get(normalized) || '';
+}
+
+function clampCrmProgress(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function normalizeCrmStage(stage){
+  if(!stage || typeof stage !== 'object') return null;
+  const name = typeof stage.name === 'string' ? stage.name.trim() : '';
+  if(!name) return null;
+  const result = { ...stage };
+  result.name = name;
+  result.stageKey = mapCrmStageName(name);
+  result.done = !!stage.done;
+  result.progress = clampCrmProgress(stage.progress);
+  result.start = typeof stage.start === 'string' ? stage.start : '';
+  result.end = typeof stage.end === 'string' ? stage.end : '';
+  if(result.value === undefined) result.value = stage.value ?? '';
+  if(result.hours === undefined){
+    const hoursCandidate = Number(stage.hours != null ? stage.hours : stage.value);
+    result.hours = Number.isFinite(hoursCandidate) ? hoursCandidate : 0;
   }
+  if(result.comments === undefined && stage.comments !== undefined){
+    result.comments = stage.comments;
+  }
+  return result;
+}
+
+function normalizeCrmOrder(order, fallbackLane=''){
+  if(!order || typeof order !== 'object') return null;
+  const safe = { ...order };
+  safe.id = typeof order.id === 'string' && order.id.trim() ? order.id.trim() : `crm-order-${Math.random().toString(16).slice(2,10)}`;
+  const orderNo = typeof order.orderNo === 'string' ? order.orderNo.trim() : '';
+  const orderNumber = typeof order.orderNumber === 'string' ? order.orderNumber.trim() : orderNo;
+  const customer = typeof order.customer === 'string' ? order.customer.trim() : '';
+  safe.orderNo = orderNo;
+  safe.orderNumber = orderNumber;
+  safe.customer = customer;
+  safe.orderCustomer = typeof order.orderCustomer === 'string' ? order.orderCustomer.trim() : (safe.orderCustomer || customer);
+  const explicitId = typeof order.orderId === 'string' ? order.orderId.trim() : '';
+  if(explicitId){
+    safe.orderId = explicitId;
+  }else{
+    const parts = [];
+    if(orderNumber){
+      parts.push(orderNumber.startsWith('№') ? orderNumber : `№${orderNumber}`);
+    }
+    if(customer){
+      parts.push(customer);
+    }
+    const composed = parts.join(' ').trim();
+    safe.orderId = composed || (typeof order.title === 'string' && order.title.trim() ? order.title.trim() : safe.id);
+  }
+  if(!safe.title || typeof safe.title !== 'string'){
+    safe.title = typeof order.title === 'string' ? order.title.trim() : '';
+  }else{
+    safe.title = safe.title.trim();
+  }
+  const lane = typeof order.status === 'string' && order.status.trim()
+    ? order.status.trim()
+    : (typeof order.lane === 'string' && order.lane.trim() ? order.lane.trim() : fallbackLane);
+  safe.status = lane;
+  safe.lane = lane;
+  safe.done = !!order.done;
+  safe.isDone = !!order.done;
+  safe.progressManual = !!order.progressManual;
+  safe.progress = clampCrmProgress(order.progress);
+  safe.start = typeof order.start === 'string' ? order.start : '';
+  safe.end = typeof order.end === 'string' ? order.end : '';
+  if(order.serviceTotal !== undefined) safe.serviceTotal = order.serviceTotal;
+  if(order.priority !== undefined){
+    const priorityNum = Number(order.priority);
+    safe.priority = Number.isFinite(priorityNum) ? priorityNum : order.priority;
+  }
+  if(order.comments !== undefined && typeof order.comments === 'string') safe.comments = order.comments;
+  if(order.notes !== undefined && typeof order.notes === 'string') safe.notes = order.notes;
+  if(order.parentId !== undefined) safe.parentId = order.parentId;
+  if(order.childIds !== undefined) safe.childIds = Array.isArray(order.childIds) ? order.childIds.slice() : [];
+  const stages = Array.isArray(order.stages) ? order.stages.map(normalizeCrmStage).filter(Boolean) : [];
+  safe.stages = stages;
+  ensureOrderIdentity(safe);
+  return safe;
 }
 
 function normalizeCrmState(raw){
-  if(!raw||typeof raw!=='object') return { boards: [], currentBoardId: null, updatedAt: '' };
-  const boards=Array.isArray(raw.boards)?raw.boards.filter(Boolean).map(board=>{
-    const lanes=Array.isArray(board.lanes)&&board.lanes.length
-      ? board.lanes.map(l=>String(l||'').trim()).filter(Boolean)
+  if(!raw || typeof raw !== 'object') return { boards: [], currentBoardId: null, updatedAt: '' };
+  const boards = Array.isArray(raw.boards) ? raw.boards.filter(Boolean).map(board => {
+    const lanes = Array.isArray(board.lanes) && board.lanes.length
+      ? board.lanes.map(l => String(l || '').trim()).filter(Boolean)
       : ['Не запланированное'];
-    const orders=Array.isArray(board.orders)?board.orders.filter(Boolean).map(order=>({
-      id:order.id||'',
-      orderNo:order.orderNo||'',
-      title:order.title||'',
-      customer:order.customer||'',
-      status:order.status||'',
-      done:!!order.done,
-      progress:Number(order.progress||0)
-    })):[];
+    const primaryLane = lanes[0] || '';
+    const orders = Array.isArray(board.orders)
+      ? board.orders.filter(Boolean).map(order => normalizeCrmOrder(order, primaryLane)).filter(Boolean)
+      : [];
     return {
-      id:typeof board.id==='string'&&board.id?board.id:`crm-${Math.random().toString(16).slice(2,8)}`,
-      name:typeof board.name==='string'&&board.name.trim()?board.name.trim():'CRM доска',
+      id: typeof board.id === 'string' && board.id.trim() ? board.id.trim() : `crm-${Math.random().toString(16).slice(2,8)}`,
+      name: typeof board.name === 'string' && board.name.trim() ? board.name.trim() : 'CRM доска',
       lanes,
       orders
     };
-  }):[];
-  const currentId = typeof raw.currentBoardId==='string' && boards.some(b=>b.id===raw.currentBoardId)
+  }) : [];
+  const currentId = typeof raw.currentBoardId === 'string' && boards.some(b => b.id === raw.currentBoardId)
     ? raw.currentBoardId
     : (boards[0]?.id || null);
   return {
     boards,
     currentBoardId: currentId,
-    updatedAt: typeof raw.updatedAt==='string'?raw.updatedAt:''
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : ''
   };
+}
+
+function cloneCrmState(state){
+  if(!state || typeof state !== 'object') return { boards: [], currentBoardId: null, updatedAt: '' };
+  try{
+    return JSON.parse(JSON.stringify(state));
+  }catch(_err){
+    return normalizeCrmState(state);
+  }
 }
 
 function setCrmState(raw){
   crmState = normalizeCrmState(raw);
   updateCrmBadge();
+  try{
+    const processSelect = document.getElementById('process');
+    const currentStage = processSelect ? processSelect.value : currentProc;
+    if(currentStage === OVERVIEW_STAGE){
+      renderOrdersOverviewTable();
+    }
+  }catch(_err){ /* ignore */ }
 }
 
 function updateCrmBadge(){
@@ -2331,6 +2427,151 @@ function updateCrmBadge(){
   badge.innerHTML = `CRM: ${total} <small>${escapeHtml(infoParts.join(' · '))}</small>`;
 }
 let crmState = { boards: [], currentBoardId: null, updatedAt: '' };
+
+function getActiveCrmBoard(){
+  if(!crmState || !Array.isArray(crmState.boards) || !crmState.boards.length) return null;
+  const board = crmState.boards.find(b => b && b.id === crmState.currentBoardId) || crmState.boards[0];
+  if(!board || !Array.isArray(board.orders)) return null;
+  return board;
+}
+
+function buildPlannerOrderFromCrm(crmOrder){
+  if(!crmOrder || typeof crmOrder !== 'object') return null;
+  const order = {
+    parentId: crmOrder.parentId ? String(crmOrder.parentId).trim() : '',
+    orderId: crmOrder.orderId || crmOrder.orderNo || crmOrder.title || crmOrder.id || '',
+    orderNumber: crmOrder.orderNumber || crmOrder.orderNo || '',
+    orderCustomer: crmOrder.orderCustomer || crmOrder.customer || '',
+    stages: {},
+    crm: {
+      id: crmOrder.id || '',
+      title: crmOrder.title || '',
+      status: crmOrder.status || crmOrder.lane || '',
+      lane: crmOrder.lane || crmOrder.status || '',
+      done: !!crmOrder.done,
+      progress: Number(crmOrder.progress || 0),
+      serviceTotal: crmOrder.serviceTotal,
+      priority: crmOrder.priority,
+      start: crmOrder.start || '',
+      end: crmOrder.end || '',
+      notes: crmOrder.notes || '',
+      comments: crmOrder.comments || ''
+    }
+  };
+  if(crmOrder.childIds && Array.isArray(crmOrder.childIds)){
+    order.childIds = crmOrder.childIds.slice();
+  }
+  if(crmOrder.orderIdentity) order.orderIdentity = crmOrder.orderIdentity;
+  order.title = crmOrder.title || '';
+  order.done = !!crmOrder.done;
+  ensureOrderIdentity(order);
+
+  const doneStages = new Set();
+  const stageList = Array.isArray(crmOrder.stages) ? crmOrder.stages : [];
+  stageList.forEach(stage => {
+    if(!stage) return;
+    const stageKey = stage.stageKey || mapCrmStageName(stage.name);
+    if(!stageKey) return;
+    const segment = {};
+    const start = safeDateValue(stage.start);
+    if(start) segment.start = start;
+    const end = safeDateValue(stage.end);
+    if(end) segment.end = end;
+    const hoursSource = stage.hours != null ? stage.hours : stage.value;
+    const hoursNum = Number(hoursSource);
+    if(!PARALLEL_STAGES.has(stageKey) && Number.isFinite(hoursNum) && hoursNum > 0){
+      segment.hours = hoursNum;
+    }else{
+      segment.hours = 0;
+    }
+    const progressVal = Number(stage.progress);
+    if(Number.isFinite(progressVal)){
+      segment.progress = Math.max(0, Math.min(100, progressVal));
+    }
+    if(stage.done || (segment.progress != null && segment.progress >= 100) || stage.isReady){
+      segment.done = true;
+      doneStages.add(stageKey);
+    }
+    if(stage.doneAt){
+      const doneAt = safeDateTimeValue(stage.doneAt);
+      if(doneAt) segment.doneAt = doneAt;
+    }
+    if(stage.comments !== undefined) segment.comments = stage.comments;
+    order.stages[stageKey] = segment;
+  });
+  if(crmOrder.done){
+    doneStages.add('ship');
+  }
+  return { order, doneStages };
+}
+
+function mergeCrmOrderInto(target, source){
+  if(!target || !source) return;
+  if(source.crm){
+    target.crm = { ...(target.crm || {}), ...source.crm };
+  }
+  if(source.title && !target.title) target.title = source.title;
+  if(source.parentId && !target.parentId) target.parentId = source.parentId;
+  if(source.orderId && !target.orderId) target.orderId = source.orderId;
+  if(source.orderNumber && !target.orderNumber) target.orderNumber = source.orderNumber;
+  if(source.orderCustomer && !target.orderCustomer) target.orderCustomer = source.orderCustomer;
+  if(!target.childIds && source.childIds) target.childIds = source.childIds.slice();
+  if(source.orderIdentity && !target.orderIdentity) target.orderIdentity = source.orderIdentity;
+  ensureOrderIdentity(target);
+  const sourceStages = source.stages || {};
+  if(!target.stages) target.stages = {};
+  Object.entries(sourceStages).forEach(([stage, seg]) => {
+    if(!seg) return;
+    const existing = target.stages[stage];
+    if(!existing){
+      target.stages[stage] = { ...seg };
+      return;
+    }
+    if(seg.start && (!existing.start || seg.start < existing.start)) existing.start = seg.start;
+    if(seg.end && (!existing.end || seg.end > existing.end)) existing.end = seg.end;
+    if(seg.done) existing.done = true;
+    if(seg.progress != null) existing.progress = seg.progress;
+    if(seg.doneAt && (!existing.doneAt || seg.doneAt > existing.doneAt)) existing.doneAt = seg.doneAt;
+    if(seg.comments !== undefined && existing.comments === undefined) existing.comments = seg.comments;
+    if(!PARALLEL_STAGES.has(stage)){
+      const hoursNum = Number(seg.hours);
+      if(Number.isFinite(hoursNum)){
+        const currentHours = Number(existing.hours);
+        existing.hours = Number.isFinite(currentHours) ? Math.max(currentHours, hoursNum) : hoursNum;
+      }
+    }
+  });
+}
+
+function integrateCrmOrdersIntoAggregated(list, map, doneStageSet){
+  const board = getActiveCrmBoard();
+  const activeKeys = new Set();
+  if(!board) return activeKeys;
+  board.orders.forEach(crmOrder => {
+    const built = buildPlannerOrderFromCrm(crmOrder);
+    if(!built) return;
+    const { order, doneStages } = built;
+    const key = orderKeyForRecord(order);
+    if(!key) return;
+    if(doneStages && doneStages.size){
+      doneStages.forEach(stage => {
+        if(stage) doneStageSet.add(`${key}::${stage}`);
+      });
+    }
+    if(map.has(key)){
+      mergeCrmOrderInto(map.get(key), order);
+    }else{
+      map.set(key, order);
+      list.push(order);
+    }
+    if(!order.done){
+      if(!order.crm || !order.crm.done){
+        activeKeys.add(key);
+      }
+    }
+  });
+  return activeKeys;
+}
 
 function normalizeOrderSearch(value){
   return String(value ?? '').replace(/\s+/g,' ').trim().toLowerCase();
@@ -2919,10 +3160,18 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
 
   const combinedTasks = baseTasks.concat(donePseudoTasks);
   const aggregatedOrders = mapOrdersFromTasks(combinedTasks);
+  const aggregatedByKey = new Map();
+  aggregatedOrders.forEach(order => {
+    const key = orderKeyForRecord(order);
+    if(key) aggregatedByKey.set(key, order);
+  });
 
   const activeInfo = collectActiveTasksForOverview();
   const activeKeys = new Set(activeInfo.list.map(orderKeyForRecord).filter(Boolean));
   const trashKeys = new Set(trash.map(orderKeyForRecord).filter(Boolean));
+
+  const crmActiveKeys = integrateCrmOrdersIntoAggregated(aggregatedOrders, aggregatedByKey, doneStageSet);
+  crmActiveKeys.forEach(key => activeKeys.add(key));
 
   aggregatedOrders.forEach(order => {
     const key = orderKeyForRecord(order);
@@ -2982,19 +3231,30 @@ function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
     totalHours = Number(seg.hours);
   }
 
-  if(remaining <= 0 && !orderEntry.isDone && !doneStageSet.has(`${key}::${stage}`)){
-    if(totalHours > 0){
-      const pct = weighted > 0 ? Math.max(0, Math.min(100, percentSum / weighted)) : 0;
-      remaining = totalHours * (1 - pct/100);
-    } else {
-      remaining = 0;
-    }
-  }
-
-  let percent = weighted > 0 ? (percentSum / weighted) : 0;
+  let percent = weighted > 0 ? (percentSum / weighted) : null;
   if(orderEntry.isDone || doneStageSet.has(`${key}::${stage}`)){
     percent = 100;
     remaining = 0;
+  }else if(seg){
+    if(seg.done){
+      percent = 100;
+    }else if(percent == null){
+      const segProgress = Number(seg.progress);
+      if(Number.isFinite(segProgress)){
+        percent = Math.max(0, Math.min(100, segProgress));
+      }
+    }
+  }
+  if(percent == null){
+    percent = 0;
+  }
+
+  if(remaining <= 0 && !orderEntry.isDone && !doneStageSet.has(`${key}::${stage}`)){
+    if(totalHours > 0){
+      remaining = totalHours * (1 - percent/100);
+    } else {
+      remaining = 0;
+    }
   }
 
   percent = Math.max(0, Math.min(100, percent));
@@ -4107,13 +4367,16 @@ function renderOrdersOverviewTable(){
     const stageHasWork = stage => {
       if(tasksForStage(stage).length > 0) return true;
       if(doneStageSet.has(`${entry.key}::${stage}`)) return true;
+      if(entry.order?.stages && entry.order.stages[stage]) return true;
       if(stage === 'ship' && entry.isDone) return true;
       return false;
     };
 
     const indicatorState = stage => {
       if(!stageHasWork(stage)) return 'missing';
+      const seg = entry.order?.stages ? entry.order.stages[stage] : null;
       if(entry.isDone || doneStageSet.has(`${entry.key}::${stage}`)) return 'done';
+      if(seg && (seg.done || Number(seg.progress) >= 100)) return 'done';
       return 'pending';
     };
 
