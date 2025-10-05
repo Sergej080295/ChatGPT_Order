@@ -506,6 +506,52 @@ const boolFrom = (value) => {
   return false;
 };
 
+const stageSortIndex = (stageKey) => {
+  if (!stageKey) return Number.MAX_SAFE_INTEGER;
+  const idx = PLANNER_STAGE_KEYS.indexOf(stageKey);
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+};
+
+const dedupeStageRows = (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return [];
+  }
+
+  const byKey = new Map();
+
+  rows.forEach((row) => {
+    if (!row) return;
+    const normalizedKey = normalizePlannerStage(row.stage_key || row.stageKey, row.stage_name || row.stageName);
+    const normalizedName = safeString(row.stage_name) || CRM_STAGE_LABELS[normalizedKey] || 'Передел';
+    const candidate = {
+      ...row,
+      stage_key: normalizedKey,
+      stage_name: normalizedName
+    };
+    const candidateTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+
+    if (!byKey.has(normalizedKey)) {
+      byKey.set(normalizedKey, { row: candidate, ts: candidateTs });
+      return;
+    }
+
+    const existing = byKey.get(normalizedKey);
+    const existingTs = existing.ts || 0;
+    if (candidateTs > existingTs || (candidateTs === existingTs && (row.id || 0) > (existing.row.id || 0))) {
+      byKey.set(normalizedKey, { row: candidate, ts: candidateTs });
+    }
+  });
+
+  const normalized = Array.from(byKey.values()).map((entry) => entry.row);
+  normalized.sort((a, b) => {
+    const idxA = stageSortIndex(a.stage_key);
+    const idxB = stageSortIndex(b.stage_key);
+    if (idxA !== idxB) return idxA - idxB;
+    return (a.id || 0) - (b.id || 0);
+  });
+  return normalized;
+};
+
 const computeOrderAggregates = (order, stages) => {
   const stageDatesStart = stages.map((s) => (s.date_start ? new Date(s.date_start) : null)).filter(Boolean);
   const stageDatesEnd = stages.map((s) => (s.date_end ? new Date(s.date_end) : null)).filter(Boolean);
@@ -1208,8 +1254,9 @@ const fetchCrmState = async () => {
 
   const lanes = mergeCrmLanes(orderRows.map((row) => row.lane));
   const orders = orderRows.map((row) => {
-    const stages = stagesByOrder.get(row.id) || [];
-    const aggregates = computeOrderAggregates(row, stages);
+    const rawStages = stagesByOrder.get(row.id) || [];
+    const normalizedStages = dedupeStageRows(rawStages);
+    const aggregates = computeOrderAggregates(row, normalizedStages);
     const laneValue = (row.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
     return {
       id: row.id,
@@ -1228,7 +1275,7 @@ const fetchCrmState = async () => {
       start: aggregates.start,
       end: aggregates.end,
       percent: aggregates.percent,
-      stages: stages.map((stage) => ({
+      stages: normalizedStages.map((stage) => ({
         id: stage.id,
         orderId: stage.order_id,
         stageKey: stage.stage_key,
@@ -1279,18 +1326,28 @@ const upsertOrder = async (payload, user) => {
     notes
   } = payload;
 
-  if (!orderNo || !title) {
+  const normalizedOrderNo = safeString(orderNo);
+  const normalizedTitle = safeString(title);
+
+  if (!normalizedOrderNo || !normalizedTitle) {
     const err = new Error('orderNo and title are required');
     err.status = 422;
     throw err;
   }
 
+  const normalizedCustomer = safeString(customer);
+  const customerValue = normalizedCustomer ? normalizedCustomer : null;
   const numericTotal = numberOrNull(serviceTotal);
-  const board = boardKey || 'default';
+  const board = safeString(boardKey) || 'default';
   const done = boolFrom(isDone);
-  const laneValue = (lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
+  const laneValue = safeString(lane) || DEFAULT_CRM_LANES[0];
+  const parentIdNormalized = parentOrderId == null ? null : Number(parentOrderId);
+  const notesValueRaw = notes == null ? null : String(notes);
+  const notesValue = notesValueRaw ? notesValueRaw.trim() : null;
 
   let result;
+  let orderChanged = false;
+
   if (id) {
     const existingRes = await pool.query(
       `SELECT id, order_no, title, customer, service_total, lane, is_done, parent_order_id, board_key, notes
@@ -1305,32 +1362,49 @@ const upsertOrder = async (payload, user) => {
     }
 
     const existingRow = existingRes.rows[0];
+    const existingOrderNo = safeString(existingRow.order_no);
+    const existingTitle = safeString(existingRow.title);
     const existingServiceTotal = existingRow.service_total === null ? null : Number(existingRow.service_total);
     const existingParentId = existingRow.parent_order_id == null ? null : Number(existingRow.parent_order_id);
     const existingLane = (existingRow.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
-    const existingNotes = existingRow.notes || null;
-    const existingCustomer = existingRow.customer || null;
+    const existingCustomer = existingRow.customer == null ? null : safeString(existingRow.customer);
+    const existingBoard = safeString(existingRow.board_key) || 'default';
+    const existingNotesRaw = existingRow.notes == null ? null : String(existingRow.notes);
+    const existingNotes = existingNotesRaw ? existingNotesRaw.trim() : null;
+
     const nextServiceTotal = numericTotal === null ? null : Number(numericTotal);
-    const nextParentId = parentOrderId == null ? null : Number(parentOrderId);
-    const nextNotes = notes ? notes : null;
-    const nextCustomer = customer ? customer : null;
 
     const changed = (
-      existingRow.order_no !== orderNo
-      || existingRow.title !== title
-      || existingCustomer !== nextCustomer
+      existingOrderNo !== normalizedOrderNo
+      || existingTitle !== normalizedTitle
+      || (existingCustomer || null) !== customerValue
       || existingServiceTotal !== nextServiceTotal
       || existingLane !== laneValue
       || boolFrom(existingRow.is_done) !== done
-      || existingParentId !== nextParentId
-      || (existingRow.board_key || 'default') !== board
-      || existingNotes !== nextNotes
+      || existingParentId !== parentIdNormalized
+      || existingBoard !== board
+      || (existingNotes || null) !== notesValue
     );
 
     if (!changed) {
-      return Number(existingRow.id);
+      return {
+        id: Number(existingRow.id),
+        changed: false,
+        applied: {
+          orderNo: existingOrderNo,
+          title: existingTitle,
+          customer: existingCustomer || '',
+          serviceTotal: existingServiceTotal === null ? '' : existingServiceTotal,
+          lane: existingLane,
+          isDone: boolFrom(existingRow.is_done),
+          parentOrderId: existingParentId,
+          boardKey: existingBoard,
+          notes: existingNotes || ''
+        }
+      };
     }
 
+    orderChanged = true;
     result = await pool.query(
       `UPDATE crm_orders
           SET order_no = $1,
@@ -1347,51 +1421,106 @@ const upsertOrder = async (payload, user) => {
         WHERE id = $12
           AND deleted_at IS NULL
       RETURNING id`,
-      [orderNo, title, nextCustomer, nextServiceTotal, laneValue, done, nextParentId, board, nextNotes, now, user?.email ?? null, id]
+      [
+        normalizedOrderNo,
+        normalizedTitle,
+        customerValue,
+        nextServiceTotal,
+        laneValue,
+        done,
+        parentIdNormalized,
+        board,
+        notesValue,
+        now,
+        user?.email ?? null,
+        id
+      ]
     );
   } else {
+    orderChanged = true;
     result = await pool.query(
       `INSERT INTO crm_orders
         (order_no, title, customer, service_total, lane, is_done, parent_order_id, board_key, notes, updated_at, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
     RETURNING id`,
-      [orderNo, title, customer || null, numericTotal, laneValue, done, parentOrderId || null, board, notes || null, now, user?.email ?? null]
+      [
+        normalizedOrderNo,
+        normalizedTitle,
+        customerValue,
+        numericTotal === null ? null : Number(numericTotal),
+        laneValue,
+        done,
+        parentIdNormalized,
+        board,
+        notesValue,
+        now,
+        user?.email ?? null
+      ]
     );
   }
 
-  const orderId = result.rows[0].id;
+  const orderId = Number(result.rows[0].id);
 
-  await recordActivity({
-    entity: 'order',
-    entityId: orderId,
-    action: id ? 'update' : 'create',
-    userEmail: user?.email ?? null,
-    payload: payload
-  });
+  const applied = {
+    orderNo: normalizedOrderNo,
+    title: normalizedTitle,
+    customer: customerValue || '',
+    serviceTotal: numericTotal === null ? '' : Number(numericTotal),
+    lane: laneValue,
+    isDone: done,
+    parentOrderId: parentIdNormalized,
+    boardKey: board,
+    notes: notesValue || ''
+  };
 
-  broadcastEvent({
-    type: 'update',
-    entity: 'order',
-    id: orderId,
-    changed: {
-      orderNo,
-      title,
-      customer,
-      serviceTotal: numericTotal,
-      lane,
+  if (orderChanged) {
+    const activityPayload = {
+      ...payload,
+      orderNo: normalizedOrderNo,
+      title: normalizedTitle,
+      customer: applied.customer,
+      serviceTotal: numericTotal === null ? null : Number(numericTotal),
+      lane: laneValue,
       isDone: done,
-      parentOrderId: parentOrderId || null,
+      parentOrderId: parentIdNormalized,
       boardKey: board,
-      notes: notes || null
-    },
-    by: user?.email ?? null
-  });
+      notes: notesValue || ''
+    };
 
-  return orderId;
+    await recordActivity({
+      entity: 'order',
+      entityId: orderId,
+      action: id ? 'update' : 'create',
+      userEmail: user?.email ?? null,
+      payload: activityPayload
+    });
+
+    broadcastEvent({
+      type: 'update',
+      entity: 'order',
+      id: orderId,
+      changed: {
+        orderNo: normalizedOrderNo,
+        title: normalizedTitle,
+        customer: applied.customer,
+        serviceTotal: numericTotal === null ? null : Number(numericTotal),
+        lane: laneValue,
+        isDone: done,
+        parentOrderId: parentIdNormalized,
+        boardKey: board,
+        notes: notesValue || ''
+      },
+      by: user?.email ?? null
+    });
+  }
+
+  return { id: orderId, changed: orderChanged, applied };
 };
 
 const syncStages = async (orderId, stages, user, opts = {}) => {
-  if (!Array.isArray(stages)) return;
+  if (!Array.isArray(stages)) {
+    return { changed: false, stageIdsByKey: new Map() };
+  }
   const { trimMissing = true } = opts;
   const existingRes = await pool.query(
     'SELECT id, stage_key, stage_name, hours, date_start, date_end, percent, is_ready FROM crm_stages WHERE order_id = $1',
@@ -1399,17 +1528,24 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
   );
   const existingIds = new Set();
   const existingById = new Map();
+  const existingByKey = new Map();
   existingRes.rows.forEach((row) => {
     existingIds.add(row.id);
     existingById.set(row.id, row);
+    const key = normalizePlannerStage(row.stage_key, row.stage_name);
+    if (!existingByKey.has(key)) {
+      existingByKey.set(key, []);
+    }
+    existingByKey.get(key).push(row);
   });
 
   const seenIds = new Set();
   const pendingBroadcasts = [];
+  const stageIdsByKey = new Map();
+  let anyChange = false;
 
   for (const stage of stages) {
-    const stageId = stage.id ? Number(stage.id) : null;
-    const key = stage.stageKey || stageKeyFromName(stage.stageName || stage.name || '');
+    const key = normalizePlannerStage(stage.stageKey, stage.stageName || stage.name || '');
     const nameRaw = stage.stageName || stage.name || CRM_STAGE_LABELS[key] || 'Передел';
     const name = safeString(nameRaw) || CRM_STAGE_LABELS[key] || 'Передел';
     const hoursRaw = numberOrNull(stage.hours ?? stage.value);
@@ -1427,15 +1563,31 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
       ? Math.max(0, Math.min(100, percentValue))
       : 0;
 
-    if (stageId && existingById.has(stageId)) {
-      const existingRow = existingById.get(stageId);
+    let stageId = stage.id != null ? Number(stage.id) : null;
+    let existingRow = stageId && existingById.has(stageId) ? existingById.get(stageId) : null;
+
+    if (!existingRow) {
+      const candidates = existingByKey.get(key) || [];
+      for (const candidate of candidates) {
+        if (!seenIds.has(candidate.id)) {
+          stageId = candidate.id;
+          existingRow = candidate;
+          break;
+        }
+      }
+    }
+
+    if (existingRow) {
       const existingHours = existingRow.hours === null ? null : Number(existingRow.hours);
       const existingStart = existingRow.date_start ? existingRow.date_start.toISOString().slice(0, 10) : null;
       const existingEnd = existingRow.date_end ? existingRow.date_end.toISOString().slice(0, 10) : null;
       const existingPercent = numberOrNull(existingRow.percent) ?? 0;
       const existingReady = boolFrom(existingRow.is_ready);
-      const existingKey = existingRow.stage_key;
+      const existingKey = normalizePlannerStage(existingRow.stage_key, existingRow.stage_name);
       const existingName = safeString(existingRow.stage_name || CRM_STAGE_LABELS[existingKey] || 'Передел') || CRM_STAGE_LABELS[existingKey] || 'Передел';
+
+      stageIdsByKey.set(key, Number(stageId));
+      seenIds.add(Number(stageId));
 
       const changed = (
         existingKey !== key
@@ -1447,12 +1599,11 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
         || existingReady !== ready
       );
 
-      seenIds.add(stageId);
-
       if (!changed) {
         continue;
       }
 
+      anyChange = true;
       await pool.query(
         `UPDATE crm_stages
             SET stage_key = $1,
@@ -1482,7 +1633,7 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
       );
 
       pendingBroadcasts.push({
-        id: stageId,
+        id: Number(stageId),
         key,
         name,
         hours: hoursValue,
@@ -1491,38 +1642,41 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
         percent: percentClamped,
         ready
       });
-    } else {
-      const inserted = await pool.query(
-        `INSERT INTO crm_stages
-          (order_id, stage_key, stage_name, hours, date_start, date_end, percent, is_ready, updated_at, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       RETURNING id`,
-        [
-          orderId,
-          key,
-          name,
-          hoursValue,
-          normalizedStart,
-          normalizedEnd,
-          percentClamped,
-          ready,
-          new Date(),
-          user?.email ?? null
-        ]
-      );
-      const newId = inserted.rows[0].id;
-      seenIds.add(newId);
-      pendingBroadcasts.push({
-        id: newId,
-        key,
-        name,
-        hours: hoursValue,
-        start: normalizedStart,
-        end: normalizedEnd,
-        percent: percentClamped,
-        ready
-      });
+      continue;
     }
+
+    const inserted = await pool.query(
+      `INSERT INTO crm_stages
+        (order_id, stage_key, stage_name, hours, date_start, date_end, percent, is_ready, updated_at, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     RETURNING id`,
+      [
+        orderId,
+        key,
+        name,
+        hoursValue,
+        normalizedStart,
+        normalizedEnd,
+        percentClamped,
+        ready,
+        new Date(),
+        user?.email ?? null
+      ]
+    );
+    const newId = Number(inserted.rows[0].id);
+    stageIdsByKey.set(key, newId);
+    seenIds.add(newId);
+    anyChange = true;
+    pendingBroadcasts.push({
+      id: newId,
+      key,
+      name,
+      hours: hoursValue,
+      start: normalizedStart,
+      end: normalizedEnd,
+      percent: percentClamped,
+      ready
+    });
   }
 
   pendingBroadcasts.forEach((entry) => {
@@ -1548,6 +1702,7 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
     for (const id of existingIds) {
       if (!seenIds.has(id)) {
         await pool.query('DELETE FROM crm_stages WHERE id = $1', [id]);
+        anyChange = true;
         broadcastEvent({
           type: 'update',
           entity: 'stage',
@@ -1559,6 +1714,8 @@ const syncStages = async (orderId, stages, user, opts = {}) => {
       }
     }
   }
+
+  return { changed: anyChange, stageIdsByKey };
 };
 
 const softDeleteOrder = async (orderId, user) => {
@@ -1688,9 +1845,9 @@ const importCrmCsv = async (text, user) => {
       })
       .filter(Boolean);
 
-    const orderId = await upsertOrder(payload, user);
-    await syncStages(orderId, stages, user);
-    processed.push({ orderNo, orderId, stages: stages.length });
+    const orderResult = await upsertOrder(payload, user);
+    await syncStages(orderResult.id, stages, user);
+    processed.push({ orderNo, orderId: orderResult.id, stages: stages.length });
   }
 
   broadcastEvent({ type: 'bulk', entity: 'order', id: null, changed: { imported: processed.length }, by: user?.email ?? null });
@@ -2050,8 +2207,11 @@ app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (req, r
         notes: existing?.notes ?? ''
       };
 
-      const savedOrderId = await upsertOrder(payload, req.user);
-      touchedOrders.add(savedOrderId);
+      const orderResult = await upsertOrder(payload, req.user);
+      const savedOrderId = orderResult.id;
+      if (orderResult.changed) {
+        touchedOrders.add(savedOrderId);
+      }
 
       const existingStageMap = stagesByOrderId.get(savedOrderId) || new Map();
       const nextStagesMap = new Map();
@@ -2091,19 +2251,46 @@ app.post('/api/crm/planner_state', requireRole('admin', 'worker'), async (req, r
       });
 
       const nextStages = Array.from(nextStagesMap.values());
-      await syncStages(savedOrderId, nextStages, req.user, { trimMissing: false });
+      const stageResult = await syncStages(savedOrderId, nextStages, req.user, { trimMissing: true });
 
-      ordersById.set(savedOrderId, {
+      if (stageResult.stageIdsByKey) {
+        stageResult.stageIdsByKey.forEach((stageId, key) => {
+          if (nextStagesMap.has(key)) {
+            const entry = nextStagesMap.get(key);
+            entry.id = stageId;
+          }
+        });
+      }
+
+      if (stageResult.changed) {
+        touchedOrders.add(savedOrderId);
+      }
+
+      const appliedOrder = {
         ...(existing || {}),
         id: savedOrderId,
-        orderNo: payload.orderNo,
-        title: payload.title,
-        customer: payload.customer,
-        lane: payload.lane,
-        isDone: payload.isDone
-      });
-      ordersByOrderNo.set(payload.orderNo, ordersById.get(savedOrderId));
+        orderNo: orderResult.applied?.orderNo ?? payload.orderNo,
+        title: orderResult.applied?.title ?? payload.title,
+        customer: orderResult.applied?.customer ?? payload.customer ?? '',
+        serviceTotal: orderResult.applied?.serviceTotal ?? (existing?.serviceTotal ?? ''),
+        lane: orderResult.applied?.lane ?? payload.lane,
+        isDone: orderResult.applied?.isDone ?? payload.isDone,
+        parentOrderId: orderResult.applied?.parentOrderId ?? payload.parentOrderId ?? null,
+        boardKey: orderResult.applied?.boardKey ?? payload.boardKey ?? 'default',
+        notes: orderResult.applied?.notes ?? payload.notes ?? ''
+      };
+
+      ordersById.set(savedOrderId, appliedOrder);
+      if (existing?.orderNo && existing.orderNo !== appliedOrder.orderNo) {
+        ordersByOrderNo.delete(existing.orderNo);
+      }
+      ordersByOrderNo.set(appliedOrder.orderNo, ordersById.get(savedOrderId));
       stagesByOrderId.set(savedOrderId, nextStagesMap);
+    }
+
+    if (touchedOrders.size === 0) {
+      res.json({ ok: true, state: current.plannerState, board: current.board, lanes: current.lanes, touched: [] });
+      return;
     }
 
     const updated = await fetchCrmState();
@@ -2140,11 +2327,19 @@ app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
       return;
     }
 
-    const orderId = await upsertOrder(order, req.user);
+    const orderResult = await upsertOrder(order, req.user);
+    let stageChanged = false;
     if (Array.isArray(stages ?? order.stages)) {
       const stagePayload = stages ?? order.stages;
-      await syncStages(orderId, stagePayload, req.user, { trimMissing: trimMissingStages !== false });
+      const stageResult = await syncStages(orderResult.id, stagePayload, req.user, { trimMissing: trimMissingStages !== false });
+      stageChanged = stageResult.changed;
     }
+
+    if (!orderResult.changed && !stageChanged) {
+      res.json({ ok: true, orderId: orderResult.id, state: await fetchCrmState() });
+      return;
+    }
+
     const updated = await fetchCrmState();
     broadcastEvent({
       type: 'state-updated',
@@ -2157,7 +2352,7 @@ app.put('/api/crm/orders', requireRole('admin', 'worker'), async (req, res) => {
       lanes: updated.lanes,
       by: req.user?.email ?? null
     });
-    res.json({ ok: true, orderId, state: updated });
+    res.json({ ok: true, orderId: orderResult.id, state: updated });
   } catch (err) {
     if (err.status) {
       res.status(err.status).json({ error: err.message });
@@ -2175,7 +2370,13 @@ app.put('/api/crm/stages', requireRole('admin', 'worker'), async (req, res) => {
     return;
   }
   try {
-    await syncStages(orderId, stages, req.user, { trimMissing: trimMissingStages !== false });
+    const stageResult = await syncStages(orderId, stages, req.user, { trimMissing: trimMissingStages !== false });
+
+    if (!stageResult.changed) {
+      res.json({ ok: true, state: await fetchCrmState() });
+      return;
+    }
+
     const updated = await fetchCrmState();
     broadcastEvent({
       type: 'state-updated',
