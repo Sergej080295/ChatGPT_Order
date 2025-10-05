@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRM · Planner bridge</title>
+  <script>
+  (() => {
+    const STATE_ENDPOINT = '/api/state';
+    const EVENTS_ENDPOINT = '/api/events';
+    const listeners = new Set();
+    let source = null;
+    let reconnectTimer = null;
+
+    const notify = (payload) => {
+      listeners.forEach((cb) => {
+        try { cb(payload); } catch (err) { console.warn('crmRemote listener failed', err); }
+      });
+    };
+
+    const scheduleReconnect = () => {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 4000);
+    };
+
+    const connect = () => {
+      if (!('EventSource' in window)) return;
+      if (source) {
+        try { source.close(); } catch (err) {}
+        source = null;
+      }
+      const next = new EventSource(EVENTS_ENDPOINT);
+      source = next;
+      next.onmessage = (event) => {
+        if (!event?.data) {
+          notify(null);
+          return;
+        }
+        try {
+          const payload = JSON.parse(event.data);
+          notify(payload);
+        } catch (err) {
+          console.warn('crmRemote event parse failed', err);
+          notify(null);
+        }
+      };
+      next.onerror = () => {
+        try { next.close(); } catch (err) {}
+        if (source === next) {
+          source = null;
+        }
+        notify({ type: 'connection-lost' });
+        scheduleReconnect();
+      };
+    };
+
+    if ('EventSource' in window) {
+      connect();
+    }
+
+    const loadState = async () => {
+      const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
+      return await res.text();
+    };
+
+    const saveState = async () => {
+      throw new Error('CRM режим: запись через Планировщик недоступна.');
+    };
+
+    window.crmBridge = {
+      loadState,
+      saveState,
+      onRemoteUpdate(callback) {
+        if (typeof callback !== 'function') return () => {};
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      }
+    };
+  })();
+  </script>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --bg:#0f1115;
+      --surface:#161a22;
+      --text:#e6ecf7;
+      --muted:#8b95a7;
+      --border:#232a36;
+      --accent:#4da3ff;
+      --accent-soft:rgba(77,163,255,.12);
+      --danger:#ff6b6b;
+      --ready:#24a148;
+      --lane-gap:18px;
+    }
+
+    body[data-theme="light"] {
+      --bg:#f6f7fb;
+      --surface:#ffffff;
+      --text:#0e1320;
+      --muted:#5a667a;
+      --border:#d9deea;
+      --accent:#1b5cff;
+      --accent-soft:rgba(27,92,255,.12);
+      --danger:#cc3a3a;
+      --ready:#1f8e41;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin:0;
+      font:14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background:var(--bg);
+      color:var(--text);
+      min-height:100vh;
+      display:flex;
+      flex-direction:column;
+    }
+
+    header {
+      position:sticky;
+      top:0;
+      backdrop-filter:blur(8px);
+      background:rgba(15,17,21,.86);
+      border-bottom:1px solid var(--border);
+      z-index:10;
+    }
+
+    body[data-theme="light"] header {
+      background:rgba(246,247,251,.88);
+    }
+
+    .toolbar {
+      padding:14px 16px;
+      display:flex;
+      flex-wrap:wrap;
+      gap:12px;
+      align-items:center;
+    }
+
+    h1 {
+      margin:0;
+      font-size:17px;
+      letter-spacing:.02em;
+    }
+
+    .spacer { flex:1 1 auto; }
+
+    a.btn, button.btn {
+      appearance:none;
+      border:none;
+      border-radius:999px;
+      padding:8px 14px;
+      font-size:13px;
+      font-weight:600;
+      text-decoration:none;
+      cursor:pointer;
+      color:var(--text);
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.06);
+      transition:transform .08s ease, filter .2s ease, background .2s ease, border .2s ease;
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+    }
+
+    body[data-theme="light"] a.btn,
+    body[data-theme="light"] button.btn {
+      background:#eef2fb;
+      border-color:var(--border);
+    }
+
+    a.btn:hover, button.btn:hover {
+      filter:brightness(.95);
+    }
+
+    a.btn:active, button.btn:active {
+      transform:translateY(1px) scale(.99);
+    }
+
+    .btn.primary {
+      background:linear-gradient(90deg, rgba(77,163,255,.22), rgba(155,255,214,.3));
+      border-color:rgba(77,163,255,.4);
+      color:var(--text);
+    }
+
+    .btn.ghost {
+      background:transparent;
+      border-color:transparent;
+    }
+
+    .status-pill {
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:6px 12px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:600;
+      background:rgba(36,161,72,.16);
+      color:var(--ready);
+    }
+
+    .status-pill::before {
+      content:"";
+      width:8px;
+      height:8px;
+      border-radius:50%;
+      background:var(--ready);
+    }
+
+    .status-pill[data-status="offline"] {
+      background:rgba(255,206,77,.16);
+      color:#facc15;
+    }
+
+    .status-pill[data-status="offline"]::before {
+      background:#facc15;
+    }
+
+    .status-pill[data-status="error"] {
+      background:rgba(255,107,107,.14);
+      color:var(--danger);
+    }
+
+    main {
+      flex:1;
+      padding:18px;
+      display:flex;
+      flex-direction:column;
+    }
+
+    .columns {
+      display:grid;
+      gap:var(--lane-gap);
+      grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+    }
+
+    .lane {
+      display:flex;
+      flex-direction:column;
+      gap:12px;
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:18px;
+      min-height:220px;
+      padding:14px;
+      box-shadow:0 10px 28px rgba(0,0,0,.25);
+    }
+
+    body[data-theme="light"] .lane {
+      box-shadow:0 12px 28px rgba(27,92,255,.08);
+    }
+
+    .lane h2 {
+      margin:0 0 6px;
+      font-size:13px;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      color:var(--muted);
+    }
+
+    .lane-count {
+      font-size:12px;
+      color:var(--muted);
+    }
+
+    .card {
+      padding:12px 14px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.06);
+      background:rgba(8,11,18,.72);
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      box-shadow:0 6px 20px rgba(0,0,0,.3);
+    }
+
+    body[data-theme="light"] .card {
+      background:#ffffff;
+      border-color:rgba(10,25,68,.08);
+    }
+
+    .card-header {
+      display:flex;
+      gap:10px;
+      align-items:center;
+    }
+
+    .order-id {
+      font-weight:700;
+      font-size:15px;
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+
+    .order-id span {
+      font-size:11px;
+      padding:3px 8px;
+      border-radius:999px;
+      background:var(--accent-soft);
+      color:var(--accent);
+    }
+
+    .customer {
+      color:var(--muted);
+      font-size:13px;
+    }
+
+    .stages {
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      font-size:12px;
+    }
+
+    .stage-row {
+      display:flex;
+      align-items:center;
+      gap:6px;
+      justify-content:space-between;
+      padding:6px 8px;
+      border-radius:10px;
+      background:rgba(255,255,255,.04);
+      border:1px solid rgba(255,255,255,.04);
+    }
+
+    body[data-theme="light"] .stage-row {
+      background:rgba(27,92,255,.06);
+      border-color:rgba(27,92,255,.08);
+    }
+
+    .stage-name {
+      font-weight:600;
+    }
+
+    .stage-dates {
+      color:var(--muted);
+      font-variant-numeric:tabular-nums;
+    }
+
+    .empty {
+      font-size:13px;
+      font-style:italic;
+      color:var(--muted);
+      padding:6px 0;
+    }
+
+    .legend {
+      display:flex;
+      flex-wrap:wrap;
+      gap:12px;
+      margin-top:22px;
+      font-size:12px;
+      color:var(--muted);
+    }
+
+    .legend b {
+      font-weight:600;
+      color:var(--text);
+    }
+
+    .toast-host {
+      position:fixed;
+      top:22px;
+      right:22px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      pointer-events:none;
+      z-index:20;
+    }
+
+    .toast {
+      min-width:220px;
+      max-width:320px;
+      background:rgba(12,14,21,.92);
+      color:#fff;
+      padding:12px 16px;
+      border-radius:12px;
+      box-shadow:0 16px 40px rgba(0,0,0,.45);
+      pointer-events:auto;
+      opacity:0;
+      transform:translateY(-10px);
+      animation:toast-in .3s forwards;
+      font-size:13px;
+    }
+
+    body[data-theme="light"] .toast {
+      background:#11182a;
+    }
+
+    @keyframes toast-in {
+      to { opacity:1; transform:translateY(0); }
+    }
+
+    @media (max-width:768px) {
+      .toolbar {
+        align-items:flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toast-host" id="toastHost" aria-live="polite"></div>
+  <header>
+    <div class="toolbar">
+      <h1>CRM · Активные заказы</h1>
+      <div class="status-pill" id="connectionBadge" data-status="online">В сети</div>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="themeToggle" type="button" aria-label="Сменить тему">🌗 Тема</button>
+      <a class="btn primary" href="/Planner_Codex_v3.html">Планировщик</a>
+    </div>
+  </header>
+  <main>
+    <section class="columns" id="lanes" aria-live="polite"></section>
+    <div class="legend">
+      <span><b>Прогресс</b> — средний % завершения по переделам.</span>
+      <span><b>Синхронизация</b> — обновления поступают напрямую из Планировщика.</span>
+    </div>
+  </main>
+  <script>
+    const badge = document.getElementById('connectionBadge');
+    const toastHost = document.getElementById('toastHost');
+    let currentTheme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+
+    const applyTheme = (next) => {
+      currentTheme = next;
+      if (next === 'light') {
+        document.body.setAttribute('data-theme', 'light');
+      } else {
+        document.body.removeAttribute('data-theme');
+      }
+      try {
+        localStorage.setItem('crm-theme', next);
+      } catch (err) {}
+    };
+
+    const savedTheme = (() => {
+      try { return localStorage.getItem('crm-theme'); } catch (err) { return null; }
+    })();
+    if (savedTheme) {
+      applyTheme(savedTheme);
+    } else {
+      applyTheme(currentTheme);
+    }
+
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      applyTheme(currentTheme === 'light' ? 'dark' : 'light');
+    });
+
+    const showToast = (message, tone = 'info') => {
+      const el = document.createElement('div');
+      el.className = 'toast';
+      el.textContent = message;
+      if (tone === 'warn') {
+        el.style.background = 'rgba(255,206,77,.22)';
+        el.style.color = '#facc15';
+      } else if (tone === 'error') {
+        el.style.background = 'rgba(255,107,107,.22)';
+        el.style.color = '#fee2e2';
+      }
+      toastHost.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateY(-12px)';
+        setTimeout(() => el.remove(), 250);
+      }, 3200);
+    };
+
+    const formatDate = (value) => {
+      if (!value) return '—';
+      try {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '—';
+        return date.toLocaleDateString();
+      } catch (err) {
+        return '—';
+      }
+    };
+
+    const formatProgress = (stages) => {
+      if (!Array.isArray(stages) || stages.length === 0) return null;
+      const avg = stages.reduce((acc, stage) => acc + (stage.progress ?? 0), 0) / stages.length;
+      return Math.round(avg);
+    };
+
+    const computeLaneOrder = (lanes) => {
+      const baseOrder = ['Не запланированное', 'Ожидание', 'В работе', 'Выполняется', 'Готово', 'Срыв'];
+      const known = [];
+      const unknown = [];
+      lanes.forEach((lane) => {
+        const idx = baseOrder.indexOf(lane);
+        if (idx === -1) {
+          unknown.push(lane);
+        } else {
+          known.push({ lane, idx });
+        }
+      });
+      known.sort((a, b) => a.idx - b.idx);
+      unknown.sort((a, b) => a.localeCompare(b, 'ru'));
+      return [...known.map((item) => item.lane), ...unknown];
+    };
+
+    const renderBoard = (orders) => {
+      const container = document.getElementById('lanes');
+      container.innerHTML = '';
+      const lanes = new Map();
+      orders.forEach((order) => {
+        const laneName = order.lane || 'Не запланированное';
+        if (!lanes.has(laneName)) {
+          lanes.set(laneName, []);
+        }
+        lanes.get(laneName).push(order);
+      });
+
+      const orderedLaneNames = computeLaneOrder(Array.from(lanes.keys()));
+      orderedLaneNames.forEach((laneName) => {
+        const cardList = lanes.get(laneName) || [];
+        cardList.sort((a, b) => {
+          const aDate = a.targetDate ?? a.earliest ?? 0;
+          const bDate = b.targetDate ?? b.earliest ?? 0;
+          return aDate - bDate;
+        });
+        const laneEl = document.createElement('article');
+        laneEl.className = 'lane';
+        const head = document.createElement('div');
+        head.style.display = 'flex';
+        head.style.justifyContent = 'space-between';
+        head.style.alignItems = 'baseline';
+
+        const title = document.createElement('h2');
+        title.textContent = laneName;
+        const count = document.createElement('span');
+        count.className = 'lane-count';
+        count.textContent = `${cardList.length} шт.`;
+        head.appendChild(title);
+        head.appendChild(count);
+        laneEl.appendChild(head);
+
+        if (cardList.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'Нет заказов в работе';
+          laneEl.appendChild(empty);
+        } else {
+          cardList.forEach((order) => {
+            const card = document.createElement('div');
+            card.className = 'card';
+
+            const header = document.createElement('div');
+            header.className = 'card-header';
+            const id = document.createElement('div');
+            id.className = 'order-id';
+            id.textContent = order.orderId || '—';
+            if (order.priority != null) {
+              const pill = document.createElement('span');
+              pill.textContent = `P${order.priority}`;
+              id.appendChild(pill);
+            }
+            header.appendChild(id);
+            if (order.customer) {
+              const customer = document.createElement('div');
+              customer.className = 'customer';
+              customer.textContent = order.customer;
+              header.appendChild(customer);
+            }
+            card.appendChild(header);
+
+            const progressValue = formatProgress(order.stages);
+            if (progressValue != null) {
+              const progress = document.createElement('div');
+              progress.textContent = `Прогресс: ${progressValue}%`;
+              progress.style.fontSize = '12px';
+              progress.style.color = 'var(--muted)';
+              card.appendChild(progress);
+            }
+
+            const stageList = document.createElement('div');
+            stageList.className = 'stages';
+            if (order.stages.length === 0) {
+              const emptyStage = document.createElement('div');
+              emptyStage.className = 'empty';
+              emptyStage.textContent = 'Переделы не заданы';
+              stageList.appendChild(emptyStage);
+            } else {
+              order.stages.forEach((stage) => {
+                const row = document.createElement('div');
+                row.className = 'stage-row';
+                const name = document.createElement('div');
+                name.className = 'stage-name';
+                name.textContent = stage.stageName ?? stage.stage ?? 'Передел';
+                const dates = document.createElement('div');
+                dates.className = 'stage-dates';
+                dates.textContent = `${formatDate(stage.startDate)} → ${formatDate(stage.endDate)}`;
+                row.appendChild(name);
+                row.appendChild(dates);
+                stageList.appendChild(row);
+              });
+            }
+            card.appendChild(stageList);
+
+            if (order.comments) {
+              const comment = document.createElement('div');
+              comment.style.fontSize = '12px';
+              comment.style.color = 'var(--muted)';
+              comment.textContent = order.comments;
+              card.appendChild(comment);
+            }
+
+            laneEl.appendChild(card);
+          });
+        }
+        container.appendChild(laneEl);
+      });
+    };
+
+    const normalizeState = (stateString) => {
+      if (!stateString) return [];
+      let parsed;
+      try {
+        parsed = JSON.parse(stateString);
+      } catch (err) {
+        console.error('Не удалось разобрать состояние Планировщика', err);
+        showToast('Ошибка чтения состояния Планировщика', 'error');
+        return [];
+      }
+      const tasks = Array.isArray(parsed?.t) ? parsed.t : [];
+      const orders = new Map();
+      tasks.forEach((task) => {
+        const orderId = task.orderId || task.uid || '—';
+        const existing = orders.get(orderId) || {
+          orderId,
+          customer: task.customer || '',
+          lane: task.state || parsed?.meta?.defaultLane || 'Не запланированное',
+          priority: task.priority ?? null,
+          comments: task.comment ?? '',
+          stages: [],
+          targetDate: null,
+          earliest: null
+        };
+        const stageEntry = {
+          stageName: task.stage || task.process,
+          startDate: task.startDate || task.start || null,
+          endDate: task.endDate || task.end || null,
+          progress: typeof task.progress === 'number' ? task.progress : null
+        };
+        existing.stages.push(stageEntry);
+        const startTime = stageEntry.startDate ? Date.parse(stageEntry.startDate) : null;
+        const endTime = stageEntry.endDate ? Date.parse(stageEntry.endDate) : null;
+        if (endTime && (!existing.targetDate || endTime < existing.targetDate)) {
+          existing.targetDate = endTime;
+        }
+        if (startTime && (!existing.earliest || startTime < existing.earliest)) {
+          existing.earliest = startTime;
+        }
+        if (!task.state && existing.lane === 'Не запланированное' && task.status) {
+          existing.lane = task.status;
+        }
+        if (!existing.customer && task.customer) {
+          existing.customer = task.customer;
+        }
+        if (task.comments && !existing.comments) {
+          existing.comments = task.comments;
+        }
+        if (typeof task.priority === 'number' && existing.priority == null) {
+          existing.priority = task.priority;
+        }
+        orders.set(orderId, existing);
+      });
+      return Array.from(orders.values());
+    };
+
+    const setConnectionState = (state) => {
+      if (state === 'online') {
+        badge.dataset.status = 'online';
+        badge.textContent = 'В сети';
+      } else if (state === 'offline') {
+        badge.dataset.status = 'offline';
+        badge.textContent = 'Ожидание…';
+      } else {
+        badge.dataset.status = 'error';
+        badge.textContent = 'Ошибка соединения';
+      }
+    };
+
+    const refreshBoard = async () => {
+      try {
+        const stateString = await window.crmBridge.loadState();
+        const orders = normalizeState(stateString);
+        renderBoard(orders);
+        setConnectionState('online');
+      } catch (err) {
+        console.error(err);
+        showToast('Не удалось загрузить данные из Планировщика', 'error');
+        setConnectionState('error');
+      }
+    };
+
+    refreshBoard();
+
+    window.crmBridge.onRemoteUpdate((payload) => {
+      if (!payload) {
+        setConnectionState('offline');
+        return;
+      }
+      if (payload.type === 'connection-lost') {
+        setConnectionState('offline');
+        showToast('Соединение с Планировщиком потеряно. Пытаемся переподключиться…', 'warn');
+        return;
+      }
+      if (payload.state) {
+        const orders = normalizeState(payload.state);
+        renderBoard(orders);
+        setConnectionState('online');
+      }
+    });
+  </script>
+</body>
+</html>
