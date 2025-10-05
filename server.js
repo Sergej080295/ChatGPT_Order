@@ -352,7 +352,7 @@ const mapStageRow = (row) => ({
 });
 
 const fetchCrmState = async (boardKey = 'default') => {
-  await poolReady;
+  await ensureBootstrap();
   const { rows: orderRows } = await pool.query(
     `SELECT id, order_number, customer, amount, state, ready, progress, parent_order_id, board_key, meta, updated_by, updated_at, created_at
      FROM crm_orders
@@ -943,22 +943,34 @@ const ensureDefaultAdmin = async () => {
   console.log(`Seeded default admin user ${email}`);
 };
 
+const bootstrapReadyPromiseRef = { current: null };
+
+const ensureBootstrap = async () => {
+  if (!bootstrapReadyPromiseRef.current) {
+    bootstrapReadyPromiseRef.current = (async () => {
+      await ensureDatabase();
+      await ensureDefaultAdmin();
+    })();
+  }
+  await bootstrapReadyPromiseRef.current;
+};
+
 const getUserByEmail = async (email) => {
   if (!email) return null;
-  await poolReady;
+  await ensureBootstrap();
   const { rows } = await pool.query('SELECT id, email, password_hash, name, role FROM users WHERE email = $1 LIMIT 1', [email]);
   return rows[0] ?? null;
 };
 
 const getUserById = async (id) => {
   if (!id) return null;
-  await poolReady;
+  await ensureBootstrap();
   const { rows } = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1 LIMIT 1', [id]);
   return rows[0] ?? null;
 };
 
 const readStateFromDatabase = async () => {
-  await poolReady;
+  await ensureBootstrap();
   const { rows } = await pool.query('SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1');
   if (rows.length > 0) {
     const row = rows[0];
@@ -995,9 +1007,7 @@ const normalizeStoredState = async () => {
     return cachedState;
   }
 
-  await poolReady;
-  await ensureDatabase();
-  await ensureDefaultAdmin();
+  await ensureBootstrap();
 
   const existing = await readStateFromDatabase();
   if (existing) {
@@ -1034,7 +1044,7 @@ const normalizeStoredState = async () => {
 };
 
 const appendLog = async (entry) => {
-  await poolReady;
+  await ensureBootstrap();
   await pool.query(
     `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -1054,7 +1064,7 @@ const appendLog = async (entry) => {
 };
 
 const appendCrmActivity = async (entry, client = pool) => {
-  await poolReady;
+  await ensureBootstrap();
   await client.query(
     `INSERT INTO activity_log (entity, entity_id, action, payload, user_id, user_name)
      VALUES ($1, $2, $3, $4, $5, $6)`,
