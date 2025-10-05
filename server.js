@@ -550,16 +550,26 @@ const buildPlannerStateFromCrm = (board) => {
   const perStage = new Map(PLANNER_STAGE_KEYS.map((key) => [key, []]));
 
   (board?.orders || []).forEach((order) => {
-    const orderId = order.id != null ? String(order.id) : `crm-${order.orderNo || crypto.randomUUID()}`;
-    const orderNumber = order.orderNo || orderId;
-    const baseIdentity = orderNumber;
-    const lane = order.lane || DEFAULT_CRM_LANES[0];
+    const numericId = order.id != null ? Number(order.id) : null;
+    const orderNo = (order.orderNo ?? '').toString().trim();
+    const title = (order.title ?? '').toString().trim();
+    const customer = (order.customer ?? '').toString().trim();
+    const baseKey = numericId != null
+      ? `srv-${numericId}`
+      : (orderNo
+        ? `ord-${simpleHash(orderNo)}`
+        : `crm-${simpleHash(`${title}::${customer}` || 'order')}`);
+    const displayOrderId = orderNo || title || baseKey;
+    const orderNumber = orderNo || displayOrderId;
+    const baseIdentity = orderNumber || baseKey;
+    const lane = (order.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
     const stages = Array.isArray(order.stages) && order.stages.length ? order.stages : [];
     let stageCount = 0;
 
     stages.forEach((stage) => {
       const plannerStage = normalizePlannerStage(stage.stageKey, stage.stageName);
-      const uid = `${orderId}::${plannerStage}-${stage.id ?? stage.stageKey ?? crypto.randomUUID()}`;
+      const stageIdPart = stage.id != null ? String(stage.id) : (stage.stageKey ? String(stage.stageKey) : crypto.randomUUID());
+      const uid = `${baseKey}::${plannerStage}-${stageIdPart}`;
       const startIso = safeDate(stage.dateStart ? `${stage.dateStart}T00:00:00Z` : null);
       const endIso = safeDate(stage.dateEnd ? `${stage.dateEnd}T00:00:00Z` : null);
       const hours = numberOrNull(stage.hours) ?? 0;
@@ -580,13 +590,13 @@ const buildPlannerStateFromCrm = (board) => {
 
       const task = {
         uid,
-        orderId,
+        orderId: displayOrderId,
         orderNumber,
-        orderCustomer: order.customer || '',
+        orderCustomer: customer,
         orderIdentity: baseIdentity,
         stage: plannerStage,
-        childId: `${orderId}-${plannerStage}`,
-        parentId: orderId,
+        childId: `${baseKey}-${plannerStage}`,
+        parentId: baseKey,
         hours,
         extraHours: 0,
         startDate: startIso,
@@ -620,7 +630,7 @@ const buildPlannerStateFromCrm = (board) => {
 
     if (stageCount === 0) {
       const plannerStage = 'proc';
-      const uid = `${orderId}::${plannerStage}-auto`;
+      const uid = `${baseKey}::${plannerStage}-auto`;
       const startIso = safeDate(order.start ? `${order.start}T00:00:00Z` : null);
       const endIso = safeDate(order.end ? `${order.end}T00:00:00Z` : null);
       const stageRoute = {};
@@ -639,13 +649,13 @@ const buildPlannerStateFromCrm = (board) => {
 
       const task = {
         uid,
-        orderId,
+        orderId: displayOrderId,
         orderNumber,
-        orderCustomer: order.customer || '',
+        orderCustomer: customer,
         orderIdentity: baseIdentity,
         stage: plannerStage,
-        childId: `${orderId}-${plannerStage}`,
-        parentId: orderId,
+        childId: `${baseKey}-${plannerStage}`,
+        parentId: baseKey,
         hours: 0,
         extraHours: 0,
         startDate: startIso,
@@ -677,7 +687,11 @@ const buildPlannerStateFromCrm = (board) => {
     }
   });
 
-  const ordersMatrix = PLANNER_STAGE_KEYS.map((stage) => [stage, perStage.get(stage) || []]);
+  const allTaskUids = tasks.map((task) => task.uid);
+  const ordersMatrix = [['orders', allTaskUids]];
+  PLANNER_STAGE_KEYS.forEach((stage) => {
+    ordersMatrix.push([stage, perStage.get(stage) || []]);
+  });
 
   const baseState = {
     routeOverrides: [],
@@ -740,14 +754,16 @@ const fetchCrmState = async () => {
   );
 
   if (orderRows.length === 0) {
+    const emptyBoard = {
+      id: 'default',
+      name: 'Список заказов',
+      lanes: [...DEFAULT_CRM_LANES],
+      orders: []
+    };
     return {
-      board: {
-        id: 'default',
-        name: 'Список заказов',
-        lanes: [...DEFAULT_CRM_LANES],
-        orders: []
-      },
-      lanes: [...DEFAULT_CRM_LANES]
+      board: emptyBoard,
+      lanes: [...DEFAULT_CRM_LANES],
+      plannerState: buildPlannerStateFromCrm(emptyBoard)
     };
   }
 
@@ -772,13 +788,14 @@ const fetchCrmState = async () => {
   const orders = orderRows.map((row) => {
     const stages = stagesByOrder.get(row.id) || [];
     const aggregates = computeOrderAggregates(row, stages);
+    const laneValue = (row.lane || DEFAULT_CRM_LANES[0]).trim() || DEFAULT_CRM_LANES[0];
     return {
       id: row.id,
       orderNo: row.order_no,
       title: row.title,
       customer: row.customer,
       serviceTotal: row.service_total === null ? '' : Number(row.service_total),
-      lane: row.lane || DEFAULT_CRM_LANES[0],
+      lane: laneValue,
       isDone: boolFrom(row.is_done),
       parentOrderId: row.parent_order_id,
       boardKey: row.board_key,
