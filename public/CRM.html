@@ -126,6 +126,24 @@
       const raw = xhr.responseText || '';
       if (!raw) return;
       const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const muted = (() => {
+          if (typeof parsed.notificationsMuted === 'boolean') return parsed.notificationsMuted;
+          if (parsed.meta) {
+            if (typeof parsed.meta.notificationsMuted === 'boolean') return parsed.meta.notificationsMuted;
+            if (parsed.meta.settings && typeof parsed.meta.settings.notificationsMuted === 'boolean') {
+              return parsed.meta.settings.notificationsMuted;
+            }
+          }
+          if (parsed.settings && typeof parsed.settings.notificationsMuted === 'boolean') {
+            return parsed.settings.notificationsMuted;
+          }
+          return undefined;
+        })();
+        if (muted !== undefined) {
+          window.__CRM_NOTIFICATIONS_MUTED__ = !!muted;
+        }
+      }
       if (parsed && typeof parsed === 'object' && parsed.crm) {
         window.__CRM_INITIAL_STATE__ = parsed.crm;
         try {
@@ -163,9 +181,12 @@
   body{margin:0;background:linear-gradient(180deg,#0e1117,#0b0d12);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}
   body[data-theme="light"]{ background:linear-gradient(180deg,#f8faff,#eef2f8) }
   header{position:sticky;top:0;z-index:10;background:rgba(15,17,21,.8);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
-  .bar{display:flex;gap:8px;align-items:center;padding:12px 14px;flex-wrap:wrap}
+  .bar{display:flex;gap:12px;align-items:center;padding:12px 14px;flex-wrap:wrap}
   .bar h1{font-size:16px;margin:0 8px 0 0;font-weight:700;color:var(--text);opacity:1}
   body[data-theme="light"] .bar h1{color:#0e1320}
+  .title-area{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .bar .search{flex:1 1 240px;min-width:220px}
 
   /* Базовые элементы */
   select, input[type="text"], input[type="number"], input[type="date"], textarea{
@@ -196,7 +217,7 @@
   @keyframes ripple{to{transform:scale(12);opacity:0}}
 
   .grow{flex:1}
-  .boards{display:flex;gap:14px;align-items:center}
+  .boards{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#0b0e13}
   body[data-theme="light"] .pill{ background:#fff }
   main{padding:16px}
@@ -429,12 +450,13 @@
   .toast strong{font-size:13px}
   .toast button{justify-self:flex-end;margin-top:4px}
 
-  .nav-link{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:10px;color:inherit;text-decoration:none;border:1px solid var(--border);transition:background .15s,border-color .15s;font-weight:600}
-  .nav-link:hover{background:rgba(77,163,255,.15);border-color:#4da3ff}
-  body[data-theme="light"] .nav-link:hover{background:rgba(27,92,255,.1)}
-  body[data-theme="light"] #plannerLink{color:#1b5cff;border-color:rgba(27,92,255,.35);box-shadow:0 0 0 1px rgba(27,92,255,.08)}
-  body[data-theme="light"] #plannerLink:hover{border-color:#1b5cff;background:rgba(27,92,255,.12)}
-  body[data-theme="light"] .bar label.muted{color:#1f2a44;font-weight:600}
+  .planner-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:12px;border:1px solid rgba(92,160,255,.45);background:linear-gradient(135deg,rgba(77,163,255,.22),rgba(77,163,255,.08));color:#4da3ff;text-decoration:none;transition:transform .12s ease,box-shadow .2s ease,background .2s ease,border-color .2s ease}
+  .planner-button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(77,163,255,.28);background:linear-gradient(135deg,rgba(77,163,255,.32),rgba(77,163,255,.14))}
+  .planner-button:active{transform:translateY(0) scale(.98)}
+  .planner-button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(77,163,255,.45)}
+  .planner-button svg{width:18px;height:18px;fill:currentColor}
+  body[data-theme="light"] .planner-button{background:linear-gradient(135deg,rgba(27,92,255,.22),rgba(27,92,255,.08));border-color:rgba(27,92,255,.45);color:#1b5cff}
+  body[data-theme="light"] .planner-button:hover{box-shadow:0 8px 18px rgba(27,92,255,.18);background:linear-gradient(135deg,rgba(27,92,255,.3),rgba(27,92,255,.12))}
 
   .tt{position:fixed;z-index:9998;background:var(--tooltipBg);color:var(--text);border:1px solid var(--tooltipBd);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;max-width:320px;pointer-events:none}
   .tt h5{margin:0 0 6px 0;font-size:12px;color:var(--muted)}
@@ -450,21 +472,24 @@
 <body>
 <header>
   <div class="bar">
-    <h1>Mini CRM</h1>
+    <div class="title-area">
+      <h1>Mini CRM</h1>
+      <a id="plannerLink" class="planner-button" href="/Planner_Codex_v3.html" title="Открыть планировщик" aria-label="Открыть планировщик">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 4h2V2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm14 6H5v10h14V10zm0-2V6H5v2h14z"/></svg>
+      </a>
+    </div>
     <div class="boards">
-      <label class="muted">Доска</label>
       <select id="boardSelect"></select>
-      <button id="addBoardBtn">+ Доска</button>
-      <button id="editBoardBtn">Настроить</button>
       <span class="pill muted" id="stats">—</span>
     </div>
-    <input id="q" class="grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
-    <button id="newOrderBtn" class="primary">+ Заказ</button>
-    <button id="exportBtn" title="Экспорт JSON">⭳</button>
-    <button id="importBtn" title="Импорт JSON">⭱</button>
-    <input id="importInput" type="file" accept="application/json" hidden />
-    <button id="themeBtn" title="Переключить тему">🌙</button>
-    <a id="plannerLink" class="ghost nav-link" href="/Planner_Codex_v3.html">Планировщик</a>
+    <div class="actions">
+      <button id="newOrderBtn" class="primary">+ Заказ</button>
+      <button id="exportBtn" title="Экспорт JSON">⭳</button>
+      <button id="importBtn" title="Импорт JSON">⭱</button>
+      <input id="importInput" type="file" accept="application/json" hidden />
+      <button id="themeBtn" title="Переключить тему">🌙</button>
+    </div>
+    <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
   </div>
 </header>
 
@@ -842,8 +867,11 @@ splitForm.addEventListener('submit',e=>{
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 
 /* TOP BAR & INIT */
-$('#addBoardBtn').onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save('Создание доски');renderAll();openBoard()};
-$('#editBoardBtn').onclick=openBoard; $('#newOrderBtn').onclick=()=>openOrder(null);
+const addBoardBtn=$('#addBoardBtn');
+if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save('Создание доски');renderAll();openBoard();};}
+const editBoardBtn=$('#editBoardBtn');
+if(editBoardBtn){editBoardBtn.onclick=openBoard;}
+$('#newOrderBtn').onclick=()=>openOrder(null);
 boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
 q.oninput=()=>renderCards();
 
@@ -886,6 +914,23 @@ function positionToastLayer(){
 }
 positionToastLayer();
 window.addEventListener('resize', positionToastLayer);
+let crmNotificationsMuted=window.__CRM_NOTIFICATIONS_MUTED__===true;
+function derivePlannerNotificationsMuted(state){
+  if(!state||typeof state!=='object') return undefined;
+  if(typeof state.notificationsMuted==='boolean') return state.notificationsMuted;
+  const meta=state.meta||{};
+  if(typeof meta.notificationsMuted==='boolean') return meta.notificationsMuted;
+  if(meta.settings&&typeof meta.settings.notificationsMuted==='boolean') return meta.settings.notificationsMuted;
+  if(state.settings&&typeof state.settings.notificationsMuted==='boolean') return state.settings.notificationsMuted;
+  return undefined;
+}
+function syncCrmNotificationsMutedFromPlanner(state){
+  const next=derivePlannerNotificationsMuted(state);
+  if(typeof next==='boolean'){
+    crmNotificationsMuted=next;
+    window.__CRM_NOTIFICATIONS_MUTED__=next;
+  }
+}
 let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
@@ -902,6 +947,7 @@ function setCrmAlias(name){
 }
 
 function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
+  if(crmNotificationsMuted) return;
   if(!toastLayer) return;
   positionToastLayer();
   const toast=document.createElement('div');
@@ -964,6 +1010,7 @@ async function pushCrmToServer(){
     return;
   }
   if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
+  syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
   plannerSnapshot.crm=snapshot;
   plannerSnapshot.crm.updatedAt=new Date().toISOString();
   const now=new Date();
@@ -1041,6 +1088,7 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
     if(!payload||!payload.state) return;
     try{
       const parsed=JSON.parse(payload.state);
+      syncCrmNotificationsMutedFromPlanner(parsed);
       if(parsed&&parsed.crm){
         applyRemoteCrm(parsed.crm);
         showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
