@@ -22,6 +22,10 @@ const pool = new Pool({
   idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
 });
 
+const wrapAsync = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
+
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const JWT_COOKIE_NAME = 'planner_token';
 const JWT_TTL_SECONDS = Number.parseInt(process.env.JWT_TTL || '86400', 10);
@@ -179,10 +183,6 @@ const normalizeDateTime = (value) => {
     return null;
   }
   return date.toISOString();
-};
-
-const wrapAsync = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
 };
 
 const nowIso = () => new Date().toISOString();
