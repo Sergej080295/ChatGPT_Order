@@ -62,6 +62,12 @@
   .boards{display:flex;gap:14px;align-items:center}
   .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#0b0e13}
   body[data-theme="light"] .pill{ background:#fff }
+  .toast{position:fixed;top:26px;right:26px;z-index:1200;min-width:220px;max-width:320px;padding:14px 18px;border-radius:14px;border:1px solid transparent;box-shadow:0 18px 32px rgba(0,0,0,.35);background:rgba(15,20,30,.92);color:var(--text);opacity:0;pointer-events:none;transform:translateY(-10px);transition:opacity .2s ease,transform .2s ease}
+  body[data-theme="light"] .toast{background:#fff;color:#0f172a;box-shadow:0 16px 24px rgba(15,23,42,.12)}
+  .toast.show{opacity:1;pointer-events:auto;transform:translateY(0)}
+  .toast.success{border-color:#1f8e41;color:#b6ff8a}
+  .toast.warn{border-color:#b57a00;color:#ffd88a}
+  .toast.error{border-color:#cc3a3a;color:#ff9f9f}
   main{padding:16px}
   .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px}
   .columns::-webkit-scrollbar{height:8px}
@@ -291,6 +297,7 @@
 <header>
   <div class="bar">
     <h1>Mini CRM</h1>
+    <span class="pill" id="sseStatus" title="Статус подключения">🟡 Проверка…</span>
     <div class="boards">
       <label class="muted">Доска</label>
       <select id="boardSelect"></select>
@@ -300,9 +307,13 @@
     </div>
     <input id="q" class="grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
     <button id="newOrderBtn" class="primary">+ Заказ</button>
+    <button id="plannerBtn" class="ghost" title="Перейти в Планировщик">Планировщик</button>
+    <button id="importCsvBtn" title="Импорт CSV в CRM">⬆ CSV</button>
+    <button id="exportCsvBtn" title="Экспорт CRM → CSV">⬇ CSV</button>
     <button id="exportBtn" title="Экспорт JSON">⭳</button>
     <button id="importBtn" title="Импорт JSON">⭱</button>
     <input id="importInput" type="file" accept="application/json" hidden />
+    <input id="importCsvInput" type="file" accept="text/csv,.csv" hidden />
     <button id="themeBtn" title="Переключить тему">🌙</button>
   </div>
 </header>
@@ -392,9 +403,12 @@
   </form>
 </dialog>
 
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
 <script>
-const KEY='mini_crm_v13c';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const KEY='mini_crm_v13c';
+const toastEl=$('#toast');
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDate=d=>d.toISOString().slice(0,10);
 const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1b3b68"/><path d="M32 4a28 28 0 0 1 0 56z" fill="#4da3ff"/></svg>`);
@@ -403,6 +417,23 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Упаковка','Отгрузка'];
 const defaultBoard=()=>({id:crypto.randomUUID(),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+
+function mergeLanes(list){
+  const seen=new Set();
+  const merged=[];
+  DEFAULT_LANES.forEach(l=>{const lane=l||'';if(!lane)return;if(!seen.has(lane)){seen.add(lane);merged.push(lane);}});
+  (list||[]).forEach(raw=>{const lane=(raw||'').trim();if(!lane||seen.has(lane))return;seen.add(lane);merged.push(lane);});
+  return merged;
+}
+
+let toastTimer=null;
+function showToast(message,type='info'){
+  if(!toastEl) return;
+  toastEl.textContent=message;
+  toastEl.className='toast show '+(type==='success'?'success':type==='warn'?'warn':type==='error'?'error':'');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{toastEl.classList.remove('show','success','warn','error');},3600);
+}
 
 let state=load()??{boards:[defaultBoard()],currentBoardId:null}; if(!state.currentBoardId) state.currentBoardId=state.boards[0].id; save();
 function load(){try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}}
@@ -418,6 +449,21 @@ function spanMuted(t){const s=document.createElement('span');s.className='muted'
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
 const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+
+const remoteSync={user:null,sse:null,refreshing:false,syncing:false,pollTimer:null,pollInterval:2000,refreshQueued:false,offline:false};
+
+function updateConnectionStatus(online){
+  remoteSync.offline=!online;
+  if(!sseStatus)return;
+  if(online){sseStatus.textContent='🟢 Онлайн';sseStatus.classList.remove('warn','error');}
+  else{sseStatus.textContent='🟡 Оффлайн';sseStatus.classList.add('warn');}
+}
+
+function scheduleRefresh(delay=400){
+  if(remoteSync.refreshQueued)return;
+  remoteSync.refreshQueued=true;
+  setTimeout(async()=>{remoteSync.refreshQueued=false;await pullFromServer();},delay);
+}
 
 function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
 function renderColumns(){const b=currentBoard();columns.innerHTML='';b.lanes.forEach(l=>{const c=document.createElement('div');c.className='col';c.innerHTML=`<header><h2>${escapeHtml(l)}</h2></header><div class="drop" data-lane="${escapeHtml(l)}"></div>`;columns.appendChild(c)});enableDnd()}
@@ -486,7 +532,7 @@ function enableDnd(){
   $$('.drop',columns).forEach(d=>{
     d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
     d.addEventListener('dragleave',()=>{d.style.outline='none'});
-    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);o.status=d.dataset.lane;save();renderCards()});
+    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);if(!o)return;o.status=d.dataset.lane;save();renderCards();syncOrderToServer(o,{silent:true,includeStages:false}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});});
   });
 }
 
@@ -494,7 +540,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save();renderCards();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save();renderCards();syncOrderToServer(order,{silent:true,includeStages:false}).catch(err=>{console.error(err);showToast(err.message||'Не удалось синхронизировать заказ','error');});closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -512,13 +558,14 @@ function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
 const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),orderDone=$('#orderDone'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday');
+const plannerBtn=$('#plannerBtn'),importCsvBtn=$('#importCsvBtn'),exportCsvBtn=$('#exportCsvBtn'),importCsvInput=$('#importCsvInput'),sseStatus=$('#sseStatus');
 
 function openOrder(id=null){
   const b=currentBoard(); statusSel.innerHTML=''; b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)}); stagesTableBody.innerHTML='';
   if(id){
     dlgTitle.textContent='Редактировать заказ'; const o=b.orders.find(x=>x.id===id); fillOrderForm(o,b);
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
-    deleteOrderBtn.style.display=''; deleteOrderBtn.onclick=()=>{if(!confirm('Удалить этот заказ?'))return;b.orders=b.orders.filter(x=>x.id!==o.id);save();renderCards();orderDlg.close()};
+    deleteOrderBtn.style.display=''; deleteOrderBtn.onclick=()=>{if(!confirm('Удалить этот заказ?'))return; b.orders=b.orders.filter(x=>x.id!==o.id); save(); renderCards(); orderDlg.close(); if(o){syncDeleteOrder(o).catch(err=>{console.error(err);showToast(err.message||'Не удалось удалить заказ','error');});}};
   }else{
     dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
     DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''})); window._editingOrigValues=null; syncAutoDates(); deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
@@ -583,8 +630,8 @@ function calcAutoProgress(stages){const s=stages||[];if(!s.length)return 0;const
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages())}
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
 
-orderForm.addEventListener('submit',e=>{
-  e.preventDefault(); const b=currentBoard();
+orderForm.addEventListener('submit',async e=>{
+  e.preventDefault(); const b=currentBoard(); if(!b){showToast('Не выбрана доска','error');return;}
   const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const stages=readStages();
   const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
   const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
@@ -593,8 +640,10 @@ orderForm.addEventListener('submit',e=>{
     notes:orderForm.notes.value.trim(),status:orderForm.status.value,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
-    parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
+    parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined,
+    serverId:exist?.serverId??null};
   if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)} save(); renderCards(); orderDlg.close();
+  try{await syncOrderToServer(obj);}catch(err){console.error(err);showToast(err.message||'Не удалось сохранить на сервере','error');}
 });
 
 /* Настройки доски */
@@ -656,14 +705,18 @@ splitForm.addEventListener('submit',e=>{
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 
 /* TOP BAR & INIT */
-$('#addBoardBtn').onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save();renderAll();openBoard()};
+$('#addBoardBtn').onclick=()=>{showToast('В этой версии поддерживается только одна доска (board_key="default").','warn');};
 $('#editBoardBtn').onclick=openBoard; $('#newOrderBtn').onclick=()=>openOrder(null);
+if(plannerBtn) plannerBtn.onclick=()=>{window.location.href='/planner';};
+if(importCsvBtn) importCsvBtn.onclick=()=>{importCsvInput?.click();};
+if(importCsvInput) importCsvInput.onchange=(e)=>{const file=e.target.files?.[0]; if(!file) return; if(!confirm('Импортировать CSV-файл в CRM? Текущие данные будут обновлены.')){e.target.value='';return;} file.text().then(text=>syncCsvImport(text)).catch(err=>showToast('Не удалось прочитать файл: '+err.message)).finally(()=>{e.target.value='';});};
+if(exportCsvBtn) exportCsvBtn.onclick=()=>{exportCrmCsv();};
 boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save();renderAll()};
 q.oninput=()=>renderCards();
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
-$('#importBtn').addEventListener('click',()=>$('#importInput').click());
-$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save();renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+$('#importBtn').addEventListener('click',()=>{showToast('Импорт JSON не синхронизируется с сервером. Для обмена используйте CSV.','warn');$('#importInput').click();});
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save();renderAll();showToast('JSON импортирован локально. Данные не отправлены на сервер.','warn');}catch(err){console.error(err);showToast('Ошибка импорта JSON: '+err.message,'error');}finally{e.target.value=''}};
 
 $('#exportBtn').insertAdjacentHTML('afterend','<button id="demoBtn" title="Загрузить демо">☆</button>');
 $('#demoBtn').onclick=()=>{loadDemo();save();renderAll();alert('Загружено 12 демо-заказов')};
@@ -690,7 +743,126 @@ document.addEventListener('click',e=>{
 
 /* INIT */
 function renderAll(){renderBoardSelect();renderColumns();renderCards()}
+
+function normalizeServiceTotal(value){if(value===''||value==null)return null;const parsed=window._parseMoney?.(value);if(parsed===''||Number.isNaN(parsed))return null;return Number(parsed);}
+
+function stageKeyFromName(name){return (name||'').toLowerCase().replace(/[^a-z0-9а-яё]+/gi,'-').replace(/^-+|-+$/g,'')||'stage';}
+
+function mapServerStage(stage){return {id:`srv-stage-${stage.id}`,stageId:stage.id,name:stage.stageName||stage.stage_key||'Передел',done:!!stage.isReady,progress:Number(stage.percent??0),start:stage.dateStart||'',end:stage.dateEnd||'',value:stage.hours==null?'':stage.hours};}
+
+function mapServerOrder(order){const stages=(order.stages||[]).map(mapServerStage);return {
+  id:`srv-${order.id}`,
+  serverId:order.id,
+  title:order.title||'',
+  orderNo:order.orderNo||'',
+  customer:order.customer||'',
+  start:order.start||'',
+  end:order.end||'',
+  done:!!order.isDone,
+  progress:Number(order.percent??calcAutoProgress(stages)),
+  progressManual:false,
+  notes:order.notes||'',
+  status:(order.lane||DEFAULT_LANES[0]).trim()||DEFAULT_LANES[0],
+  serviceTotal:order.serviceTotal===''||order.serviceTotal==null?'':Number(order.serviceTotal),
+  stages,
+  createdAt:order.createdAt||new Date().toISOString(),
+  updatedAt:order.updatedAt||null,
+  updatedBy:order.updatedBy||null,
+  parentId:order.parentOrderId?`srv-${order.parentOrderId}`:null,
+  childIds:[],
+  partOfPct:null,
+  restOfPct:null,
+  _origValues:Object.fromEntries(stages.map(st=>[st.name,st.value??'']))
+};}
+
+function mapLocalOrderToServer(order){const parseId=(val)=>{if(!val)return null;const str=String(val);if(str.startsWith('srv-'))return Number(str.replace('srv-',''));const num=Number(str);return Number.isNaN(num)?null:num;};
+  return {
+    id:order.serverId??parseId(order.id),
+    orderNo:order.orderNo,
+    title:order.title,
+    customer:order.customer,
+    serviceTotal:normalizeServiceTotal(order.serviceTotal),
+    lane:(order.status||DEFAULT_LANES[0]).trim()||DEFAULT_LANES[0],
+    isDone:!!order.done,
+    parentOrderId:parseId(order.parentId),
+    boardKey:'default',
+    notes:order.notes||''
+  };
+}
+
+function mapLocalStagesToServer(order){return (order.stages||[]).map(st=>({
+  id:st.stageId??(typeof st.id==='string'&&st.id.startsWith('srv-stage-')?Number(st.id.replace('srv-stage-','')):Number(st.id)||null),
+  stageName:st.name||'Передел',
+  stageKey:stageKeyFromName(st.name||'Передел'),
+  dateStart:st.start||'',
+  dateEnd:st.end||'',
+  percent:Number(st.progress??(st.done?100:0)),
+  isReady:!!st.done,
+  hours:st.value===''||st.value==null?null:Number(st.value)
+}));}
+
+async function pullFromServer(){
+  if(remoteSync.refreshing)return; remoteSync.refreshing=true;
+  try{
+    const res=await fetch('/api/crm/state',{headers:{'Accept':'application/json'}});
+    if(res.status===401){window.location.href='/login.html';return;}
+    if(!res.ok){throw new Error('HTTP '+res.status);}
+    const data=await res.json();
+    applyServerSnapshot(data?.board||data);
+    updateConnectionStatus(true);
+  }catch(err){console.error('fetch CRM state failed',err);updateConnectionStatus(false);}
+  finally{remoteSync.refreshing=false;}
+}
+
+function applyServerSnapshot(board){if(!board)return;const lanes=mergeLanes(board.lanes);
+  const orders=(board.orders||[]).map(o=>{const mapped=mapServerOrder(o);if(!lanes.includes(mapped.status)){mapped.status=lanes[0]||DEFAULT_LANES[0];}return mapped;});
+  state.boards=[{id:'server-default',name:board.name||'Список заказов',lanes:[...lanes],orders}];
+  state.currentBoardId='server-default';
+  save();renderAll();renderCards();}
+
+async function syncOrderToServer(order,opts={}){try{
+    const includeStages=opts.includeStages!==false;
+    const trimPref=opts.trimMissingStages;
+    const payload={order:mapLocalOrderToServer(order)};
+    if(includeStages&&Array.isArray(order?.stages)){
+      payload.stages=mapLocalStagesToServer(order);
+      payload.trimMissingStages=trimPref===false?false:true;
+    }else{
+      payload.trimMissingStages=false;
+    }
+    const res=await fetch('/api/crm/orders',{method:'PUT',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
+    if(res.status===401){window.location.href='/login.html';return;}
+    if(!res.ok){const detail=await res.json().catch(()=>({}));throw new Error(detail.error||'Сервер вернул ошибку');}
+    const data=await res.json();
+    if(data?.state?.board){applyServerSnapshot(data.state.board);}
+    if(!opts.silent) showToast('Заказ сохранён', 'success');
+  }catch(err){updateConnectionStatus(false);throw err;}}
+
+async function syncDeleteOrder(order){const payload={order:mapLocalOrderToServer(order),delete:true};const res=await fetch('/api/crm/orders',{method:'PUT',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify(payload)});
+  if(res.status===401){window.location.href='/login.html';return;}
+  if(!res.ok){const detail=await res.json().catch(()=>({}));throw new Error(detail.error||'Ошибка удаления');}
+  const data=await res.json();if(data?.state?.board)applyServerSnapshot(data.state.board);showToast('Заказ удалён','success');}
+
+async function syncCsvImport(text){try{const res=await fetch('/api/crm/import_csv',{method:'POST',headers:{'Content-Type':'text/csv','Accept':'application/json'},body:text});if(res.status===401){window.location.href='/login.html';return;}if(!res.ok){const detail=await res.json().catch(()=>({}));throw new Error(detail.error||'Ошибка импорта CSV');}const data=await res.json();showToast(`Импортировано заказов: ${data?.processed?.length??0}`,'success');await pullFromServer();}catch(err){showToast(err.message||'CSV импорт не выполнен','error');}}
+
+async function exportCrmCsv(){try{const res=await fetch('/api/crm/export_csv');if(res.status===401){window.location.href='/login.html';return;}if(!res.ok){const detail=await res.json().catch(()=>({}));throw new Error(detail.error||'Не удалось экспортировать CSV');}const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);showToast('CSV экспортирован','success');}catch(err){showToast(err.message||'Не удалось экспортировать CSV','error');}}
+
+function startFallbackPolling(){clearInterval(remoteSync.pollTimer);remoteSync.pollTimer=setInterval(()=>{if(remoteSync.offline)pullFromServer();},remoteSync.pollInterval);}
+
+function stopFallbackPolling(){clearInterval(remoteSync.pollTimer);remoteSync.pollTimer=null;}
+
+function connectSse(){if(!('EventSource'in window))return; if(remoteSync.sse)try{remoteSync.sse.close();}catch(_err){}
+  const es=new EventSource('/api/events'); remoteSync.sse=es; updateConnectionStatus(true); stopFallbackPolling();
+  es.onmessage=(event)=>{if(!event?.data)return; try{const payload=JSON.parse(event.data); if(payload?.type==='state-snapshot'&&payload?.mode==='crm'){const boardPayload=payload.board||payload.state?.board||payload.state; applyServerSnapshot(boardPayload); updateConnectionStatus(true);} else if(payload?.entity==='order'||payload?.entity==='stage'){scheduleRefresh(350);} }catch(err){console.warn('SSE parse failed',err);} };
+  es.onerror=()=>{updateConnectionStatus(false);startFallbackPolling();setTimeout(connectSse,4000);};
+}
+
+async function bootstrapRemote(){try{const res=await fetch('/api/auth/me',{headers:{'Accept':'application/json'}});if(res.ok){const data=await res.json();remoteSync.user=data?.user||null;}else{updateConnectionStatus(false);} }catch(err){console.warn('auth check failed',err);}
+  await pullFromServer();
+  connectSse();
+}
 renderAll();
+bootstrapRemote();
 
 /* hotkeys */
 document.addEventListener('keydown',e=>{

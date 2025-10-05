@@ -61,8 +61,15 @@
     connect();
   }
 
+  const resolveEndpoint = () => {
+    const override = typeof window.PLANNER_STATE_ENDPOINT === 'string' ? window.PLANNER_STATE_ENDPOINT : '';
+    return override || STATE_ENDPOINT;
+  };
+
   const loadState = async () => {
-    const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
+    const endpoint = resolveEndpoint();
+    if (!endpoint) return null;
+    const res = await fetch(endpoint, { headers: { 'Accept': 'application/json,text/plain' } });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(detail || `HTTP ${res.status}`);
@@ -71,9 +78,11 @@
   };
 
   const saveState = async (payload, meta) => {
+    const endpoint = resolveEndpoint();
+    if (!endpoint) return true;
     const stateString = typeof payload === 'string' ? payload : JSON.stringify(payload);
     const body = JSON.stringify({ state: stateString, meta: meta || null });
-    const res = await fetch(STATE_ENDPOINT, {
+    const res = await fetch(endpoint, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -515,7 +524,10 @@ body.overview-fs-active{overflow:hidden}
 <body>
 
 <header>
-  <h1 id="pageTitle">Планировщик — <span id="procTitle">Общий список заказов</span></h1>
+  <div class="row" style="justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <h1 id="pageTitle">Планировщик — <span id="procTitle">Общий список заказов</span></h1>
+    <button id="crmNavBtn" class="btn small ghost" type="button" title="Перейти в CRM">CRM</button>
+  </div>
   <div class="row" style="align-items:flex-end">
     <label>Передел:
           <select id="process">
@@ -893,6 +905,29 @@ body.overview-fs-active{overflow:hidden}
       </div>
     </div>
     <div class="settings-panel" data-settings-panel="shared">
+      <div class="settings-system-row">
+        <div class="label">
+          <strong>Источник данных</strong>
+          <span>CRM — общая SQL база, CSV — локальные файлы</span>
+        </div>
+        <div class="controls" style="flex-wrap:wrap">
+          <label class="small"><input type="radio" name="dataSourceMode" value="crm" checked> CRM (SQL)</label>
+          <label class="small"><input type="radio" name="dataSourceMode" value="csv"> CSV</label>
+        </div>
+      </div>
+      <div class="settings-system-row">
+        <div class="label">
+          <strong>Скорость синхронизации</strong>
+          <span>Используется при CRM-режиме для fallback-поллинга</span>
+        </div>
+        <div class="controls">
+          <select id="syncSpeedSelect">
+            <option value="fast">Быстро (0.5–1 с)</option>
+            <option value="standard" selected>Стандарт (1–2 с)</option>
+            <option value="calm">Спокойно (3–5 с)</option>
+          </select>
+        </div>
+      </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:4px;width:100%">
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
@@ -1268,6 +1303,8 @@ const VERSION='v2025.09.22-rc2';
 const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
 const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
+const DATA_SOURCE_PREF_KEY = 'planner_data_source_pref_v1';
+const SYNC_SPEED_PREF_KEY = 'planner_sync_speed_pref_v1';
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
   local:{label:'Локальный кэш'},
@@ -1282,6 +1319,9 @@ let currentDataOrigin = 'unknown';
 let lastSerializedState = '';
 let remoteSubscriptionStop = null;
 let preferredStartStage = 'orders';
+let dataSourceMode = 'crm';
+let syncSpeedMode = 'standard';
+const SYNC_SPEED_VALUES = { fast: 1000, standard: 2000, calm: 4500 };
 
 function cloneTaskRecord(task){
   if(!task) return null;
@@ -1345,6 +1385,7 @@ function mergeStageIntoAll(stage, stageTasks){
    СИНХРОНИЗАЦИЯ С БАЗОЙ
 ========= */
 function detectRemoteAdapter(){
+  if(typeof dataSourceMode !== 'undefined' && dataSourceMode === 'csv') return null;
   const candidates = [
     window.plannerRemote,
     window.plannerDB,
@@ -1741,6 +1782,101 @@ function setDataMode(mode){
   refreshDataModeIndicator();
 }
 
+function applySyncSpeed(mode, opts={}){
+  const next = SYNC_SPEED_VALUES.hasOwnProperty(mode) ? mode : 'standard';
+  syncSpeedMode = next;
+  if(!opts.skipPersist){
+    try{ localStorage.setItem(SYNC_SPEED_PREF_KEY, next); }catch(_){ }
+  }
+  window.PLANNER_SYNC_INTERVAL = SYNC_SPEED_VALUES[next];
+  const select = $('#syncSpeedSelect');
+  if(select){ select.value = next; }
+  if(typeof startRemotePolling === 'function'){
+    startRemotePolling();
+  }
+}
+
+function toggleCsvUi(visible){
+  const importBtn = $('#importCsvBtn');
+  if(importBtn){
+    importBtn.style.display = visible ? '' : 'none';
+    importBtn.disabled = !visible;
+  }
+  const undoBtn = $('#undoImport');
+  if(undoBtn){
+    undoBtn.style.display = visible ? '' : 'none';
+    undoBtn.disabled = !visible;
+  }
+  const importStateInput = $('#stateFile');
+  const importStateLabel = importStateInput ? importStateInput.closest('label') : null;
+  if(importStateLabel){
+    importStateLabel.style.display = visible ? '' : 'none';
+  }
+  if(importStateInput){
+    importStateInput.disabled = !visible;
+    if(!visible){
+      importStateInput.value = '';
+    }
+  }
+  const csvFileInput = $('#file');
+  if(csvFileInput){
+    csvFileInput.disabled = !visible;
+    if(!visible){
+      csvFileInput.value = '';
+    }
+  }
+}
+
+function applyDataSourceMode(mode, opts={}){
+  const next = mode === 'csv' ? 'csv' : 'crm';
+  dataSourceMode = next;
+  if(!opts.skipPersist){
+    try{ localStorage.setItem(DATA_SOURCE_PREF_KEY, next); }catch(_){ }
+  }
+  $$('input[name="dataSourceMode"]').forEach(radio=>{ radio.checked = radio.value === next; });
+  remotePreferenceRequested = true;
+  enableRemoteStore = true;
+  if(next === 'crm'){
+    window.PLANNER_STATE_ENDPOINT = '/api/crm/planner_state';
+    window.PLANNER_STATE_METHOD = 'POST';
+    window.PLANNER_STATE_WRAP = true;
+    setDataMode('remote');
+    if(!opts.skipStorage){
+      applyStoragePrefs({ remote:true });
+    }
+    toggleCsvUi(false);
+  }else{
+    window.PLANNER_STATE_ENDPOINT = '/api/state';
+    window.PLANNER_STATE_METHOD = 'PUT';
+    window.PLANNER_STATE_WRAP = true;
+    setDataMode('remote');
+    if(!opts.skipStorage){
+      applyStoragePrefs({ remote:true, local:true });
+    }
+    toggleCsvUi(true);
+  }
+  const remBox = $('#storageRemote');
+  if(remBox){
+    remBox.checked = enableRemoteStore;
+    remBox.disabled = !remoteBridge.hasRemote;
+    remBox.parentElement?.classList.toggle('muted', remBox.disabled);
+  }
+  if(remoteBridge && typeof remoteBridge.refresh === 'function'){
+    remoteBridge.refresh();
+  }
+  updateRealtimeMode();
+  refreshDataModeIndicator();
+}
+
+function loadPlannerPreferences(){
+  try{ const storedMode = localStorage.getItem(DATA_SOURCE_PREF_KEY); if(storedMode === 'csv' || storedMode === 'crm') dataSourceMode = storedMode; }
+  catch(_){ dataSourceMode = 'crm'; }
+  try{ const storedSpeed = localStorage.getItem(SYNC_SPEED_PREF_KEY); if(SYNC_SPEED_VALUES.hasOwnProperty(storedSpeed)) syncSpeedMode = storedSpeed; }
+  catch(_){ syncSpeedMode = 'standard'; }
+  applySyncSpeed(syncSpeedMode, { skipPersist:true });
+  applyDataSourceMode(dataSourceMode, { skipPersist:true });
+}
+
 function userCanEdit(){
   return accessMode === ACCESS_MODES.edit;
 }
@@ -1877,6 +2013,7 @@ function applyStoragePrefs(changes={}){
   }else{
     updateRealtimeMode();
   }
+  applyDataSourceMode(dataSourceMode, { skipStorage:true });
 }
 
 function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStore){
@@ -10099,6 +10236,11 @@ function wireHandlers(){
     e.target.value = userAlias;
   });
 
+  const crmNavBtn = $('#crmNavBtn');
+  if(crmNavBtn){
+    crmNavBtn.addEventListener('click', ()=>{ window.location.href = '/crm'; });
+  }
+
   const ignoredBtn = document.getElementById('ignoredStatesBtn');
   if(ignoredBtn){
     ignoredBtn.addEventListener('click', openIgnoredStatesDialog);
@@ -10163,6 +10305,23 @@ function wireHandlers(){
     storageRemote.parentElement?.classList.toggle('muted', storageRemote.disabled);
     storageRemote.addEventListener('change', e=>{
       applyStoragePrefs({ remote: !!e.target.checked });
+    });
+  }
+
+  const dsRadios = $$('input[name="dataSourceMode"]');
+  dsRadios.forEach(radio=>{
+    radio.checked = radio.value === dataSourceMode;
+    radio.addEventListener('change', e=>{
+      if(e.target.checked){
+        applyDataSourceMode(e.target.value);
+      }
+    });
+  });
+  const speedSelect = $('#syncSpeedSelect');
+  if(speedSelect){
+    speedSelect.value = syncSpeedMode;
+    speedSelect.addEventListener('change', e=>{
+      applySyncSpeed(e.target.value);
     });
   }
 
@@ -10637,6 +10796,10 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
               remBox.disabled = !remoteBridge.hasRemote;
               remBox.parentElement?.classList.toggle('muted', remBox.disabled);
             }
+            const dsRadios = $$('input[name="dataSourceMode"]');
+            dsRadios.forEach(r=>{ r.checked = r.value === dataSourceMode; });
+            const speedSelect = $('#syncSpeedSelect');
+            if(speedSelect){ speedSelect.value = syncSpeedMode; }
             const startStageSel = $('#startStagePreference');
             if(startStageSel) startStageSel.value = getPreferredStartStage();
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
@@ -10681,6 +10844,7 @@ document.addEventListener('keydown', e=>{
 });
 document.addEventListener('DOMContentLoaded', ()=>{
 
+  loadPlannerPreferences();
   setupRealtimeSync();
   wireHandlers();
   applyAccessMode();
