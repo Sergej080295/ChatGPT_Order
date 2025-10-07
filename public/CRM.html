@@ -391,6 +391,7 @@
   #stagesTable select{background-image:none;padding-right:8px;}
   body[data-theme="light"] #stagesTable input,
   body[data-theme="light"] #stagesTable select{background:#fff;box-shadow:none;border-color:#d0d9ec;}
+  #stagesTable input.crm-date-changed{box-shadow:inset 0 -2px 0 rgba(37,99,235,.6)}
 
   /* Таблица переделов */
   table{width:100%;border-collapse:collapse;table-layout:fixed}
@@ -585,6 +586,8 @@ const KEY='mini_crm_v13c';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDate=d=>d.toISOString().slice(0,10);
+const formatDateHuman=iso=>{if(!iso)return'';const d=new Date(iso);return Number.isNaN(d.getTime())?iso:d.toLocaleDateString('ru-RU');};
+const applyStageDateHighlight=(input,orig,label)=>{if(!input)return;const original=(orig||'').trim();input.dataset.original=original;const current=input.value||'';if(original&&current&&original!==current){input.classList.add('crm-date-changed');input.title=`${label}: ${formatDateHuman(original)}`;}else{input.classList.remove('crm-date-changed');if(original){input.title=`${label}: ${formatDateHuman(original)}`;}else{input.removeAttribute('title');}}if(!original&&current){input.removeAttribute('title');}};
 const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1b3b68"/><path d="M32 4a28 28 0 0 1 0 56z" fill="#4da3ff"/></svg>`);
 const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#15341e"/><path d="M32 4a28 28 0 0 0 0 56z" fill="#70e000"/></svg>`);
 
@@ -737,7 +740,7 @@ function openOrder(id=null){
   addStageBtn.onclick=()=>appendStageRow({name:'Новый передел',done:false,progress:0,start:'',end:'',value:''});
   presetStagesBtn.onclick=()=>{stagesTableBody.innerHTML='';DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''}));syncAutoProgress();syncAutoDates()};
   splitBtn.onclick=()=>openSplitDialog();
-  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(!s.value)s.value=today;if(!e.value)e.value=today});syncAutoDates()};
+  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates()};
   orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress()};
   orderDlg.showModal();
 }
@@ -774,8 +777,10 @@ function appendStageRow(st){
   const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
   if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress()})}
   if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress()})}
-  tr.querySelector('[data-k="start"]').addEventListener('change',syncAutoDates);
-  tr.querySelector('[data-k="end"]').addEventListener('change',syncAutoDates);
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();});}
+  if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();});}
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates();
 }
 
@@ -786,7 +791,9 @@ function readStages(){
     const boolOnly=['закупка','рубка','упаковка','отгрузка'].includes(name.toLowerCase());
     const done=get('done').checked; const progEl=get('progress');
     const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
-    return {name,done,progress,start:get('start').value||'',end:get('end').value||'',value:isZak?'':(get('value')?.value??'')}
+    const startInput=get('start');
+    const endInput=get('end');
+    return {name,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:isZak?'':(get('value')?.value??'')}
   })
 }
 

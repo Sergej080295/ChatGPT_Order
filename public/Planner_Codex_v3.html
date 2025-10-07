@@ -454,6 +454,11 @@ body.overview-fs-active{overflow:hidden}
 #tasksTable[data-nohours="1"] col#colExtra,
 #tasksTable[data-nohours="1"] col#colRest { display:none }
 
+#tasksTable{table-layout:fixed}
+#tasksTable th,#tasksTable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0}
+#tasksTable td.start-cell{white-space:nowrap}
+#tasksTable td .orig{display:block;font-size:11px;color:var(--muted);white-space:nowrap}
+
 /* шапка — скрываем те же 4 колонки (Прогресс/Часов/Доп.время/Остаток) */
 #tasksTable[data-nohours="1"] thead th:nth-child(5),
 #tasksTable[data-nohours="1"] thead th:nth-child(6),
@@ -1341,6 +1346,7 @@ function cloneTaskRecord(task){
     useReserve: !!task.useReserve,
     progress: Number(task.progress)||0,
     origStartDate: task.origStartDate ? new Date(task.origStartDate) : null,
+    origEndDate: task.origEndDate ? new Date(task.origEndDate) : null,
     route: {},
     isUserNew: !!task.isUserNew,
     isNew: !!task.isNew,
@@ -1361,6 +1367,8 @@ function cloneTaskRecord(task){
         hours: Number(seg.hours)||0,
         start: seg.start ? new Date(seg.start) : null,
         end: seg.end ? new Date(seg.end) : null,
+        origStart: seg.origStart ? new Date(seg.origStart) : null,
+        origEnd: seg.origEnd ? new Date(seg.origEnd) : null,
         ...(seg.doneAt ? { doneAt: new Date(seg.doneAt) } : {})
       };
     } else {
@@ -2296,6 +2304,7 @@ function serializeRouteSegmentForMode(seg){
     start: toIsoSafe(seg.start || null),
     end: toIsoSafe(seg.end || null),
     origStart: toIsoSafe(seg.origStart || seg.originalStart || null),
+    origEnd: toIsoSafe(seg.origEnd || seg.originalEnd || null),
     doneAt: toIsoSafe(seg.doneAt || null)
   };
 }
@@ -2322,6 +2331,7 @@ function serializeTaskForModeSnapshot(task){
     useReserve: !!task.useReserve,
     progress: Number(task.progress) || 0,
     origStartDate: toIsoSafe(task.origStartDate || null),
+    origEndDate: toIsoSafe(task.origEndDate || null),
     route: {
       laser: serializeRouteSegmentForMode(task.route?.laser),
       bend:  serializeRouteSegmentForMode(task.route?.bend),
@@ -2385,6 +2395,7 @@ function deserializeRouteSegmentFromMode(seg){
     start: seg.start ? new Date(seg.start) : null,
     end: seg.end ? new Date(seg.end) : null,
     origStart: seg.origStart ? new Date(seg.origStart) : null,
+    origEnd: seg.origEnd ? new Date(seg.origEnd) : null,
     doneAt: seg.doneAt ? new Date(seg.doneAt) : null
   };
 }
@@ -2410,6 +2421,7 @@ function deserializeTaskFromModeSnapshot(raw){
     useReserve: !!raw.useReserve,
     progress: Number(raw.progress) || 0,
     origStartDate: raw.origStartDate ? new Date(raw.origStartDate) : null,
+    origEndDate: raw.origEndDate ? new Date(raw.origEndDate) : null,
     route: {
       laser: deserializeRouteSegmentFromMode(raw.route?.laser),
       bend:  deserializeRouteSegmentFromMode(raw.route?.bend),
@@ -2747,6 +2759,11 @@ function normalizeCrmStage(stage){
   }else if(typeof stage.origStart === 'string' && stage.origStart.trim()){
     result.originalStart = stage.origStart;
   }
+  if(typeof stage.originalEnd === 'string' && stage.originalEnd.trim()){
+    result.originalEnd = stage.originalEnd;
+  }else if(typeof stage.origEnd === 'string' && stage.origEnd.trim()){
+    result.originalEnd = stage.origEnd;
+  }
   if(result.value === undefined) result.value = stage.value ?? '';
   if(result.hours === undefined){
     const hoursCandidate = Number(stage.hours != null ? stage.hours : stage.value);
@@ -2888,8 +2905,104 @@ function cloneCrmState(state){
   }
 }
 
+function buildCrmOrderKey(order, boardId){
+  if(!order) return '';
+  const boardPart = boardId ? String(boardId).trim() : '';
+  const identity = String(order.orderIdentity || '').trim();
+  if(identity) return `${boardPart}::identity::${identity}`;
+  const id = String(order.id || '').trim();
+  if(id) return `${boardPart}::id::${id}`;
+  const orderNo = String(order.orderId || order.orderNo || '').trim();
+  if(orderNo) return `${boardPart}::order::${orderNo}`;
+  const title = String(order.title || '').trim();
+  if(title) return `${boardPart}::title::${title}`;
+  return boardPart ? `${boardPart}::unknown` : '';
+}
+
+function collectCrmOrderKeys(state){
+  const keys = new Set();
+  if(!state || !Array.isArray(state.boards)) return keys;
+  state.boards.forEach(board => {
+    if(!board || !Array.isArray(board.orders)) return;
+    board.orders.forEach(order => {
+      const key = buildCrmOrderKey(order, board.id);
+      if(key) keys.add(key);
+    });
+  });
+  return keys;
+}
+
+function pushRemovedCrmOrderToTrash(board, order, when){
+  if(!board || !order) return false;
+  const built = buildPlannerOrderFromCrm({ ...order, boardId: board.id });
+  if(!built) return false;
+  const { order: plannerOrder, stageMeta } = built;
+  const stageList = Array.isArray(order.stages) ? order.stages : [];
+  let added = false;
+  stageList.forEach((stage, idx) => {
+    if(!stage) return;
+    const stageKey = stage.stageKey || mapCrmStageName(stage.name);
+    if(!stageKey) return;
+    const segment = plannerOrder.stages?.[stageKey];
+    if(!segment) return;
+    const meta = stageMeta?.[stageKey] || { boardId: board.id || '', orderId: order.id || '', orderIdentity: order.orderIdentity || '' };
+    const task = buildCrmStageTask(plannerOrder, stageKey, segment, meta);
+    if(!task) return;
+    if(trash.some(entry => entry && entry.uid === task.uid)) return;
+    const crmStageSnapshot = {
+      boardId: meta.boardId || board.id || '',
+      orderId: meta.orderId || order.id || '',
+      orderIdentity: meta.orderIdentity || plannerOrder.orderIdentity || '',
+      stageKey,
+      stageIndex: idx,
+      stage: cloneCrmStageSnapshot({ ...stage, stageKey })
+    };
+    trash.push({
+      uid: task.uid,
+      orderId: task.orderId,
+      stage: task.stage,
+      parentId: task.parentId,
+      childId: task.childId,
+      hours: task.hours,
+      extra: task.extraHours,
+      start: task.startDate,
+      end: task.endDate,
+      when: when instanceof Date ? new Date(when) : new Date(),
+      source: 'crm-delete',
+      crmMeta: task.crmMeta ? { ...task.crmMeta } : null,
+      crmStage: crmStageSnapshot
+    });
+    added = true;
+  });
+  return added;
+}
+
+function handleCrmOrderRemovals(prevState, nextState){
+  if(!prevState || !Array.isArray(prevState.boards)) return false;
+  const nextKeys = collectCrmOrderKeys(nextState);
+  const stamp = new Date();
+  let moved = false;
+  prevState.boards.forEach(board => {
+    if(!board || !Array.isArray(board.orders)) return;
+    board.orders.forEach(order => {
+      const key = buildCrmOrderKey(order, board.id);
+      if(!key || nextKeys.has(key)) return;
+      if(pushRemovedCrmOrderToTrash(board, order, stamp)){
+        moved = true;
+      }
+    });
+  });
+  if(moved){
+    updateTrashAttention?.();
+  }
+  return moved;
+}
+
 function setCrmState(raw){
-  crmState = normalizeCrmState(raw);
+  const prevState = cloneCrmState(crmState);
+  const nextState = normalizeCrmState(raw);
+  const movedToTrash = handleCrmOrderRemovals(prevState, nextState);
+  crmState = nextState;
   updateCrmBadge();
   refreshCrmDerivedData({ recompute: false, rebuildOverview: plannerStateReady });
   try{
@@ -2899,6 +3012,9 @@ function setCrmState(raw){
       renderOrdersOverviewTable();
     }
   }catch(_err){ /* ignore */ }
+  if(movedToTrash){
+    persistMaybe();
+  }
 }
 
 function updateCrmBadge(){
@@ -2976,6 +3092,8 @@ function buildPlannerOrderFromCrm(crmOrder){
     if(originalStart) segment.origStart = originalStart;
     const end = safeDateValue(stage.end);
     if(end) segment.end = end;
+    const originalEnd = safeDateValue(stage.originalEnd || stage.origEnd);
+    if(originalEnd) segment.origEnd = originalEnd;
     const hoursSource = stage.hours != null ? stage.hours : stage.value;
     const hoursNum = Number(hoursSource);
     if(!PARALLEL_STAGES.has(stageKey) && Number.isFinite(hoursNum) && hoursNum > 0){
@@ -3062,6 +3180,9 @@ function integrateCrmOrdersIntoAggregated(list, map, doneStageSet){
   const board = getActiveCrmBoard();
   if(!board) return activeKeys;
   board.orders.forEach(crmOrder => {
+    if(!crmOrder) return;
+    const laneNorm = normalizeStateName(crmOrder.status || crmOrder.lane || '');
+    if(laneNorm && ignoredStateSet.has(laneNorm)) return;
     const enrichedOrder = { ...crmOrder, boardId: board.id };
     const built = buildPlannerOrderFromCrm(enrichedOrder);
     if(!built) return;
@@ -3129,6 +3250,7 @@ function buildCrmStageTask(order, stageKey, segment, meta){
   const startDate = segment.start ? new Date(segment.start) : today0();
   const origStartDate = segment.origStart ? new Date(segment.origStart) : (segment.start ? new Date(segment.start) : null);
   const endDate = segment.end ? new Date(segment.end) : null;
+  const origEndDate = segment.origEnd ? new Date(segment.origEnd) : (segment.end ? new Date(segment.end) : null);
   const progress = segment.progress != null ? clampProgressValue(segment.progress) : (segment.done ? 100 : 0);
   const crmId = order.crm?.id || order.orderIdentity || order.orderId || order.parentId || Math.random().toString(16).slice(2,10);
   const uidBase = String(crmId).replace(/\s+/g,'_');
@@ -3139,6 +3261,9 @@ function buildCrmStageTask(order, stageKey, segment, meta){
   }
   if(origStartDate){
     route[stageKey].origStart = new Date(origStartDate);
+  }
+  if(origEndDate){
+    route[stageKey].origEnd = new Date(origEndDate);
   }
   const task = {
     uid,
@@ -3160,6 +3285,7 @@ function buildCrmStageTask(order, stageKey, segment, meta){
     useReserve: !!segment.useReserve,
     progress,
     origStartDate: origStartDate,
+    origEndDate: origEndDate,
     route,
     isDone: segment.done || progress >= 100,
     crmMeta: {
@@ -3351,14 +3477,28 @@ function buildCrmUpdateFromTask(task, stage, extras={}){
   const includeStart = includeDates || !!extras.touchStart;
   const includeEnd = includeDates || !!extras.touchEnd;
   if(includeStart){
-    update.start = startVal ? new Date(startVal) : null;
+    if(startVal){
+      const startCopy = startVal instanceof Date ? new Date(startVal) : new Date(startVal);
+      if(!Number.isNaN(startCopy.getTime())) update.start = startCopy;
+    }else if(extras.allowNullStart){
+      update.start = null;
+    }
   }
   if(includeEnd){
-    update.end = endVal ? new Date(endVal) : null;
+    if(endVal){
+      const endCopy = endVal instanceof Date ? new Date(endVal) : new Date(endVal);
+      if(!Number.isNaN(endCopy.getTime())) update.end = endCopy;
+    }else if(extras.allowNullEnd){
+      update.end = null;
+    }
   }
   const origValRaw = seg.origStart instanceof Date ? seg.origStart : (seg.origStart ? new Date(seg.origStart) : (task.origStartDate instanceof Date ? task.origStartDate : null));
   if(origValRaw && !Number.isNaN(origValRaw.getTime())){
     update.originalStart = new Date(origValRaw);
+  }
+  const origEndValRaw = seg.origEnd instanceof Date ? seg.origEnd : (seg.origEnd ? new Date(seg.origEnd) : (task.origEndDate instanceof Date ? task.origEndDate : null));
+  if(origEndValRaw && !Number.isNaN(origEndValRaw.getTime())){
+    update.originalEnd = new Date(origEndValRaw);
   }
   if('done' in extras){
     update.done = !!extras.done;
@@ -3540,7 +3680,7 @@ function applyCrmProgressUpdates(updates){
     if(update.progress != null){
       stageRecord.progress = clampCrmProgress(update.progress);
     }
-    if('start' in update){
+    if(Object.prototype.hasOwnProperty.call(update,'start')){
       if(update.start){
         const start = update.start instanceof Date ? update.start : new Date(update.start);
         if(!Number.isNaN(start.getTime())){
@@ -3550,21 +3690,31 @@ function applyCrmProgressUpdates(updates){
           }
           stageRecord.start = start.toISOString();
         }
-      }else{
+      }else if(update.allowNullStart){
         delete stageRecord.start;
       }
     }
-    if('end' in update){
+    if(Object.prototype.hasOwnProperty.call(update,'end')){
       if(update.end){
         const end = update.end instanceof Date ? update.end : new Date(update.end);
-        if(!Number.isNaN(end.getTime())) stageRecord.end = end.toISOString();
-      }else{
+        if(!Number.isNaN(end.getTime())){
+          const prevEndIso = stageRecord.end ? String(stageRecord.end) : '';
+          if(prevEndIso && (!stageRecord.originalEnd || !stageRecord.originalEnd.trim())){
+            stageRecord.originalEnd = prevEndIso;
+          }
+          stageRecord.end = end.toISOString();
+        }
+      }else if(update.allowNullEnd){
         delete stageRecord.end;
       }
     }
     if(update.originalStart){
       const orig = update.originalStart instanceof Date ? update.originalStart : new Date(update.originalStart);
       if(!Number.isNaN(orig.getTime())) stageRecord.originalStart = orig.toISOString();
+    }
+    if(update.originalEnd){
+      const origEnd = update.originalEnd instanceof Date ? update.originalEnd : new Date(update.originalEnd);
+      if(!Number.isNaN(origEnd.getTime())) stageRecord.originalEnd = origEnd.toISOString();
     }
     const completionChange = updateCrmOrderCompletion(targetOrder);
     if(completionChange.doneChanged || completionChange.progressChanged){
@@ -4485,6 +4635,7 @@ function cascadeCompletionForTask(task, options={}){
   };
 
   let changed = false;
+  const crmUpdates = [];
 
   for(const stageName of STAGES){
     const idxVal = STAGE_ORDER_INDEX.get(stageName);
@@ -4499,8 +4650,27 @@ function cascadeCompletionForTask(task, options={}){
           next.push(item);
           continue;
         }
+        if(item.progress !== 100){ item.progress = 100; }
+        item.isDone = true;
+        const seg = { ...(item.route?.[stageName] || {}) };
+        if(item.startDate instanceof Date && !seg.start){ seg.start = new Date(item.startDate); }
+        if(item.endDate instanceof Date && !seg.end){ seg.end = new Date(item.endDate); }
+        seg.doneAt = when instanceof Date ? new Date(when) : new Date();
+        if(item.route){
+          item.route[stageName] = seg;
+        }else{
+          item.route = { [stageName]: seg };
+        }
         ensureDoneRecordFromTask(item, 'cascade', when);
         forgetTaskFromStageOrder(stageName, item.uid);
+        const update = buildCrmUpdateFromTask(item, stageName, {
+          progress: 100,
+          done: true,
+          doneAt: when,
+          touchStart: item.startDate instanceof Date,
+          touchEnd: item.endDate instanceof Date
+        });
+        if(update) crmUpdates.push(update);
         stageChanged = true;
       }
       if(stageChanged){
@@ -4513,6 +4683,14 @@ function cascadeCompletionForTask(task, options={}){
         const candidate = tasks[i];
         if(!candidate || !matchesOrder(candidate)) continue;
         archiveTaskAsDone(candidate, 'cascade', { cascade:false, updateUI:false, when });
+        const update = buildCrmUpdateFromTask(candidate, stageName, {
+          progress: 100,
+          done: true,
+          doneAt: when,
+          touchStart: candidate.startDate instanceof Date,
+          touchEnd: candidate.endDate instanceof Date
+        });
+        if(update) crmUpdates.push(update);
         stageChanged = true;
       }
     }
@@ -4532,6 +4710,10 @@ function cascadeCompletionForTask(task, options={}){
       }
       changed = true;
     }
+  }
+
+  if(crmUpdates.length){
+    applyCrmProgressUpdates(crmUpdates);
   }
 
   if(changed && options.updateUI !== false){
@@ -6812,12 +6994,25 @@ function applyEditImmediate(cell, task){
     }
   }
   else if(field==='endDate'){
+    const prevEnd = task.endDate instanceof Date ? new Date(task.endDate) : (task.route?.[task.stage]?.end ? new Date(task.route[task.stage].end) : null);
     const d=parseDate(val);
     task.endDate=d||null;
     task.endMissing=!d;
     cell.textContent=d?fmtDate(d):'—';
     cell.classList.toggle('error',!d);
-    task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null};
+    const seg = { ...(task.route[task.stage]||{}) };
+    if(prevEnd && d && (+prevEnd !== +d)){
+      if(!task.origEndDate){
+        task.origEndDate = new Date(prevEnd);
+      }else if(task.origEndDate instanceof Date && (+task.origEndDate === +prevEnd)){
+        task.origEndDate = new Date(prevEnd);
+      }
+      seg.origEnd = new Date(task.origEndDate);
+    }else if(prevEnd && !task.origEndDate){
+      task.origEndDate = new Date(prevEnd);
+    }
+    seg.end = d || null;
+    task.route[task.stage]=seg;
     if(isCrmMode()){
       const update = buildCrmUpdateFromTask(task, task.stage, { touchEnd: true });
       if(update) applyCrmProgressUpdates([update]);
@@ -6974,6 +7169,35 @@ function renderTasksTable(){
       <td><input type="checkbox" data-done ${canEdit ? '' : 'disabled'} ${isDoneRecord ? 'checked' : ''}></td>
       <td><button class="del-btn" title="Удалить" data-del ${(canEdit && !isDoneRecord) ? '' : 'disabled'}>×</button></td>
     `;
+
+    const assignTitle = (selector, value) => {
+      const el = tr.querySelector(selector);
+      if(!el) return;
+      const text = typeof value === 'string' ? value : (value != null ? String(value) : '');
+      el.title = text.trim();
+    };
+    assignTitle('.drag-handle', orderDisplay);
+    assignTitle('[data-field="progress"]', progressText);
+    assignTitle('[data-field="hours"]', hoursText);
+    assignTitle('[data-field="extraHours"]', extraText);
+    assignTitle('.rest-cell', restText);
+    assignTitle('[data-field="state"]', t.state || '');
+    const statusCell = status.cls ? tr.querySelector(`td.${status.cls.replace(/\s+/g,'.')}`) : null;
+    if(statusCell){
+      statusCell.title = (status.text || '').trim();
+    }
+    const startCell = tr.querySelector('.start-cell');
+    if(startCell){
+      const startParts = [startText];
+      if(origChanged && t.origStartDate instanceof Date){
+        startParts.push(`Исходная: ${fmtDate(t.origStartDate)}`);
+      }
+      startCell.title = startParts.join(' · ').trim();
+    }
+    const endCell = tr.querySelector('[data-field="endDate"]');
+    if(endCell){
+      endCell.title = endText.trim();
+    }
 
     const lockBtn = tr.querySelector('.lock-btn');
     if(lockBtn){
