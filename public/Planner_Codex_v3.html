@@ -446,6 +446,7 @@ body.overview-fs-active{overflow:hidden}
 .stage-bend{background:#ef4444}
 .stage-weld{background:#7f1d1d}
 .stage-mech{background:#6b7280}
+.stage-coop{background:#14b8a6}
 .stage-pack{background:#8b5e3c}
 .stage-ship{background:#8b5cf6}
 
@@ -524,16 +525,22 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section summary::-webkit-details-marker{display:none;}
 .settings-mapping-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
-.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
-.settings-mapping-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
-.settings-mapping-item.needs-mapping{border-color:#f97316;background:#fff7ed;}
-.settings-mapping-item select{flex:0 0 220px;max-width:100%;padding:4px 6px;border-radius:6px;border:1px solid #cbd5f5;font-size:13px;background:#fff;}
-.settings-mapping-label{flex:1;display:flex;flex-direction:column;gap:2px;}
-.settings-mapping-label strong{font-size:13px;color:#0f172a;}
-.settings-mapping-label .muted{font-size:12px;color:var(--muted);}
-.settings-mapping-warning{display:none;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:#f97316;color:#fff;font-weight:700;font-size:13px;}
-.settings-mapping-item.needs-mapping .settings-mapping-warning{display:inline-flex;}
+.settings-mapping-list{display:flex;flex-direction:column;gap:12px;margin-top:12px;}
+.settings-mapping-stage-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}
+.settings-mapping-stage{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+.settings-mapping-stage.needs-mapping{border-color:#f97316;background:#fff7ed;}
+.settings-mapping-stage .stage-title{display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:13px;color:#0f172a;}
+.settings-mapping-stage select{min-height:132px;padding:6px;border-radius:8px;border:1px solid #cbd5f5;font-size:13px;background:#fff;}
+.settings-mapping-stage option[data-unmapped="1"]{color:#b91c1c;font-weight:600;}
+.settings-mapping-alert{font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:6px;}
+.settings-mapping-note{font-size:12px;color:var(--muted);}
 .settings-mapping-empty{font-size:12px;color:var(--muted);padding:6px 0;}
+
+.settings-capacity-section{margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;padding:0 12px 12px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);}
+.settings-capacity-section summary{cursor:pointer;font-weight:600;font-size:13px;list-style:none;margin:0 -12px;padding:10px 12px;display:flex;align-items:center;gap:6px;color:#1f2937;}
+.settings-capacity-section summary::-webkit-details-marker{display:none;}
+.settings-capacity-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
+.settings-capacity-section[open] summary::before{transform:rotate(90deg);}
 .settings-column-item{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;}
 .settings-column-item strong{font-size:12px;color:#1f2937;}
 .settings-column-item input{width:100%;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
@@ -588,6 +595,7 @@ body.overview-fs-active{overflow:hidden}
                 <option value="bend">Гибка</option>
                 <option value="weld">Сварка</option>
                 <option value="mech">Мехобработка</option>
+                <option value="coop">Кооперация</option>
                 <option value="pack">Упаковка</option>
                 <option value="ship">Отгрузка</option>
 
@@ -612,10 +620,6 @@ body.overview-fs-active{overflow:hidden}
         </button>
       </div>
       <button id="undoImport" class="btn" data-mode-visible="csv">Откат импорта</button>
-          <button id="exportCSV" class="btn" data-mode-visible="csv">Экспорт (.csv)</button>
-          <label class="btn" data-mode-visible="csv">Импорт состояния
-            <input id="stateFile" type="file" accept=".csv" style="display:none">
-          </label>
       <button id="clearAll" class="btn" data-mode-visible="csv">Очистить</button>
     </div>
 
@@ -706,6 +710,7 @@ body.overview-fs-active{overflow:hidden}
           <col style="width:150px">
           <col style="width:92px">
           <col style="width:92px">
+          <col style="width:92px">
         </colgroup>
         <thead>
           <tr>
@@ -719,6 +724,7 @@ body.overview-fs-active{overflow:hidden}
             <th>Гибка, ч</th>
             <th>Сварка, ч</th>
             <th>Мехобр., ч</th>
+            <th>Кооперация</th>
             <th>Упаковка</th>
             <th>Отгрузка</th>
           </tr>
@@ -742,6 +748,7 @@ body.overview-fs-active{overflow:hidden}
           <col style="width:150px">
           <col style="width:92px">
           <col style="width:92px">
+          <col style="width:92px">
         </colgroup>
         <tbody>
           <tr>
@@ -753,6 +760,7 @@ body.overview-fs-active{overflow:hidden}
             <td data-total-stage="bend">Гибка: 00:00:00</td>
             <td data-total-stage="weld">Сварка: 00:00:00</td>
             <td data-total-stage="mech">Мехобр.: 00:00:00</td>
+            <td data-total-stage="coop">Кооперация: 0 шт</td>
             <td data-total-stage="pack">Упаковка: 0 шт</td>
             <td data-total-stage="ship">Отгрузка: 0 шт</td>
           </tr>
@@ -873,11 +881,12 @@ body.overview-fs-active{overflow:hidden}
 		<option value="laser">Лазер</option>
 		<option value="draw">Подготовка в работу</option>
 		<option value="weld">Сварка</option>
-		<option value="mech">Мехобработка</option>
-		<option value="proc">Закупка</option>
-		<option value="shear">Рубка</option>
-		<option value="pack">Упаковка</option>
-		<option value="ship">Отгрузка</option>
+                <option value="mech">Мехобработка</option>
+                <option value="proc">Закупка</option>
+                <option value="shear">Рубка</option>
+                <option value="coop">Кооперация</option>
+                <option value="pack">Упаковка</option>
+                <option value="ship">Отгрузка</option>
 	  </select>
 
       <span class="muted small">Фильтр:</span>
@@ -943,6 +952,7 @@ body.overview-fs-active{overflow:hidden}
             <option value="bend">Гибка</option>
             <option value="weld">Сварка</option>
             <option value="mech">Мехобработка</option>
+            <option value="coop">Кооперация</option>
             <option value="pack">Упаковка</option>
             <option value="ship">Отгрузка</option>
           </select>
@@ -955,7 +965,6 @@ body.overview-fs-active{overflow:hidden}
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
         <label class="small"><input type="checkbox" id="cascadeReady"> Автоготовность при упаковке/отгрузке</label>
-        <label class="small"><input type="checkbox" id="confirmReadyTime"> Уточнять время готовности</label>
         <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
         <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
         <div class="row" style="gap:8px;align-items:center">
@@ -1147,9 +1156,10 @@ body.overview-fs-active{overflow:hidden}
 		<label class="badge"><input type="checkbox" class="ov-filter" value="shear" checked> Рубка</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="laser" checked> Лазер</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="bend"  checked> Гибка</label>
-		<label class="badge"><input type="checkbox" class="ov-filter" value="weld"  checked> Сварка</label>
-		<label class="badge"><input type="checkbox" class="ov-filter" value="mech"  checked> Мех</label>
-		<label class="badge"><input type="checkbox" class="ov-filter" value="pack"  checked> Упаковка</label>
+                <label class="badge"><input type="checkbox" class="ov-filter" value="weld"  checked> Сварка</label>
+                <label class="badge"><input type="checkbox" class="ov-filter" value="mech"  checked> Мех</label>
+                <label class="badge"><input type="checkbox" class="ov-filter" value="coop"  checked> Кооперация</label>
+                <label class="badge"><input type="checkbox" class="ov-filter" value="pack"  checked> Упаковка</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="ship" checked> Отгрузка</label>
 	  </div>
 
@@ -1174,6 +1184,7 @@ body.overview-fs-active{overflow:hidden}
       <span class="item"><span class="dot stage-laser"></span>Лазер</span>
       <span class="item"><span class="dot stage-bend"></span>Гибка</span>
       <span class="item"><span class="dot stage-weld"></span>Сварка</span>
+      <span class="item"><span class="dot stage-coop"></span>Кооперация</span>
       <span class="item"><span class="dot stage-mech"></span>Мехобработка</span>
       <span class="item"><span class="dot stage-pack"></span>Упаковка</span>
       <span class="item"><span class="dot stage-ship"></span>Отгрузка</span>
@@ -1332,7 +1343,7 @@ const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
 
 const VERSION='v2025.09.22-rc2';
-const PARALLEL_STAGES = new Set(['proc','shear','pack','ship']);
+const PARALLEL_STAGES = new Set(['proc','shear','coop','pack','ship']);
 const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
 const PLANNER_MODES = { csv:'csv', crm:'crm' };
@@ -1833,7 +1844,7 @@ function applyAccessMode(){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#confirmReadyTime','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates','#muteNotifications'];
+  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates','#muteNotifications'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -1843,7 +1854,7 @@ function applyAccessMode(){
       }
     }
   });
-  ['#file','#stateFile'].forEach(sel=>{
+  ['#file'].forEach(sel=>{
     const input = $(sel);
     if(input){ input.disabled = !canEdit; }
   });
@@ -2267,9 +2278,9 @@ async function bootstrapState(){
 /* =========
    СОСТОЯНИЕ
 ========= */
-const STAGE_KEYS = ['draw','proc','shear','laser','bend','weld','mech','pack','ship'];
+const STAGE_KEYS = ['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
-const DEFAULT_PARALLEL = { proc:5, shear:5, pack:3, ship:5 };
+const DEFAULT_PARALLEL = { proc:5, shear:5, coop:3, pack:3, ship:5 };
 const TABLE_COLUMN_DEFS = [
   { key:'index',   label:'№',              settingsLabel:'№',              defaultWidth:42 },
   { key:'lock',    label:'🔐',             settingsLabel:'Замок',          defaultWidth:34 },
@@ -2355,7 +2366,6 @@ let autoOptimizeOn = true;
 let lockNewOrders = false;
 let lockNewOrdersCsv = false;
 let cascadeReadyOn = false;
-let confirmReadyTimeOn = false;
 let priorityChangeLoggingOn = true;
 let routeDateChangeLoggingOn = true;
 let notificationsMuted = false;
@@ -2806,6 +2816,8 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
   ['мех.обработка','mech'],
   ['мех. обработка','mech'],
   ['мех-обработка','mech'],
+  ['кооперация','coop'],
+  ['кооп','coop'],
   ['упаковка','pack'],
   ['отгрузка','ship']
 ]);
@@ -5295,25 +5307,6 @@ function applyStageProgress(identity, stage, value, options={}){
     crmUpdates.push(payload);
   };
 
-  if(markDone && confirmReadyTimeOn && interactive && !options.skipReadyPrompt){
-    const defaultText = fmtDateTimeLocal(completionMoment);
-    while(true){
-      const answer = prompt('Укажите дату и время готовности (ДД.ММ.ГГГГ ЧЧ:ММ). Оставьте значение без изменений, чтобы использовать текущие дату и время.', defaultText);
-      if(answer === null) return false;
-      const trimmed = String(answer).trim();
-      if(!trimmed){
-        completionMoment = new Date(defaultMoment);
-        break;
-      }
-      const parsed = parseDateTimeInput(trimmed);
-      if(parsed){
-        completionMoment = parsed;
-        break;
-      }
-      alert('Введите дату в формате ДД.ММ.ГГГГ и время ЧЧ:ММ.');
-    }
-  }
-
   const matches = collectStageEntities(identity, stage);
   const activeMatches = Array.isArray(matches?.active) ? matches.active : [];
   const storedMatches = Array.isArray(matches?.stored) ? matches.stored : [];
@@ -5590,7 +5583,11 @@ function applyStageProgress(identity, stage, value, options={}){
     }
   });
 
-  stageActive.sort(compareTasksForOrdering);
+  if(autoOptimizeOn){
+    stageActive.sort(compareTasksForOrdering);
+  }else{
+    sortBySavedOrder(stageActive, stage);
+  }
   ordersByStage.set(stage, stageActive.map(task => task.uid));
 
   allTasksFromState = others.concat(stageActive);
@@ -5757,6 +5754,7 @@ function renderOrdersOverviewTable(){
     };
     setCell('proc', `${totals.proc} шт`);
     setCell('shear', `${totals.shear} шт`);
+    setCell('coop', `${totals.coop} шт`);
     setCell('pack', `${totals.pack} шт`);
     setCell('ship', `${totals.ship} шт`);
     setCell('draw', formatStageHoursWithDays('draw', totals.draw));
@@ -5766,13 +5764,13 @@ function renderOrdersOverviewTable(){
     setCell('mech', formatStageHoursWithDays('mech', totals.mech));
   };
 
-  updateTotalsUI({ orders: 0, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 });
+  updateTotalsUI({ orders: 0, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 });
 
   tbody.innerHTML = '';
   if(!rows.length){
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 12;
+    td.colSpan = 13;
     td.className = 'orders-overview-empty';
     td.textContent = 'Нет заказов для отображения';
     tr.appendChild(td);
@@ -5785,7 +5783,7 @@ function renderOrdersOverviewTable(){
     return;
   }
 
-  const totals = { orders: rows.length, proc:0, shear:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const totals = { orders: rows.length, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
 
   rows.forEach(entry => {
     const tr = document.createElement('tr');
@@ -5877,6 +5875,7 @@ function renderOrdersOverviewTable(){
       <td class="progress-cell">${renderProgress('bend')}</td>
       <td class="progress-cell">${renderProgress('weld')}</td>
       <td class="progress-cell">${renderProgress('mech')}</td>
+      <td>${renderIndicator('coop')}</td>
       <td>${renderIndicator('pack')}</td>
       <td>${renderIndicator('ship')}</td>
     `;
@@ -6153,7 +6152,7 @@ function rebuildAndRenderMasterRoute(){
 const STAGES = STAGE_KEYS.slice();
 
 const PROGRESS_STAGES = ['draw','laser','bend','weld','mech'];
-const INDICATOR_STAGES = ['proc','shear','pack','ship'];
+const INDICATOR_STAGES = ['proc','shear','coop','pack','ship'];
 
 const isDoneStatus = s => /готов|done|сдан|закрыт|closed/i.test(String(s||''));
 
@@ -6176,6 +6175,7 @@ const STAGE_TITLE = {
   bend:'Гибка',
   weld:'Сварка',
   mech:'Мехобработка',
+  coop:'Кооперация',
   pack:'Упаковка',
   ship:'Отгрузка' // на будущее
 };
@@ -6189,6 +6189,7 @@ const STAGE_LETTER = {
   bend:'Г',
   weld:'С',
   mech:'М',
+  coop:'К',
   pack:'У',
   ship:'О'
 };
@@ -6202,6 +6203,7 @@ const STAGE_CLASS = {
   bend:'stage-bend',
   weld:'stage-weld',
   mech:'stage-mech',
+  coop:'stage-coop',
   pack:'stage-pack',
   ship:'stage-ship'
 };
@@ -6269,7 +6271,7 @@ function adjustUIForProcess(p){
 }
 
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
-const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
+const NOHOUR_STAGES = new Set(['proc','shear','coop','pack','ship']);
 const NOHOUR_HIDDEN_COLUMNS = new Set(['progress','hours','rest','reserve']);
 
 function cleanupPendingColumnWidthEdits(now = Date.now()){
@@ -6399,8 +6401,9 @@ function stageIcon(name){
     case 'mech' : return '⚙️ Мехобработка';
     case 'proc' : return '🛒 Закупка';
     case 'shear': return '✂️ Рубка';
+    case 'coop' : return '🤝 Кооперация';
     case 'pack' : return '📦 Упаковка';
-	case 'ship': return '🚚 Отгрузка';
+        case 'ship': return '🚚 Отгрузка';
     default: return '◻︎';
   }
 }
@@ -7393,6 +7396,10 @@ function renderTasksTable(){
   const canEdit = userCanEdit();
   const stage = document.getElementById('process')?.value || currentProc || '';
   const noHours = NOHOUR_STAGES.has(stage);
+  const tableEl = document.getElementById('tasksTable');
+  if(tableEl){
+    tableEl.setAttribute('data-nohours', noHours ? '1' : '0');
+  }
   applyTableColumnWidths();
   if(stage === OVERVIEW_STAGE){
     updateOptimizeButtonsHighlight();
@@ -8588,8 +8595,9 @@ function renderDoneList(){
 	  <label class="badge"><input type="checkbox" value="laser" checked> ${STAGE_TITLE.laser}</label>
 	  <label class="badge"><input type="checkbox" value="bend"  checked> ${STAGE_TITLE.bend}</label>
 	  <label class="badge"><input type="checkbox" value="weld"  checked> ${STAGE_TITLE.weld}</label>
-	  <label class="badge"><input type="checkbox" value="mech"  checked> ${STAGE_TITLE.mech}</label>
-	  <label class="badge"><input type="checkbox" value="pack"  checked> ${STAGE_TITLE.pack}</label>
+     <label class="badge"><input type="checkbox" value="mech"  checked> ${STAGE_TITLE.mech}</label>
+     <label class="badge"><input type="checkbox" value="coop"  checked> ${STAGE_TITLE.coop}</label>
+     <label class="badge"><input type="checkbox" value="pack"  checked> ${STAGE_TITLE.pack}</label>
 	  <label class="badge"><input type="checkbox" value="ship"  checked> ${STAGE_TITLE.ship}</label>
     `;
     // вставим панель перед таблицей
@@ -8923,7 +8931,7 @@ function exportStateCSV(){
   STAGES.forEach(s=> lines.push(`cap.${s}${sep}${capByProc[s] ?? DEFAULT_CAP[s] ?? ''}`));
   
   // параллельные операции для безчасовых этапов
-  ['proc','shear','pack','ship'].forEach(s=>{
+  ['proc','shear','coop','pack','ship'].forEach(s=>{
     lines.push(`par.${s}${sep}${parallelByProc[s] ?? 3}`);
   });
   
@@ -8933,7 +8941,6 @@ function exportStateCSV(){
   lines.push(`lastManualTime${sep}${lastManualTime||''}`);
   lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
   lines.push(`cascadeReadyOn${sep}${cascadeReadyOn?1:0}`);
-  lines.push(`confirmReadyTimeOn${sep}${confirmReadyTimeOn?1:0}`);
   lines.push(`priorityChangeLoggingOn${sep}${priorityChangeLoggingOn?1:0}`);
   lines.push(`routeDateChangeLoggingOn${sep}${routeDateChangeLoggingOn?1:0}`);
 
@@ -9221,11 +9228,6 @@ function importStateFromCSV(text){
   }
   $("#cascadeReady").checked = !!cascadeReadyOn;
 
-  if(meta.confirmReadyTimeOn !== undefined && meta.confirmReadyTimeOn !== ''){
-    confirmReadyTimeOn = !!Number(meta.confirmReadyTimeOn);
-  }
-  const confirmBoxMeta = $("#confirmReadyTime");
-  if(confirmBoxMeta) confirmBoxMeta.checked = !!confirmReadyTimeOn;
   if(meta.priorityChangeLoggingOn !== undefined && meta.priorityChangeLoggingOn !== ''){
     priorityChangeLoggingOn = !!Number(meta.priorityChangeLoggingOn);
   }
@@ -9257,7 +9259,7 @@ function importStateFromCSV(text){
   updateFreshnessUI();
   
   // параллельные операции (включая ship)
-  ['proc','shear','pack','ship'].forEach(s=>{
+  ['proc','shear','coop','pack','ship'].forEach(s=>{
     const k = 'par.'+s;
     const raw = meta[k];
     if(raw!==undefined && raw!==''){
@@ -9500,20 +9502,22 @@ function renderDeltaDialog(diffByStage, currentByStage){
         if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
       });
 
-      stageTasks.sort((a,b)=>{
-        if(csvLockOrder && csvLockOrder.size){
-          const aLocked = csvLockOrder.has(a.uid);
-          const bLocked = csvLockOrder.has(b.uid);
-          if(aLocked !== bLocked) return aLocked ? 1 : -1;
-          if(aLocked && bLocked){
-            return csvLockOrder.get(a.uid) - csvLockOrder.get(b.uid);
+      if(autoOptimizeOn){
+        stageTasks.sort((a,b)=>{
+          if(csvLockOrder && csvLockOrder.size){
+            const aLocked = csvLockOrder.has(a.uid);
+            const bLocked = csvLockOrder.has(b.uid);
+            if(aLocked !== bLocked) return aLocked ? 1 : -1;
+            if(aLocked && bLocked){
+              return csvLockOrder.get(a.uid) - csvLockOrder.get(b.uid);
+            }
           }
-        }
-        const aStart = a.startDate ? +a.startDate : 0;
-        const bStart = b.startDate ? +b.startDate : 0;
-        if(aStart !== bStart) return aStart - bStart;
-        return a.uid.localeCompare(b.uid);
-      });
+          const aStart = a.startDate ? +a.startDate : 0;
+          const bStart = b.startDate ? +b.startDate : 0;
+          if(aStart !== bStart) return aStart - bStart;
+          return a.uid.localeCompare(b.uid);
+        });
+      }
 
       if(csvLockOrder && csvLockOrder.size){
         csvLockedAdds.set(stage, [...csvLockOrder.keys()]);
@@ -9855,7 +9859,6 @@ function buildStateObject(){
     autosaveOn,
     autoOptimizeOn,
     cascadeReadyOn,
-    confirmReadyTimeOn,
     priorityChangeLoggingOn,
     routeDateChangeLoggingOn,
     notificationsMuted,
@@ -11058,9 +11061,6 @@ function restoreState(json, opts={}){
     if(s.cascadeReadyOn !== undefined){
       cascadeReadyOn = !!s.cascadeReadyOn;
     }
-    if(s.confirmReadyTimeOn !== undefined){
-      confirmReadyTimeOn = !!s.confirmReadyTimeOn;
-    }
     if(s.priorityChangeLoggingOn !== undefined){
       priorityChangeLoggingOn = !!s.priorityChangeLoggingOn;
     }
@@ -11092,8 +11092,6 @@ function restoreState(json, opts={}){
     sortBySavedOrder(tasks, $("#process").value);
     recompute();
     updateTrashAttention?.();
-    const confirmElRestore = $("#confirmReadyTime");
-    if(confirmElRestore) confirmElRestore.checked = !!confirmReadyTimeOn;
     const priorityElRestore = $("#notifyPriorityChange");
     if(priorityElRestore) priorityElRestore.checked = !!priorityChangeLoggingOn;
     const routeElRestore = $("#notifyRouteDates");
@@ -11977,6 +11975,8 @@ function renderSystemSettingsUI(){
   const prevColumnsOpen = prevColumnsSection ? !!prevColumnsSection.open : false;
   const prevMappingSection = prevWrapper ? prevWrapper.querySelector('.settings-mapping-section') : null;
   const prevMappingOpen = prevMappingSection ? !!prevMappingSection.open : false;
+  const prevCapacitySection = prevWrapper ? prevWrapper.querySelector('.settings-capacity-section') : null;
+  const prevCapacityOpen = prevCapacitySection ? !!prevCapacitySection.open : false;
   container.innerHTML = '';
 
   const wrapper = document.createElement('details');
@@ -12032,7 +12032,14 @@ function renderSystemSettingsUI(){
     stageList.appendChild(row);
   });
 
-  body.appendChild(stageList);
+  const capacitySection = document.createElement('details');
+  capacitySection.className = 'settings-capacity-section';
+  capacitySection.open = prevWrapper ? prevCapacityOpen : false;
+  const capacitySummary = document.createElement('summary');
+  capacitySummary.textContent = 'Константы вместимости';
+  capacitySection.appendChild(capacitySummary);
+  capacitySection.appendChild(stageList);
+  body.appendChild(capacitySection);
 
   const columnsSection = document.createElement('details');
   columnsSection.className = 'settings-columns-section';
@@ -12119,21 +12126,24 @@ function renderCrmMappingSettingsUI(){
   const list = document.getElementById('crmMappingList');
   if(!list) return;
   list.innerHTML = '';
+
   const combined = new Map(encounteredCrmStages);
   Object.entries(crmStageMapping || {}).forEach(([rawKey, stage])=>{
     const normalized = normalizeCrmStageKey(rawKey);
     if(!normalized) return;
-    if(combined.has(normalized)) return;
-    const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
-    combined.set(normalized, {
-      normalized,
-      label: rawKey,
-      resolved: stage,
-      custom: true,
-      fallback,
-      unmapped: !stage
-    });
+    if(!combined.has(normalized)){
+      const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+      combined.set(normalized, {
+        normalized,
+        label: rawKey,
+        resolved: stage || '',
+        fallback,
+        custom: !!stage,
+        unmapped: !stage
+      });
+    }
   });
+
   if(!combined.size){
     const empty = document.createElement('div');
     empty.className = 'settings-mapping-empty';
@@ -12141,116 +12151,142 @@ function renderCrmMappingSettingsUI(){
     list.appendChild(empty);
     return;
   }
-  const entries = [...combined.values()].sort((a,b)=>{
-    const labelA = (a.label || a.normalized || '').toLowerCase();
-    const labelB = (b.label || b.normalized || '').toLowerCase();
-    return labelA.localeCompare(labelB, 'ru', { sensitivity:'base' });
-  });
-  entries.forEach(entry=>{
-    const item = document.createElement('div');
-    item.className = 'settings-mapping-item';
-    if(entry.unmapped){
-      item.classList.add('needs-mapping');
-    }
-    const warning = document.createElement('span');
-    warning.className = 'settings-mapping-warning';
-    warning.title = 'Назначьте соответствующий передел для этой стадии CRM';
-    warning.textContent = '!';
-    item.appendChild(warning);
 
-    const labelWrap = document.createElement('div');
-    labelWrap.className = 'settings-mapping-label';
-    const nameEl = document.createElement('strong');
-    nameEl.textContent = entry.label || entry.normalized;
-    labelWrap.appendChild(nameEl);
-    if(entry.unmapped && !entry.fallback){
-      const note = document.createElement('span');
-      note.className = 'muted';
-      note.textContent = 'Необходимо выбрать передел Планировщика';
-      labelWrap.appendChild(note);
-    }else if(entry.unmapped && entry.fallback){
-      const note = document.createElement('span');
-      note.className = 'muted';
-      note.textContent = `По умолчанию: ${STAGE_TITLE[entry.fallback] || entry.fallback}`;
-      labelWrap.appendChild(note);
-    }else if(entry.custom){
-      const note = document.createElement('span');
-      note.className = 'muted';
-      note.textContent = `Назначено: ${STAGE_TITLE[entry.resolved] || entry.resolved}`;
-      labelWrap.appendChild(note);
-    }else if(entry.resolved){
-      const note = document.createElement('span');
-      note.className = 'muted';
-      note.textContent = `По умолчанию: ${STAGE_TITLE[entry.resolved] || entry.resolved}`;
-      labelWrap.appendChild(note);
-    }
-    item.appendChild(labelWrap);
+  const entries = [...combined.values()]
+    .map(entry=>{
+      const normalized = normalizeCrmStageKey(entry.normalized || entry.label || '');
+      if(!normalized) return null;
+      const label = entry.label || entry.normalized || normalized;
+      const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || entry.fallback || '';
+      const customStage = crmStageMapping?.[normalized];
+      const resolved = customStage || entry.resolved || fallback || '';
+      const custom = !!customStage;
+      const unmapped = !resolved;
+      const record = { normalized, label, resolved, fallback, custom, unmapped };
+      const stored = encounteredCrmStages.get(normalized) || { normalized };
+      stored.label = label;
+      stored.fallback = fallback;
+      stored.resolved = resolved;
+      stored.custom = custom;
+      stored.unmapped = unmapped;
+      encounteredCrmStages.set(normalized, stored);
+      return record;
+    })
+    .filter(Boolean)
+    .sort((a,b)=>{
+      const labelA = (a.label || a.normalized || '').toLowerCase();
+      const labelB = (b.label || b.normalized || '').toLowerCase();
+      return labelA.localeCompare(labelB, 'ru', { sensitivity:'base' });
+    });
+
+  if(!entries.length){
+    const empty = document.createElement('div');
+    empty.className = 'settings-mapping-empty';
+    empty.textContent = 'Стадии CRM появятся после загрузки данных.';
+    list.appendChild(empty);
+    return;
+  }
+
+  const stageGrid = document.createElement('div');
+  stageGrid.className = 'settings-mapping-stage-grid';
+  const selectSize = Math.min(Math.max(entries.length, 4), 10);
+
+  STAGES.forEach(stage=>{
+    const block = document.createElement('div');
+    block.className = 'settings-mapping-stage';
+    const title = document.createElement('div');
+    title.className = 'stage-title';
+    title.textContent = STAGE_TITLE[stage] || stage;
+    block.appendChild(title);
 
     const select = document.createElement('select');
-    select.dataset.normalized = entry.normalized;
-    select.dataset.label = entry.label || entry.normalized;
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = '— Не назначено';
-    select.appendChild(blank);
-    STAGES.forEach(stageKey=>{
+    select.multiple = true;
+    select.size = selectSize;
+    select.dataset.stage = stage;
+    entries.forEach(entry=>{
       const option = document.createElement('option');
-      option.value = stageKey;
-      option.textContent = STAGE_TITLE[stageKey] || stageKey;
+      option.value = entry.normalized;
+      option.textContent = entry.label || entry.normalized;
+      if(entry.unmapped){
+        option.dataset.unmapped = '1';
+      }
+      if(entry.resolved === stage){
+        option.selected = true;
+      }
       select.appendChild(option);
     });
-    select.value = entry.resolved || '';
-    select.addEventListener('change', handleCrmMappingChange);
     if(!userCanEdit()){
       select.disabled = true;
+    }else{
+      select.addEventListener('change', handleCrmStageMultiChange);
     }
-    item.appendChild(select);
-
-    list.appendChild(item);
+    block.appendChild(select);
+    stageGrid.appendChild(block);
   });
+
+  list.appendChild(stageGrid);
+
+  const unmappedEntries = entries.filter(entry => entry.unmapped);
+  if(unmappedEntries.length){
+    const alert = document.createElement('div');
+    alert.className = 'settings-mapping-alert';
+    const names = unmappedEntries.map(entry => entry.label || entry.normalized).join(', ');
+    alert.textContent = `Не сопоставлены стадии CRM: ${names}`;
+    list.appendChild(alert);
+  }else{
+    const note = document.createElement('div');
+    note.className = 'settings-mapping-note';
+    note.textContent = 'Выберите, к каким переделам относятся стадии CRM. Настройки сохраняются автоматически.';
+    list.appendChild(note);
+  }
 }
 
-function handleCrmMappingChange(e){
+function handleCrmStageMultiChange(e){
   const select = e.target;
-  if(!(select instanceof HTMLSelectElement)) return;
-  const normalized = select.dataset.normalized || '';
-  if(!normalized) return;
+  if(!(select instanceof HTMLSelectElement) || !select.multiple) return;
+  const stage = select.dataset.stage || '';
+  if(!stage || !STAGES.includes(stage)) return;
   if(!userCanEdit()){
-    const entry = encounteredCrmStages.get(normalized);
-    select.value = entry?.resolved || '';
+    renderCrmMappingSettingsUI();
     notifyReadOnly();
     return;
   }
-  let value = select.value;
-  if(value && !STAGES.includes(value)){
-    value = '';
-  }
-  let nextMapping = { ...crmStageMapping };
-  if(value){
-    nextMapping[normalized] = value;
-  }else if(Object.prototype.hasOwnProperty.call(nextMapping, normalized)){
-    delete nextMapping[normalized];
-  }
-  nextMapping = sanitizeCrmStageMapping(nextMapping);
-  crmStageMapping = nextMapping;
+
+  const container = document.getElementById('crmMappingList');
+  const stageSelects = container ? Array.from(container.querySelectorAll('select[data-stage]')) : [];
+  const nextMapping = {};
+  stageSelects.forEach(sel=>{
+    const stageKey = sel.dataset.stage || '';
+    if(!stageKey || !STAGES.includes(stageKey)) return;
+    Array.from(sel.options || []).forEach(option=>{
+      if(option.selected){
+        const normalized = normalizeCrmStageKey(option.value);
+        if(normalized){
+          nextMapping[normalized] = stageKey;
+        }
+      }
+    });
+  });
+
+  crmStageMapping = sanitizeCrmStageMapping(nextMapping);
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.crmStageMapping = { ...crmStageMapping };
   stateMeta.settings.updatedAt = new Date().toLocaleString();
-  const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
-  const resolved = value || fallback;
-  const entry = encounteredCrmStages.get(normalized) || {
-    normalized,
-    label: select.dataset.label || normalized,
-    fallback,
-    resolved: '',
-    custom: false,
-    unmapped: true
-  };
-  entry.fallback = fallback;
-  entry.resolved = resolved || '';
-  entry.custom = !!value;
-  entry.unmapped = !resolved;
-  encounteredCrmStages.set(normalized, entry);
+
+  encounteredCrmStages.forEach((entry, normalized)=>{
+    const fallback = entry?.fallback || CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+    const resolved = crmStageMapping[normalized] || fallback;
+    const updated = {
+      ...(entry || {}),
+      normalized,
+      fallback,
+      resolved: resolved || '',
+      custom: !!crmStageMapping[normalized],
+      unmapped: !resolved
+    };
+    encounteredCrmStages.set(normalized, updated);
+  });
+
   renderCrmMappingSettingsUI();
   const snapshot = JSON.parse(JSON.stringify(stateMeta.settings.crmStageMapping || {}));
   persistSharedPreference('crmStageMapping', 'Сопоставление стадий CRM', snapshot);
@@ -12856,15 +12892,6 @@ function wireHandlers(){
     e.target.value='';
   });
   
-  // экспорт / импорт состояния
-  $("#exportCSV").addEventListener('click', exportStateCSV);
-  $("#stateFile").addEventListener('change', async e=>{
-    if(!userCanEdit()){ e.target.value=''; notifyReadOnly(); return; }
-    const f=e.target.files[0];
-    if(f) await importStateFile(f);
-    e.target.value='';
-  });
-
   // исключения/бронь
   $("#exceptionsBtn").addEventListener('click', openExceptions);
   $("#excCancel").addEventListener('click', ()=>$("#exceptionsDlg").close());
@@ -13053,12 +13080,6 @@ function wireHandlers(){
     if(!userCanEdit()){ e.target.checked = cascadeReadyOn; notifyReadOnly(); return; }
     cascadeReadyOn = !!e.target.checked;
     persistSharedPreference('cascadeReadyOn', 'Автоготовность при упаковке/отгрузке', cascadeReadyOn);
-  });
-
-  $("#confirmReadyTime").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = confirmReadyTimeOn; notifyReadOnly(); return; }
-    confirmReadyTimeOn = !!e.target.checked;
-    persistSharedPreference('confirmReadyTimeOn', 'Уточнять время готовности', confirmReadyTimeOn);
   });
 
   $("#notifyPriorityChange").addEventListener('change', e=>{
