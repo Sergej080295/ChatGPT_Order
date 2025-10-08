@@ -605,6 +605,7 @@ body.overview-fs-active{overflow:hidden}
     <div class="tools">
       <button id="importCsvBtn" class="btn" data-mode-visible="csv">Импорт (.csv)</button>
       <input id="file" type="file" accept=".csv" style="display:none">
+      <button id="clearAll" class="btn" data-mode-visible="csv">Очистить</button>
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
       <div class="optimize-group">
@@ -619,12 +620,6 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
-      <button id="undoImport" class="btn" data-mode-visible="csv">Откат импорта</button>
-      <button id="clearAll" class="btn" data-mode-visible="csv">Очистить</button>
-    </div>
-
-    <div class="row" style="margin-left:auto;gap:12px;align-items:center;flex-wrap:wrap">
-      <label class="small"><input type="checkbox" id="autosave"> AutoSave</label>
       <button id="saveBtn" class="btn small">Сохранить</button>
       <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
@@ -638,6 +633,7 @@ body.overview-fs-active{overflow:hidden}
       </button>
       <button id="settingsBtn" class="btn small ghost" title="Настройки" aria-label="Настройки">⚙️</button>
     </div>
+
     <div class="row small muted" id="freshnessRow" style="margin-left:auto;gap:16px">
       <span>CSV: <b id="freshnessCsv">—</b></span>
       <span>Ручные правки: <b id="freshnessManual">—</b></span>
@@ -980,9 +976,13 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
+        <label class="small"><input type="checkbox" id="autosaveSetting"> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
+        <label class="small">Количество записей в журнале:
+          <input type="number" id="logLimitInput" min="0" step="1" placeholder="Без ограничений" style="margin-left:6px;width:120px">
+        </label>
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
         <div id="systemSettings"></div>
@@ -1837,14 +1837,14 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#undoImport','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosave','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates','#muteNotifications'];
+  const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el){
@@ -2243,6 +2243,7 @@ async function bootstrapState(){
         tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
         extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
         crmStageMapping: {},
+        logLimit: DEFAULT_LOG_LIMIT,
         updatedAt: ''
       };
     }else{
@@ -2258,6 +2259,9 @@ async function bootstrapState(){
       }
       if(!stateMeta.settings.crmStageMapping || typeof stateMeta.settings.crmStageMapping !== 'object'){
         stateMeta.settings.crmStageMapping = {};
+      }
+      if(stateMeta.settings.logLimit == null){
+        stateMeta.settings.logLimit = DEFAULT_LOG_LIMIT;
       }
     }
     refreshPlannerModeUI();
@@ -2311,7 +2315,8 @@ const UI_PREF_KEY = 'yougile_planner_ui_v2';
 const SYNC_PING_KEY = 'yougile_planner_sync_ping_v1';
 const ACCESS_MODE_KEY = 'yougile_planner_access_mode_v1';
 const ACCESS_MODES = { edit:'edit', view:'view' };
-const LOG_LIMIT = 200;
+const DEFAULT_LOG_LIMIT = 200;
+let logLimitSetting = DEFAULT_LOG_LIMIT;
 const REMOTE_POLL_INTERVAL = 4000;
 const SESSION_ID = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
   ? crypto.randomUUID()
@@ -2781,6 +2786,55 @@ function cloneModeScopedStateForSave(){
   return result;
 }
 let activityLog = [];
+
+function sanitizeLogLimit(raw){
+  if(raw === '') return null;
+  if(raw === undefined) return DEFAULT_LOG_LIMIT;
+  if(raw === null) return null;
+  const num = Number(raw);
+  if(Number.isNaN(num)) return DEFAULT_LOG_LIMIT;
+  if(!Number.isFinite(num)) return null;
+  if(num <= 0) return 0;
+  return Math.max(0, Math.round(num));
+}
+
+function getEffectiveLogLimit(){
+  if(logLimitSetting === null) return Infinity;
+  if(typeof logLimitSetting === 'number'){
+    if(logLimitSetting <= 0) return 0;
+    return logLimitSetting;
+  }
+  const sanitized = sanitizeLogLimit(logLimitSetting);
+  if(sanitized === null) return Infinity;
+  if(sanitized <= 0) return 0;
+  return sanitized;
+}
+
+function trimActivityLogInPlace(){
+  const limit = getEffectiveLogLimit();
+  if(limit <= 0){
+    activityLog = [];
+  }else if(Number.isFinite(limit) && activityLog.length > limit){
+    activityLog = activityLog.slice(-limit);
+  }else{
+    activityLog = activityLog.slice();
+  }
+  stateMeta.history = activityLog.slice();
+}
+
+function applyLogLimitSnapshot(list){
+  if(!Array.isArray(list)) return [];
+  const limit = getEffectiveLogLimit();
+  if(limit <= 0) return [];
+  if(!Number.isFinite(limit)) return list.slice();
+  return list.slice(-limit);
+}
+
+function appendToActivityLog(entry){
+  if(getEffectiveLogLimit() === 0) return;
+  activityLog.push(entry);
+  trimActivityLogInPlace();
+}
 let lastKnownVersions = new Map();      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
 let broadcastChannel = null;
@@ -9220,7 +9274,11 @@ function importStateFromCSV(text){
   // meta / UI
   if(meta.process) $("#process").value = meta.process;
   if(meta.ganttFilter) $("#ganttFilter").value = meta.ganttFilter;
-  autosaveOn = !!Number(meta.autosaveOn); $("#autosave").checked = autosaveOn;
+  autosaveOn = !!Number(meta.autosaveOn); $("#autosaveSetting").checked = autosaveOn;
+  const logField = $("#logLimitInput");
+  if(logField){
+    logField.value = logLimitSetting === null ? '' : String(logLimitSetting);
+  }
   autoOptimizeOn = !!Number(meta.autoOptimizeOn);
   $("#autoOptimize").checked = autoOptimizeOn;
   if(meta.cascadeReadyOn !== undefined && meta.cascadeReadyOn !== ''){
@@ -9811,7 +9869,7 @@ function buildStateObject(){
 
   const versionsObj = {};
   lastKnownVersions.forEach((v,k)=>{ versionsObj[k] = v; });
-  const history = activityLog.slice(-LOG_LIMIT);
+  const history = applyLogLimitSnapshot(activityLog);
 
   const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
@@ -9832,6 +9890,7 @@ function buildStateObject(){
     tableColumns: columnOut,
     extraTime: extraOut,
     crmStageMapping: { ...crmStageMapping },
+    logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
     updatedAt: stateMeta.settings?.updatedAt || ''
   };
   const storageMeta = {
@@ -10956,6 +11015,7 @@ function restoreState(json, opts={}){
     };
     const savedMappingRaw = metaSettings.crmStageMapping || {};
     crmStageMapping = sanitizeCrmStageMapping(savedMappingRaw);
+    logLimitSetting = sanitizeLogLimit(metaSettings.logLimit);
 
     stateMeta.settings = {
       capacity: { ...capByProc },
@@ -10995,6 +11055,7 @@ function restoreState(json, opts={}){
       tableColumns: { ...tableColumnWidths },
       extraTime: { ...extraTimeSettings },
       crmStageMapping: { ...crmStageMapping },
+      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
       updatedAt: stateMeta.settings?.updatedAt || ''
     };
     stateMeta = {
@@ -11002,14 +11063,14 @@ function restoreState(json, opts={}){
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
-      history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
+      history: applyLogLimitSnapshot(s.meta?.history),
       ignoredStates: stateMeta.ignoredStates.slice(),
       settings: persistedSettings
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
     }
-    activityLog = stateMeta.history.slice(-LOG_LIMIT);
+    activityLog = applyLogLimitSnapshot(stateMeta.history);
     if(activityLog.length){
       activityLog = activityLog.map(entry=>{
         if(!entry) return entry;
@@ -11022,7 +11083,7 @@ function restoreState(json, opts={}){
         if(!summary) return { ...entry, changeType };
         return { ...entry, ordersSummary: summary, changeType };
       });
-      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      trimActivityLogInPlace();
     }
     csvFreshnessStr = stateMeta.csvTimestamp || s.freshness || '—';
     manualFreshnessStr = stateMeta.manualTimestamp || s.lastManualTime || '—';
@@ -11275,12 +11336,10 @@ function persistNow(stageOverride, opts={}){
           authors: authorsMap,
           ordersSummary: combinedSummary || null
         };
-        activityLog.push(logEntry);
-        if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
-        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        appendToActivityLog(logEntry);
         markLogAttention();
       }else{
-        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        trimActivityLogInPlace();
       }
 
       stateObj.meta = {
@@ -11288,7 +11347,7 @@ function persistNow(stageOverride, opts={}){
         lastAuthors: { ...(stateMeta.lastAuthors || {}) },
         csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
         manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-        history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+        history: stateMeta.history || applyLogLimitSnapshot(activityLog),
         settings: {
           capacity: { ...(stateMeta.settings?.capacity || {}) },
           parallel: { ...(stateMeta.settings?.parallel || {}) },
@@ -11503,8 +11562,12 @@ function persistNow(stageOverride, opts={}){
         stateMeta.lastAuthors = { ...(prevMeta.lastAuthors||{}) };
         stateMeta.csvTimestamp = prevMeta.csvTimestamp || stateMeta.csvTimestamp;
         stateMeta.manualTimestamp = prevMeta.manualTimestamp || stateMeta.manualTimestamp;
-        stateMeta.history = Array.isArray(prevMeta.history) ? prevMeta.history.slice(-LOG_LIMIT) : stateMeta.history;
-        activityLog = stateMeta.history.slice(-LOG_LIMIT);
+        if(Array.isArray(prevMeta.history)){
+          activityLog = applyLogLimitSnapshot(prevMeta.history);
+          stateMeta.history = activityLog.slice();
+        }else{
+          trimActivityLogInPlace();
+        }
         updateFreshnessUI();
         if(!silentOnConflict){
           const authorInfo = stateMeta.lastAuthors?.[curStage];
@@ -11594,16 +11657,14 @@ function persistNow(stageOverride, opts={}){
           authors: authorsMap,
           ordersSummary: effectiveOrdersSummary || null
         };
-        activityLog.push(entry);
-        if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
-        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        appendToActivityLog(entry);
         stateMeta.lastAuthors = { ...(stateMeta.lastAuthors||{}), [curStage]: authorDetails };
         markLogAttention();
       } else {
-        stateMeta.history = activityLog.slice(-LOG_LIMIT);
+        trimActivityLogInPlace();
       }
     } else if(force || !rawPrev){
-      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      trimActivityLogInPlace();
     }
 
     if(isSettingsChange){
@@ -11622,9 +11683,7 @@ function persistNow(stageOverride, opts={}){
           entries: settingsChange.entries
         }
       };
-      activityLog.push(entry);
-      if(activityLog.length > LOG_LIMIT) activityLog = activityLog.slice(-LOG_LIMIT);
-      stateMeta.history = activityLog.slice(-LOG_LIMIT);
+      appendToActivityLog(entry);
       markLogAttention();
     }
 
@@ -11641,7 +11700,7 @@ function persistNow(stageOverride, opts={}){
       lastAuthors: { ...(stateMeta.lastAuthors||{}) },
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
-      history: stateMeta.history || activityLog.slice(-LOG_LIMIT),
+      history: stateMeta.history || applyLogLimitSnapshot(activityLog),
       settings: {
         capacity: { ...(stateMeta.settings?.capacity || {}) },
         parallel: { ...(stateMeta.settings?.parallel || {}) },
@@ -11892,6 +11951,7 @@ function persistSystemSettingsChange(entries){
       tableColumns: { ...tableColumnWidths },
       extraTime: { ...extraTimeSettings },
       crmStageMapping: { ...crmStageMapping },
+      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
       updatedAt: timestamp
     };
     persistNow(undefined, {
@@ -11902,8 +11962,9 @@ function persistSystemSettingsChange(entries){
   }, 150);
 }
 
-function persistSharedPreferencesChange(entries){
+function persistSharedPreferencesChange(entries, options={}){
   if(!Array.isArray(entries) || !entries.length) return;
+  const immediate = !!options.immediate;
   const normalized = entries
     .map(entry=>{
       if(!entry || !entry.key) return null;
@@ -11920,10 +11981,8 @@ function persistSharedPreferencesChange(entries){
     .filter(Boolean);
   if(!normalized.length) return;
   pendingSharedPrefQueue = pendingSharedPrefQueue.concat(normalized);
-  if(pendingSharedPrefTimer){
-    clearTimeout(pendingSharedPrefTimer);
-  }
-  pendingSharedPrefTimer = setTimeout(()=>{
+
+  const flush = ()=>{
     const byKey = new Map();
     pendingSharedPrefQueue.forEach(change=>{
       const key = change.key;
@@ -11942,6 +12001,7 @@ function persistSharedPreferencesChange(entries){
         tableColumns: { ...tableColumnWidths },
         extraTime: { ...extraTimeSettings },
         crmStageMapping: { ...crmStageMapping },
+        logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
         updatedAt: timestamp
       };
     }else{
@@ -11953,17 +12013,32 @@ function persistSharedPreferencesChange(entries){
       stateMeta.settings.tableColumns = { ...tableColumnWidths };
       stateMeta.settings.extraTime = { ...extraTimeSettings };
       stateMeta.settings.crmStageMapping = { ...crmStageMapping };
+      stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
     }
     persistNow(undefined, {
       source:'settings',
       force:true,
       settingsChange:{ entries: merged, timestamp }
     });
-  }, 120);
+  };
+
+  if(immediate){
+    if(pendingSharedPrefTimer){
+      clearTimeout(pendingSharedPrefTimer);
+      pendingSharedPrefTimer = null;
+    }
+    flush();
+    return;
+  }
+
+  if(pendingSharedPrefTimer){
+    clearTimeout(pendingSharedPrefTimer);
+  }
+  pendingSharedPrefTimer = setTimeout(flush, 120);
 }
 
-function persistSharedPreference(key, label, value){
-  persistSharedPreferencesChange([{ key, label, value }]);
+function persistSharedPreference(key, label, value, options){
+  persistSharedPreferencesChange([{ key, label, value }], options);
 }
 
 function renderSystemSettingsUI(){
@@ -12289,7 +12364,7 @@ function handleCrmStageMultiChange(e){
 
   renderCrmMappingSettingsUI();
   const snapshot = JSON.parse(JSON.stringify(stateMeta.settings.crmStageMapping || {}));
-  persistSharedPreference('crmStageMapping', 'Сопоставление стадий CRM', snapshot);
+  persistSharedPreference('crmStageMapping', 'Сопоставление стадий CRM', snapshot, { immediate:true });
   if(isCrmMode()){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
@@ -12396,7 +12471,7 @@ function handleColumnWidthChange(e){
   applyTableColumnWidths();
   requestAnimationFrame(()=>{ renderTasksTable(); });
   const label = TABLE_COLUMN_LABEL_MAP[key] || key;
-  persistSharedPreference(`tableColumn.${key}`, `Ширина колонки «${label}»`, value);
+  persistSharedPreference(`tableColumn.${key}`, `Ширина колонки «${label}»`, value, { immediate:true });
 }
 
 function handleExtraSettingChange(e){
@@ -12422,6 +12497,33 @@ function handleExtraSettingChange(e){
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.extraTime = { ...extraTimeSettings };
   persistSharedPreference(`extraTime.${key}`, key === 'percent' ? 'Автодовес, %' : 'Минимум доп. времени, ч', value);
+}
+
+function handleLogLimitInputChange(e){
+  const input = e.target;
+  if(!(input instanceof HTMLInputElement)) return;
+  if(!userCanEdit()){
+    input.value = logLimitSetting === null ? '' : String(logLimitSetting);
+    notifyReadOnly();
+    return;
+  }
+  const raw = input.value.trim();
+  if(raw === ''){
+    logLimitSetting = null;
+    input.value = '';
+  }else{
+    let value = Number(raw.replace(',', '.'));
+    if(!Number.isFinite(value) || value < 0){
+      value = 0;
+    }
+    value = Math.round(value);
+    logLimitSetting = value;
+    input.value = String(value);
+  }
+  if(!stateMeta.settings) stateMeta.settings = {};
+  stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
+  trimActivityLogInPlace();
+  persistSharedPreference('logLimit', 'Лимит журнала', logLimitSetting === null ? null : Number(logLimitSetting), { immediate:true });
 }
 
 /* =========
@@ -12484,8 +12586,10 @@ function applyUiPreferences(prefs={}){
     updateIgnoredStatesSummary();
     updateExcludedAttention();
   }
-  const autosaveEl = $("#autosave");
+  const autosaveEl = $("#autosaveSetting");
   if(autosaveEl) autosaveEl.checked = !!autosaveOn;
+  const logLimitEl = $("#logLimitInput");
+  if(logLimitEl) logLimitEl.value = logLimitSetting === null ? '' : String(logLimitSetting);
   const shiftEl = $("#shiftOnProgress");
   if(shiftEl) shiftEl.checked = !!shiftOnProgress;
   const autoOptEl = $("#autoOptimize");
@@ -12581,6 +12685,7 @@ function recompute(){
     proc==='mech' ? 'Мехобработка' :
     proc==='proc' ? 'Закупка' :
     proc==='shear'? 'Рубка' :
+    proc==='coop' ? 'Кооперация' :
     proc==='pack' ? 'Упаковка' :
     proc==='ship' ? 'Отгрузка' : '—';
   
@@ -12859,6 +12964,12 @@ function wireHandlers(){
     refreshPlannerModeUI();
   }
 
+  const logLimitField = $("#logLimitInput");
+  if(logLimitField){
+    logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
+    logLimitField.addEventListener('change', handleLogLimitInputChange);
+  }
+
   const overviewFilter = $("#ordersOverviewFilter");
   if(overviewFilter){
     overviewFilter.addEventListener('change', ()=> renderOrdersOverviewTable());
@@ -13040,7 +13151,7 @@ function wireHandlers(){
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{
+  $("#autosaveSetting").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
     autosaveOn = !!e.target.checked;
     persistSharedPreference('autosaveOn', 'Автосохранение', autosaveOn);
@@ -13127,12 +13238,14 @@ $("#routeClose").addEventListener('click', ()=> $("#routeDlg").close());
 $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 
   // откат импорта — выборочно
-  $("#undoImport").addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-    if(!lastSnapshotJson){ alert('Нет снимка для отката. Сначала примените импорт с изменениями.'); return; }
+  const undoImportBtn = $("#undoImport");
+  if(undoImportBtn){
+    undoImportBtn.addEventListener('click', ()=>{
+      if(!userCanEdit()){ notifyReadOnly(); return; }
+      if(!lastSnapshotJson){ alert('Нет снимка для отката. Сначала примените импорт с изменениями.'); return; }
 
-    const prev = lastDiffApplied;
-    const box=$("#undoContent");
+      const prev = lastDiffApplied;
+      const box=$("#undoContent");
     if(prev){
       const block = (key, arr, fmt) => `
         <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
@@ -13225,7 +13338,8 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
       restoreState(lastSnapshotJson); lastSnapshotJson=''; sortTasksByStart(); recompute(); persistNow();
       alert('Откат выполнен.');
     }
-  });
+    });
+  }
 
 	// Общий маршрут — фильтры этапов
         $$('.ov-filter').forEach(ch=>{
@@ -13350,6 +13464,10 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(lockBox) lockBox.checked = lockNewOrders;
             const lockCsvBox = $('#lockNewOrdersCsv');
             if(lockCsvBox) lockCsvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
+            const autosaveBox = $('#autosaveSetting');
+            if(autosaveBox) autosaveBox.checked = autosaveOn;
+            const logLimitField = $('#logLimitInput');
+            if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
             const locBox = $('#storageLocal');
             if(locBox) locBox.checked = enableLocalStore;
             const remBox = $('#storageRemote');
@@ -13386,7 +13504,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         });
         updateOrderSearchControls();
 
-        $("#autosave").checked = autosaveOn;
+        $("#autosaveSetting").checked = autosaveOn;
         renderSystemSettingsUI();
 }
 
