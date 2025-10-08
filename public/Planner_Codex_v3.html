@@ -11029,6 +11029,7 @@ function restoreState(json, opts={}){
       tableColumns: { ...tableColumnWidths },
       extraTime: { ...extraTimeSettings },
       crmStageMapping: { ...crmStageMapping },
+      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
       updatedAt: preservedLocalColumns ? (prevSettingsStamp || (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')) : (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')
     };
     plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
@@ -11358,6 +11359,7 @@ function persistNow(stageOverride, opts={}){
           plannerMode: stateMeta.settings?.plannerMode || plannerMode,
           notificationsMuted: !!stateMeta.settings?.notificationsMuted,
           crmStageMapping: { ...(stateMeta.settings?.crmStageMapping || {}) },
+          logLimit: stateMeta.settings?.logLimit ?? (logLimitSetting === null ? null : Number(logLimitSetting)),
           updatedAt: stateMeta.settings?.updatedAt || ''
         },
         ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
@@ -11711,6 +11713,7 @@ function persistNow(stageOverride, opts={}){
         plannerMode: stateMeta.settings?.plannerMode || plannerMode,
         notificationsMuted: !!stateMeta.settings?.notificationsMuted,
         crmStageMapping: { ...(stateMeta.settings?.crmStageMapping || {}) },
+        logLimit: stateMeta.settings?.logLimit ?? (logLimitSetting === null ? null : Number(logLimitSetting)),
         updatedAt: stateMeta.settings?.updatedAt || ''
       },
       ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
