@@ -536,6 +536,13 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-row option[value=""]{color:#94a3b8;}
 .settings-mapping-alert{font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:6px;}
 .settings-mapping-note{font-size:12px;color:var(--muted);}
+.settings-shared-actions{width:100%;display:flex;align-items:center;gap:10px;justify-content:flex-end;padding-top:10px;border-top:1px solid rgba(148,163,184,.35);margin-top:16px;flex-wrap:wrap;}
+.settings-shared-actions .grow{flex:1 1 auto;}
+.settings-dirty-hint{font-size:12px;color:#b45309;display:none;}
+.settings-shared-actions[data-dirty="1"] .settings-dirty-hint{display:block;}
+.btn.attention{position:relative;}
+.btn.attention::after{content:'';position:absolute;inset:-4px;border-radius:10px;border:2px solid rgba(245,158,11,.55);pointer-events:none;animation:pulseBorder 1.4s infinite ease-in-out;}
+@keyframes pulseBorder{0%{opacity:.9;}50%{opacity:.35;}100%{opacity:.9;}}
 .settings-mapping-empty{font-size:12px;color:var(--muted);padding:6px 0;}
 
 .settings-capacity-section{margin-top:12px;border:1px solid #e2e8f0;border-radius:10px;padding:0 12px 12px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);}
@@ -991,6 +998,14 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
         <div id="crmMappingSettings"></div>
+      </div>
+      <div class="row settings-shared-actions" id="sharedSettingsActions" data-dirty="0">
+        <div class="settings-dirty-hint" id="sharedSettingsDirtyHint">Есть несохранённые изменения</div>
+        <div class="grow"></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <button id="sharedSettingsCancel" class="btn ghost" type="button" disabled>Отмена</button>
+          <button id="sharedSettingsApply" class="btn primary" type="button" disabled>Применить</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2360,6 +2375,8 @@ let extraTimeSettings = { ...stateMeta.settings.extraTime };
 let crmStageMapping = sanitizeCrmStageMapping(stateMeta.settings?.crmStageMapping);
 const encounteredCrmStages = new Map();
 let pendingCrmMappingRender = false;
+let sharedSettingsSnapshot = null;
+const sharedSettingsDirtyKeys = new Set();
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -9940,6 +9957,7 @@ function buildStateObject(){
         plannerMode: stateMeta.settings.plannerMode || plannerMode,
         notificationsMuted: !!stateMeta.settings.notificationsMuted,
         crmStageMapping: { ...(stateMeta.settings.crmStageMapping || {}) },
+        logLimit: stateMeta.settings.logLimit == null ? null : Number(stateMeta.settings.logLimit),
         updatedAt: stateMeta.settings.updatedAt || ''
       },
       ignoredStates: ignoredStates.slice(),
@@ -12046,6 +12064,127 @@ function persistSharedPreference(key, label, value, options){
   persistSharedPreferencesChange([{ key, label, value }], options);
 }
 
+function cloneCrmMappingForSnapshot(map){
+  const result = {};
+  if(!map || typeof map !== 'object') return result;
+  Object.entries(map).forEach(([key, value])=>{
+    const normalized = normalizeCrmStageKey(key);
+    if(!normalized) return;
+    const stageKey = STAGES.includes(value) ? value : '';
+    if(stageKey){
+      result[normalized] = stageKey;
+    }
+  });
+  return result;
+}
+
+function captureSharedSettingsSnapshot(force=false){
+  const dialog = document.getElementById('settingsDlg');
+  if(!force && dialog && dialog.open && sharedSettingsDirtyKeys.size>0) return;
+  const columns = {};
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    columns[def.key] = getColumnWidthValue(def.key);
+  });
+  sharedSettingsSnapshot = {
+    tableColumns: columns,
+    extraTime: {
+      percent: sanitizeExtraPercent(extraTimeSettings.percent),
+      minimum: sanitizeExtraMinimum(extraTimeSettings.minimum)
+    },
+    logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
+    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
+  };
+  if(force){
+    sharedSettingsDirtyKeys.clear();
+  }
+  updateSharedSettingsButtons();
+}
+
+function updateSharedSettingsButtons(){
+  const hasDirty = sharedSettingsDirtyKeys.size > 0;
+  const canEdit = userCanEdit();
+  const applyBtn = document.getElementById('sharedSettingsApply');
+  const cancelBtn = document.getElementById('sharedSettingsCancel');
+  const hint = document.getElementById('sharedSettingsDirtyHint');
+  const actions = document.getElementById('sharedSettingsActions');
+  if(applyBtn){
+    applyBtn.disabled = !hasDirty || !canEdit;
+    applyBtn.classList.toggle('attention', hasDirty && canEdit);
+  }
+  if(cancelBtn){
+    cancelBtn.disabled = !hasDirty;
+  }
+  if(actions){
+    actions.dataset.dirty = hasDirty ? '1' : '0';
+  }
+  if(hint){
+    hint.style.display = hasDirty ? '' : 'none';
+  }
+}
+
+function markSharedSettingsDirty(key){
+  if(!sharedSettingsSnapshot){
+    captureSharedSettingsSnapshot(true);
+  }
+  if(key) sharedSettingsDirtyKeys.add(key);
+  updateSharedSettingsButtons();
+}
+
+function restoreSharedSettingsSnapshot(){
+  if(!sharedSettingsSnapshot) return;
+  const snap = sharedSettingsSnapshot;
+  tableColumnWidths = { ...snap.tableColumns };
+  stateMeta.settings.tableColumns = { ...tableColumnWidths };
+  applyTableColumnWidths();
+  requestAnimationFrame(()=>{ renderTasksTable(); });
+  extraTimeSettings = {
+    percent: sanitizeExtraPercent(snap.extraTime?.percent),
+    minimum: sanitizeExtraMinimum(snap.extraTime?.minimum)
+  };
+  stateMeta.settings.extraTime = { ...extraTimeSettings };
+  logLimitSetting = snap.logLimit === null ? null : Number(snap.logLimit);
+  stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
+  trimActivityLogInPlace();
+  const logField = document.getElementById('logLimitInput');
+  if(logField){
+    logField.value = logLimitSetting === null ? '' : String(logLimitSetting);
+  }
+  crmStageMapping = sanitizeCrmStageMapping(snap.crmStageMapping);
+  stateMeta.settings.crmStageMapping = { ...crmStageMapping };
+  renderSystemSettingsUI();
+  if(isCrmMode()){
+    refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
+  }
+  captureSharedSettingsSnapshot(true);
+}
+
+function commitSharedSettingsChanges(){
+  if(sharedSettingsDirtyKeys.size === 0){
+    updateSharedSettingsButtons();
+    return;
+  }
+  if(!userCanEdit()){
+    notifyReadOnly();
+    return;
+  }
+  const entries = [];
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    const label = TABLE_COLUMN_LABEL_MAP[def.key] || def.label || def.key;
+    entries.push({
+      key:`tableColumn.${def.key}`,
+      label:`Ширина колонки «${label}»`,
+      value:getColumnWidthValue(def.key)
+    });
+  });
+  entries.push({ key:'extraTime.percent', label:'Автодовес, %', value:sanitizeExtraPercent(extraTimeSettings.percent) });
+  entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value:sanitizeExtraMinimum(extraTimeSettings.minimum) });
+  entries.push({ key:'logLimit', label:'Лимит журнала', value: logLimitSetting === null ? null : Number(logLimitSetting) });
+  entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
+  persistSharedPreferencesChange(entries, { immediate:true });
+  sharedSettingsDirtyKeys.clear();
+  captureSharedSettingsSnapshot(true);
+}
+
 function renderSystemSettingsUI(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
@@ -12193,13 +12332,18 @@ function renderSystemSettingsUI(){
 
   const note = document.createElement('div');
   note.className = 'settings-system-note';
-  note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
+  note.textContent = 'После внесения правок нажмите «Применить», чтобы сохранить изменения для всех пользователей.';
   body.appendChild(note);
 
   wrapper.appendChild(body);
   container.appendChild(wrapper);
   refreshSystemSettingsAccess();
   renderCrmMappingSettingsUI();
+  if(!sharedSettingsSnapshot || sharedSettingsDirtyKeys.size === 0){
+    captureSharedSettingsSnapshot();
+  }else{
+    updateSharedSettingsButtons();
+  }
 }
 
 function renderCrmMappingSettingsUI(){
@@ -12332,9 +12476,10 @@ function renderCrmMappingSettingsUI(){
   }else{
     const note = document.createElement('div');
     note.className = 'settings-mapping-note';
-    note.textContent = 'Выберите, к каким переделам относятся стадии CRM. Настройки сохраняются автоматически.';
+    note.textContent = 'Выберите, к каким переделам относятся стадии CRM. После изменений нажмите «Применить», чтобы сохранить соответствия.';
     list.appendChild(note);
   }
+  updateSharedSettingsButtons();
 }
 
 function handleCrmStageMappingSelect(e){
@@ -12352,6 +12497,11 @@ function handleCrmStageMappingSelect(e){
   }
 
   const selectedStage = STAGE_KEYS.includes(select.value) ? select.value : '';
+  const currentStage = crmStageMapping?.[normalized] || '';
+  if((selectedStage || '') === currentStage){
+    renderCrmMappingSettingsUI();
+    return;
+  }
   const nextMapping = { ...crmStageMapping };
   if(selectedStage){
     nextMapping[normalized] = selectedStage;
@@ -12373,8 +12523,7 @@ function handleCrmStageMappingSelect(e){
   encounteredCrmStages.set(normalized, entry);
 
   renderCrmMappingSettingsUI();
-  const snapshot = JSON.parse(JSON.stringify(stateMeta.settings.crmStageMapping || {}));
-  persistSharedPreference('crmStageMapping', 'Сопоставление стадий CRM', snapshot, { immediate:true });
+  markSharedSettingsDirty('crmMapping');
   if(isCrmMode()){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
@@ -12481,8 +12630,7 @@ function handleColumnWidthChange(e){
   stateMeta.settings.updatedAt = stamp;
   applyTableColumnWidths();
   requestAnimationFrame(()=>{ renderTasksTable(); });
-  const label = TABLE_COLUMN_LABEL_MAP[key] || key;
-  persistSharedPreference(`tableColumn.${key}`, `Ширина колонки «${label}»`, value, { immediate:true });
+  markSharedSettingsDirty('tableColumns');
 }
 
 function handleExtraSettingChange(e){
@@ -12496,6 +12644,9 @@ function handleExtraSettingChange(e){
     notifyReadOnly();
     return;
   }
+  const prevValue = key === 'percent'
+    ? sanitizeExtraPercent(extraTimeSettings.percent)
+    : sanitizeExtraMinimum(extraTimeSettings.minimum);
   let value = Number(input.value);
   if(key === 'percent'){
     value = sanitizeExtraPercent(value);
@@ -12505,9 +12656,12 @@ function handleExtraSettingChange(e){
     extraTimeSettings.minimum = value;
   }
   input.value = String(value);
+  if(value === prevValue){
+    return;
+  }
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.extraTime = { ...extraTimeSettings };
-  persistSharedPreference(`extraTime.${key}`, key === 'percent' ? 'Автодовес, %' : 'Минимум доп. времени, ч', value);
+  markSharedSettingsDirty('extraTime');
 }
 
 function handleLogLimitInputChange(e){
@@ -12519,22 +12673,26 @@ function handleLogLimitInputChange(e){
     return;
   }
   const raw = input.value.trim();
+  let nextValue;
   if(raw === ''){
-    logLimitSetting = null;
-    input.value = '';
+    nextValue = null;
   }else{
     let value = Number(raw.replace(',', '.'));
     if(!Number.isFinite(value) || value < 0){
       value = 0;
     }
-    value = Math.round(value);
-    logLimitSetting = value;
-    input.value = String(value);
+    nextValue = Math.round(value);
+  }
+  const prevValue = logLimitSetting === null ? null : Number(logLimitSetting);
+  logLimitSetting = nextValue;
+  input.value = logLimitSetting === null ? '' : String(logLimitSetting);
+  if(nextValue === prevValue){
+    return;
   }
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
   trimActivityLogInPlace();
-  persistSharedPreference('logLimit', 'Лимит журнала', logLimitSetting === null ? null : Number(logLimitSetting), { immediate:true });
+  markSharedSettingsDirty('logLimit');
 }
 
 /* =========
@@ -13491,6 +13649,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(startStageSel) startStageSel.value = getPreferredStartStage();
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             renderSystemSettingsUI();
+            captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
             refreshNewOrderPrefUI();
             refreshPlannerModeUI();
@@ -13501,6 +13660,15 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         const settingsClose = $('#settingsClose');
         if(settingsClose){
           settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
+        }
+
+        const sharedApplyBtn = $('#sharedSettingsApply');
+        if(sharedApplyBtn){
+          sharedApplyBtn.addEventListener('click', ()=> commitSharedSettingsChanges());
+        }
+        const sharedCancelBtn = $('#sharedSettingsCancel');
+        if(sharedCancelBtn){
+          sharedCancelBtn.addEventListener('click', ()=> restoreSharedSettingsSnapshot());
         }
 
         $$('.settings-tab').forEach(btn=>{
