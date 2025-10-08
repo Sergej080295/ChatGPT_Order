@@ -491,14 +491,19 @@ body.overview-fs-active{overflow:hidden}
 .compact-legend{display:flex;gap:10px;font-size:12px;margin-top:8px;flex-wrap:wrap}
 .compact-legend .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
 
-.settings-system{display:flex;flex-direction:column;gap:6px;width:100%;}
-.settings-system-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid #e2e8f0;}
+.settings-system-wrapper{width:100%;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);}
+.settings-system-wrapper summary{cursor:pointer;font-weight:600;font-size:13px;list-style:none;margin:0;padding:10px 12px;display:flex;align-items:center;gap:6px;color:#1f2937;}
+.settings-system-wrapper summary::-webkit-details-marker{display:none;}
+.settings-system-wrapper summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
+.settings-system-wrapper[open] summary::before{transform:rotate(90deg);}.settings-system-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:12px;}
+.settings-system{display:flex;flex-direction:column;gap:8px;width:100%;}
+.settings-system-row{display:grid;grid-template-columns:minmax(0,220px) auto;align-items:center;gap:4px 16px;padding:8px 12px;border-bottom:1px solid #e2e8f0;}
 .settings-system-row:last-child{border-bottom:none;}
-.settings-system-row .label{flex:1;display:flex;flex-direction:column;gap:2px;}
+.settings-system-row .label{display:flex;flex-direction:column;gap:2px;}
 .settings-system-row .label span{font-size:12px;color:var(--muted);}
-.settings-system-row .controls{display:flex;gap:6px;align-items:center;}
-.settings-system-row input{width:90px;padding:4px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
-.settings-system-note{font-size:12px;color:var(--muted);margin-top:4px;}
+.settings-system-row .controls{display:flex;align-items:center;gap:6px;justify-self:flex-start;}
+.settings-system-row input{width:88px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
+.settings-system-note{font-size:12px;color:var(--muted);}
 .settings-tab-bar{display:flex;gap:8px;margin:6px 0 12px;}
 .settings-tab{flex:0 0 auto;padding:6px 14px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#1f2937;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s ease;}
 .settings-tab:hover{border-color:#94a3b8;}
@@ -955,8 +960,7 @@ body.overview-fs-active{overflow:hidden}
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:14px;width:100%">
-        <div class="muted small">Системные параметры:</div>
-        <div id="systemSettings" class="settings-system"></div>
+        <div id="systemSettings"></div>
       </div>
     </div>
   </div>
@@ -2306,6 +2310,9 @@ let stateMeta = {
 let capByProc = { ...stateMeta.settings.capacity };
 let parallelByProc = { ...stateMeta.settings.parallel };
 let tableColumnWidths = { ...stateMeta.settings.tableColumns };
+let lastColumnWidthChangeAt = 0;
+const COLUMN_WIDTH_EDIT_TTL = 30000;
+const pendingColumnWidthEdits = new Map();
 let extraTimeSettings = { ...stateMeta.settings.extraTime };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
@@ -3973,7 +3980,7 @@ function collectActiveTasksForOverview(){
     const clone = cloneTaskRecord(source);
     clone.isDone = doneSet.has(clone.uid) || !!source.isDone;
     clone.isTrash = trashSet.has(clone.uid) || !!source.isTrash;
-    if(clone.isDone || clone.isTrash) return;
+    if(taskIsClosed(clone)) return;
     const orderKey = orderKeyForRecord(clone);
     if(shouldSkipOrder(orderKey)) return;
     byUid.set(clone.uid, clone);
@@ -5345,10 +5352,7 @@ function applyStageProgress(identity, stage, value, options={}){
       ensureDoneRecordFromTask(target, source, completionMoment);
       cascadeCompletionForTask(target, { when: completionMoment, updateUI:false });
       removeSet.add(uid);
-      queueCrmUpdate(target, 100, true, completionMoment, {
-        touchStart: !!shiftInfo.startChanged,
-        touchEnd: !!shiftInfo.endAdjusted
-      });
+      queueCrmUpdate(target, 100, true, completionMoment);
     });
 
     if(!removeSet.size) return false;
@@ -5407,10 +5411,7 @@ function applyStageProgress(identity, stage, value, options={}){
         stored.isDone = false;
         clearCompletionMeta(stored, stage);
         updatedStored.set(uid, stored);
-        queueCrmUpdate(stored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null, {
-          touchStart: !!shiftInfo.startChanged,
-          touchEnd: !!shiftInfo.endAdjusted
-        });
+        queueCrmUpdate(stored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         return;
       }
 
@@ -5433,10 +5434,7 @@ function applyStageProgress(identity, stage, value, options={}){
         clearCompletionMeta(copy, stage);
         allTasksFromState.push(copy);
         updatedStored.set(uid, copy);
-        queueCrmUpdate(copy, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null, {
-          touchStart: !!shiftInfo.startChanged,
-          touchEnd: !!shiftInfo.endAdjusted
-        });
+        queueCrmUpdate(copy, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         return;
       }
 
@@ -5460,10 +5458,7 @@ function applyStageProgress(identity, stage, value, options={}){
           allTasksFromState.push(restored);
           updatedStored.set(uid, restored);
           changed = true;
-          queueCrmUpdate(restored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null, {
-            touchStart: !!shiftInfo.startChanged,
-            touchEnd: !!shiftInfo.endAdjusted
-          });
+          queueCrmUpdate(restored, normalized, normalized >= 100, normalized >= 100 ? completionMoment : null);
         }
       }
     });
@@ -6069,6 +6064,17 @@ const INDICATOR_STAGES = ['proc','shear','pack','ship'];
 
 const isDoneStatus = s => /готов|done|сдан|закрыт|closed/i.test(String(s||''));
 
+function taskIsClosed(task){
+  if(!task) return true;
+  if(task.isTrash) return true;
+  if(task.isDone || isDoneStatus(task.status)) return true;
+  return clampProgressValue(task.progress) >= 100;
+}
+
+function taskIsActive(task){
+  return !taskIsClosed(task);
+}
+
 const STAGE_TITLE = {
   draw:'Технологи: подготовка в работу',
   proc:'Закупка',
@@ -6172,6 +6178,15 @@ function adjustUIForProcess(p){
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
 const NOHOUR_HIDDEN_COLUMNS = new Set(['progress','hours','rest','reserve']);
+
+function cleanupPendingColumnWidthEdits(now = Date.now()){
+  for(const [key, info] of pendingColumnWidthEdits.entries()){
+    const stamp = info && typeof info.timestamp === 'number' ? info.timestamp : 0;
+    if(!stamp || (now - stamp) > COLUMN_WIDTH_EDIT_TTL){
+      pendingColumnWidthEdits.delete(key);
+    }
+  }
+}
 
 function sanitizeColumnWidth(value, fallback){
   const num = Number(value);
@@ -7170,6 +7185,67 @@ function applyEditImmediate(cell, task){
   }
   return false;
 }
+
+function applyOverrideDatesToTask(task, stage, override){
+  if(!task || !stage || !override) return;
+  const seg = { ...(task.route?.[stage] || {}) };
+
+  if(override.start){
+    const newStart = new Date(override.start);
+    if(!Number.isNaN(newStart.getTime())){
+      const prevStart = task.startDate instanceof Date ? new Date(task.startDate) : null;
+      if(prevStart){
+        if(!task.origStartDate){
+          task.origStartDate = new Date(prevStart);
+        }else if(task.origStartDate instanceof Date && (+task.origStartDate === +prevStart)){
+          task.origStartDate = new Date(prevStart);
+        }
+      }
+      task.startDate = newStart;
+      task.startMissing = false;
+      if(task.endDate instanceof Date && task.endDate < newStart){
+        task.endDate = new Date(newStart);
+        task.endMissing = false;
+      }
+      if(task.origStartDate instanceof Date){
+        seg.origStart = new Date(task.origStartDate);
+      }
+      seg.start = newStart;
+      if(seg.end instanceof Date && seg.end < newStart){
+        seg.end = new Date(newStart);
+      }
+    }
+  }
+
+  if(Object.prototype.hasOwnProperty.call(override, 'end')){
+    const rawEnd = override.end ? new Date(override.end) : null;
+    if(rawEnd && !Number.isNaN(rawEnd.getTime())){
+      const prevEnd = task.endDate instanceof Date
+        ? new Date(task.endDate)
+        : (seg.end instanceof Date ? new Date(seg.end) : null);
+      if(prevEnd){
+        if(!task.origEndDate){
+          task.origEndDate = new Date(prevEnd);
+        }else if(task.origEndDate instanceof Date && (+task.origEndDate === +prevEnd)){
+          task.origEndDate = new Date(prevEnd);
+        }
+      }
+      task.endDate = rawEnd;
+      task.endMissing = false;
+      seg.end = rawEnd;
+      if(task.origEndDate instanceof Date){
+        seg.origEnd = new Date(task.origEndDate);
+      }
+    }else{
+      task.endDate = null;
+      task.endMissing = true;
+      seg.end = null;
+    }
+  }
+
+  if(!task.route) task.route = {};
+  task.route[stage] = seg;
+}
 function renderTasksTable(){
   const tbody = $("#tasksTable tbody");
   if(!tbody) return;
@@ -7521,10 +7597,10 @@ function renderDetail(){
 
   const totalDays=daysBetween(schedule.minD,schedule.maxD)+1;
   const days=[...Array(totalDays)].map((_,i)=>addDays(schedule.minD,i));
-  const stageTasks = tasks.filter(t=> !t.hiddenByState);
+  const stageTasks = tasks.filter(t=> !t.hiddenByState && taskIsActive(t));
   const totalBy=new Map(stageTasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
   const cumBy=new Map([...totalBy.keys()].map(k=>[k,0]));
-  const labelByUid = new Map(stageTasks.map(t=>[t.uid,t.orderId]));
+  const labelByUid = new Map(stageTasks.map(t=>[t.uid, formatOrderIdForDisplay(t.orderId || '')]));
 
   // есть ли вообще Бронь
   let anyReserve = false;
@@ -7701,11 +7777,11 @@ function renderGantt(intoFS=false){
 	cards.header.appendChild(c);
   });
 
+  const stageTasks = tasks.filter(t=> !t.hiddenByState && taskIsActive(t));
   let ganttRowIndex = 0;
-  tasks.forEach(t=>{
-    if(t.hiddenByState) return;
+  stageTasks.forEach(t=>{
     ganttRowIndex += 1;
-    const labelText = `${ganttRowIndex}. ${t.orderId || '—'}`;
+    const labelText = `${ganttRowIndex}. ${formatOrderIdForDisplay(t.orderId || '—')}`;
     const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=labelText;
     cards.leftBody.appendChild(lab);
 
@@ -7816,7 +7892,7 @@ function mapAllProcessesFromRows(rows){
   if(schedule && schedule.perTask){
     const cur = $("#process").value;
     const byIdentity = new Map();
-    tasks.forEach(t=>{
+    stageTasks.forEach(t=>{
       if(t.stage===cur){
         const key = orderKeyForRecord(t);
         if(!key) return;
@@ -8150,7 +8226,7 @@ function renderOverview(){
       if(stagesKeys.length===0) continue;
 
       // 1) строка-заголовок заказа (без полос)
-      const orderLab=document.createElement('div'); orderLab.className='row-label'; orderLab.textContent=`${o.number}. ${o.orderId}`;
+      const orderLab=document.createElement('div'); orderLab.className='row-label'; orderLab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
       left.appendChild(orderLab);
 	  const emptyRow=document.createElement('div'); emptyRow.className='ov-row';
 	  idxs.forEach(i=>{
@@ -8258,7 +8334,7 @@ function renderOverview(){
 		  return STAGES.indexOf(a) - STAGES.indexOf(b);
 		});
 
-		const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=`${o.number}. ${o.orderId}`;
+		const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
 		leftC.appendChild(lab);
 
 		const row=document.createElement('div'); row.className='ov-row';
@@ -10528,6 +10604,8 @@ function setupRealtimeSync(){
 function restoreState(json, opts={}){
   try{
     plannerStateReady = false;
+    const prevSettingsStamp = stateMeta?.settings?.updatedAt || '';
+    let preservedLocalColumns = false;
     const preserveProcess = !!opts.preserveProcess;
     const s = typeof json === 'string' ? JSON.parse(json) : json;
     if(s && typeof s === 'object'){
@@ -10628,10 +10706,35 @@ function restoreState(json, opts={}){
     });
 
     const savedColumns = metaSettings.tableColumns || {};
-    tableColumnWidths = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
+    const incomingColumns = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
     TABLE_COLUMN_DEFS.forEach(def=>{
-      tableColumnWidths[def.key] = sanitizeColumnWidth(savedColumns[def.key], def.defaultWidth);
+      incomingColumns[def.key] = sanitizeColumnWidth(savedColumns[def.key], def.defaultWidth);
     });
+    const now = Date.now();
+    cleanupPendingColumnWidthEdits(now);
+    TABLE_COLUMN_DEFS.forEach(def=>{
+      const key = def.key;
+      const pending = pendingColumnWidthEdits.get(key);
+      if(!pending) return;
+      const pendingValue = sanitizeColumnWidth(pending.value, def.defaultWidth);
+      if(incomingColumns[key] === pendingValue){
+        pendingColumnWidthEdits.delete(key);
+        return;
+      }
+      preservedLocalColumns = true;
+      incomingColumns[key] = pendingValue;
+    });
+    const changedRecently = (now - lastColumnWidthChangeAt) < 5000;
+    if(changedRecently){
+      const differsFromLocal = TABLE_COLUMN_DEFS.some(def=> incomingColumns[def.key] !== sanitizeColumnWidth(tableColumnWidths?.[def.key], def.defaultWidth));
+      if(differsFromLocal){
+        preservedLocalColumns = true;
+        TABLE_COLUMN_DEFS.forEach(def=>{
+          incomingColumns[def.key] = sanitizeColumnWidth(tableColumnWidths?.[def.key], def.defaultWidth);
+        });
+      }
+    }
+    tableColumnWidths = { ...incomingColumns };
     const savedExtra = metaSettings.extraTime || {};
     extraTimeSettings = {
       percent: sanitizeExtraPercent(savedExtra.percent),
@@ -10647,7 +10750,7 @@ function restoreState(json, opts={}){
         : (typeof s.notificationsMuted === 'boolean' ? s.notificationsMuted : !!stateMeta.settings?.notificationsMuted),
       tableColumns: { ...tableColumnWidths },
       extraTime: { ...extraTimeSettings },
-      updatedAt: typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''
+      updatedAt: preservedLocalColumns ? (prevSettingsStamp || (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')) : (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')
     };
     plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
     stateMeta.settings.plannerMode = plannerMode;
@@ -11640,8 +11743,26 @@ function persistSharedPreference(key, label, value){
 function renderSystemSettingsUI(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
+  const prevWrapper = container.querySelector('.settings-system-wrapper');
+  const prevOpen = prevWrapper ? !!prevWrapper.open : false;
+  const prevColumnsSection = prevWrapper ? prevWrapper.querySelector('.settings-columns-section') : null;
+  const prevColumnsOpen = prevColumnsSection ? !!prevColumnsSection.open : false;
   container.innerHTML = '';
-  const frag = document.createDocumentFragment();
+
+  const wrapper = document.createElement('details');
+  wrapper.className = 'settings-system-wrapper';
+  wrapper.open = prevWrapper ? prevOpen : false;
+
+  const summary = document.createElement('summary');
+  summary.textContent = 'Системные параметры';
+  wrapper.appendChild(summary);
+
+  const body = document.createElement('div');
+  body.className = 'settings-system-body';
+
+  const stageList = document.createElement('div');
+  stageList.className = 'settings-system';
+
   STAGES.forEach(stage=>{
     const row = document.createElement('div');
     row.className = 'settings-system-row';
@@ -11678,14 +11799,16 @@ function renderSystemSettingsUI(){
     controls.appendChild(unit);
     row.appendChild(label);
     row.appendChild(controls);
-    frag.appendChild(row);
+    stageList.appendChild(row);
   });
-  container.appendChild(frag);
+
+  body.appendChild(stageList);
+
   const columnsSection = document.createElement('details');
   columnsSection.className = 'settings-columns-section';
-  columnsSection.open = false;
+  columnsSection.open = prevWrapper ? prevColumnsOpen : false;
   const columnsSummary = document.createElement('summary');
-  columnsSummary.innerHTML = '<span>Таблица «Список заказов»: ширина колонок (px)</span><span class="muted">Применяется во всех переделах</span>';
+  columnsSummary.innerHTML = '<span>Ширина колонок в Списке заказов (px)</span><span class="muted">Применяется во всех переделах</span>';
   columnsSection.appendChild(columnsSummary);
   const columnsGrid = document.createElement('div');
   columnsGrid.className = 'settings-columns-grid';
@@ -11706,7 +11829,7 @@ function renderSystemSettingsUI(){
     columnsGrid.appendChild(item);
   });
   columnsSection.appendChild(columnsGrid);
-  container.appendChild(columnsSection);
+  body.appendChild(columnsSection);
 
   const extraRow = document.createElement('div');
   extraRow.className = 'settings-extra-row';
@@ -11737,14 +11860,17 @@ function renderSystemSettingsUI(){
   minLabel.appendChild(minTitle);
   minLabel.appendChild(minInput);
   extraRow.appendChild(minLabel);
-  container.appendChild(extraRow);
+  body.appendChild(extraRow);
+
   const note = document.createElement('div');
   note.className = 'settings-system-note';
   note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
-  container.appendChild(note);
+  body.appendChild(note);
+
+  wrapper.appendChild(body);
+  container.appendChild(wrapper);
   refreshSystemSettingsAccess();
 }
-
 function refreshSystemSettingsAccess(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
@@ -11833,8 +11959,14 @@ function handleColumnWidthChange(e){
     return;
   }
   tableColumnWidths[key] = value;
+  const now = Date.now();
+  lastColumnWidthChangeAt = now;
+  cleanupPendingColumnWidthEdits(now);
+  pendingColumnWidthEdits.set(key, { value, timestamp: now });
   if(!stateMeta.settings) stateMeta.settings = {};
+  const stamp = new Date().toLocaleString();
   stateMeta.settings.tableColumns = { ...tableColumnWidths };
+  stateMeta.settings.updatedAt = stamp;
   applyTableColumnWidths();
   requestAnimationFrame(()=>{ renderTasksTable(); });
   const label = TABLE_COLUMN_LABEL_MAP[key] || key;
@@ -12038,11 +12170,11 @@ if (noHours) {
 }
 
 // подготовим задачи для аллокатора
-const visibleTasks = tasks.filter(t=> !t.hiddenByState);
-let allocTasks = visibleTasks;
+const activeStageTasks = tasks.filter(t=> !t.hiddenByState && taskIsActive(t));
+let allocTasks = activeStageTasks;
 if (noHours) {
   // вес = количество календарных дней в интервале, чтобы полоса заполняла весь диапазон
-  allocTasks = visibleTasks.map(t => {
+  allocTasks = activeStageTasks.map(t => {
     const s = t.startDate || today0();
     const e = t.endDate || t.startDate || today0();
     const days = Math.max(1, Math.round((e - s) / 86400000) + 1);
@@ -12700,22 +12832,49 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 	// Общий маршрут — Сохранить/Сброс
         $('#ovApply').addEventListener('click', ()=>{
           if(!userCanEdit()){ notifyReadOnly(); return; }
+          const crmUpdates = [];
+          const crmActive = isCrmMode();
           // коммитим рабочие правки в постоянные overrides
-	  for(const [k,ov] of routeEditsWorking.entries()){
-		routeOverrides.set(k, {start:ov.start||null, end:('end' in ov)? (ov.end||null): null});
-		const [pid, st] = k.split('::');
-		// отражаем в текущем списке задач (если этот этап сейчас отображается)
-		const rec = tasks.find(t=> t.parentId===pid && t.stage===st);
-		if(rec){
-		  if(ov.start){ rec.startDate=new Date(ov.start); rec.startMissing=false; if(!rec.origStartDate) rec.origStartDate=rec.startDate; }
-		  if('end' in ov){ rec.endDate = ov.end? new Date(ov.end): null; rec.endMissing = !ov.end; }
-		  if(rec.route && rec.route[st]){
-			if(ov.start) rec.route[st].start = new Date(ov.start);
-			if('end' in ov) rec.route[st].end = ov.end? new Date(ov.end): null;
-		  }
-		}
-	  }
-	  routeEditsWorking.clear();
+          for(const [k,ov] of routeEditsWorking.entries()){
+            const overridePayload = {
+              start: ov.start || null,
+              end: Object.prototype.hasOwnProperty.call(ov, 'end') ? (ov.end || null) : null
+            };
+            routeOverrides.set(k, overridePayload);
+            const [pidRaw, st] = k.split('::');
+            const pid = (pidRaw || '').trim();
+            let crmTarget = null;
+
+            const stageMatch = candidate => candidate && candidate.stage === st
+              && ((candidate.parentId ? String(candidate.parentId).trim() : '') === pid);
+
+            const rec = tasks.find(stageMatch);
+            if(rec){
+              applyOverrideDatesToTask(rec, st, ov);
+              crmTarget = rec;
+            }
+
+            if(Array.isArray(allTasksFromState)){
+              const stored = allTasksFromState.find(stageMatch);
+              if(stored){
+                applyOverrideDatesToTask(stored, st, ov);
+                if(!crmTarget) crmTarget = stored;
+              }
+            }
+
+            if(crmActive && crmTarget){
+              const update = buildCrmUpdateFromTask(crmTarget, st, {
+                touchStart: !!ov.start,
+                touchEnd: Object.prototype.hasOwnProperty.call(ov, 'end')
+              });
+              if(update) crmUpdates.push(update);
+            }
+          }
+          routeEditsWorking.clear();
+          if(crmUpdates.length){
+            applyCrmProgressUpdates(crmUpdates);
+            refreshCrmDerivedData({ recompute:false, rebuildOverview:false });
+          }
           recompute();    // таблица/подетально/гант
           persistNow();   // и в localStorage
           alert('Изменения сохранены.');
