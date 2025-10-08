@@ -190,6 +190,22 @@ body.show-ids .uid-badge{display:inline-flex;align-items:center;gap:4px}
   cursor:pointer;
   transition:transform .08s ease, filter .15s ease, box-shadow .2s ease;
 }
+.btn.has-alert{
+  position:relative;
+  box-shadow:0 0 0 2px rgba(239,68,68,0.35);
+  border-color:#ef4444;
+}
+.btn.has-alert::after{
+  content:"";
+  position:absolute;
+  top:4px;
+  right:4px;
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#ef4444;
+  box-shadow:0 0 0 2px #fff;
+}
 .btn.opt-attn{box-shadow:0 0 0 2px rgba(249,115,22,0.35);border-color:#f97316;background:#fff7ed;color:#9a3412;}
 .tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .tools .optimize-group{display:inline-flex;gap:6px}
@@ -527,8 +543,10 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
 .settings-mapping-list{display:flex;flex-direction:column;gap:12px;margin-top:12px;}
 .settings-mapping-rows{display:flex;flex-direction:column;gap:8px;}
-.settings-mapping-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(220px,1fr);gap:12px;align-items:center;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+.settings-mapping-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(220px,1fr);gap:12px;align-items:center;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;}
 .settings-mapping-row[data-unmapped="1"]{border-color:#f97316;background:#fff7ed;}
+.settings-mapping-row[data-new="1"]::before{content:'Новое';position:absolute;top:-10px;left:12px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;box-shadow:0 2px 6px rgba(239,68,68,0.35);}
+.settings-mapping-row[data-ignored="1"]{border-color:#cbd5f5;background:#f1f5f9;opacity:0.85;}
 .settings-mapping-row .crm-label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#0f172a;font-weight:600;}
 .settings-mapping-row .crm-label .crm-fallback{font-size:12px;color:var(--muted);font-weight:400;}
 .settings-mapping-row select{width:100%;padding:6px;border-radius:8px;border:1px solid #cbd5f5;font-size:13px;background:#fff;}
@@ -966,6 +984,9 @@ body.overview-fs-active{overflow:hidden}
       </div>
     </div>
     <div class="settings-panel" data-settings-panel="shared">
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:4px;margin-top:4px;width:100%">
+        <div class="small muted">Изменения этих разделов сохраняются по кнопке «Применить».</div>
+      </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:4px;width:100%">
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
@@ -1365,6 +1386,7 @@ const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
 const PLANNER_MODES = { csv:'csv', crm:'crm' };
 const CRM_TASK_PREFIX = 'crm-task::';
+const CRM_STAGE_IGNORE = '__ignore__';
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
   local:{label:'Локальный кэш'},
@@ -2376,6 +2398,9 @@ let crmStageMapping = sanitizeCrmStageMapping(stateMeta.settings?.crmStageMappin
 const encounteredCrmStages = new Map();
 let pendingCrmMappingRender = false;
 let sharedSettingsSnapshot = null;
+let sharedSettingsEditing = false;
+let sharedSettingsApplying = false;
+let sharedSettingsPendingStamp = null;
 const sharedSettingsDirtyKeys = new Set();
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
@@ -2909,10 +2934,14 @@ function registerCrmStageName(originalLabel, normalizedKey, resolvedStage, custo
   if(originalLabel){
     existing.label = originalLabel;
   }
-  existing.resolved = resolvedStage || '';
+  const ignored = resolvedStage === CRM_STAGE_IGNORE;
+  const resolvedValue = ignored ? '' : (resolvedStage || '');
+  existing.resolved = resolvedValue;
+  existing.intent = resolvedStage || '';
   existing.custom = !!custom;
   existing.fallback = fallbackStage || '';
-  existing.unmapped = !resolvedStage;
+  existing.ignored = ignored;
+  existing.unmapped = !resolvedValue && !ignored;
   encounteredCrmStages.set(normalizedKey, existing);
   scheduleCrmMappingRender();
 }
@@ -2931,10 +2960,15 @@ function mapCrmStageName(name){
   const normalized = rawLabel.toLowerCase();
   if(!normalized) return '';
   const rawCustom = crmStageMapping?.[normalized];
+  if(rawCustom === CRM_STAGE_IGNORE){
+    const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+    registerCrmStageName(rawLabel, normalized, CRM_STAGE_IGNORE, true, fallback);
+    return '';
+  }
   const customStage = STAGES.includes(rawCustom) ? rawCustom : '';
   const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
   const resolved = customStage || fallback;
-  registerCrmStageName(rawLabel, normalized, resolved, !!customStage, fallback);
+  registerCrmStageName(rawLabel, normalized, customStage || fallback, !!customStage, fallback);
   return resolved;
 }
 
@@ -6368,9 +6402,13 @@ function sanitizeCrmStageMapping(map){
   Object.entries(map).forEach(([key, value])=>{
     const normalized = normalizeCrmStageKey(key);
     if(!normalized) return;
-    const stageKey = typeof value === 'string' ? value.trim() : '';
-    if(!stageKey || !STAGE_KEYS.includes(stageKey)) return;
-    result[normalized] = stageKey;
+    const stageKeyRaw = typeof value === 'string' ? value.trim() : '';
+    if(stageKeyRaw === CRM_STAGE_IGNORE){
+      result[normalized] = CRM_STAGE_IGNORE;
+      return;
+    }
+    if(!stageKeyRaw || !STAGE_KEYS.includes(stageKeyRaw)) return;
+    result[normalized] = stageKeyRaw;
   });
   return result;
 }
@@ -10998,8 +11036,9 @@ function restoreState(json, opts={}){
       }
     });
 
+    const freezeShared = sharedSettingsEditing && sharedSettingsDirtyKeys.size > 0;
     const savedColumns = metaSettings.tableColumns || {};
-    const incomingColumns = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
+    let incomingColumns = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
     TABLE_COLUMN_DEFS.forEach(def=>{
       incomingColumns[def.key] = sanitizeColumnWidth(savedColumns[def.key], def.defaultWidth);
     });
@@ -11027,15 +11066,27 @@ function restoreState(json, opts={}){
         });
       }
     }
+    if(freezeShared && sharedSettingsDirtyKeys.has('tableColumns')){
+      incomingColumns = { ...tableColumnWidths };
+    }
     tableColumnWidths = { ...incomingColumns };
     const savedExtra = metaSettings.extraTime || {};
-    extraTimeSettings = {
+    const incomingExtra = {
       percent: sanitizeExtraPercent(savedExtra.percent),
       minimum: sanitizeExtraMinimum(savedExtra.minimum)
     };
+    if(!(freezeShared && sharedSettingsDirtyKeys.has('extraTime'))){
+      extraTimeSettings = { ...incomingExtra };
+    }
     const savedMappingRaw = metaSettings.crmStageMapping || {};
-    crmStageMapping = sanitizeCrmStageMapping(savedMappingRaw);
-    logLimitSetting = sanitizeLogLimit(metaSettings.logLimit);
+    const incomingMapping = sanitizeCrmStageMapping(savedMappingRaw);
+    if(!(freezeShared && sharedSettingsDirtyKeys.has('crmStageMapping'))){
+      crmStageMapping = incomingMapping;
+    }
+    const incomingLogLimit = sanitizeLogLimit(metaSettings.logLimit);
+    if(!(freezeShared && sharedSettingsDirtyKeys.has('logLimit'))){
+      logLimitSetting = incomingLogLimit;
+    }
 
     stateMeta.settings = {
       capacity: { ...capByProc },
@@ -11050,6 +11101,7 @@ function restoreState(json, opts={}){
       logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
       updatedAt: preservedLocalColumns ? (prevSettingsStamp || (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')) : (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')
     };
+    maybeResolveSharedSettingsAck(stateMeta.settings.updatedAt || '');
     plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
     stateMeta.settings.plannerMode = plannerMode;
     if(!s.modeScoped || !s.modeScoped[plannerMode]){
@@ -11237,8 +11289,10 @@ function persistNow(stageOverride, opts={}){
     settingsChange=null,
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
-    ordersSummaryOverride: ordersSummaryOverrideOpt=null
+    ordersSummaryOverride: ordersSummaryOverrideOpt=null,
+    sharedContext=null
   } = opts;
+  let pushPromise = Promise.resolve(true);
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
     const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
@@ -11414,7 +11468,7 @@ function persistNow(stageOverride, opts={}){
       const targetStageLabel = visibleStageLabel;
 
       if(remoteSyncEnabled()){
-        remoteBridge.push(payload, {
+        pushPromise = remoteBridge.push(payload, {
           stage: targetStageLabel,
           diff: combinedDiff,
           version:null,
@@ -11427,25 +11481,32 @@ function persistNow(stageOverride, opts={}){
           time: nowStr,
           changeType
         })
-          .then(()=> setDataMode('remote'))
+          .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
+            const sharedAttempt = sharedContext === 'sharedSettings';
             if(err?.status === 409){
+              if(sharedAttempt){
+                err.__sharedHandled = true;
+                handleSharedSettingsCommitError(err);
+              }
               const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
               const stageName = meaningfulEntries.length>1
                 ? 'несколько переделов'
                 : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
               const lastAuthor = detail?.lastAuthor;
               const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-              if(authorName){
-                messageParts.push(`Последние правки: ${authorName}.`);
+              if(!sharedAttempt){
+                const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+                if(authorName){
+                  messageParts.push(`Последние правки: ${authorName}.`);
+                }
+                messageParts.push('Актуальные данные загружены заново.');
+                showToast({
+                  title:'Конфликт синхронизации',
+                  message: messageParts.join(' '),
+                  actions:[{label:'OK', handler:(el)=> el.remove()}]
+                });
               }
-              messageParts.push('Актуальные данные загружены заново.');
-              showToast({
-                title:'Конфликт синхронизации',
-                message: messageParts.join(' '),
-                actions:[{label:'OK', handler:(el)=> el.remove()}]
-              });
               try{
                 const latest = await remoteBridge.pull();
                 if(latest){
@@ -11455,6 +11516,9 @@ function persistNow(stageOverride, opts={}){
                 console.warn('failed to refresh after conflict', pullErr);
               }
               setDataMode('remote');
+              if(sharedAttempt){
+                throw err;
+              }
               return;
             }
             console.warn('remote push failed', err);
@@ -11482,9 +11546,15 @@ function persistNow(stageOverride, opts={}){
             });
             const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
             setDataMode(modeAfter);
+            if(sharedAttempt){
+              err.__sharedHandled = true;
+              handleSharedSettingsCommitError(err);
+              throw err;
+            }
           });
       }else{
         setDataMode(enableLocalStore ? 'local' : 'session');
+        pushPromise = Promise.resolve(true);
       }
 
       if(hasChanges && announce){
@@ -11781,7 +11851,7 @@ function persistNow(stageOverride, opts={}){
         const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
         const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
-        remoteBridge.push(payload, {
+        pushPromise = remoteBridge.push(payload, {
           stage:remoteStage,
           diff:remoteDiff,
           version:remoteVersion,
@@ -11795,23 +11865,30 @@ function persistNow(stageOverride, opts={}){
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
           ...remoteExtras
         })
-          .then(()=> setDataMode('remote'))
+          .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
+            const sharedAttempt = sharedContext === 'sharedSettings';
             if(err?.status === 409){
+              if(sharedAttempt){
+                err.__sharedHandled = true;
+                handleSharedSettingsCommitError(err);
+              }
               const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
               const stageName = detail?.stage != null ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[curStage] || curStage);
               const lastAuthor = detail?.lastAuthor;
               const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-              const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-              if(authorName){
-                messageParts.push(`Последние правки: ${authorName}.`);
+              if(!sharedAttempt){
+                const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+                if(authorName){
+                  messageParts.push(`Последние правки: ${authorName}.`);
+                }
+                messageParts.push('Актуальные данные загружены заново.');
+                showToast({
+                  title:'Конфликт синхронизации',
+                  message: messageParts.join(' '),
+                  actions:[{label:'OK', handler:(el)=> el.remove()}]
+                });
               }
-              messageParts.push('Актуальные данные загружены заново.');
-              showToast({
-                title:'Конфликт синхронизации',
-                message: messageParts.join(' '),
-                actions:[{label:'OK', handler:(el)=> el.remove()}]
-              });
               try{
                 const latest = await remoteBridge.pull();
                 if(latest){
@@ -11821,6 +11898,9 @@ function persistNow(stageOverride, opts={}){
                 console.warn('failed to refresh after conflict', pullErr);
               }
               setDataMode('remote');
+              if(sharedAttempt){
+                throw err;
+              }
               return;
             }
             console.warn('remote push failed', err);
@@ -11848,10 +11928,16 @@ function persistNow(stageOverride, opts={}){
             });
             const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
             setDataMode(modeAfter);
+            if(sharedAttempt){
+              err.__sharedHandled = true;
+              handleSharedSettingsCommitError(err);
+              throw err;
+            }
           });
       }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
+      pushPromise = Promise.resolve(true);
     }
 
     if(announce){
@@ -11891,6 +11977,7 @@ function persistNow(stageOverride, opts={}){
   }catch(e){
     console.warn('persist failed', e);
   }
+  return pushPromise;
 }
 
 function persistMaybe(reason='data', opts={}){
@@ -11988,6 +12075,8 @@ function persistSystemSettingsChange(entries){
 function persistSharedPreferencesChange(entries, options={}){
   if(!Array.isArray(entries) || !entries.length) return;
   const immediate = !!options.immediate;
+  const context = typeof options.context === 'string' ? options.context : null;
+  const timestampOverride = typeof options.timestamp === 'string' ? options.timestamp : null;
   const normalized = entries
     .map(entry=>{
       if(!entry || !entry.key) return null;
@@ -12014,7 +12103,7 @@ function persistSharedPreferencesChange(entries, options={}){
     const merged = [...byKey.values()];
     pendingSharedPrefQueue = [];
     pendingSharedPrefTimer = null;
-    const timestamp = new Date().toLocaleString();
+    const timestamp = timestampOverride || new Date().toLocaleString();
     if(!stateMeta.settings){
       stateMeta.settings = {
         capacity: { ...DEFAULT_CAP, ...capByProc },
@@ -12038,10 +12127,11 @@ function persistSharedPreferencesChange(entries, options={}){
       stateMeta.settings.crmStageMapping = { ...crmStageMapping };
       stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
     }
-    persistNow(undefined, {
+    return persistNow(undefined, {
       source:'settings',
       force:true,
-      settingsChange:{ entries: merged, timestamp }
+      settingsChange:{ entries: merged, timestamp },
+      sharedContext: context
     });
   };
 
@@ -12050,14 +12140,14 @@ function persistSharedPreferencesChange(entries, options={}){
       clearTimeout(pendingSharedPrefTimer);
       pendingSharedPrefTimer = null;
     }
-    flush();
-    return;
+    return flush();
   }
 
   if(pendingSharedPrefTimer){
     clearTimeout(pendingSharedPrefTimer);
   }
   pendingSharedPrefTimer = setTimeout(flush, 120);
+  return null;
 }
 
 function persistSharedPreference(key, label, value, options){
@@ -12070,6 +12160,10 @@ function cloneCrmMappingForSnapshot(map){
   Object.entries(map).forEach(([key, value])=>{
     const normalized = normalizeCrmStageKey(key);
     if(!normalized) return;
+    if(value === CRM_STAGE_IGNORE){
+      result[normalized] = CRM_STAGE_IGNORE;
+      return;
+    }
     const stageKey = STAGES.includes(value) ? value : '';
     if(stageKey){
       result[normalized] = stageKey;
@@ -12108,14 +12202,16 @@ function updateSharedSettingsButtons(){
   const hint = document.getElementById('sharedSettingsDirtyHint');
   const actions = document.getElementById('sharedSettingsActions');
   if(applyBtn){
-    applyBtn.disabled = !hasDirty || !canEdit;
-    applyBtn.classList.toggle('attention', hasDirty && canEdit);
+    applyBtn.disabled = !hasDirty || !canEdit || sharedSettingsApplying;
+    applyBtn.classList.toggle('attention', hasDirty && canEdit && !sharedSettingsApplying);
+    applyBtn.textContent = sharedSettingsApplying ? 'Сохраняем…' : 'Применить';
   }
   if(cancelBtn){
-    cancelBtn.disabled = !hasDirty;
+    cancelBtn.disabled = !hasDirty || sharedSettingsApplying;
   }
   if(actions){
     actions.dataset.dirty = hasDirty ? '1' : '0';
+    actions.dataset.busy = sharedSettingsApplying ? '1' : '0';
   }
   if(hint){
     hint.style.display = hasDirty ? '' : 'none';
@@ -12126,12 +12222,18 @@ function markSharedSettingsDirty(key){
   if(!sharedSettingsSnapshot){
     captureSharedSettingsSnapshot(true);
   }
+  if(sharedSettingsApplying){
+    sharedSettingsApplying = false;
+    sharedSettingsPendingStamp = null;
+  }
   if(key) sharedSettingsDirtyKeys.add(key);
   updateSharedSettingsButtons();
 }
 
 function restoreSharedSettingsSnapshot(){
   if(!sharedSettingsSnapshot) return;
+  sharedSettingsApplying = false;
+  sharedSettingsPendingStamp = null;
   const snap = sharedSettingsSnapshot;
   tableColumnWidths = { ...snap.tableColumns };
   stateMeta.settings.tableColumns = { ...tableColumnWidths };
@@ -12158,7 +12260,50 @@ function restoreSharedSettingsSnapshot(){
   captureSharedSettingsSnapshot(true);
 }
 
+function maybeResolveSharedSettingsAck(stamp){
+  if(!sharedSettingsApplying) return;
+  if(!sharedSettingsPendingStamp) return;
+  if(typeof stamp !== 'string' || !stamp) return;
+  if(stamp === sharedSettingsPendingStamp){
+    handleSharedSettingsCommitSuccess();
+  }
+}
+
+function handleSharedSettingsCommitSuccess(){
+  sharedSettingsApplying = false;
+  sharedSettingsPendingStamp = null;
+  sharedSettingsDirtyKeys.clear();
+  captureSharedSettingsSnapshot(true);
+  showToast({
+    title:'Настройки сохранены',
+    message:'Общие параметры обновлены для всех пользователей.',
+    actions:[{ label:'OK', handler:el=>el.remove() }]
+  });
+}
+
+function handleSharedSettingsCommitError(err){
+  sharedSettingsApplying = false;
+  if(err?.status === 409 || err?.name === 'PlannerConflictError'){
+    showToast({
+      title:'Конфликт настроек',
+      message:'Настройки изменены другим пользователем одновременно с вами. Повторите действие позже.',
+      actions:[{ label:'OK', handler:el=>el.remove() }]
+    });
+  }else{
+    const detail = err?.message ? String(err.message) : '';
+    const suffix = detail ? ` (${detail})` : '';
+    showToast({
+      title:'Ошибка сохранения',
+      message:`Не удалось сохранить настройки.${suffix}`,
+      actions:[{ label:'OK', handler:el=>el.remove() }]
+    });
+  }
+  sharedSettingsPendingStamp = null;
+  updateSharedSettingsButtons();
+}
+
 function commitSharedSettingsChanges(){
+  if(sharedSettingsApplying) return;
   if(sharedSettingsDirtyKeys.size === 0){
     updateSharedSettingsButtons();
     return;
@@ -12167,6 +12312,10 @@ function commitSharedSettingsChanges(){
     notifyReadOnly();
     return;
   }
+  const timestamp = new Date().toLocaleString();
+  sharedSettingsPendingStamp = timestamp;
+  sharedSettingsApplying = true;
+  updateSharedSettingsButtons();
   const entries = [];
   TABLE_COLUMN_DEFS.forEach(def=>{
     const label = TABLE_COLUMN_LABEL_MAP[def.key] || def.label || def.key;
@@ -12180,9 +12329,21 @@ function commitSharedSettingsChanges(){
   entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value:sanitizeExtraMinimum(extraTimeSettings.minimum) });
   entries.push({ key:'logLimit', label:'Лимит журнала', value: logLimitSetting === null ? null : Number(logLimitSetting) });
   entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
-  persistSharedPreferencesChange(entries, { immediate:true });
-  sharedSettingsDirtyKeys.clear();
-  captureSharedSettingsSnapshot(true);
+  const flushResult = persistSharedPreferencesChange(entries, { immediate:true, context:'sharedSettings', timestamp });
+  if(flushResult && typeof flushResult.then === 'function'){
+    flushResult.then(()=>{
+      if(!remoteSyncEnabled()){
+        handleSharedSettingsCommitSuccess();
+      }
+    }).catch(err=>{
+      if(err && err.__sharedHandled){
+        return;
+      }
+      handleSharedSettingsCommitError(err);
+    });
+  }else if(!remoteSyncEnabled()){
+    handleSharedSettingsCommitSuccess();
+  }
 }
 
 function renderSystemSettingsUI(){
@@ -12373,6 +12534,7 @@ function renderCrmMappingSettingsUI(){
     empty.className = 'settings-mapping-empty';
     empty.textContent = 'Стадии CRM появятся после загрузки данных.';
     list.appendChild(empty);
+    updateSettingsAttentionBadge(0);
     return;
   }
 
@@ -12382,17 +12544,33 @@ function renderCrmMappingSettingsUI(){
       if(!normalized) return null;
       const label = entry.label || entry.normalized || normalized;
       const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || entry.fallback || '';
-      const customStage = crmStageMapping?.[normalized];
-      const resolved = customStage || entry.resolved || fallback || '';
-      const custom = !!customStage;
-      const unmapped = !resolved;
-      const record = { normalized, label, resolved, fallback, custom, unmapped };
+      const customStageRaw = crmStageMapping?.[normalized];
+      const hasCustomStage = STAGES.includes(customStageRaw);
+      const ignored = customStageRaw === CRM_STAGE_IGNORE;
+      const resolved = ignored
+        ? ''
+        : (hasCustomStage ? customStageRaw : (entry.resolved || fallback || ''));
+      const custom = hasCustomStage || ignored;
+      const unmapped = !resolved && !ignored;
+      const record = {
+        normalized,
+        label,
+        resolved,
+        fallback,
+        custom,
+        unmapped,
+        ignored,
+        intent: customStageRaw || entry.intent || '',
+        isNew: unmapped && !fallback
+      };
       const stored = encounteredCrmStages.get(normalized) || { normalized };
       stored.label = label;
       stored.fallback = fallback;
       stored.resolved = resolved;
       stored.custom = custom;
       stored.unmapped = unmapped;
+      stored.ignored = ignored;
+      stored.intent = record.intent;
       encounteredCrmStages.set(normalized, stored);
       return record;
     })
@@ -12418,6 +12596,8 @@ function renderCrmMappingSettingsUI(){
     const row = document.createElement('div');
     row.className = 'settings-mapping-row';
     row.dataset.unmapped = entry.unmapped ? '1' : '0';
+    row.dataset.ignored = entry.ignored ? '1' : '0';
+    row.dataset.new = entry.isNew ? '1' : '0';
 
     const label = document.createElement('div');
     label.className = 'crm-label';
@@ -12442,6 +12622,11 @@ function renderCrmMappingSettingsUI(){
     placeholder.textContent = '— Не назначено —';
     select.appendChild(placeholder);
 
+    const ignoreOption = document.createElement('option');
+    ignoreOption.value = CRM_STAGE_IGNORE;
+    ignoreOption.textContent = 'Игнорировать';
+    select.appendChild(ignoreOption);
+
     STAGES.forEach(stage=>{
       const option = document.createElement('option');
       option.value = stage;
@@ -12454,6 +12639,10 @@ function renderCrmMappingSettingsUI(){
       }
       select.appendChild(option);
     });
+
+    if(entry.ignored){
+      ignoreOption.selected = true;
+    }
 
     if(!userCanEdit()){
       select.disabled = true;
@@ -12479,6 +12668,7 @@ function renderCrmMappingSettingsUI(){
     note.textContent = 'Выберите, к каким переделам относятся стадии CRM. После изменений нажмите «Применить», чтобы сохранить соответствия.';
     list.appendChild(note);
   }
+  updateSettingsAttentionBadge(unmappedEntries.length);
   updateSharedSettingsButtons();
 }
 
@@ -12496,9 +12686,14 @@ function handleCrmStageMappingSelect(e){
     return;
   }
 
-  const selectedStage = STAGE_KEYS.includes(select.value) ? select.value : '';
+  let selectedStage = '';
+  if(select.value === CRM_STAGE_IGNORE){
+    selectedStage = CRM_STAGE_IGNORE;
+  }else if(STAGE_KEYS.includes(select.value)){
+    selectedStage = select.value;
+  }
   const currentStage = crmStageMapping?.[normalized] || '';
-  if((selectedStage || '') === currentStage){
+  if(selectedStage === currentStage || (!selectedStage && !currentStage)){
     renderCrmMappingSettingsUI();
     return;
   }
@@ -12517,13 +12712,15 @@ function handleCrmStageMappingSelect(e){
   const entry = encounteredCrmStages.get(normalized) || { normalized };
   entry.label = select.dataset.label || entry.label || normalized;
   entry.fallback = entry.fallback || CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
-  entry.resolved = selectedStage || entry.fallback || '';
+  entry.resolved = selectedStage === CRM_STAGE_IGNORE ? '' : (selectedStage || entry.fallback || '');
   entry.custom = !!selectedStage;
-  entry.unmapped = !entry.resolved;
+  entry.unmapped = !entry.resolved && selectedStage !== CRM_STAGE_IGNORE;
+  entry.ignored = selectedStage === CRM_STAGE_IGNORE;
+  entry.intent = selectedStage || '';
   encounteredCrmStages.set(normalized, entry);
 
   renderCrmMappingSettingsUI();
-  markSharedSettingsDirty('crmMapping');
+  markSharedSettingsDirty('crmStageMapping');
   if(isCrmMode()){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
@@ -12819,6 +13016,20 @@ function updateFreshnessUI(){
 
 function markLogAttention(){ $("#logBtn")?.classList.add('attn'); }
 function clearLogAttention(){ $("#logBtn")?.classList.remove('attn'); }
+
+function updateSettingsAttentionBadge(pendingCount){
+  const btn = document.getElementById('settingsBtn');
+  if(!btn) return;
+  const active = Number(pendingCount) > 0;
+  btn.classList.toggle('has-alert', active);
+  if(active){
+    const baseTitle = btn.dataset.baseTitle || btn.title || 'Настройки';
+    btn.dataset.baseTitle = baseTitle;
+    btn.title = `${baseTitle} — требуется сопоставление стадий`;
+  }else if(btn.dataset.baseTitle){
+    btn.title = btn.dataset.baseTitle;
+  }
+}
 
 function recompute(){
   refreshIgnoredStateFlags();
@@ -13649,6 +13860,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(startStageSel) startStageSel.value = getPreferredStartStage();
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
             renderSystemSettingsUI();
+            sharedSettingsEditing = true;
             captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
             refreshNewOrderPrefUI();
@@ -13660,6 +13872,23 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         const settingsClose = $('#settingsClose');
         if(settingsClose){
           settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
+        }
+
+        const settingsDlgEl = $('#settingsDlg');
+        if(settingsDlgEl){
+          settingsDlgEl.addEventListener('close', ()=>{
+            sharedSettingsEditing = false;
+            if(sharedSettingsDirtyKeys.size > 0 && !sharedSettingsApplying){
+              restoreSharedSettingsSnapshot();
+            }else{
+              updateSharedSettingsButtons();
+            }
+          });
+          settingsDlgEl.addEventListener('cancel', evt=>{
+            if(sharedSettingsApplying){
+              evt.preventDefault();
+            }
+          });
         }
 
         const sharedApplyBtn = $('#sharedSettingsApply');
