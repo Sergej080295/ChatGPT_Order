@@ -565,7 +565,7 @@ body.overview-fs-active{overflow:hidden}
     <label>Передел:
           <select id="process">
                 <option value="orders" selected>Общий список заказов</option>
-                <option value="draw">Технологи: подготовка в работу</option>
+                <option value="draw">Подготовка в работу</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
                 <option value="laser">Лазер</option>
@@ -698,7 +698,7 @@ body.overview-fs-active{overflow:hidden}
             <th>Заказ</th>
             <th>Закупка</th>
             <th>Рубка</th>
-            <th>Технологи, ч</th>
+            <th>Подготовка, ч</th>
             <th>Лазер, ч</th>
             <th>Гибка, ч</th>
             <th>Сварка, ч</th>
@@ -732,7 +732,7 @@ body.overview-fs-active{overflow:hidden}
             <td class="orders-total" data-total="orders" colspan="3">Итого: 0</td>
             <td data-total-stage="proc">Закупка: 0 шт</td>
             <td data-total-stage="shear">Рубка: 0 шт</td>
-            <td data-total-stage="draw">Технологи: 00:00:00</td>
+            <td data-total-stage="draw">Подготовка: 00:00:00</td>
             <td data-total-stage="laser">Лазер: 00:00:00</td>
             <td data-total-stage="bend">Гибка: 00:00:00</td>
             <td data-total-stage="weld">Сварка: 00:00:00</td>
@@ -855,7 +855,7 @@ body.overview-fs-active{overflow:hidden}
 	  <select id="processFS">
 		<option value="bend">Гибка</option>
 		<option value="laser">Лазер</option>
-		<option value="draw">Технологи: подготовка в работу</option>
+		<option value="draw">Подготовка в работу</option>
 		<option value="weld">Сварка</option>
 		<option value="mech">Мехобработка</option>
 		<option value="proc">Закупка</option>
@@ -920,7 +920,7 @@ body.overview-fs-active{overflow:hidden}
         <label class="small">Стартовая страница:
           <select id="startStagePreference">
             <option value="orders">Общий список заказов</option>
-            <option value="draw">Технологи: подготовка в работу</option>
+            <option value="draw">Подготовка в работу</option>
             <option value="proc">Закупка</option>
             <option value="shear">Рубка</option>
             <option value="laser">Лазер</option>
@@ -1123,7 +1123,7 @@ body.overview-fs-active{overflow:hidden}
       <h3 style="margin:0">Общий маршрут заказов</h3>
 	  <div class="group">
 		<span class="muted small">Фильтр этапов:</span>
-		<label class="badge"><input type="checkbox" class="ov-filter" value="draw"  checked> Технологи</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="draw"  checked> Подготовка</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="proc"  checked> Закупка</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="shear" checked> Рубка</label>
 		<label class="badge"><input type="checkbox" class="ov-filter" value="laser" checked> Лазер</label>
@@ -1149,7 +1149,7 @@ body.overview-fs-active{overflow:hidden}
     </div>
 
     <div class="route-legend" id="overviewLegend">
-      <span class="item"><span class="dot stage-draw"></span>Технологи</span>
+      <span class="item"><span class="dot stage-draw"></span>Подготовка</span>
       <span class="item"><span class="dot stage-proc"></span>Закупка</span>
       <span class="item"><span class="dot stage-shear"></span>Рубка</span>
       <span class="item"><span class="dot stage-laser"></span>Лазер</span>
@@ -3521,6 +3521,7 @@ function buildCrmUpdateFromTask(task, stage, extras={}){
   const endVal = seg.end instanceof Date ? seg.end : (task.endDate instanceof Date ? task.endDate : null);
   const update = {
     meta,
+    // «% вып.» в CRM и «Прогресс» в планировщике — одно и то же поле
     progress: extras.progress != null ? clampCrmProgress(extras.progress) : clampCrmProgress(task.progress),
     useReserve: task.useReserve
   };
@@ -3731,6 +3732,12 @@ function applyCrmProgressUpdates(updates){
     if(update.progress != null){
       stageRecord.progress = clampCrmProgress(update.progress);
     }
+    if(Object.prototype.hasOwnProperty.call(update,'hours')){
+      const hoursNum = Number(update.hours);
+      if(Number.isFinite(hoursNum) && hoursNum >= 0){
+        stageRecord.hours = hoursNum;
+      }
+    }
     if(Object.prototype.hasOwnProperty.call(update,'start')){
       if(update.start){
         const start = update.start instanceof Date ? update.start : new Date(update.start);
@@ -3828,6 +3835,26 @@ function taskMatchesSearch(task){
     task?.state || '',
     task?.status || ''
   ]);
+}
+
+function collectStageActiveEntries(stage){
+  const stageKey = stage || document.getElementById('process')?.value || currentProc || '';
+  if(!stageKey || stageKey === OVERVIEW_STAGE) return [];
+  const mode = getStageListFilter(stageKey);
+  if(mode === 'done') return [];
+  const base = tasks
+    .map((task, index)=>({ task, index, source:'active' }))
+    .filter(entry=>{
+      const t = entry.task;
+      if(!t || t.hiddenByState) return false;
+      if(t.isDone || isDoneStatus(t.status)) return false;
+      if(clampProgressValue(t.progress) >= 100) return false;
+      return true;
+    });
+  const filtered = orderSearchNormalized
+    ? base.filter(({ task })=> taskMatchesSearch(task))
+    : base;
+  return filtered;
 }
 
 function overviewMatchesSearch(order, parts){
@@ -6076,7 +6103,7 @@ function taskIsActive(task){
 }
 
 const STAGE_TITLE = {
-  draw:'Технологи: подготовка в работу',
+  draw:'Подготовка в работу',
   proc:'Закупка',
   shear:'Рубка',
   laser:'Лазер',
@@ -6089,7 +6116,7 @@ const STAGE_TITLE = {
 
 // буквы для полос
 const STAGE_LETTER = {
-  draw:'Т',
+  draw:'П',
   proc:'З',
   shear:'Р',
   laser:'Л',
@@ -6288,7 +6315,7 @@ function stageIcon(name){
   switch(name){
     case 'laser': return '🔦 Лазер';
     case 'bend' : return '🗜️ Гибка';
-    case 'draw' : return '📐 Технологи: подготовка в работу';
+    case 'draw' : return '📐 Подготовка в работу';
     case 'weld' : return '🔩 Сварка';
     case 'mech' : return '⚙️ Мехобработка';
     case 'proc' : return '🛒 Закупка';
@@ -6928,7 +6955,8 @@ function statusForTask(t){
 /* =========
    СОРТИРОВКА/ОПТИМИЗАЦИЯ
 ========= */
-function sortTasksByStart(){
+function sortTasksByStart(force=false){
+  if(!force && !autoOptimizeOn) return;
   tasks.sort((a,b)=> +a.startDate - +b.startDate);
   rememberStageOrder();
 }
@@ -7087,8 +7115,41 @@ function applyEditImmediate(cell, task){
     ensureOrderIdentity(task);
     cell.textContent = formatOrderIdForDisplay(task.orderId);
   }
-  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=computeAutoExtra(h); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
-  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0){ task.extraHours=roundExtraForStage(task.stage, e); cell.textContent=String(task.extraHours).replace('.',','); } }
+  else if(field==='hours'){
+    const h = parseHours(val);
+    if(Number.isFinite(h) && h >= 0){
+      task.hours = h;
+      const autoExtra = computeAutoExtra(h);
+      task.extraHours = roundExtraForStage(task.stage, autoExtra);
+      task.route[task.stage] = {
+        ...(task.route[task.stage]||{}),
+        hours: h,
+        start: task.startDate,
+        end: task.endDate
+      };
+      cell.textContent = String(task.hours ?? 0).replace('.',',');
+      if(isCrmMode()){
+        const update = buildCrmUpdateFromTask(task, task.stage, { includeDates:false });
+        if(update){
+          update.hours = h;
+          applyCrmProgressUpdates([update]);
+        }
+      }
+      recompute();
+      persistMaybe();
+      return true;
+    }
+  }
+  else if(field==='extraHours'){
+    const e = parseHours(val);
+    if(Number.isFinite(e) && e >= 0){
+      task.extraHours = roundExtraForStage(task.stage, e);
+      cell.textContent = String(task.extraHours).replace('.',',');
+      recompute();
+      persistMaybe();
+      return true;
+    }
+  }
   
   else if(field==='startDate'){
     const txt = cell.textContent || '';
@@ -7262,19 +7323,8 @@ function renderTasksTable(){
   const includeActive = filterMode !== 'done';
   const includeDone = filterMode !== 'current';
 
-  const activeEntriesBase = includeActive
-    ? tasks
-        .map((task, index)=>({ task, index, source:'active' }))
-        .filter(entry=>{
-          if(!entry.task || entry.task.hiddenByState) return false;
-          if(entry.task.isDone || isDoneStatus(entry.task.status)) return false;
-          if(clampProgressValue(entry.task.progress) >= 100) return false;
-          return true;
-        })
-    : [];
-  const filteredActive = orderSearchNormalized
-    ? activeEntriesBase.filter(({ task })=> taskMatchesSearch(task))
-    : activeEntriesBase;
+  const activeEntriesBase = includeActive ? collectStageActiveEntries(stage) : [];
+  const filteredActive = activeEntriesBase;
 
   let doneEntries = [];
   if(includeDone){
@@ -7777,7 +7827,8 @@ function renderGantt(intoFS=false){
 	cards.header.appendChild(c);
   });
 
-  const stageTasks = tasks.filter(t=> !t.hiddenByState && taskIsActive(t));
+  const stageEntries = collectStageActiveEntries(curProc);
+  const stageTasks = stageEntries.map(entry => entry.task);
   let ganttRowIndex = 0;
   stageTasks.forEach(t=>{
     ganttRowIndex += 1;
@@ -8166,6 +8217,38 @@ function renderOverview(){
     });
   }else{
     orders.sort((a,b)=> a.orderId.localeCompare(b.orderId));
+  }
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  if(currentStage && currentStage !== OVERVIEW_STAGE){
+    const activeEntries = collectStageActiveEntries(currentStage);
+    orders = orders.filter(order => {
+      const key = orderKeyForRecord(order);
+      const parent = order.parentId ? String(order.parentId).trim() : '';
+      const identity = order.orderIdentity ? String(order.orderIdentity).trim() : '';
+      const orderIdNorm = normalizeOrderSearch(order.orderId || '');
+      const allowed = activeEntries.some(entry => {
+        const task = entry.task;
+        if(!task) return false;
+        const taskKey = orderKeyForRecord(task);
+        if(key && taskKey && taskKey === key) return true;
+        const taskParent = task.parentId ? String(task.parentId).trim() : '';
+        if(parent && taskParent && taskParent === parent) return true;
+        const taskIdentity = task.orderIdentity ? String(task.orderIdentity).trim() : '';
+        if(identity && taskIdentity && taskIdentity === identity) return true;
+        if(orderIdNorm){
+          const taskOrderNorm = normalizeOrderSearch(task.orderId || '');
+          if(taskOrderNorm && taskOrderNorm === orderIdNorm) return true;
+        }
+        return false;
+      });
+      if(!allowed) return false;
+      const seg = order.stages[currentStage];
+      if(!seg) return false;
+      if(seg.done) return false;
+      const progressVal = clampProgressValue(seg.progress);
+      if(progressVal >= 100) return false;
+      return true;
+    });
   }
   orders.forEach((o,i)=> o.number = i+1);
 
@@ -12149,7 +12232,7 @@ function recompute(){
   $("#procTitle").textContent =
     proc==='bend' ? 'Гибка' :
     proc==='laser' ? 'Лазер' :
-    proc==='draw' ? 'Технологи: подготовка в работу' :
+    proc==='draw' ? 'Подготовка в работу' :
     proc==='weld' ? 'Сварка' :
     proc==='mech' ? 'Мехобработка' :
     proc==='proc' ? 'Закупка' :
@@ -12485,7 +12568,7 @@ function wireHandlers(){
   $("#reserveText").addEventListener('input', e=> renderReserveDiag(e.target.value));
   
   // сортировка/оптимизация
-  $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
+  $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(true); recompute(); });
   const optimizeAllBtn = document.getElementById('optimizeAllBtn');
   if(optimizeAllBtn){
     optimizeAllBtn.addEventListener('click', ()=>{
