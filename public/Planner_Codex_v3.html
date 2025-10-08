@@ -526,12 +526,14 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
 .settings-mapping-list{display:flex;flex-direction:column;gap:12px;margin-top:12px;}
-.settings-mapping-stage-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}
-.settings-mapping-stage{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
-.settings-mapping-stage.needs-mapping{border-color:#f97316;background:#fff7ed;}
-.settings-mapping-stage .stage-title{display:flex;align-items:center;justify-content:space-between;font-weight:600;font-size:13px;color:#0f172a;}
-.settings-mapping-stage select{min-height:132px;padding:6px;border-radius:8px;border:1px solid #cbd5f5;font-size:13px;background:#fff;}
-.settings-mapping-stage option[data-unmapped="1"]{color:#b91c1c;font-weight:600;}
+.settings-mapping-rows{display:flex;flex-direction:column;gap:8px;}
+.settings-mapping-row{display:grid;grid-template-columns:minmax(200px,1fr) minmax(220px,1fr);gap:12px;align-items:center;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;}
+.settings-mapping-row[data-unmapped="1"]{border-color:#f97316;background:#fff7ed;}
+.settings-mapping-row .crm-label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:#0f172a;font-weight:600;}
+.settings-mapping-row .crm-label .crm-fallback{font-size:12px;color:var(--muted);font-weight:400;}
+.settings-mapping-row select{width:100%;padding:6px;border-radius:8px;border:1px solid #cbd5f5;font-size:13px;background:#fff;}
+.settings-mapping-row option[data-fallback="1"]{color:#0f172a;font-style:italic;}
+.settings-mapping-row option[value=""]{color:#94a3b8;}
 .settings-mapping-alert{font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:6px;}
 .settings-mapping-note{font-size:12px;color:var(--muted);}
 .settings-mapping-empty{font-size:12px;color:var(--muted);padding:6px 0;}
@@ -12262,44 +12264,60 @@ function renderCrmMappingSettingsUI(){
     return;
   }
 
-  const stageGrid = document.createElement('div');
-  stageGrid.className = 'settings-mapping-stage-grid';
-  const selectSize = Math.min(Math.max(entries.length, 4), 10);
+  const rows = document.createElement('div');
+  rows.className = 'settings-mapping-rows';
 
-  STAGES.forEach(stage=>{
-    const block = document.createElement('div');
-    block.className = 'settings-mapping-stage';
+  entries.forEach(entry=>{
+    const row = document.createElement('div');
+    row.className = 'settings-mapping-row';
+    row.dataset.unmapped = entry.unmapped ? '1' : '0';
+
+    const label = document.createElement('div');
+    label.className = 'crm-label';
     const title = document.createElement('div');
-    title.className = 'stage-title';
-    title.textContent = STAGE_TITLE[stage] || stage;
-    block.appendChild(title);
+    title.textContent = entry.label || entry.normalized;
+    label.appendChild(title);
+    if(entry.fallback){
+      const fallbackStage = STAGE_TITLE[entry.fallback] || entry.fallback;
+      const fallbackEl = document.createElement('div');
+      fallbackEl.className = 'crm-fallback';
+      fallbackEl.textContent = `По умолчанию: ${fallbackStage}`;
+      label.appendChild(fallbackEl);
+    }
+    row.appendChild(label);
 
     const select = document.createElement('select');
-    select.multiple = true;
-    select.size = selectSize;
-    select.dataset.stage = stage;
-    entries.forEach(entry=>{
+    select.dataset.normalized = entry.normalized;
+    select.dataset.label = entry.label || entry.normalized;
+
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '— Не назначено —';
+    select.appendChild(placeholder);
+
+    STAGES.forEach(stage=>{
       const option = document.createElement('option');
-      option.value = entry.normalized;
-      option.textContent = entry.label || entry.normalized;
-      if(entry.unmapped){
-        option.dataset.unmapped = '1';
+      option.value = stage;
+      option.textContent = STAGE_TITLE[stage] || stage;
+      if(entry.fallback === stage){
+        option.dataset.fallback = '1';
       }
       if(entry.resolved === stage){
         option.selected = true;
       }
       select.appendChild(option);
     });
+
     if(!userCanEdit()){
       select.disabled = true;
     }else{
-      select.addEventListener('change', handleCrmStageMultiChange);
+      select.addEventListener('change', handleCrmStageMappingSelect);
     }
-    block.appendChild(select);
-    stageGrid.appendChild(block);
+    row.appendChild(select);
+    rows.appendChild(row);
   });
 
-  list.appendChild(stageGrid);
+  list.appendChild(rows);
 
   const unmappedEntries = entries.filter(entry => entry.unmapped);
   if(unmappedEntries.length){
@@ -12316,51 +12334,40 @@ function renderCrmMappingSettingsUI(){
   }
 }
 
-function handleCrmStageMultiChange(e){
+function handleCrmStageMappingSelect(e){
   const select = e.target;
-  if(!(select instanceof HTMLSelectElement) || !select.multiple) return;
-  const stage = select.dataset.stage || '';
-  if(!stage || !STAGES.includes(stage)) return;
+  if(!(select instanceof HTMLSelectElement)) return;
+  const normalized = select.dataset.normalized ? normalizeCrmStageKey(select.dataset.normalized) : '';
+  if(!normalized){
+    renderCrmMappingSettingsUI();
+    return;
+  }
   if(!userCanEdit()){
     renderCrmMappingSettingsUI();
     notifyReadOnly();
     return;
   }
 
-  const container = document.getElementById('crmMappingList');
-  const stageSelects = container ? Array.from(container.querySelectorAll('select[data-stage]')) : [];
-  const nextMapping = {};
-  stageSelects.forEach(sel=>{
-    const stageKey = sel.dataset.stage || '';
-    if(!stageKey || !STAGES.includes(stageKey)) return;
-    Array.from(sel.options || []).forEach(option=>{
-      if(option.selected){
-        const normalized = normalizeCrmStageKey(option.value);
-        if(normalized){
-          nextMapping[normalized] = stageKey;
-        }
-      }
-    });
-  });
+  const selectedStage = STAGE_KEYS.includes(select.value) ? select.value : '';
+  const nextMapping = { ...crmStageMapping };
+  if(selectedStage){
+    nextMapping[normalized] = selectedStage;
+  }else{
+    delete nextMapping[normalized];
+  }
 
   crmStageMapping = sanitizeCrmStageMapping(nextMapping);
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.crmStageMapping = { ...crmStageMapping };
   stateMeta.settings.updatedAt = new Date().toLocaleString();
 
-  encounteredCrmStages.forEach((entry, normalized)=>{
-    const fallback = entry?.fallback || CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
-    const resolved = crmStageMapping[normalized] || fallback;
-    const updated = {
-      ...(entry || {}),
-      normalized,
-      fallback,
-      resolved: resolved || '',
-      custom: !!crmStageMapping[normalized],
-      unmapped: !resolved
-    };
-    encounteredCrmStages.set(normalized, updated);
-  });
+  const entry = encounteredCrmStages.get(normalized) || { normalized };
+  entry.label = select.dataset.label || entry.label || normalized;
+  entry.fallback = entry.fallback || CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+  entry.resolved = selectedStage || entry.fallback || '';
+  entry.custom = !!selectedStage;
+  entry.unmapped = !entry.resolved;
+  encounteredCrmStages.set(normalized, entry);
 
   renderCrmMappingSettingsUI();
   const snapshot = JSON.parse(JSON.stringify(stateMeta.settings.crmStageMapping || {}));
@@ -12369,6 +12376,7 @@ function handleCrmStageMultiChange(e){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
 }
+
 function refreshSystemSettingsAccess(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
