@@ -2398,6 +2398,7 @@ let crmStageMapping = sanitizeCrmStageMapping(stateMeta.settings?.crmStageMappin
 const encounteredCrmStages = new Map();
 let pendingCrmMappingRender = false;
 let sharedSettingsSnapshot = null;
+let sharedSettingsDraft = null;
 let sharedSettingsEditing = false;
 let sharedSettingsApplying = false;
 let sharedSettingsPendingStamp = null;
@@ -6396,6 +6397,13 @@ function sanitizeColumnWidth(value, fallback){
   return Math.round(num);
 }
 
+function getStoredColumnWidth(source, key){
+  const def = TABLE_COLUMN_DEFS.find(item=>item.key === key);
+  const fallback = def ? def.defaultWidth : 60;
+  if(!source || typeof source !== 'object') return fallback;
+  return sanitizeColumnWidth(source[key], fallback);
+}
+
 function sanitizeCrmStageMapping(map){
   const result = {};
   if(!map || typeof map !== 'object') return result;
@@ -6414,9 +6422,18 @@ function sanitizeCrmStageMapping(map){
 }
 
 function getColumnWidthValue(key){
-  const def = TABLE_COLUMN_DEFS.find(item=>item.key === key);
-  const fallback = def ? def.defaultWidth : 60;
-  return sanitizeColumnWidth(tableColumnWidths?.[key], fallback);
+  return getStoredColumnWidth(tableColumnWidths, key);
+}
+
+function getColumnWidthForRender(key){
+  if(sharedSettingsEditing && sharedSettingsDraft && sharedSettingsDraft.tableColumns){
+    if(Object.prototype.hasOwnProperty.call(sharedSettingsDraft.tableColumns, key)){
+      const def = TABLE_COLUMN_DEFS.find(item=>item.key === key);
+      const fallback = def ? def.defaultWidth : 60;
+      return sanitizeColumnWidth(sharedSettingsDraft.tableColumns[key], fallback);
+    }
+  }
+  return getColumnWidthValue(key);
 }
 
 function sanitizeExtraPercent(value){
@@ -6445,7 +6462,7 @@ function applyTableColumnWidths(){
   let totalWidth = 0;
   document.querySelectorAll('#tasksTable col[data-col]').forEach(col=>{
     const key = col.dataset.col || '';
-    const width = getColumnWidthValue(key);
+    const width = getColumnWidthForRender(key);
     if(width > 0){
       const px = `${width}px`;
       col.style.width = px;
@@ -12172,14 +12189,25 @@ function cloneCrmMappingForSnapshot(map){
   return result;
 }
 
-function captureSharedSettingsSnapshot(force=false){
-  const dialog = document.getElementById('settingsDlg');
-  if(!force && dialog && dialog.open && sharedSettingsDirtyKeys.size>0) return;
+function crmMappingsEqual(a, b){
+  const mapA = a || {};
+  const mapB = b || {};
+  const keysA = Object.keys(mapA).sort();
+  const keysB = Object.keys(mapB).sort();
+  if(keysA.length !== keysB.length) return false;
+  for(let i=0;i<keysA.length;i+=1){
+    if(keysA[i] !== keysB[i]) return false;
+    if((mapA[keysA[i]] || '') !== (mapB[keysB[i]] || '')) return false;
+  }
+  return true;
+}
+
+function cloneSharedSettingsBaseline(){
   const columns = {};
   TABLE_COLUMN_DEFS.forEach(def=>{
     columns[def.key] = getColumnWidthValue(def.key);
   });
-  sharedSettingsSnapshot = {
+  return {
     tableColumns: columns,
     extraTime: {
       percent: sanitizeExtraPercent(extraTimeSettings.percent),
@@ -12188,6 +12216,23 @@ function captureSharedSettingsSnapshot(force=false){
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
     crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
   };
+}
+
+function ensureSharedSettingsDraft(){
+  if(!sharedSettingsDraft){
+    sharedSettingsDraft = cloneSharedSettingsBaseline();
+  }
+  return sharedSettingsDraft;
+}
+
+function resetSharedSettingsDraft(){
+  sharedSettingsDraft = cloneSharedSettingsBaseline();
+}
+
+function captureSharedSettingsSnapshot(force=false){
+  const dialog = document.getElementById('settingsDlg');
+  if(!force && dialog && dialog.open && sharedSettingsDirtyKeys.size>0) return;
+  sharedSettingsSnapshot = cloneSharedSettingsBaseline();
   if(force){
     sharedSettingsDirtyKeys.clear();
   }
@@ -12222,6 +12267,7 @@ function markSharedSettingsDirty(key){
   if(!sharedSettingsSnapshot){
     captureSharedSettingsSnapshot(true);
   }
+  ensureSharedSettingsDraft();
   if(sharedSettingsApplying){
     sharedSettingsApplying = false;
     sharedSettingsPendingStamp = null;
@@ -12247,6 +12293,7 @@ function restoreSharedSettingsSnapshot(){
   logLimitSetting = snap.logLimit === null ? null : Number(snap.logLimit);
   stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
   trimActivityLogInPlace();
+  renderLogList();
   const logField = document.getElementById('logLimitInput');
   if(logField){
     logField.value = logLimitSetting === null ? '' : String(logLimitSetting);
@@ -12257,7 +12304,10 @@ function restoreSharedSettingsSnapshot(){
   if(isCrmMode()){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
+  resetSharedSettingsDraft();
   captureSharedSettingsSnapshot(true);
+  applyTableColumnWidths();
+  updateSharedSettingsButtons();
 }
 
 function maybeResolveSharedSettingsAck(stamp){
@@ -12273,7 +12323,11 @@ function handleSharedSettingsCommitSuccess(){
   sharedSettingsApplying = false;
   sharedSettingsPendingStamp = null;
   sharedSettingsDirtyKeys.clear();
+  resetSharedSettingsDraft();
   captureSharedSettingsSnapshot(true);
+  renderSystemSettingsUI();
+  applyTableColumnWidths();
+  updateSharedSettingsButtons();
   showToast({
     title:'Настройки сохранены',
     message:'Общие параметры обновлены для всех пользователей.',
@@ -12316,17 +12370,83 @@ function commitSharedSettingsChanges(){
   sharedSettingsPendingStamp = timestamp;
   sharedSettingsApplying = true;
   updateSharedSettingsButtons();
+  const draft = ensureSharedSettingsDraft();
+  const newColumns = {};
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    const width = sanitizeColumnWidth(draft.tableColumns?.[def.key], def.defaultWidth);
+    newColumns[def.key] = width;
+  });
+  const newExtra = {
+    percent: sanitizeExtraPercent(draft.extraTime?.percent),
+    minimum: sanitizeExtraMinimum(draft.extraTime?.minimum)
+  };
+  const prevExtra = {
+    percent: sanitizeExtraPercent(extraTimeSettings.percent),
+    minimum: sanitizeExtraMinimum(extraTimeSettings.minimum)
+  };
+  const extraChanged = newExtra.percent !== prevExtra.percent || newExtra.minimum !== prevExtra.minimum;
+  const prevLogLimit = logLimitSetting === null ? null : Number(logLimitSetting);
+  const normalizedDraftLog = draft.logLimit === null ? null : Number(draft.logLimit);
+  const sanitizedLog = normalizedDraftLog === null ? null : sanitizeLogLimit(normalizedDraftLog);
+  const nextLogLimit = sanitizedLog === null ? null : Number(sanitizedLog);
+  const logChanged = (nextLogLimit ?? null) !== (prevLogLimit ?? null);
+  const prevMappingSnapshot = cloneCrmMappingForSnapshot(crmStageMapping);
+  const nextMappingRaw = sanitizeCrmStageMapping(draft.crmStageMapping);
+  const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, cloneCrmMappingForSnapshot(nextMappingRaw));
+
+  tableColumnWidths = { ...newColumns };
+  const now = Date.now();
+  lastColumnWidthChangeAt = now;
+  cleanupPendingColumnWidthEdits(now);
+  Object.entries(tableColumnWidths).forEach(([colKey, width])=>{
+    pendingColumnWidthEdits.set(colKey, { value: width, timestamp: now });
+  });
+  extraTimeSettings = { ...newExtra };
+  logLimitSetting = nextLogLimit === null ? null : Number(nextLogLimit);
+  crmStageMapping = nextMappingRaw;
+  if(!stateMeta.settings) stateMeta.settings = {};
+  stateMeta.settings.tableColumns = { ...tableColumnWidths };
+  stateMeta.settings.extraTime = { ...extraTimeSettings };
+  stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
+  stateMeta.settings.crmStageMapping = { ...crmStageMapping };
+  stateMeta.settings.updatedAt = timestamp;
+  sharedSettingsDraft = {
+    tableColumns: { ...tableColumnWidths },
+    extraTime: { ...extraTimeSettings },
+    logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
+    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
+  };
+  const logInput = document.getElementById('logLimitInput');
+  if(logInput){
+    logInput.value = sharedSettingsDraft.logLimit === null ? '' : String(sharedSettingsDraft.logLimit);
+  }
+
+  applyTableColumnWidths();
+  requestAnimationFrame(()=>{ renderTasksTable(); });
+  if(extraChanged){
+    recompute();
+  }
+  if(logChanged){
+    trimActivityLogInPlace();
+    renderLogList();
+  }
+  if(mappingChanged && isCrmMode()){
+    refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
+  }
+  renderCrmMappingSettingsUI();
+  updateSharedSettingsButtons();
+
   const entries = [];
   TABLE_COLUMN_DEFS.forEach(def=>{
     const label = TABLE_COLUMN_LABEL_MAP[def.key] || def.label || def.key;
     entries.push({
       key:`tableColumn.${def.key}`,
       label:`Ширина колонки «${label}»`,
-      value:getColumnWidthValue(def.key)
+      value:newColumns[def.key]
     });
   });
-  entries.push({ key:'extraTime.percent', label:'Автодовес, %', value:sanitizeExtraPercent(extraTimeSettings.percent) });
-  entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value:sanitizeExtraMinimum(extraTimeSettings.minimum) });
+  entries.push({ key:'extraTime.percent', label:'Автодовес, %', value:newExtra.percent });
+  entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value:newExtra.minimum });
   entries.push({ key:'logLimit', label:'Лимит журнала', value: logLimitSetting === null ? null : Number(logLimitSetting) });
   entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
   const flushResult = persistSharedPreferencesChange(entries, { immediate:true, context:'sharedSettings', timestamp });
@@ -12358,6 +12478,8 @@ function renderSystemSettingsUI(){
   const prevCapacitySection = prevWrapper ? prevWrapper.querySelector('.settings-capacity-section') : null;
   const prevCapacityOpen = prevCapacitySection ? !!prevCapacitySection.open : false;
   container.innerHTML = '';
+
+  const draft = sharedSettingsEditing ? ensureSharedSettingsDraft() : null;
 
   const wrapper = document.createElement('details');
   wrapper.className = 'settings-system-wrapper';
@@ -12439,7 +12561,10 @@ function renderSystemSettingsUI(){
     input.min = '24';
     input.step = '1';
     input.dataset.column = def.key;
-    input.value = String(getColumnWidthValue(def.key));
+    const widthValue = draft
+      ? sanitizeColumnWidth(draft.tableColumns?.[def.key], def.defaultWidth)
+      : getColumnWidthValue(def.key);
+    input.value = String(widthValue);
     input.addEventListener('change', handleColumnWidthChange);
     item.appendChild(title);
     item.appendChild(input);
@@ -12470,7 +12595,8 @@ function renderSystemSettingsUI(){
   percentInput.min = '0';
   percentInput.step = '0.1';
   percentInput.dataset.extraSetting = 'percent';
-  percentInput.value = String(sanitizeExtraPercent(extraTimeSettings.percent));
+  const extraSource = draft ? draft.extraTime : extraTimeSettings;
+  percentInput.value = String(sanitizeExtraPercent(extraSource.percent));
   percentInput.addEventListener('change', handleExtraSettingChange);
   percentLabel.appendChild(percentTitle);
   percentLabel.appendChild(percentInput);
@@ -12484,7 +12610,7 @@ function renderSystemSettingsUI(){
   minInput.min = '0';
   minInput.step = '0.05';
   minInput.dataset.extraSetting = 'minimum';
-  minInput.value = String(sanitizeExtraMinimum(extraTimeSettings.minimum));
+  minInput.value = String(sanitizeExtraMinimum(extraSource.minimum));
   minInput.addEventListener('change', handleExtraSettingChange);
   minLabel.appendChild(minTitle);
   minLabel.appendChild(minInput);
@@ -12513,7 +12639,10 @@ function renderCrmMappingSettingsUI(){
   list.innerHTML = '';
 
   const combined = new Map(encounteredCrmStages);
-  Object.entries(crmStageMapping || {}).forEach(([rawKey, stage])=>{
+  const mappingSource = (sharedSettingsEditing && sharedSettingsDraft)
+    ? sharedSettingsDraft.crmStageMapping
+    : crmStageMapping;
+  Object.entries(mappingSource || {}).forEach(([rawKey, stage])=>{
     const normalized = normalizeCrmStageKey(rawKey);
     if(!normalized) return;
     if(!combined.has(normalized)){
@@ -12544,7 +12673,7 @@ function renderCrmMappingSettingsUI(){
       if(!normalized) return null;
       const label = entry.label || entry.normalized || normalized;
       const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || entry.fallback || '';
-      const customStageRaw = crmStageMapping?.[normalized];
+      const customStageRaw = mappingSource?.[normalized];
       const hasCustomStage = STAGES.includes(customStageRaw);
       const ignored = customStageRaw === CRM_STAGE_IGNORE;
       const resolved = ignored
@@ -12692,22 +12821,20 @@ function handleCrmStageMappingSelect(e){
   }else if(STAGE_KEYS.includes(select.value)){
     selectedStage = select.value;
   }
-  const currentStage = crmStageMapping?.[normalized] || '';
+  const mappingDraft = ensureSharedSettingsDraft();
+  const currentStage = mappingDraft?.crmStageMapping?.[normalized] || '';
   if(selectedStage === currentStage || (!selectedStage && !currentStage)){
     renderCrmMappingSettingsUI();
     return;
   }
-  const nextMapping = { ...crmStageMapping };
+  const nextMapping = { ...(mappingDraft.crmStageMapping || {}) };
   if(selectedStage){
     nextMapping[normalized] = selectedStage;
   }else{
     delete nextMapping[normalized];
   }
 
-  crmStageMapping = sanitizeCrmStageMapping(nextMapping);
-  if(!stateMeta.settings) stateMeta.settings = {};
-  stateMeta.settings.crmStageMapping = { ...crmStageMapping };
-  stateMeta.settings.updatedAt = new Date().toLocaleString();
+  mappingDraft.crmStageMapping = sanitizeCrmStageMapping(nextMapping);
 
   const entry = encounteredCrmStages.get(normalized) || { normalized };
   entry.label = select.dataset.label || entry.label || normalized;
@@ -12721,9 +12848,6 @@ function handleCrmStageMappingSelect(e){
 
   renderCrmMappingSettingsUI();
   markSharedSettingsDirty('crmStageMapping');
-  if(isCrmMode()){
-    refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
-  }
 }
 
 function refreshSystemSettingsAccess(){
@@ -12811,20 +12935,14 @@ function handleColumnWidthChange(e){
   const fallback = def ? def.defaultWidth : 60;
   let value = Number(input.value);
   value = sanitizeColumnWidth(value, fallback);
-  const prev = getColumnWidthValue(key);
+  const draft = ensureSharedSettingsDraft();
+  const prev = sanitizeColumnWidth(draft.tableColumns?.[key], fallback);
   if(value === prev){
     input.value = String(value);
     return;
   }
-  tableColumnWidths[key] = value;
-  const now = Date.now();
-  lastColumnWidthChangeAt = now;
-  cleanupPendingColumnWidthEdits(now);
-  pendingColumnWidthEdits.set(key, { value, timestamp: now });
-  if(!stateMeta.settings) stateMeta.settings = {};
-  const stamp = new Date().toLocaleString();
-  stateMeta.settings.tableColumns = { ...tableColumnWidths };
-  stateMeta.settings.updatedAt = stamp;
+  draft.tableColumns = { ...(draft.tableColumns || {}) };
+  draft.tableColumns[key] = value;
   applyTableColumnWidths();
   requestAnimationFrame(()=>{ renderTasksTable(); });
   markSharedSettingsDirty('tableColumns');
@@ -12836,28 +12954,30 @@ function handleExtraSettingChange(e){
   const key = input.dataset.extraSetting;
   if(!key) return;
   if(!userCanEdit()){
-    if(key === 'percent') input.value = String(sanitizeExtraPercent(extraTimeSettings.percent));
-    else input.value = String(sanitizeExtraMinimum(extraTimeSettings.minimum));
+    const source = sharedSettingsEditing && sharedSettingsDraft ? sharedSettingsDraft.extraTime : extraTimeSettings;
+    if(key === 'percent') input.value = String(sanitizeExtraPercent(source.percent));
+    else input.value = String(sanitizeExtraMinimum(source.minimum));
     notifyReadOnly();
     return;
   }
+  const draft = ensureSharedSettingsDraft();
+  const current = draft.extraTime || { percent: sanitizeExtraPercent(extraTimeSettings.percent), minimum: sanitizeExtraMinimum(extraTimeSettings.minimum) };
   const prevValue = key === 'percent'
-    ? sanitizeExtraPercent(extraTimeSettings.percent)
-    : sanitizeExtraMinimum(extraTimeSettings.minimum);
+    ? sanitizeExtraPercent(current.percent)
+    : sanitizeExtraMinimum(current.minimum);
   let value = Number(input.value);
   if(key === 'percent'){
     value = sanitizeExtraPercent(value);
-    extraTimeSettings.percent = value;
+    current.percent = value;
   }else{
     value = sanitizeExtraMinimum(value);
-    extraTimeSettings.minimum = value;
+    current.minimum = value;
   }
   input.value = String(value);
   if(value === prevValue){
     return;
   }
-  if(!stateMeta.settings) stateMeta.settings = {};
-  stateMeta.settings.extraTime = { ...extraTimeSettings };
+  draft.extraTime = { ...current };
   markSharedSettingsDirty('extraTime');
 }
 
@@ -12865,7 +12985,8 @@ function handleLogLimitInputChange(e){
   const input = e.target;
   if(!(input instanceof HTMLInputElement)) return;
   if(!userCanEdit()){
-    input.value = logLimitSetting === null ? '' : String(logLimitSetting);
+    const source = sharedSettingsEditing && sharedSettingsDraft ? sharedSettingsDraft.logLimit : logLimitSetting;
+    input.value = source === null ? '' : String(source);
     notifyReadOnly();
     return;
   }
@@ -12880,15 +13001,13 @@ function handleLogLimitInputChange(e){
     }
     nextValue = Math.round(value);
   }
-  const prevValue = logLimitSetting === null ? null : Number(logLimitSetting);
-  logLimitSetting = nextValue;
-  input.value = logLimitSetting === null ? '' : String(logLimitSetting);
+  const draft = ensureSharedSettingsDraft();
+  const prevValue = draft.logLimit === null ? null : Number(draft.logLimit);
+  draft.logLimit = nextValue === null ? null : Number(nextValue);
+  input.value = draft.logLimit === null ? '' : String(draft.logLimit);
   if(nextValue === prevValue){
     return;
   }
-  if(!stateMeta.settings) stateMeta.settings = {};
-  stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
-  trimActivityLogInPlace();
   markSharedSettingsDirty('logLimit');
 }
 
@@ -13859,8 +13978,9 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             const startStageSel = $('#startStagePreference');
             if(startStageSel) startStageSel.value = getPreferredStartStage();
             $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
-            renderSystemSettingsUI();
             sharedSettingsEditing = true;
+            resetSharedSettingsDraft();
+            renderSystemSettingsUI();
             captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
             refreshNewOrderPrefUI();
@@ -13878,10 +13998,12 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         if(settingsDlgEl){
           settingsDlgEl.addEventListener('close', ()=>{
             sharedSettingsEditing = false;
+            sharedSettingsDraft = null;
             if(sharedSettingsDirtyKeys.size > 0 && !sharedSettingsApplying){
               restoreSharedSettingsSnapshot();
             }else{
               updateSharedSettingsButtons();
+              applyTableColumnWidths();
             }
           });
           settingsDlgEl.addEventListener('cancel', evt=>{
