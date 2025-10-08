@@ -451,7 +451,6 @@ body.overview-fs-active{overflow:hidden}
 /* скрытие «часовых» колонок, когда для передела часов нет */
 #tasksTable[data-nohours="1"] col#colProg,
 #tasksTable[data-nohours="1"] col#colHours,
-#tasksTable[data-nohours="1"] col#colExtra,
 #tasksTable[data-nohours="1"] col#colRest { display:none }
 
 #tasksTable{table-layout:fixed}
@@ -462,18 +461,16 @@ body.overview-fs-active{overflow:hidden}
 /* шапка — скрываем те же 4 колонки (Прогресс/Часов/Доп.время/Остаток) */
 #tasksTable[data-nohours="1"] thead th:nth-child(5),
 #tasksTable[data-nohours="1"] thead th:nth-child(6),
-#tasksTable[data-nohours="1"] thead th:nth-child(7),
-#tasksTable[data-nohours="1"] thead th:nth-child(8) { display:none }
+#tasksTable[data-nohours="1"] thead th:nth-child(7) { display:none }
 
 /* тело таблицы — скрываем соответствующие TD */
 #tasksTable[data-nohours="1"] tbody td:nth-child(5),
 #tasksTable[data-nohours="1"] tbody td:nth-child(6),
-#tasksTable[data-nohours="1"] tbody td:nth-child(7),
-#tasksTable[data-nohours="1"] tbody td:nth-child(8) { display:none }
+#tasksTable[data-nohours="1"] tbody td:nth-child(7) { display:none }
 /* Безчасовые этапы: убираем колонку «Бронь» */
 #tasksTable[data-nohours="1"] col#colReserve { display:none }
-#tasksTable[data-nohours="1"] thead th:nth-child(13) { display:none }
-#tasksTable[data-nohours="1"] tbody td:nth-child(13) { display:none }
+#tasksTable[data-nohours="1"] thead th:nth-child(12) { display:none }
+#tasksTable[data-nohours="1"] tbody td:nth-child(12) { display:none }
 
 /* итоговую строку «Итого» для безчасовых не показываем */
 #tasksTable[data-nohours="1"] tfoot { display:none }
@@ -509,6 +506,13 @@ body.overview-fs-active{overflow:hidden}
 .settings-panels{min-width:320px;}
 .settings-panel{display:none;flex-direction:column;gap:10px;}
 .settings-panel.active{display:flex;}
+.settings-columns-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;width:100%;margin-top:8px;}
+.settings-column-item{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;}
+.settings-column-item strong{font-size:12px;color:#1f2937;}
+.settings-column-item input{width:100%;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
+.settings-extra-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;}
+.settings-extra-row label{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;min-width:160px;}
+.settings-extra-row input{padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
 
 /* статистика под графиком */
 .ov-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
@@ -732,21 +736,20 @@ body.overview-fs-active{overflow:hidden}
     <div class="table-wrap" id="ordersScroller">
       <table id="tasksTable">
         <colgroup>
-          <col style="width:42px">   <!-- № -->
-          <col style="width:34px">   <!-- замок -->
-          <col style="width:34px">   <!-- глаз -->
-          <col id="colOrderId" style="width:340px">
-          <col id="colProg"    style="width:110px">  <!-- Прогресс, % -->
-          <col id="colHours"   style="width:96px">   <!-- Часов -->
-          <col id="colExtra"   style="width:104px">  <!-- Доп. время -->
-          <col id="colRest"    style="width:100px">  <!-- Остаток -->
-          <col id="colStart"   style="width:118px">
-          <col id="colEnd"     style="width:118px">
-          <col id="colState"   style="width:180px">
-          <col id="colDelta"   style="width:120px">
-          <col id="colReserve" style="width:74px">   <!-- Бронь -->
-          <col style="width:34px">   <!-- готово -->
-          <col style="width:54px">   <!-- 🗑 -->
+          <col id="colIndex"   data-col="index"   style="width:42px">  <!-- № -->
+          <col id="colLock"    data-col="lock"    style="width:34px">  <!-- замок -->
+          <col id="colEye"     data-col="eye"     style="width:34px">  <!-- глаз -->
+          <col id="colOrderId" data-col="order"   style="width:340px">
+          <col id="colProg"    data-col="progress" style="width:110px">  <!-- Прогресс, % -->
+          <col id="colHours"   data-col="hours"   style="width:96px">   <!-- Часов -->
+          <col id="colRest"    data-col="rest"    style="width:100px">  <!-- Остаток -->
+          <col id="colStart"   data-col="start"   style="width:118px">
+          <col id="colEnd"     data-col="end"     style="width:118px">
+          <col id="colState"   data-col="state"   style="width:180px">
+          <col id="colDelta"   data-col="status"  style="width:120px">
+          <col id="colReserve" data-col="reserve" style="width:74px">   <!-- Бронь -->
+          <col id="colDone"    data-col="done"    style="width:34px">   <!-- готово -->
+          <col id="colTrash"   data-col="trash"   style="width:54px">   <!-- 🗑 -->
         </colgroup>
         <thead>
           <tr>
@@ -756,7 +759,6 @@ body.overview-fs-active{overflow:hidden}
             <th>Заказ</th>
             <th>Прогресс, %</th>
             <th>Часов</th>
-            <th id="thExtra">Доп. время</th>
             <th>Остаток</th>
             <th id="thStart" title="Сортировать по дате начала (по возрастанию)">Начало ⇅</th>
             <th>Конец</th>
@@ -772,7 +774,6 @@ body.overview-fs-active{overflow:hidden}
           <tr id="totalsRow">
             <td colspan="6" style="text-align:right;font-weight:700">Итого:</td>
             <td id="totHours"  style="font-weight:700">0</td>
-            <td id="totExtra"  style="font-weight:700">0</td>
             <td id="totRest"   style="font-weight:700">0</td>
             <td colspan="6"></td>
           </tr>
@@ -2199,12 +2200,20 @@ async function bootstrapState(){
         parallel: { ...DEFAULT_PARALLEL },
         plannerMode: initialMode,
         notificationsMuted: false,
+        tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
+        extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
         updatedAt: ''
       };
     }else{
       stateMeta.settings.plannerMode = initialMode;
       if(typeof stateMeta.settings.notificationsMuted !== 'boolean'){
         stateMeta.settings.notificationsMuted = false;
+      }
+      if(!stateMeta.settings.tableColumns || typeof stateMeta.settings.tableColumns !== 'object'){
+        stateMeta.settings.tableColumns = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
+      }
+      if(!stateMeta.settings.extraTime || typeof stateMeta.settings.extraTime !== 'object'){
+        stateMeta.settings.extraTime = { ...DEFAULT_EXTRA_TIME_SETTINGS };
       }
     }
     refreshPlannerModeUI();
@@ -2227,6 +2236,31 @@ async function bootstrapState(){
 ========= */
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
 const DEFAULT_PARALLEL = { proc:5, shear:5, pack:3, ship:5 };
+const TABLE_COLUMN_DEFS = [
+  { key:'index',   label:'№',              settingsLabel:'№',              defaultWidth:42 },
+  { key:'lock',    label:'🔐',             settingsLabel:'Замок',          defaultWidth:34 },
+  { key:'eye',     label:'👁',             settingsLabel:'Маршрут',        defaultWidth:34 },
+  { key:'order',   label:'Заказ',          settingsLabel:'Заказ',          defaultWidth:340 },
+  { key:'progress',label:'Прогресс, %',    settingsLabel:'Прогресс, %',    defaultWidth:110 },
+  { key:'hours',   label:'Часов',          settingsLabel:'Часов',          defaultWidth:96 },
+  { key:'rest',    label:'Остаток',        settingsLabel:'Остаток',        defaultWidth:100 },
+  { key:'start',   label:'Начало',         settingsLabel:'Начало',         defaultWidth:118 },
+  { key:'end',     label:'Конец',          settingsLabel:'Конец',          defaultWidth:118 },
+  { key:'state',   label:'Состояние',      settingsLabel:'Состояние',      defaultWidth:180 },
+  { key:'status',  label:'Статус',         settingsLabel:'Статус',         defaultWidth:120 },
+  { key:'reserve', label:'Бронь',          settingsLabel:'Бронь',          defaultWidth:74 },
+  { key:'done',    label:'✔',              settingsLabel:'Готово',         defaultWidth:34 },
+  { key:'trash',   label:'🗑',             settingsLabel:'Удаление',       defaultWidth:54 }
+];
+const DEFAULT_TABLE_COLUMN_WIDTHS = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
+  acc[def.key] = def.defaultWidth;
+  return acc;
+}, {});
+const DEFAULT_EXTRA_TIME_SETTINGS = { percent:5, minimum:0.25 };
+const TABLE_COLUMN_LABEL_MAP = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
+  acc[def.key] = def.settingsLabel || def.label;
+  return acc;
+}, {});
 const USER_ALIAS_KEY = 'yougile_planner_user_alias_v2';
 const UI_PREF_KEY = 'yougile_planner_ui_v2';
 const SYNC_PING_KEY = 'yougile_planner_sync_ping_v1';
@@ -2256,13 +2290,17 @@ let stateMeta = {
     capacity: { ...DEFAULT_CAP },
     parallel: { ...DEFAULT_PARALLEL },
     plannerMode: plannerMode,
-    notificationsMuted: false
+    notificationsMuted: false,
+    tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
+    extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS }
   },
   ignoredStates: []
 };
 
 let capByProc = { ...stateMeta.settings.capacity };
 let parallelByProc = { ...stateMeta.settings.parallel };
+let tableColumnWidths = { ...stateMeta.settings.tableColumns };
+let extraTimeSettings = { ...stateMeta.settings.extraTime };
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -3275,7 +3313,7 @@ function buildCrmStageTask(order, stageKey, segment, meta){
     childId: '',
     parentId: order.parentId || '',
     hours,
-    extraHours: roundExtraForStage(stageKey, Math.max(0.25, hours * 0.05)),
+    extraHours: roundExtraForStage(stageKey, computeAutoExtra(hours)),
     startDate,
     endDate,
     startMissing: !segment.start,
@@ -4124,7 +4162,7 @@ function restoreDoneRecordAtIndex(idx, stage){
     childId,
     parentId,
     hours: record.hours,
-    extraHours: roundExtraForStage(stageForTask, Math.max(0.25, (+record.hours || 0) * 0.05)),
+    extraHours: roundExtraForStage(stageForTask, computeAutoExtra(+record.hours || 0)),
     startDate: start,
     endDate: end,
     startMissing: !record.start,
@@ -6128,6 +6166,47 @@ function adjustUIForProcess(p){
 // безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
 const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
 
+function sanitizeColumnWidth(value, fallback){
+  const num = Number(value);
+  if(!Number.isFinite(num) || num <= 0) return fallback;
+  return Math.round(num);
+}
+
+function getColumnWidthValue(key){
+  const def = TABLE_COLUMN_DEFS.find(item=>item.key === key);
+  const fallback = def ? def.defaultWidth : 60;
+  return sanitizeColumnWidth(tableColumnWidths?.[key], fallback);
+}
+
+function sanitizeExtraPercent(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return DEFAULT_EXTRA_TIME_SETTINGS.percent;
+  return Math.max(0, Math.round(num * 100) / 100);
+}
+
+function sanitizeExtraMinimum(value){
+  const num = Number(value);
+  if(!Number.isFinite(num)) return DEFAULT_EXTRA_TIME_SETTINGS.minimum;
+  return Math.max(0, Math.round(num * 100) / 100);
+}
+
+function computeAutoExtra(hours){
+  const percent = sanitizeExtraPercent(extraTimeSettings?.percent);
+  const minimum = sanitizeExtraMinimum(extraTimeSettings?.minimum);
+  const base = Math.max(0, Number(hours) || 0);
+  return Math.max(minimum, base * (percent / 100));
+}
+
+function applyTableColumnWidths(){
+  document.querySelectorAll('#tasksTable col[data-col]').forEach(col=>{
+    const key = col.dataset.col;
+    const width = getColumnWidthValue(key);
+    if(width > 0){
+      col.style.width = `${width}px`;
+    }
+  });
+}
+
 function roundExtraForStage(stage, value){
   let num = Number(value);
   if(!Number.isFinite(num)) return 0;
@@ -6548,7 +6627,7 @@ function mapRows(rows, process='bend'){
       const ed      = parseDate(edRaw);
       if(!orderId || (!sd && !ed)) return null;
       const uid = 'fallback::'+orderId+'::'+process;
-      const extraBase = Math.max(0.25,(isFinite(hours)?hours:0)*0.05);
+      const extraBase = computeAutoExtra(isFinite(hours)?hours:0);
       const rec={uid,orderId,orderNumber:orderId,orderCustomer:'',orderIdentity:'',stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:roundExtraForStage(process, extraBase),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
 
 	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
@@ -6668,7 +6747,7 @@ function mapRows(rows, process='bend'){
       childId:String(ch[IDX.id]).trim(),
       parentId:pid,
       hours: useH||0,
-      extraHours: roundExtraForStage(process, Math.max(0.25,(useH||0)*0.05)),
+      extraHours: roundExtraForStage(process, computeAutoExtra(useH||0)),
       startDate: sd || today0(),
       endDate: ed || null,
       startMissing: !sd,
@@ -6962,8 +7041,8 @@ function applyEditImmediate(cell, task){
     ensureOrderIdentity(task);
     cell.textContent = formatOrderIdForDisplay(task.orderId);
   }
-  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=Math.max(0.25,h*0.05); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
-  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=roundExtraForStage(task.stage, e); }
+  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; const autoExtra=computeAutoExtra(h); task.extraHours=roundExtraForStage(task.stage, autoExtra); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
+  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0){ task.extraHours=roundExtraForStage(task.stage, e); cell.textContent=String(task.extraHours).replace('.',','); } }
   
   else if(field==='startDate'){
     const txt = cell.textContent || '';
@@ -7067,13 +7146,7 @@ function renderTasksTable(){
   const canEdit = userCanEdit();
   const stage = document.getElementById('process')?.value || currentProc || '';
   const noHours = NOHOUR_STAGES.has(stage);
-  const formatExtra = value => {
-    const num = Number(value) || 0;
-    if(noHours){
-      return String(num).replace('.',',');
-    }
-    return num.toFixed(2).replace('.',',');
-  };
+  applyTableColumnWidths();
   if(stage === OVERVIEW_STAGE){
     renderOrdersOverviewTable();
     return;
@@ -7136,7 +7209,6 @@ function renderTasksTable(){
     const allowEdit = canEdit && !isDoneRecord;
     const progressText = String(t.progress ?? 0).replace('.',',');
     const hoursText = String(t.hours ?? 0).replace('.',',');
-    const extraText = formatExtra(t.extraHours ?? 0);
     const restText = rest.toFixed(1).replace('.',',');
     const startText = t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
     const endText = t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
@@ -7159,7 +7231,6 @@ function renderTasksTable(){
       <td class="drag-handle" ${orderAttrs}>${orderDisplay}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="progress">${progressText}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="hours">${hoursText}</td>
-      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="extraHours">${extraText}</td>
       <td class="rest-cell">${restText}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="startDate" class="start-cell ${t.startMissing?'error':''}">${startText}${origMarkup}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="endDate" class="${t.endMissing?'error':''}">${endText}</td>
@@ -7179,7 +7250,6 @@ function renderTasksTable(){
     assignTitle('.drag-handle', orderDisplay);
     assignTitle('[data-field="progress"]', progressText);
     assignTitle('[data-field="hours"]', hoursText);
-    assignTitle('[data-field="extraHours"]', extraText);
     assignTitle('.rest-cell', restText);
     assignTitle('[data-field="state"]', t.state || '');
     const statusCell = status.cls ? tr.querySelector(`td.${status.cls.replace(/\s+/g,'.')}`) : null;
@@ -7311,7 +7381,6 @@ function renderTasksTable(){
           else if(e.key==='Escape'){ e.preventDefault();
             if(field==='orderId') cell.textContent=formatOrderIdForDisplay(t.orderId);
             if(field==='hours') cell.textContent=String(t.hours ?? 0).replace('.',',');
-            if(field==='extraHours') cell.textContent=formatExtra(t.extraHours ?? 0.25);
             if(field==='startDate') cell.textContent=t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
             if(field==='endDate') cell.textContent=t.endDate instanceof Date ? fmtDate(t.endDate) : '—';
             if(field==='state') cell.textContent=t.state||'';
@@ -7374,18 +7443,17 @@ function renderTasksTable(){
 
   const totalsSource = filteredActive;
   const sHours = totalsSource.reduce((sum, entry)=> sum + (+entry.task.hours||0), 0);
-  const sExtra = totalsSource.reduce((sum, entry)=> sum + (+entry.task.extraHours||0), 0);
   const sRest  = totalsSource.reduce((sum, entry)=> sum + Math.max(0, remainingTotal(entry.task)), 0);
   $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
-  const extraTotalText = (noHours ? sExtra.toFixed(1) : sExtra.toFixed(2)).replace('.',',');
-  $("#totExtra").textContent = extraTotalText;
   $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
 
   requestAnimationFrame(()=>{
     const tableEl = $("#tasksTable");
     const currentWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leftWidth')) || 960;
     const tableWidth = tableEl ? tableEl.offsetWidth : 0;
-    const hiddenWidth = noHours ? (110 + 96 + 104 + 100) : 0;
+    const hiddenWidth = noHours
+      ? (getColumnWidthValue('progress') + getColumnWidthValue('hours') + getColumnWidthValue('rest'))
+      : 0;
     const desired = tableWidth > 0 ? tableWidth + hiddenWidth + 24 : currentWidth;
     const w = Math.min(2200, desired);
     document.documentElement.style.setProperty('--leftWidth', w + 'px');
@@ -8329,7 +8397,7 @@ function renderDoneList(){
             childId,
             parentId,
             hours: d.hours,
-            extraHours: roundExtraForStage(stage, Math.max(0.25,(+d.hours||0)*0.05)),
+            extraHours: roundExtraForStage(stage, computeAutoExtra(+d.hours||0)),
             startDate: start,
             endDate: end,
             startMissing: !d.start,
@@ -8433,7 +8501,7 @@ function renderTrashList(){
           orderId: rec.orderId,
           stage, childId, parentId,
           hours: rec.hours,
-          extraHours: roundExtraForStage(stage, Math.max(0.25,(+rec.hours||0)*0.05)),
+          extraHours: roundExtraForStage(stage, computeAutoExtra(+rec.hours||0)),
           startDate: start, endDate: end,
           startMissing: !rec.start, endMissing: !rec.end,
           state: '', status: '', useReserve:false, progress:0,
@@ -9103,7 +9171,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
         if(!byId.has(from.uid)) return;
         const target = byId.get(from.uid);
         target.hours = to.hours;
-        target.extraHours = roundExtraForStage(stage, Math.max(0.25,(to.hours||0)*0.05));
+        target.extraHours = roundExtraForStage(stage, computeAutoExtra(to.hours||0));
         target.startDate = to.startDate;
         target.endDate = to.endDate;
         target.startMissing = to.startMissing;
@@ -9448,11 +9516,23 @@ function buildStateObject(){
 
   const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
   const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
+  const columnOut = {};
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    const raw = Number(tableColumnWidths?.[def.key]);
+    columnOut[def.key] = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : def.defaultWidth;
+  });
+  const extraOut = {
+    percent: sanitizeExtraPercent(extraTimeSettings?.percent),
+    minimum: sanitizeExtraMinimum(extraTimeSettings?.minimum)
+  };
   stateMeta.settings = {
     capacity: { ...capOut },
     parallel: { ...parallelOut },
     plannerMode: plannerMode,
-    notificationsMuted: !!notificationsMuted
+    notificationsMuted: !!notificationsMuted,
+    tableColumns: columnOut,
+    extraTime: extraOut,
+    updatedAt: stateMeta.settings?.updatedAt || ''
   };
   const storageMeta = {
     local: enableLocalStore,
@@ -10488,6 +10568,17 @@ function restoreState(json, opts={}){
       }
     });
 
+    const savedColumns = metaSettings.tableColumns || {};
+    tableColumnWidths = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
+    TABLE_COLUMN_DEFS.forEach(def=>{
+      tableColumnWidths[def.key] = sanitizeColumnWidth(savedColumns[def.key], def.defaultWidth);
+    });
+    const savedExtra = metaSettings.extraTime || {};
+    extraTimeSettings = {
+      percent: sanitizeExtraPercent(savedExtra.percent),
+      minimum: sanitizeExtraMinimum(savedExtra.minimum)
+    };
+
     stateMeta.settings = {
       capacity: { ...capByProc },
       parallel: { ...parallelByProc },
@@ -10495,6 +10586,8 @@ function restoreState(json, opts={}){
       notificationsMuted: typeof metaSettings.notificationsMuted === 'boolean'
         ? metaSettings.notificationsMuted
         : (typeof s.notificationsMuted === 'boolean' ? s.notificationsMuted : !!stateMeta.settings?.notificationsMuted),
+      tableColumns: { ...tableColumnWidths },
+      extraTime: { ...extraTimeSettings },
       updatedAt: typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''
     };
     plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
@@ -10515,13 +10608,23 @@ function restoreState(json, opts={}){
 
     const versionsRaw = (s.meta && s.meta.versions) || {};
     lastKnownVersions = new Map(Object.entries(versionsRaw).map(([k,v])=>[k, Number(v)||0]));
+    const persistedSettings = {
+      capacity: { ...capByProc },
+      parallel: { ...parallelByProc },
+      plannerMode,
+      notificationsMuted: !!notificationsMuted,
+      tableColumns: { ...tableColumnWidths },
+      extraTime: { ...extraTimeSettings },
+      updatedAt: stateMeta.settings?.updatedAt || ''
+    };
     stateMeta = {
       versions: { ...versionsRaw },
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
       csvTimestamp: s.meta?.csvTimestamp || s.freshnessCsv || s.freshness || '',
       manualTimestamp: s.meta?.manualTimestamp || s.freshnessManual || s.lastManualTime || '',
       history: Array.isArray(s.meta?.history) ? s.meta.history.slice(-LOG_LIMIT) : [],
-      ignoredStates: stateMeta.ignoredStates.slice()
+      ignoredStates: stateMeta.ignoredStates.slice(),
+      settings: persistedSettings
     };
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
@@ -11401,6 +11504,8 @@ function persistSystemSettingsChange(entries){
       parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
       plannerMode: plannerMode,
       notificationsMuted: !!notificationsMuted,
+      tableColumns: { ...tableColumnWidths },
+      extraTime: { ...extraTimeSettings },
       updatedAt: timestamp
     };
     persistNow(undefined, {
@@ -11448,6 +11553,8 @@ function persistSharedPreferencesChange(entries){
         parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
         plannerMode: plannerMode,
         notificationsMuted: !!notificationsMuted,
+        tableColumns: { ...tableColumnWidths },
+        extraTime: { ...extraTimeSettings },
         updatedAt: timestamp
       };
     }else{
@@ -11456,6 +11563,8 @@ function persistSharedPreferencesChange(entries){
       if(typeof stateMeta.settings.notificationsMuted !== 'boolean'){
         stateMeta.settings.notificationsMuted = !!notificationsMuted;
       }
+      stateMeta.settings.tableColumns = { ...tableColumnWidths };
+      stateMeta.settings.extraTime = { ...extraTimeSettings };
     }
     persistNow(undefined, {
       source:'settings',
@@ -11513,6 +11622,61 @@ function renderSystemSettingsUI(){
     frag.appendChild(row);
   });
   container.appendChild(frag);
+  const columnsHeader = document.createElement('div');
+  columnsHeader.className = 'muted small';
+  columnsHeader.textContent = 'Таблица «Список заказов»: ширина колонок (px)';
+  columnsHeader.style.marginTop = '12px';
+  container.appendChild(columnsHeader);
+  const columnsGrid = document.createElement('div');
+  columnsGrid.className = 'settings-columns-grid';
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    const item = document.createElement('label');
+    item.className = 'settings-column-item';
+    const title = document.createElement('strong');
+    title.textContent = def.settingsLabel || def.label || def.key;
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '24';
+    input.step = '1';
+    input.dataset.column = def.key;
+    input.value = String(getColumnWidthValue(def.key));
+    input.addEventListener('change', handleColumnWidthChange);
+    item.appendChild(title);
+    item.appendChild(input);
+    columnsGrid.appendChild(item);
+  });
+  container.appendChild(columnsGrid);
+
+  const extraRow = document.createElement('div');
+  extraRow.className = 'settings-extra-row';
+  const percentLabel = document.createElement('label');
+  const percentTitle = document.createElement('span');
+  percentTitle.textContent = 'Автодовес, %';
+  const percentInput = document.createElement('input');
+  percentInput.type = 'number';
+  percentInput.min = '0';
+  percentInput.step = '0.1';
+  percentInput.dataset.extraSetting = 'percent';
+  percentInput.value = String(sanitizeExtraPercent(extraTimeSettings.percent));
+  percentInput.addEventListener('change', handleExtraSettingChange);
+  percentLabel.appendChild(percentTitle);
+  percentLabel.appendChild(percentInput);
+  extraRow.appendChild(percentLabel);
+
+  const minLabel = document.createElement('label');
+  const minTitle = document.createElement('span');
+  minTitle.textContent = 'Минимум доп. времени, ч';
+  const minInput = document.createElement('input');
+  minInput.type = 'number';
+  minInput.min = '0';
+  minInput.step = '0.05';
+  minInput.dataset.extraSetting = 'minimum';
+  minInput.value = String(sanitizeExtraMinimum(extraTimeSettings.minimum));
+  minInput.addEventListener('change', handleExtraSettingChange);
+  minLabel.appendChild(minTitle);
+  minLabel.appendChild(minInput);
+  extraRow.appendChild(minLabel);
+  container.appendChild(extraRow);
   const note = document.createElement('div');
   note.className = 'settings-system-note';
   note.textContent = 'Изменения сохраняются сразу и видны всем пользователям.';
@@ -11525,6 +11689,9 @@ function refreshSystemSettingsAccess(){
   if(!container) return;
   const disabled = !userCanEdit();
   container.querySelectorAll('input[data-stage]').forEach(input=>{
+    input.disabled = disabled;
+  });
+  container.querySelectorAll('input[data-column], input[data-extra-setting]').forEach(input=>{
     input.disabled = disabled;
   });
 }
@@ -11583,6 +11750,59 @@ function handleSystemSettingChange(e){
     }
     persistSystemSettingsChange([{ stage, kind:'capacity', from: prev, to: value }]);
   }
+}
+
+function handleColumnWidthChange(e){
+  const input = e.target;
+  if(!input || !input.dataset) return;
+  const key = input.dataset.column;
+  if(!key) return;
+  if(!userCanEdit()){
+    input.value = String(getColumnWidthValue(key));
+    notifyReadOnly();
+    return;
+  }
+  const def = TABLE_COLUMN_DEFS.find(item=>item.key === key);
+  const fallback = def ? def.defaultWidth : 60;
+  let value = Number(input.value);
+  value = sanitizeColumnWidth(value, fallback);
+  const prev = getColumnWidthValue(key);
+  if(value === prev){
+    input.value = String(value);
+    return;
+  }
+  tableColumnWidths[key] = value;
+  if(!stateMeta.settings) stateMeta.settings = {};
+  stateMeta.settings.tableColumns = { ...tableColumnWidths };
+  applyTableColumnWidths();
+  requestAnimationFrame(()=>{ renderTasksTable(); });
+  const label = TABLE_COLUMN_LABEL_MAP[key] || key;
+  persistSharedPreference(`tableColumn.${key}`, `Ширина колонки «${label}»`, value);
+}
+
+function handleExtraSettingChange(e){
+  const input = e.target;
+  if(!input || !input.dataset) return;
+  const key = input.dataset.extraSetting;
+  if(!key) return;
+  if(!userCanEdit()){
+    if(key === 'percent') input.value = String(sanitizeExtraPercent(extraTimeSettings.percent));
+    else input.value = String(sanitizeExtraMinimum(extraTimeSettings.minimum));
+    notifyReadOnly();
+    return;
+  }
+  let value = Number(input.value);
+  if(key === 'percent'){
+    value = sanitizeExtraPercent(value);
+    extraTimeSettings.percent = value;
+  }else{
+    value = sanitizeExtraMinimum(value);
+    extraTimeSettings.minimum = value;
+  }
+  input.value = String(value);
+  if(!stateMeta.settings) stateMeta.settings = {};
+  stateMeta.settings.extraTime = { ...extraTimeSettings };
+  persistSharedPreference(`extraTime.${key}`, key === 'percent' ? 'Автодовес, %' : 'Минимум доп. времени, ч', value);
 }
 
 /* =========
@@ -11719,7 +11939,7 @@ function recompute(){
 	  }
 
     if(!isFinite(t.hours)) t.hours=0;
-    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=roundExtraForStage(t.stage, Math.max(0.25,(t.hours||0)*0.05));
+    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=roundExtraForStage(t.stage, computeAutoExtra(t.hours||0));
     else t.extraHours = roundExtraForStage(t.stage, t.extraHours);
   });
 
@@ -12108,7 +12328,7 @@ function wireHandlers(){
     if(!userCanEdit()){ notifyReadOnly(); return; }
     const stageKey = $("#process").value;
     const uid='user-'+Date.now()+'::'+stageKey;
-    const newExtra = roundExtraForStage(stageKey, Math.max(0.25,1*0.05));
+    const newExtra = roundExtraForStage(stageKey, computeAutoExtra(1));
     const t={uid,orderId:'Новый заказ',orderNumber:'',orderCustomer:'',orderIdentity:'',stage:stageKey,childId:'',parentId:'',hours:1,extraHours:newExtra,startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     applyIgnoredStateToTask(t);
     ensureOrderIdentity(t);
@@ -12152,11 +12372,15 @@ function wireHandlers(){
     if(resetSettings){
       capByProc      = { ...DEFAULT_CAP };
       parallelByProc = { ...DEFAULT_PARALLEL };
+      tableColumnWidths = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
+      extraTimeSettings = { ...DEFAULT_EXTRA_TIME_SETTINGS };
       stateMeta.settings = {
         capacity: { ...capByProc },
         parallel: { ...parallelByProc },
         plannerMode: plannerMode,
         notificationsMuted: !!notificationsMuted,
+        tableColumns: { ...tableColumnWidths },
+        extraTime: { ...extraTimeSettings },
         updatedAt: ''
       };
     } else {
@@ -12168,6 +12392,12 @@ function wireHandlers(){
         stateMeta.settings.notificationsMuted = !!notificationsMuted;
       }
       if(!stateMeta.settings.plannerMode) stateMeta.settings.plannerMode = plannerMode;
+      if(!stateMeta.settings.tableColumns || typeof stateMeta.settings.tableColumns !== 'object'){
+        stateMeta.settings.tableColumns = { ...tableColumnWidths };
+      }
+      if(!stateMeta.settings.extraTime || typeof stateMeta.settings.extraTime !== 'object'){
+        stateMeta.settings.extraTime = { ...extraTimeSettings };
+      }
     }
 
     // обновим UI под текущий выбранный передел
@@ -12348,7 +12578,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             const idx = tasks.findIndex(x=>x.uid===from.uid);
             if(idx>-1){
               const t=tasks[idx];
-              t.hours=to.hours; t.extraHours=roundExtraForStage(t.stage, Math.max(0.25,(to.hours||0)*0.05));
+              t.hours=to.hours; t.extraHours=roundExtraForStage(t.stage, computeAutoExtra(to.hours||0));
               t.startDate=to.startDate; t.endDate=to.endDate;
               t.startMissing=to.startMissing; t.endMissing=to.endMissing;
               t.state=to.state||t.state;
