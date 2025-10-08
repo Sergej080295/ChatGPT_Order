@@ -7607,17 +7607,41 @@ function renderDetail(){
    СОРВАННЫЕ СРОКИ (правый сайдбар)
 ========= */
 function renderOverdue(){
-  const box=$("#overDays"); if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
+  const box=$("#overDays");
+  if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
+
+  const stage = document.getElementById('process')?.value || currentProc || '';
   const items=[];
+
   for(const t of tasks){
+    if(!t) continue;
+    if(stage && t.stage && t.stage !== stage) continue;
     if(t.hiddenByState) continue;
-    const rec=schedule.perTask.get(t.uid);
-    if(!rec||!t.endDate) continue;
-    let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); }
-    if(last>t.endDate) items.push({orderId:t.orderId,date:last});
+    if(t.isDone || isDoneStatus(t.status) || clampProgressValue(t.progress) >= 100) continue;
+    if(!t.endDate) continue;
+
+    const rec = schedule.perTask.get(t.uid);
+    if(!rec || !Array.isArray(rec.segments) || !rec.segments.length) continue;
+
+    let last=null;
+    for(const seg of rec.segments){
+      if(!seg || !seg.date) continue;
+      const d = new Date(seg.date);
+      if(!last || d>last) last=d;
+    }
+
+    if(last && last>t.endDate){
+      items.push({
+        orderId: formatOrderIdForDisplay(t.orderId || ''),
+        date: last
+      });
+    }
   }
+
   if(!items.length){ box.textContent='нет'; box.classList.add('muted'); return; }
-  box.classList.remove('muted'); items.sort((a,b)=>a.date-b.date);
+
+  box.classList.remove('muted');
+  items.sort((a,b)=>a.date-b.date);
   box.innerHTML = items.map(x=>`
     <div class="overdue-tile">
       <div class="ttl">${x.orderId}</div>
