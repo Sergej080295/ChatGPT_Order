@@ -2322,6 +2322,7 @@ async function bootstrapState(){
    СОСТОЯНИЕ
 ========= */
 const STAGE_KEYS = ['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
+const SETTINGS_STAGE_KEY = 'settings';
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
 const DEFAULT_PARALLEL = { proc:5, shear:5, coop:3, pack:3, ship:5 };
 const TABLE_COLUMN_DEFS = [
@@ -2370,7 +2371,7 @@ let accessMode = (()=>{
 })();
 
 let stateMeta = {
-  versions:{},
+  versions:{ settings:0 },
   lastAuthors:{},
   csvTimestamp:'',
   manualTimestamp:'',
@@ -2382,7 +2383,9 @@ let stateMeta = {
     notificationsMuted: false,
     tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
     extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
-    crmStageMapping: {}
+    crmStageMapping: {},
+    logLimit: DEFAULT_LOG_LIMIT,
+    updatedAt: ''
   },
   ignoredStates: []
 };
@@ -2880,7 +2883,7 @@ function appendToActivityLog(entry){
   activityLog.push(entry);
   trimActivityLogInPlace();
 }
-let lastKnownVersions = new Map();      // stage -> version
+let lastKnownVersions = new Map([[ 'settings', 0 ]]);      // stage -> version
 let lastSyncedSnapshots = new Map();    // stage -> snapshot array
 let broadcastChannel = null;
 let suppressIncoming = false;
@@ -6448,6 +6451,143 @@ function sanitizeExtraMinimum(value){
   return Math.max(0, Math.round(num * 100) / 100);
 }
 
+const KNOWN_SETTINGS_KEYS = new Set([
+  'capacity','parallel','plannerMode','notificationsMuted','tableColumns','extraTime','crmStageMapping','logLimit','updatedAt'
+]);
+
+function clonePlain(value){
+  if(Array.isArray(value)) return value.map(clonePlain);
+  if(value && typeof value === 'object'){
+    const out = {};
+    Object.keys(value).forEach(key=>{
+      const cloned = clonePlain(value[key]);
+      if(cloned !== undefined) out[key] = cloned;
+    });
+    return out;
+  }
+  return value;
+}
+
+function sanitizeSharedSettings(raw, context={}){
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const fallbackMode = typeof context.fallbackMode === 'string' && context.fallbackMode
+    ? context.fallbackMode
+    : determinePlannerModeFallback();
+
+  const capacitySource = source.capacity && typeof source.capacity === 'object' ? source.capacity : {};
+  const capacity = { ...DEFAULT_CAP };
+  Object.entries(capacitySource).forEach(([key, value])=>{
+    const num = Number(value);
+    if(Number.isFinite(num) && num > 0){
+      capacity[key] = num;
+    }
+  });
+
+  const parallelSource = source.parallel && typeof source.parallel === 'object' ? source.parallel : {};
+  const parallel = { ...DEFAULT_PARALLEL };
+  Object.entries(parallelSource).forEach(([key, value])=>{
+    const num = Number(value);
+    if(Number.isFinite(num) && num > 0){
+      parallel[key] = num;
+    }
+  });
+
+  const rawMode = typeof source.plannerMode === 'string' ? source.plannerMode : '';
+  const normalizedMode = normalizePlannerMode(rawMode || fallbackMode) || fallbackMode;
+
+  const rawColumns = source.tableColumns && typeof source.tableColumns === 'object' ? source.tableColumns : {};
+  const tableColumns = {};
+  TABLE_COLUMN_DEFS.forEach(def=>{
+    tableColumns[def.key] = sanitizeColumnWidth(rawColumns[def.key], def.defaultWidth);
+  });
+
+  const extraSource = source.extraTime && typeof source.extraTime === 'object' ? source.extraTime : {};
+  const extraTime = {
+    percent: sanitizeExtraPercent(extraSource.percent),
+    minimum: sanitizeExtraMinimum(extraSource.minimum)
+  };
+
+  const sanitized = {
+    capacity,
+    parallel,
+    plannerMode: normalizedMode,
+    notificationsMuted: !!source.notificationsMuted,
+    tableColumns,
+    extraTime,
+    crmStageMapping: sanitizeCrmStageMapping(source.crmStageMapping),
+    logLimit: (function(){
+      const sanitizedLimit = sanitizeLogLimit(source.logLimit);
+      return sanitizedLimit === null ? null : Number(sanitizedLimit);
+    })(),
+    updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : ''
+  };
+
+  Object.keys(source).forEach(key=>{
+    if(KNOWN_SETTINGS_KEYS.has(key)) return;
+    const cloned = clonePlain(source[key]);
+    if(cloned !== undefined) sanitized[key] = cloned;
+  });
+
+  return sanitized;
+}
+
+function syncSharedSettingsToMeta(timestamp){
+  const fallbackMode = plannerMode || determinePlannerModeFallback();
+  const base = {
+    ...(stateMeta.settings || {}),
+    capacity: { ...DEFAULT_CAP, ...(capByProc || {}) },
+    parallel: { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) },
+    plannerMode: plannerMode || fallbackMode,
+    notificationsMuted: !!notificationsMuted,
+    tableColumns: (()=>{
+      const cols = {};
+      TABLE_COLUMN_DEFS.forEach(def=>{
+        cols[def.key] = sanitizeColumnWidth(tableColumnWidths?.[def.key], def.defaultWidth);
+      });
+      return cols;
+    })(),
+    extraTime: {
+      percent: sanitizeExtraPercent(extraTimeSettings?.percent),
+      minimum: sanitizeExtraMinimum(extraTimeSettings?.minimum)
+    },
+    crmStageMapping: { ...crmStageMapping },
+    logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
+    updatedAt: typeof timestamp === 'string' ? timestamp : (stateMeta.settings?.updatedAt || '')
+  };
+  const sanitized = sanitizeSharedSettings(base, { fallbackMode });
+  stateMeta.settings = sanitized;
+  return sanitized;
+}
+
+function cloneSettingsForSerialize(settings){
+  return clonePlain(settings || {});
+}
+
+function ensureSettingsVersionEntry(){
+  if(!stateMeta.versions) stateMeta.versions = {};
+  if(!Object.prototype.hasOwnProperty.call(stateMeta.versions, SETTINGS_STAGE_KEY)){
+    const known = Number(lastKnownVersions.get(SETTINGS_STAGE_KEY));
+    stateMeta.versions[SETTINGS_STAGE_KEY] = Number.isFinite(known) && known >= 0 ? known : 0;
+  }
+  if(!lastKnownVersions.has(SETTINGS_STAGE_KEY)){
+    const current = Number(stateMeta.versions[SETTINGS_STAGE_KEY]);
+    lastKnownVersions.set(SETTINGS_STAGE_KEY, Number.isFinite(current) && current >= 0 ? current : 0);
+  }
+}
+
+function getSettingsVersion(){
+  ensureSettingsVersionEntry();
+  const current = Number(stateMeta.versions[SETTINGS_STAGE_KEY]);
+  return Number.isFinite(current) && current >= 0 ? current : 0;
+}
+
+function bumpSettingsVersion(){
+  const next = getSettingsVersion() + 1;
+  stateMeta.versions[SETTINGS_STAGE_KEY] = next;
+  lastKnownVersions.set(SETTINGS_STAGE_KEY, next);
+  return next;
+}
+
 function computeAutoExtra(hours){
   const percent = sanitizeExtraPercent(extraTimeSettings?.percent);
   const minimum = sanitizeExtraMinimum(extraTimeSettings?.minimum);
@@ -9945,27 +10085,13 @@ function buildStateObject(){
   lastKnownVersions.forEach((v,k)=>{ versionsObj[k] = v; });
   const history = applyLogLimitSnapshot(activityLog);
 
-  const capOut = { ...DEFAULT_CAP, ...(capByProc || {}) };
-  const parallelOut = { ...DEFAULT_PARALLEL, ...(parallelByProc || {}) };
-  const columnOut = {};
-  TABLE_COLUMN_DEFS.forEach(def=>{
-    const raw = Number(tableColumnWidths?.[def.key]);
-    columnOut[def.key] = Number.isFinite(raw) && raw > 0 ? Math.round(raw) : def.defaultWidth;
-  });
+  const settingsSnapshot = syncSharedSettingsToMeta();
+  const capOut = { ...(settingsSnapshot.capacity || {}) };
+  const parallelOut = { ...(settingsSnapshot.parallel || {}) };
+  const columnOut = { ...(settingsSnapshot.tableColumns || {}) };
   const extraOut = {
-    percent: sanitizeExtraPercent(extraTimeSettings?.percent),
-    minimum: sanitizeExtraMinimum(extraTimeSettings?.minimum)
-  };
-  stateMeta.settings = {
-    capacity: { ...capOut },
-    parallel: { ...parallelOut },
-    plannerMode: plannerMode,
-    notificationsMuted: !!notificationsMuted,
-    tableColumns: columnOut,
-    extraTime: extraOut,
-    crmStageMapping: { ...crmStageMapping },
-    logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-    updatedAt: stateMeta.settings?.updatedAt || ''
+    percent: sanitizeExtraPercent(settingsSnapshot?.extraTime?.percent),
+    minimum: sanitizeExtraMinimum(settingsSnapshot?.extraTime?.minimum)
   };
   const storageMeta = {
     local: enableLocalStore,
@@ -10004,17 +10130,7 @@ function buildStateObject(){
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
       history,
-      settings: {
-        capacity: { ...stateMeta.settings.capacity },
-        parallel: { ...stateMeta.settings.parallel },
-        tableColumns: { ...columnOut },
-        extraTime: { ...extraOut },
-        plannerMode: stateMeta.settings.plannerMode || plannerMode,
-        notificationsMuted: !!stateMeta.settings.notificationsMuted,
-        crmStageMapping: { ...(stateMeta.settings.crmStageMapping || {}) },
-        logLimit: stateMeta.settings.logLimit == null ? null : Number(stateMeta.settings.logLimit),
-        updatedAt: stateMeta.settings.updatedAt || ''
-      },
+      settings: cloneSettingsForSerialize(settingsSnapshot),
       ignoredStates: ignoredStates.slice(),
       storage: storageMeta
     },
@@ -11054,6 +11170,12 @@ function restoreState(json, opts={}){
     });
 
     const freezeShared = sharedSettingsEditing && sharedSettingsDirtyKeys.size > 0;
+    const metaSettingsMissing = !metaSettings || typeof metaSettings !== 'object'
+      || !metaSettings.tableColumns || !metaSettings.extraTime
+      || typeof metaSettings.crmStageMapping !== 'object'
+      || (metaSettings.logLimit === undefined);
+    if(metaSettingsMissing) migrated = true;
+
     const savedColumns = metaSettings.tableColumns || {};
     let incomingColumns = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
     TABLE_COLUMN_DEFS.forEach(def=>{
@@ -11105,22 +11227,22 @@ function restoreState(json, opts={}){
       logLimitSetting = incomingLogLimit;
     }
 
-    stateMeta.settings = {
-      capacity: { ...capByProc },
-      parallel: { ...parallelByProc },
-      plannerMode: normalizePlannerMode(metaSettings.plannerMode || s.plannerMode || stateMeta.settings?.plannerMode || determinePlannerModeFallback()),
-      notificationsMuted: typeof metaSettings.notificationsMuted === 'boolean'
-        ? metaSettings.notificationsMuted
-        : (typeof s.notificationsMuted === 'boolean' ? s.notificationsMuted : !!stateMeta.settings?.notificationsMuted),
-      tableColumns: { ...tableColumnWidths },
-      extraTime: { ...extraTimeSettings },
-      crmStageMapping: { ...crmStageMapping },
-      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-      updatedAt: preservedLocalColumns ? (prevSettingsStamp || (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')) : (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '')
-    };
-    maybeResolveSharedSettingsAck(stateMeta.settings.updatedAt || '');
-    plannerMode = normalizePlannerMode(stateMeta.settings.plannerMode || determinePlannerModeFallback());
+    const incomingNotificationsMuted = typeof metaSettings.notificationsMuted === 'boolean'
+      ? metaSettings.notificationsMuted
+      : (typeof s.notificationsMuted === 'boolean' ? s.notificationsMuted : !!stateMeta.settings?.notificationsMuted);
+    notificationsMuted = !!incomingNotificationsMuted;
+
+    const plannerModeCandidate = normalizePlannerMode(
+      metaSettings.plannerMode || s.plannerMode || stateMeta.settings?.plannerMode || determinePlannerModeFallback()
+    );
+    plannerMode = plannerModeCandidate;
+
+    const desiredSettingsStamp = preservedLocalColumns
+      ? (prevSettingsStamp || (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : ''))
+      : (typeof metaSettings.updatedAt === 'string' ? metaSettings.updatedAt : '');
+    const sanitizedSettings = syncSharedSettingsToMeta(desiredSettingsStamp);
     stateMeta.settings.plannerMode = plannerMode;
+    maybeResolveSharedSettingsAck(sanitizedSettings.updatedAt || '');
     if(!s.modeScoped || !s.modeScoped[plannerMode]){
       captureModeScopedState(plannerMode);
     }
@@ -11136,18 +11258,11 @@ function restoreState(json, opts={}){
     setIgnoredStates(metaIgnored, { persist:false, rerender:false });
 
     const versionsRaw = (s.meta && s.meta.versions) || {};
+    if(versionsRaw && versionsRaw[SETTINGS_STAGE_KEY] === undefined){
+      migrated = true;
+    }
     lastKnownVersions = new Map(Object.entries(versionsRaw).map(([k,v])=>[k, Number(v)||0]));
-    const persistedSettings = {
-      capacity: { ...capByProc },
-      parallel: { ...parallelByProc },
-      plannerMode,
-      notificationsMuted: !!notificationsMuted,
-      tableColumns: { ...tableColumnWidths },
-      extraTime: { ...extraTimeSettings },
-      crmStageMapping: { ...crmStageMapping },
-      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-      updatedAt: stateMeta.settings?.updatedAt || ''
-    };
+    const persistedSettings = cloneSettingsForSerialize(stateMeta.settings);
     stateMeta = {
       versions: { ...versionsRaw },
       lastAuthors: { ...(s.meta?.lastAuthors || {}) },
@@ -11157,6 +11272,7 @@ function restoreState(json, opts={}){
       ignoredStates: stateMeta.ignoredStates.slice(),
       settings: persistedSettings
     };
+    ensureSettingsVersionEntry();
     if(s.meta?.storage?.mode){
       currentDataOrigin = s.meta.storage.mode;
     }
@@ -11440,17 +11556,7 @@ function persistNow(stageOverride, opts={}){
         csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
         manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
         history: stateMeta.history || applyLogLimitSnapshot(activityLog),
-        settings: {
-          capacity: { ...(stateMeta.settings?.capacity || {}) },
-          parallel: { ...(stateMeta.settings?.parallel || {}) },
-          tableColumns: { ...(stateMeta.settings?.tableColumns || {}) },
-          extraTime: { ...(stateMeta.settings?.extraTime || {}) },
-          plannerMode: stateMeta.settings?.plannerMode || plannerMode,
-          notificationsMuted: !!stateMeta.settings?.notificationsMuted,
-          crmStageMapping: { ...(stateMeta.settings?.crmStageMapping || {}) },
-          logLimit: stateMeta.settings?.logLimit ?? (logLimitSetting === null ? null : Number(logLimitSetting)),
-          updatedAt: stateMeta.settings?.updatedAt || ''
-        },
+        settings: cloneSettingsForSerialize(stateMeta.settings),
         ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
         ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
         lastChange: {
@@ -11803,6 +11909,8 @@ function persistNow(stageOverride, opts={}){
       ? null
       : (announcementChanged ? (effectiveOrdersSummary || null) : null);
     const diffForMeta = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
+    const metaStage = isSettingsChange && !diffChanged ? SETTINGS_STAGE_KEY : curStage;
+    const metaStageList = isSettingsChange && !diffChanged ? [SETTINGS_STAGE_KEY] : [curStage];
 
     stateObj.meta = {
       versions: { ...versions },
@@ -11810,22 +11918,12 @@ function persistNow(stageOverride, opts={}){
       csvTimestamp: stateMeta.csvTimestamp || csvFreshnessStr || '',
       manualTimestamp: stateMeta.manualTimestamp || manualFreshnessStr || '',
       history: stateMeta.history || applyLogLimitSnapshot(activityLog),
-      settings: {
-        capacity: { ...(stateMeta.settings?.capacity || {}) },
-        parallel: { ...(stateMeta.settings?.parallel || {}) },
-        tableColumns: { ...(stateMeta.settings?.tableColumns || {}) },
-        extraTime: { ...(stateMeta.settings?.extraTime || {}) },
-        plannerMode: stateMeta.settings?.plannerMode || plannerMode,
-        notificationsMuted: !!stateMeta.settings?.notificationsMuted,
-        crmStageMapping: { ...(stateMeta.settings?.crmStageMapping || {}) },
-        logLimit: stateMeta.settings?.logLimit ?? (logLimitSetting === null ? null : Number(logLimitSetting)),
-        updatedAt: stateMeta.settings?.updatedAt || ''
-      },
+      settings: cloneSettingsForSerialize(stateMeta.settings),
       ignoredStates: Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates.slice() : ignoredStates.slice(),
       ordersSummary: ordersSummaryForMeta,
       lastChange: {
-        stage: curStage,
-        stages: [curStage],
+        stage: metaStage,
+        stages: metaStageList,
         summary: summaryForMeta,
         diff: diffForMeta,
         user: userAlias,
@@ -11857,15 +11955,17 @@ function persistNow(stageOverride, opts={}){
 
     const skipRemote = uiOnly && !diffChanged && !isSettingsChange;
 
+    const settingsVersionForRemote = getSettingsVersion();
+
     if(remoteSyncEnabled()){
       if(skipRemote){
         setDataMode('remote');
       }else{
-        const remoteStage = isSettingsChange && !diffChanged ? 'settings' : curStage;
+        const remoteStage = isSettingsChange && !diffChanged ? SETTINGS_STAGE_KEY : curStage;
         const remoteSummary = summaryForMeta || undefined;
         const remoteDiff = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
-        const remoteVersion = isSettingsChange && !diffChanged ? null : newVersion;
+        const remoteVersion = isSettingsChange && !diffChanged ? settingsVersionForRemote : newVersion;
         const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         pushPromise = remoteBridge.push(payload, {
@@ -11960,9 +12060,9 @@ function persistNow(stageOverride, opts={}){
     if(announce){
       if(isSettingsChange){
         announceStateUpdate({
-          stage:'settings',
+          stage:SETTINGS_STAGE_KEY,
           diff:null,
-          version:null,
+          version:settingsVersionForRemote,
           source:'settings',
           user:userAlias,
           settings:{
@@ -12070,17 +12170,8 @@ function persistSystemSettingsChange(entries){
     pendingSettingsQueue = [];
     pendingSettingsTimer = null;
     const timestamp = new Date().toLocaleString();
-    stateMeta.settings = {
-      capacity: { ...DEFAULT_CAP, ...capByProc },
-      parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
-      plannerMode: plannerMode,
-      notificationsMuted: !!notificationsMuted,
-      tableColumns: { ...tableColumnWidths },
-      extraTime: { ...extraTimeSettings },
-      crmStageMapping: { ...crmStageMapping },
-      logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-      updatedAt: timestamp
-    };
+    syncSharedSettingsToMeta(timestamp);
+    bumpSettingsVersion();
     persistNow(undefined, {
       source:'settings',
       force:true,
@@ -12121,29 +12212,8 @@ function persistSharedPreferencesChange(entries, options={}){
     pendingSharedPrefQueue = [];
     pendingSharedPrefTimer = null;
     const timestamp = timestampOverride || new Date().toLocaleString();
-    if(!stateMeta.settings){
-      stateMeta.settings = {
-        capacity: { ...DEFAULT_CAP, ...capByProc },
-        parallel: { ...DEFAULT_PARALLEL, ...parallelByProc },
-        plannerMode: plannerMode,
-        notificationsMuted: !!notificationsMuted,
-        tableColumns: { ...tableColumnWidths },
-        extraTime: { ...extraTimeSettings },
-        crmStageMapping: { ...crmStageMapping },
-        logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-        updatedAt: timestamp
-      };
-    }else{
-      stateMeta.settings.updatedAt = timestamp;
-      stateMeta.settings.plannerMode = plannerMode;
-      if(typeof stateMeta.settings.notificationsMuted !== 'boolean'){
-        stateMeta.settings.notificationsMuted = !!notificationsMuted;
-      }
-      stateMeta.settings.tableColumns = { ...tableColumnWidths };
-      stateMeta.settings.extraTime = { ...extraTimeSettings };
-      stateMeta.settings.crmStageMapping = { ...crmStageMapping };
-      stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
-    }
+    syncSharedSettingsToMeta(timestamp);
+    bumpSettingsVersion();
     return persistNow(undefined, {
       source:'settings',
       force:true,
@@ -13647,15 +13717,9 @@ function wireHandlers(){
       parallelByProc = { ...DEFAULT_PARALLEL };
       tableColumnWidths = { ...DEFAULT_TABLE_COLUMN_WIDTHS };
       extraTimeSettings = { ...DEFAULT_EXTRA_TIME_SETTINGS };
-      stateMeta.settings = {
-        capacity: { ...capByProc },
-        parallel: { ...parallelByProc },
-        plannerMode: plannerMode,
-        notificationsMuted: !!notificationsMuted,
-        tableColumns: { ...tableColumnWidths },
-        extraTime: { ...extraTimeSettings },
-        updatedAt: ''
-      };
+      logLimitSetting = DEFAULT_LOG_LIMIT;
+      crmStageMapping = {};
+      syncSharedSettingsToMeta('');
     } else {
       stateMeta.settings = stateMeta.settings || {};
       stateMeta.settings.capacity = { ...capByProc };
@@ -13671,6 +13735,7 @@ function wireHandlers(){
       if(!stateMeta.settings.extraTime || typeof stateMeta.settings.extraTime !== 'object'){
         stateMeta.settings.extraTime = { ...extraTimeSettings };
       }
+      syncSharedSettingsToMeta(stateMeta.settings.updatedAt || '');
     }
 
     // обновим UI под текущий выбранный передел
