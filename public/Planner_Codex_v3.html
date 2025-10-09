@@ -12287,7 +12287,11 @@ function diffCrmMappingSnapshot(prev, next){
   const diff = {};
   const prevMap = prev && typeof prev === 'object' ? prev : {};
   const nextMap = next && typeof next === 'object' ? next : {};
-  Object.keys(nextMap).forEach(key=>{
+  const keys = new Set([
+    ...Object.keys(prevMap),
+    ...Object.keys(nextMap)
+  ]);
+  keys.forEach(key=>{
     const prevValue = prevMap[key] || '';
     const nextValue = nextMap[key] || '';
     if(prevValue !== nextValue){
