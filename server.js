@@ -323,6 +323,26 @@ const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
   }
   nextStateObj.meta.settings = mergedSettings;
 
+  if (isPlainObject(mergedSettings.capacity)) {
+    nextStateObj.capByProc = { ...mergedSettings.capacity };
+  }
+
+  if (isPlainObject(mergedSettings.parallel)) {
+    nextStateObj.parallelByProc = { ...mergedSettings.parallel };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autosave')) {
+    nextStateObj.autosaveOn = mergedSettings.autosave;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autoOptimize')) {
+    nextStateObj.autoOptimizeOn = mergedSettings.autoOptimize;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'shiftOnProgress')) {
+    nextStateObj.shiftOnProgress = mergedSettings.shiftOnProgress;
+  }
+
   return { stateObj: nextStateObj, touched: true };
 };
 
@@ -349,9 +369,13 @@ const persistSnapshotToSql = async (client, stateObj) => {
   const stageEntries = Array.isArray(stateObj?.t) ? stateObj.t : [];
   const doneEntries = Array.isArray(stateObj?.done) ? stateObj.done : [];
   const excEntries = Array.isArray(stateObj?.exc) ? stateObj.exc : [];
-  const capacityEntries = isPlainObject(stateObj?.capByProc) ? stateObj.capByProc : {};
-  const parallelEntries = isPlainObject(stateObj?.parallelByProc) ? stateObj.parallelByProc : {};
   const settings = isPlainObject(stateObj?.meta?.settings) ? stateObj.meta.settings : {};
+  const capacityEntries = isPlainObject(settings.capacity)
+    ? settings.capacity
+    : (isPlainObject(stateObj?.capByProc) ? stateObj.capByProc : {});
+  const parallelEntries = isPlainObject(settings.parallel)
+    ? settings.parallel
+    : (isPlainObject(stateObj?.parallelByProc) ? stateObj.parallelByProc : {});
 
   const stageCodeSet = new Set();
   stageEntries.forEach((entry) => {
