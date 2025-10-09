@@ -230,7 +230,8 @@ const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
   const entries = Array.isArray(metaSettings.entries) ? metaSettings.entries : [];
   entries.forEach((entry) => {
     if (!entry) return;
-    if (entry.kind && entry.stage) {
+    const entryKind = entry.kind;
+    if ((entryKind === 'capacity' || entryKind === 'parallel') && entry.stage) {
       const rootKey = entry.kind === 'parallel' ? 'parallel' : 'capacity';
       const stageKey = String(entry.stage || '').trim();
       if (!stageKey) return;
