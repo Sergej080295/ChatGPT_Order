@@ -49,6 +49,16 @@ h3{margin:0 0 10px;font-size:16px}
 .btn.toggled{box-shadow:0 0 0 2px #2563eb33 inset}
 .btn.attn{background:#fee2e2;border-color:#ef4444;color:#991b1b;font-weight:700}
 .btn.attn::after{content:' •';font-weight:900}
+.status-line{display:flex;align-items:center;gap:6px}
+.dirty-label{font-weight:600}
+.dirty-label.clean{color:#16a34a}
+.dirty-label.dirty{color:#dc2626}
+.history-list{max-height:360px;overflow:auto;display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.history-item{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:#fff}
+.history-item .info{display:flex;flex-direction:column;font-size:13px}
+.history-item .info .time{color:var(--muted);font-size:12px}
+.history-actions{display:flex;gap:6px;flex-wrap:wrap}
+.history-empty{padding:10px;border:1px dashed var(--line);border-radius:8px;font-size:13px;color:var(--muted);text-align:center}
 
 /* верхняя панель */
 header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:12px 20px}
@@ -304,11 +314,14 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <button id="exceptionsBtn" class="btn">Исключения</button>
       <button id="reserveBtn" class="btn">Бронь</button>
       <button id="optimizeBtn" class="btn warn">Оптимизация</button>
-      <button id="undoImport" class="btn">Откат импорта</button> 
-	  <button id="exportCSV" class="btn">Экспорт (.csv)</button>
-	  <label class="btn">Импорт состояния
-	    <input id="stateFile" type="file" accept=".csv" style="display:none">
-	  </label>
+      <button id="undoImport" class="btn">Откат импорта</button>
+      <button id="undoBtn" class="btn" title="Ctrl+Z">↶ Отменить</button>
+      <button id="redoBtn" class="btn" title="Ctrl+Shift+Z">↷ Повторить</button>
+      <button id="historyBtn" class="btn ghost">История</button>
+          <button id="exportCSV" class="btn">Экспорт (.csv)</button>
+          <label class="btn">Импорт состояния
+            <input id="stateFile" type="file" accept=".csv" style="display:none">
+          </label>
       <button id="clearAll" class="btn">Очистить</button>
     </div>
 
@@ -316,6 +329,11 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
       <label class="small"><input type="checkbox" id="autosave"> Автосохранение</label>
       <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
       <button id="saveBtn" class="btn small">Сохранить</button>
+      <button id="saveSqlBtn" class="btn small">Записать в SQL</button>
+      <div class="status-line small">
+        <span id="dirtyDot" class="badgeDot"></span>
+        <span id="dirtyText" class="dirty-label clean">Сохранено</span>
+      </div>
       <div class="muted small">Актуальность: <b id="freshness">—</b></div>
     </div>
 	<label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
@@ -572,6 +590,15 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   </div>
 </dialog>
 
+<dialog id="historyDlg">
+  <h3 style="margin:0 0 6px">История изменений</h3>
+  <p class="small muted" style="margin:0 0 8px">Снимки состояния. Можно откатиться или удалить запись.</p>
+  <div id="historyList" class="history-list"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="historyClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
 
 
 <!-- ОБЩИЙ МАРШРУТ ЗАКАЗОВ -->
@@ -709,6 +736,14 @@ let lastImportTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
 let allTasksFromState = null;	// полный снимок задач всех переделов, если он приехал из импорта состояния
+const HISTORY_LIMIT = 200;
+const HISTORY_AUTOSYNC_MS = 5*60*1000;
+let historyStack = [];
+let redoStack = [];
+let isDirty = false;
+let lastSavedState = '';
+let historySyncTimer = null;
+let pendingHistoryQueue = [];
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -732,6 +767,218 @@ function sortBySavedOrder(arr, stage){
     return (a.startDate?.getTime()||0) - (b.startDate?.getTime()||0) || a.uid.localeCompare(b.uid);
   });
   return arr;
+}
+
+/* =========
+   ИСТОРИЯ СОСТОЯНИЙ
+========= */
+function setDirty(flag){
+  isDirty = !!flag;
+  const dot = document.getElementById('dirtyDot');
+  const text = document.getElementById('dirtyText');
+  if(dot){
+    dot.classList.toggle('on', !isDirty);
+    dot.style.background = isDirty ? '#ef4444' : '';
+  }
+  if(text){
+    text.textContent = isDirty ? 'Есть несохранённые изменения' : 'Сохранено';
+    text.classList.toggle('dirty', isDirty);
+    text.classList.toggle('clean', !isDirty);
+  }
+  document.body?.classList?.toggle('state-dirty', isDirty);
+}
+
+function updateDirtyFromState(state){
+  setDirty(state !== lastSavedState);
+}
+
+function refreshHistoryUI(forceList=false){
+  const undoBtn = document.getElementById('undoBtn');
+  if(undoBtn) undoBtn.disabled = historyStack.length <= 1;
+  const redoBtn = document.getElementById('redoBtn');
+  if(redoBtn) redoBtn.disabled = redoStack.length === 0;
+  if(forceList && document.getElementById('historyDlg')?.open){
+    renderHistoryList();
+  }
+}
+
+function renderHistoryList(){
+  const list = document.getElementById('historyList');
+  if(!list) return;
+  list.innerHTML = '';
+  if(!historyStack.length){
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'История пуста';
+    list.appendChild(empty);
+    return;
+  }
+  const entries = historyStack.map((entry, idx)=>({ entry, idx })).reverse();
+  entries.forEach(({entry, idx: originalIndex})=>{
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    const info = document.createElement('div');
+    info.className = 'info';
+    const title = document.createElement('strong');
+    title.textContent = entry.label || 'Без названия';
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = new Date(entry.ts).toLocaleString();
+    info.appendChild(title);
+    info.appendChild(time);
+    const actions = document.createElement('div');
+    actions.className = 'history-actions';
+    const canRevert = originalIndex !== historyStack.length - 1;
+    if(canRevert){
+      const revertBtn = document.createElement('button');
+      revertBtn.className = 'btn small';
+      revertBtn.textContent = 'Откатиться сюда';
+      revertBtn.addEventListener('click', ()=> jumpToHistory(originalIndex));
+      actions.appendChild(revertBtn);
+    }
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn small ghost';
+    delBtn.textContent = 'Удалить';
+    delBtn.disabled = historyStack.length <= 1 || originalIndex === historyStack.length - 1;
+    delBtn.addEventListener('click', ()=> removeHistoryEntry(originalIndex));
+    actions.appendChild(delBtn);
+    item.appendChild(info);
+    item.appendChild(actions);
+    list.appendChild(item);
+  });
+}
+
+function scheduleHistorySync(entry){
+  pendingHistoryQueue.push(entry);
+  if(historySyncTimer) return;
+  historySyncTimer = setTimeout(flushHistoryQueue, HISTORY_AUTOSYNC_MS);
+}
+
+function flushHistoryQueue(){
+  if(!pendingHistoryQueue.length){
+    historySyncTimer = null;
+    return;
+  }
+  const entry = pendingHistoryQueue.shift();
+  sendHistoryEntryToServer(entry).finally(()=>{
+    if(pendingHistoryQueue.length){
+      historySyncTimer = setTimeout(flushHistoryQueue, HISTORY_AUTOSYNC_MS);
+    } else {
+      historySyncTimer = null;
+    }
+  });
+}
+
+async function sendHistoryEntryToServer(entry){
+  if(typeof fetch !== 'function'){ return; }
+  try{
+    await fetch('/api/state-history', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ label: entry.label, state: entry.state, ts: new Date(entry.ts).toISOString() })
+    });
+  }catch(err){
+    console.warn('history sync failed', err);
+  }
+}
+
+function pushHistory(label, opts={}){
+  const state = opts.state ?? serializeState();
+  const ts = Date.now();
+  const last = historyStack[historyStack.length-1];
+  if(last && last.state === state && !opts.force){
+    if(opts.updateLabel){
+      last.label = label;
+      last.ts = ts;
+      redoStack = [];
+    }
+    if(label === 'Сохранено'){
+      lastSavedState = state;
+      setDirty(false);
+    }
+    refreshHistoryUI(opts.renderList);
+    return false;
+  }
+  const entry = { label, state, ts };
+  historyStack.push(entry);
+  if(historyStack.length > HISTORY_LIMIT){
+    historyStack = historyStack.slice(historyStack.length - HISTORY_LIMIT);
+  }
+  if(!opts.keepRedo){
+    redoStack = [];
+  }
+  if(label === 'Сохранено'){
+    lastSavedState = state;
+    setDirty(false);
+  } else if(!opts.skipDirty){
+    setDirty(true);
+  }
+  if(!opts.skipSync){
+    scheduleHistorySync(entry);
+  }
+  refreshHistoryUI(true);
+  return true;
+}
+
+function initializeHistory(label){
+  const state = serializeState();
+  historyStack = [{ label, state, ts: Date.now() }];
+  redoStack = [];
+  lastSavedState = state;
+  pendingHistoryQueue = [];
+  if(historySyncTimer) { clearTimeout(historySyncTimer); historySyncTimer = null; }
+  setDirty(false);
+  refreshHistoryUI(false);
+}
+
+function applyHistoryState(entry, opts={}){
+  if(!entry) return;
+  restoreState(entry.state);
+  sortTasksByStart();
+  recompute();
+  updateDirtyFromState(entry.state);
+  if(!opts.skipSync){
+    scheduleHistorySync(entry);
+  }
+}
+
+function undo(){
+  if(historyStack.length <= 1) return;
+  const current = historyStack.pop();
+  redoStack.push(current);
+  const prev = historyStack[historyStack.length-1];
+  applyHistoryState(prev, { skipSync:true });
+  refreshHistoryUI(true);
+}
+
+function redo(){
+  if(!redoStack.length) return;
+  const entry = redoStack.pop();
+  const restored = { ...entry, ts: Date.now() };
+  historyStack.push(restored);
+  applyHistoryState(restored, { skipSync:true });
+  refreshHistoryUI(true);
+}
+
+function jumpToHistory(index){
+  if(index < 0 || index >= historyStack.length) return;
+  const target = historyStack[index];
+  if(!target) return;
+  const removed = historyStack.splice(index+1);
+  for(let i=removed.length-1;i>=0;i--){
+    redoStack.push(removed[i]);
+  }
+  applyHistoryState(target, { skipSync:true });
+  refreshHistoryUI(true);
+}
+
+function removeHistoryEntry(index){
+  if(index < 0 || index >= historyStack.length - 1) return;
+  const [removed] = historyStack.splice(index,1);
+  if(removed){
+    pendingHistoryQueue = pendingHistoryQueue.filter(entry => entry !== removed);
+  }
+  refreshHistoryUI(true);
 }
 
 /* === Общий маршрут — состояние === */
@@ -820,8 +1067,9 @@ document.getElementById('capacity')?.addEventListener('change', (e)=>{
     const v = Number(e.target.value);
     if (Number.isFinite(v) && v >= 0) {
       capByProc[cur] = v;
-      persistMaybe();
       recompute();
+      pushHistory('Изменение вместимости');
+      persistMaybe();
     }
   }
 });
@@ -833,8 +1081,9 @@ document.getElementById('parallelOps')?.addEventListener('change', (e)=>{
     const v = parseInt(String(e.target.value), 10);
     if (Number.isFinite(v) && v > 0) {
       parallelByProc[cur] = v;
-      persistMaybe();
       recompute();
+      pushHistory('Правка параллельных операций');
+      persistMaybe();
     }
   }
 });
@@ -1266,6 +1515,7 @@ function optimizeQueue(){
   recompute();
   rememberStageOrder();
   recompute();
+  pushHistory('Оптимизация очереди');
   persistMaybe();
 }
 
@@ -1363,6 +1613,7 @@ function renderTasksTable(){
       if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
       e.currentTarget.dataset.locked = lockedUids.has(t.uid);
       e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
+      pushHistory('Переключение закрепления заказа');
       persistMaybe();
     });
 
@@ -1379,8 +1630,9 @@ function renderTasksTable(){
 		tasks.splice(i,1);
 		rememberStageOrder();
 		updateDoneAttention();
-		recompute();
-		persistMaybe();
+                recompute();
+                pushHistory('Перенос в «Готовые»');
+                persistMaybe();
 	  }
 	});
 
@@ -1401,8 +1653,9 @@ function renderTasksTable(){
 		tasks.splice(idx,1);
 		rememberStageOrder();
 		updateTrashAttention?.(); // подсветим кнопку «Корзина», если функция уже определена
-		recompute();
-		persistMaybe();
+                recompute();
+                pushHistory('Удаление заказа');
+                persistMaybe();
 	  }
 	});
 
@@ -1413,7 +1666,7 @@ function renderTasksTable(){
     tr.querySelectorAll('[contenteditable]').forEach(cell=>{
       const field=cell.dataset.field;
       cell.addEventListener('keydown', e=>{
-        if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
+        if(e.key==='Enter'){ e.preventDefault(); cell.blur(); }
         else if(e.key==='Escape'){ e.preventDefault();
           if(field==='orderId') cell.textContent=t.orderId;
           if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
@@ -1425,13 +1678,28 @@ function renderTasksTable(){
           cell.blur();
         }
       });
-      cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
+      cell.addEventListener('blur', ()=>{
+        applyEditImmediate(cell,t);
+        recompute();
+        const labels={
+          orderId:'Правка названия заказа',
+          hours:'Правка часов',
+          extraHours:'Правка доп. времени',
+          startDate:'Правка даты начала',
+          endDate:'Правка даты окончания',
+          state:'Правка состояния',
+          progress:'Правка прогресса'
+        };
+        pushHistory(labels[field] || 'Правка заказа');
+        persistMaybe();
+      });
     });
 
     // флажок «Бронь»
     tr.querySelector('input[data-reserve]').addEventListener('change', e=>{
       t.useReserve = !!e.target.checked;
       recompute();
+      pushHistory('Переключение брони');
       persistMaybe();
     });
 
@@ -1455,8 +1723,9 @@ function renderTasksTable(){
       let insertIndex = targetIndex + (dropAbove?0:1);
       if(insertIndex<0) insertIndex=0; if(insertIndex>tasks.length) insertIndex=tasks.length;
       tasks.splice(insertIndex,0,item);
-	  rememberStageOrder();
+          rememberStageOrder();
       recompute();
+      pushHistory('Перестановка заказа');
       persistMaybe();
     });
 
@@ -2315,6 +2584,7 @@ function renderDoneList(){
         recompute();
         renderDoneList();
         if(wrap) wrap.scrollTop = Math.max(0, before - delta);
+        pushHistory('Возврат из «Готовых»');
         persistMaybe();
       }, 200);
     });
@@ -2405,6 +2675,7 @@ function renderTrashList(){
       updateTrashAttention();
       recompute();
       renderTrashList();
+      pushHistory('Возврат из корзины');
       persistMaybe();
     });
   });
@@ -2416,6 +2687,7 @@ function renderTrashList(){
       trash = [];
       updateTrashAttention();
       renderTrashList();
+      pushHistory('Очистка корзины');
       persistMaybe();
     }
   };
@@ -2833,6 +3105,7 @@ function importStateFromCSV(text){
   updateTrashAttention?.();
 
   recompute();
+  pushHistory('Импорт состояния');
   persistMaybe();
   alert('Состояние импортировано.');
 }
@@ -2887,7 +3160,9 @@ function renderDeltaDialog(diff){
   $("#deltaDlg").showModal();
 
   $("#deltaApply").onclick = ()=>{
-    lastSnapshotJson = serializeState(); // снимок для отката
+    const beforeState = serializeState();
+    lastSnapshotJson = beforeState; // снимок для отката
+    pushHistory('Импорт: снимок перед применением', { state: beforeState, force:true, skipDirty:true });
     // перед применением сняем старые подсветки «isNew»
     tasks.forEach(t=>{ t.isNew=false; });
 
@@ -2955,9 +3230,10 @@ function renderDeltaDialog(diff){
     lastRows = pendingRows; // установим из глобалки (см. importRows)
     lastImportTime = new Date().toLocaleString();
     $("#freshness").textContent = lastImportTime;
-	sortTasksByStart();
-	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
-	persistNow();
+        sortTasksByStart();
+        if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
+        pushHistory('Импорт: изменения применены');
+        persistNow({ markSaved:false });
 
     $("#deltaDlg").close();
   };
@@ -3007,6 +3283,7 @@ async function importRows(rows){
 
     lastImportTime = new Date().toLocaleString();
     if(!freshnessStr) $("#freshness").textContent = lastImportTime;
+    pushHistory('Импорт CSV (первый)');
     persistMaybe();
     return;
   }
@@ -3067,16 +3344,18 @@ function serializeState(){
   }]);
 
   return JSON.stringify({
-	routeOverrides: ro,
-	t, done, trash: trashArr, exc, res,
+        routeOverrides: ro,
+        t, done, trash: trashArr, exc, res,
 
-	process: $("#process").value,
-	capByProc,
-	parallelByProc,        // <— ДОБАВЛЕНО
-	filter: $("#ganttFilter").value,
-	locked:[...lockedUids],
-	orders:[...ordersByStage.entries()],
-	freshness: $("#freshness").textContent || '',
+        process: $("#process").value,
+        capByProc,
+        parallelByProc,        // <— ДОБАВЛЕНО
+        overviewFilter: [...ovFilter],
+        overviewMode: ovModeCurrent,
+        filter: $("#ganttFilter").value,
+        locked:[...lockedUids],
+        orders:[...ordersByStage.entries()],
+        freshness: $("#freshness").textContent || '',
 	lastImportTime,
 	autosaveOn,
 	autoOptimizeOn,
@@ -3165,9 +3444,21 @@ function restoreState(json){
 	});
 
 	// если что-то мигрировали — сразу сохраним новое состояние
-	if(migrated){ try{ persistNow(); }catch(_){ /* ignore */ } }
+	if(migrated){ try{ persistNow({ markSaved:false }); }catch(_){ /* ignore */ } }
 
     $("#ganttFilter").value = s.filter || 'all';
+    if(Array.isArray(s.overviewFilter)){
+      ovFilter = new Set(s.overviewFilter);
+      document.querySelectorAll('.ov-filter').forEach(ch=>{
+        ch.checked = ovFilter.has(ch.value);
+      });
+    }
+    if(typeof s.overviewMode === 'string'){
+      ovModeCurrent = s.overviewMode;
+      document.querySelectorAll('#ovMode button').forEach(btn=>{
+        btn.classList.toggle('active', btn.dataset.mode === ovModeCurrent);
+      });
+    }
     $("#freshness").textContent = s.freshness || '—';
     lastImportTime = s.lastImportTime || '';
     autosaveOn = !!s.autosaveOn;
@@ -3216,10 +3507,21 @@ function loadStageFromLS(stage){
   }catch(_){ return null; }
 }
 
-function persistNow(stageOverride){
+function persistNow(stageOverrideOrOptions, maybeOptions){
+  let stageOverride = '';
+  let options = {};
+  if(typeof stageOverrideOrOptions === 'object' && stageOverrideOrOptions !== null && !Array.isArray(stageOverrideOrOptions)){
+    options = stageOverrideOrOptions;
+    stageOverride = options.stageOverride || '';
+  } else {
+    stageOverride = stageOverrideOrOptions || '';
+    options = maybeOptions || {};
+  }
+  const markSaved = options.markSaved !== undefined ? !!options.markSaved : true;
   try{
     // 1) Текущее состояние только активного передела
-    const cur = JSON.parse(serializeState());
+    const snapshot = serializeState();
+    const cur = JSON.parse(snapshot);
     const curStage = stageOverride || cur.process || ($("#process")?.value || 'bend');
     cur.process = curStage; // зафиксируем явным образом
 
@@ -3260,12 +3562,26 @@ function persistNow(stageOverride){
 
     // 3) Запись в LS
     localStorage.setItem(LS_KEY, JSON.stringify(cur));
+    if(markSaved){
+      const entry = { label:'Сохранено', state: snapshot, ts: Date.now() };
+      const inserted = pushHistory(entry.label, { state: entry.state, updateLabel:true, skipSync:true, force:false });
+      if(inserted === false){
+        redoStack = [];
+        lastSavedState = snapshot;
+        setDirty(false);
+      }
+      lastSavedState = snapshot;
+      setDirty(false);
+      sendHistoryEntryToServer(entry);
+    } else {
+      refreshHistoryUI(false);
+    }
   }catch(e){
     console.warn('persist failed', e);
   }
 }
 
-function persistMaybe(){ if(autosaveOn) persistNow(); }
+function persistMaybe(){ if(autosaveOn) persistNow({ markSaved:false }); }
 
 /* =========
    ПЕРЕСЧЁТ
@@ -3359,7 +3675,13 @@ function openExceptions(){
   $("#exceptionsText").value = lines;
   $("#exceptionsDlg").showModal();
 }
-function applyExceptions(){ exceptions = parseKVLines($("#exceptionsText").value,'exc'); $("#exceptionsDlg").close(); recompute(); persistMaybe(); }
+function applyExceptions(){
+  exceptions = parseKVLines($("#exceptionsText").value,'exc');
+  $("#exceptionsDlg").close();
+  recompute();
+  pushHistory('Изменение исключений');
+  persistMaybe();
+}
 
 function openReserve(){
   const lines = [...reserves.entries()].map(([ds,val])=> `${ds} (${String(val).replace('.',',')})`).join('\n');
@@ -3382,7 +3704,13 @@ function renderReserveDiag(text){
   }).filter(Boolean);
   $("#reserveDiag").innerHTML = arr.length? arr.map(x=>`<div>${x.ds}: Будет применено <b>${x.will}</b> ч (из ${x.want}), исключение: ${x.excl} ч, ёмкость: ${x.capDay} ч</div>`).join('') : '';
 }
-function applyReserve(){ reserves = parseKVLines($("#reserveText").value,'res'); $("#reserveDlg").close(); recompute(); persistMaybe(); }
+function applyReserve(){
+  reserves = parseKVLines($("#reserveText").value,'res');
+  $("#reserveDlg").close();
+  recompute();
+  pushHistory('Изменение брони');
+  persistMaybe();
+}
 
 // Безопасное переключение передела c загрузкой сохранённого состояния
 function switchProcess(newProc){
@@ -3392,7 +3720,7 @@ function switchProcess(newProc){
   const prev = currentProc;
   if(prev && prev !== newProc){
     if(tasks.length) rememberStageOrder(prev);
-    persistNow(prev);
+    persistNow(prev, { markSaved:false });
   }
 
   // пытаемся загрузить задачи ИЗ localStorage для newProc
@@ -3468,10 +3796,12 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#loadExample").addEventListener('click', ()=>{
     lastRows = parseCSVText(exampleCSV);
     const doneSet = new Set(doneTasks.map(d=> d.uid));
-	tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
-	sortTasksByStart();
-	rememberStageOrder();
-	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+        tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
+        sortTasksByStart();
+        rememberStageOrder();
+        if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+    pushHistory('Загружен пример CSV');
+    persistMaybe();
     $("#file").value='';
   });
 
@@ -3489,12 +3819,18 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   $("#parallelOps").addEventListener('input', e=>{
     const v = Math.max(1, parseInt(e.target.value, 10) || 1);
     parallelByProc[$("#process").value] = v;  // сохраняем для текущего передела
-    recompute(); 
+    recompute();
+    pushHistory('Правка параллельных операций');
     persistMaybe();                           // чтобы осталось после переключения вкладок
   });
 
   // сортировка/оптимизация
-  $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
+  $("#thStart").addEventListener('click', ()=>{
+    sortTasksByStart();
+    recompute();
+    pushHistory('Сортировка по дате начала');
+    persistMaybe();
+  });
   $("#optimizeBtn").addEventListener('click', optimizeQueue);
 
   // готовые
@@ -3509,9 +3845,10 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     const uid='user-'+Date.now()+'::'+$("#process").value;
     const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
     tasks.push(t);
-	rememberStageOrder();
-	recompute();
-	persistMaybe();
+        rememberStageOrder();
+        recompute();
+        pushHistory('Добавление заказа вручную');
+        persistMaybe();
 
   });
 
@@ -3521,18 +3858,15 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     const v=Number($("#capacity").value)|| capByProc[p] || 15;
     capByProc[p]=v;
     recompute();
+    pushHistory('Изменение вместимости');
     persistMaybe();
   });
   
-  document.getElementById('parallelOps').addEventListener('input', e=>{
-    const p = document.getElementById('process').value;
-    const v = Math.max(1, parseInt(e.target.value||'3',10));
-    parallelByProc[p] = v;
-    recompute();
+  $("#ganttFilter").addEventListener('change', ()=>{
+    renderGantt(false);
+    pushHistory('Изменение фильтра Ганта');
     persistMaybe();
   });
-  
-  $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe(); });
 
   // очистка
   document.getElementById('clearAll')?.addEventListener('click', ()=>{
@@ -3565,14 +3899,19 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
       document.getElementById('parallelOps').value = String(parallelByProc[cur] ?? 3);
     }
 
-    persistNow();
+    pushHistory('Очистка всех данных');
+    persistNow({ markSaved:false });
     recompute();
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(); });
+  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow({ markSaved:false }); });
   $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
-  $("#saveBtn").addEventListener('click', ()=>{ persistNow(); alert('Состояние сохранено.'); });
+  $("#saveBtn").addEventListener('click', ()=>{ persistNow({ markSaved:true }); alert('Состояние сохранено.'); });
+  $("#saveSqlBtn").addEventListener('click', ()=>{
+    persistNow({ markSaved:true });
+    alert('Снимок отправлен в SQL.');
+  });
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
@@ -3595,9 +3934,17 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
     persistMaybe();
   });
   $("#ganttFilterFS").addEventListener('change', ()=>{
-    $("#ganttFilter").value = $("#ganttFilterFS").value;
-    renderGantt(true);
-    persistMaybe();
+    const val = $("#ganttFilterFS").value;
+    const base = $("#ganttFilter");
+    if(base){
+      base.value = val;
+      base.dispatchEvent(new Event('change'));
+      renderGantt(true);
+    } else {
+      renderGantt(true);
+      pushHistory('Изменение фильтра Ганта');
+      persistMaybe();
+    }
   });
 
   // маршрут диалог
@@ -3681,59 +4028,84 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 		  });
         }
 
-        sortTasksByStart(); recompute(); persistNow();
+        sortTasksByStart(); recompute();
+        pushHistory('Импорт: выборочный откат');
+        persistNow({ markSaved:false });
         $("#undoDlg").close();
       };
       $("#undoCancel").onclick = ()=> $("#undoDlg").close();
     } else {
       // нет диффа — просто полный откат
-      restoreState(lastSnapshotJson); lastSnapshotJson=''; sortTasksByStart(); recompute(); persistNow();
+      restoreState(lastSnapshotJson); lastSnapshotJson=''; sortTasksByStart(); recompute(); pushHistory('Импорт: полный откат'); persistNow({ markSaved:false });
       alert('Откат выполнен.');
     }
   });
 
 	// Общий маршрут — фильтры этапов
-	$$('.ov-filter').forEach(ch=>{
-	  ch.addEventListener('change', ()=>{
-		if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
-		renderOverview();
-	  });
-	});
-	// Общий маршрут — переключатель вида
-	$('#ovMode').addEventListener('click', (e)=>{
-	  if(!(e.target instanceof HTMLButtonElement)) return;
-	  const m=e.target.dataset.mode; if(!m) return;
-	  ovModeCurrent=m;
-	  $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
-	  renderOverview();
-	});
+        $$('.ov-filter').forEach(ch=>{
+          ch.addEventListener('change', ()=>{
+                if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
+                renderOverview();
+                pushHistory('Изменение фильтра маршрута');
+                persistMaybe();
+          });
+        });
+        // Общий маршрут — переключатель вида
+        $('#ovMode').addEventListener('click', (e)=>{
+          if(!(e.target instanceof HTMLButtonElement)) return;
+          const m=e.target.dataset.mode; if(!m) return;
+          ovModeCurrent=m;
+          $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
+          renderOverview();
+          pushHistory('Переключение вида маршрута');
+          persistMaybe();
+        });
 	// Общий маршрут — Сохранить/Сброс
-	$('#ovApply').addEventListener('click', ()=>{
-	  // коммитим рабочие правки в постоянные overrides
-	  for(const [k,ov] of routeEditsWorking.entries()){
-		routeOverrides.set(k, {start:ov.start||null, end:('end' in ov)? (ov.end||null): null});
-		const [pid, st] = k.split('::');
-		// отражаем в текущем списке задач (если этот этап сейчас отображается)
-		const rec = tasks.find(t=> t.parentId===pid && t.stage===st);
-		if(rec){
-		  if(ov.start){ rec.startDate=new Date(ov.start); rec.startMissing=false; if(!rec.origStartDate) rec.origStartDate=rec.startDate; }
-		  if('end' in ov){ rec.endDate = ov.end? new Date(ov.end): null; rec.endMissing = !ov.end; }
-		  if(rec.route && rec.route[st]){
-			if(ov.start) rec.route[st].start = new Date(ov.start);
-			if('end' in ov) rec.route[st].end = ov.end? new Date(ov.end): null;
-		  }
-		}
-	  }
-	  routeEditsWorking.clear();
-	  recompute();    // таблица/подетально/гант
-	  persistNow();   // и в localStorage
-	  alert('Изменения сохранены.');
-	  renderOverview();
-	});
+        $('#ovApply').addEventListener('click', ()=>{
+          // коммитим рабочие правки в постоянные overrides
+          for(const [k,ov] of routeEditsWorking.entries()){
+                routeOverrides.set(k, {start:ov.start||null, end:('end' in ov)? (ov.end||null): null});
+                const [pid, st] = k.split('::');
+                // отражаем в текущем списке задач (если этот этап сейчас отображается)
+                const rec = tasks.find(t=> t.parentId===pid && t.stage===st);
+                if(rec){
+                  if(ov.start){ rec.startDate=new Date(ov.start); rec.startMissing=false; if(!rec.origStartDate) rec.origStartDate=rec.startDate; }
+                  if('end' in ov){ rec.endDate = ov.end? new Date(ov.end): null; rec.endMissing = !ov.end; }
+                  if(rec.route && rec.route[st]){
+                        if(ov.start) rec.route[st].start = new Date(ov.start);
+                        if('end' in ov) rec.route[st].end = ov.end? new Date(ov.end): null;
+                  }
+                }
+          }
+          routeEditsWorking.clear();
+          recompute();    // таблица/подетально/гант
+          pushHistory('Изменение маршрута заказа');
+          persistNow({ markSaved:false });   // и в localStorage
+          alert('Изменения сохранены.');
+          renderOverview();
+        });
 	$('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
 
-$("#autosave").checked = autosaveOn;
+  $("#autosave").checked = autosaveOn;
+  $("#undoBtn").addEventListener('click', ()=> undo());
+  $("#redoBtn").addEventListener('click', ()=> redo());
+  $("#historyBtn").addEventListener('click', ()=>{
+    renderHistoryList();
+    $("#historyDlg").showModal();
+  });
+  $("#historyClose").addEventListener('click', ()=> $("#historyDlg").close());
 }
+
+document.addEventListener('keydown', (e)=>{
+  if(e.defaultPrevented) return;
+  if(!e.ctrlKey || e.metaKey) return;
+  const target = e.target;
+  if(target && target.closest('input, textarea, [contenteditable="true"]')) return;
+  if(e.key === 'z' || e.key === 'Z'){
+    e.preventDefault();
+    if(e.shiftKey) redo(); else undo();
+  }
+});
 
 /* =========
    ИНИЦИАЛИЗАЦИЯ
@@ -3746,7 +4118,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     restoreState(saved);
   } else {
     const st = $("#process").value;
-	currentProc = st;
+        currentProc = st;
     adjustUIForProcess(st);
     if (!NOHOUR_STAGES.has(st)) {
       $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
@@ -3755,6 +4127,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
     }
     recompute();
   }
+  const initLabel = saved ? 'Загружено из LocalStorage' : 'Начальное состояние';
+  initializeHistory(initLabel);
 });
 </script>
 </body>
