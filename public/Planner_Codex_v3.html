@@ -2030,6 +2030,29 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
+  if(payload && typeof payload === 'object'){
+    if(payload.type === 'delta'){
+      const skip = skipRealtimeToastOnce;
+      fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
+        .then(applied=>{
+          if(applied && skipRealtimeToastOnce){
+            skipRealtimeToastOnce = false;
+          }
+        });
+      return;
+    }
+    if(payload.type === 'state' && payload.state){
+      const skip = skipRealtimeToastOnce;
+      const rawState = typeof payload.state === 'string' ? payload.state : (()=>{ try{ return JSON.stringify(payload.state); }catch(_){ return null; } })();
+      if(rawState){
+        applyStateFromExternal(rawState, {preserveProcess:true, origin:'remote', skipToasts: skip, meta: payload.meta || null});
+        if(skipRealtimeToastOnce){
+          skipRealtimeToastOnce = false;
+        }
+        return;
+      }
+    }
+  }
   if(payload){
     const skip = skipRealtimeToastOnce;
     applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
