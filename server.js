@@ -273,6 +273,146 @@ const extractStateFromBody = (body) => {
   return { state: null, meta: null };
 };
 
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const clonePlainObject = (value) => {
+  if (!isPlainObject(value)) {
+    return {};
+  }
+  return JSON.parse(JSON.stringify(value));
+};
+
+const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
+  if (!isPlainObject(nextStateObj)) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const metaSettings = meta?.settings;
+  if (!metaSettings || (!Array.isArray(metaSettings.entries) && metaSettings.replace !== true)) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const currentSettings = clonePlainObject(currentStateObj?.meta?.settings);
+  const incomingSettings = clonePlainObject(nextStateObj?.meta?.settings);
+  if (!Object.keys(incomingSettings).length && !Object.keys(currentSettings).length) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const plan = new Map();
+  const ensurePlan = (key, defaults = {}) => {
+    if (!plan.has(key)) {
+      plan.set(key, { type: 'value', values: new Map(), whole: undefined, allowReplace: false, ...defaults });
+    }
+    return plan.get(key);
+  };
+
+  const readIncoming = (rootKey, fallback) => {
+    const value = incomingSettings[rootKey];
+    if (value === undefined) {
+      return fallback;
+    }
+    return isPlainObject(value) ? clonePlainObject(value) : value;
+  };
+
+  const entries = Array.isArray(metaSettings.entries) ? metaSettings.entries : [];
+  entries.forEach((entry) => {
+    if (!entry) return;
+    if (entry.kind && entry.stage) {
+      const rootKey = entry.kind === 'parallel' ? 'parallel' : 'capacity';
+      const stageKey = String(entry.stage || '').trim();
+      if (!stageKey) return;
+      const targetPlan = ensurePlan(rootKey, { type: 'object' });
+      const nextValue = entry.to ?? readIncoming(rootKey, {})?.[stageKey];
+      if (nextValue === undefined) return;
+      targetPlan.values.set(stageKey, Number.isFinite(nextValue) ? nextValue : nextValue);
+      return;
+    }
+    if (typeof entry.key !== 'string') {
+      return;
+    }
+    const keyPath = entry.key.split('.');
+    const rootKey = keyPath.shift();
+    if (!rootKey) {
+      return;
+    }
+    if (rootKey === 'tableColumn') {
+      const columnKey = keyPath[0];
+      if (!columnKey) return;
+      const targetPlan = ensurePlan('tableColumns', { type: 'object' });
+      const tableColumnsIncoming = readIncoming('tableColumns', {});
+      const value = entry.value ?? tableColumnsIncoming?.[columnKey];
+      if (value === undefined) return;
+      targetPlan.values.set(columnKey, value);
+      return;
+    }
+    if (rootKey === 'extraTime') {
+      const extraKey = keyPath[0];
+      if (!extraKey) return;
+      const targetPlan = ensurePlan('extraTime', { type: 'object' });
+      const extraIncoming = readIncoming('extraTime', {});
+      const value = entry.value ?? extraIncoming?.[extraKey];
+      if (value === undefined) return;
+      targetPlan.values.set(extraKey, value);
+      return;
+    }
+    if (rootKey === 'crmStageMapping') {
+      const targetPlan = ensurePlan('crmStageMapping', { type: 'object', allowReplace: true });
+      const mappingValue = entry.value ?? readIncoming('crmStageMapping', {});
+      if (isPlainObject(mappingValue)) {
+        targetPlan.whole = clonePlainObject(mappingValue);
+      }
+      return;
+    }
+    const targetPlan = ensurePlan(rootKey, { type: 'value' });
+    const value = entry.value ?? readIncoming(rootKey, undefined);
+    if (value !== undefined) {
+      targetPlan.value = value;
+    }
+  });
+
+  if (plan.size === 0) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const mergedSettings = clonePlainObject(currentSettings);
+  const allowGlobalReplace = metaSettings.replace === true;
+
+  plan.forEach((targetPlan, key) => {
+    if (targetPlan.type === 'object') {
+      const replaceMode = allowGlobalReplace && (targetPlan.allowReplace || targetPlan.whole);
+      const base = replaceMode ? {} : clonePlainObject(mergedSettings[key]);
+      const nextObject = { ...base };
+      if (isPlainObject(targetPlan.whole)) {
+        Object.entries(targetPlan.whole).forEach(([childKey, childValue]) => {
+          nextObject[childKey] = childValue;
+        });
+      }
+      targetPlan.values.forEach((value, childKey) => {
+        if (value === undefined && replaceMode) {
+          delete nextObject[childKey];
+        } else if (value !== undefined) {
+          nextObject[childKey] = value;
+        }
+      });
+      mergedSettings[key] = nextObject;
+    } else if (Object.prototype.hasOwnProperty.call(targetPlan, 'value')) {
+      const value = targetPlan.value;
+      mergedSettings[key] = isPlainObject(value) ? clonePlainObject(value) : value;
+    }
+  });
+
+  if (incomingSettings.updatedAt) {
+    mergedSettings.updatedAt = incomingSettings.updatedAt;
+  }
+
+  if (!isPlainObject(nextStateObj.meta)) {
+    nextStateObj.meta = {};
+  }
+  nextStateObj.meta.settings = mergedSettings;
+
+  return { stateObj: nextStateObj, touched: true };
+};
+
 app.put('/api/state', async (req, res) => {
   const { state, meta } = extractStateFromBody(req.body);
   if (!state) {
@@ -314,7 +454,19 @@ app.put('/api/state', async (req, res) => {
   }
 
   const updatedAt = new Date().toISOString();
-  const hash = simpleHash(state);
+  let nextStateString = state;
+  if (meta?.stage === 'settings') {
+    try {
+      const { stateObj, touched } = mergeSettingsSnapshot(currentStateObj, nextStateObj, meta);
+      if (touched) {
+        nextStateString = JSON.stringify(stateObj);
+      }
+    } catch (err) {
+      console.error('Failed to merge settings snapshot, falling back to incoming state', err);
+    }
+  }
+
+  const hash = simpleHash(nextStateString);
   const nextMeta = meta || null;
   const stateId = current.id;
 
@@ -325,7 +477,7 @@ app.put('/api/state', async (req, res) => {
 
   const updateResult = await pool.query(
     'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5 AND hash = $6',
-    [state, nextMeta, hash, updatedAt, stateId, current.hash]
+    [nextStateString, nextMeta, hash, updatedAt, stateId, current.hash]
   );
 
   if (updateResult.rowCount === 0) {
@@ -352,7 +504,7 @@ app.put('/api/state', async (req, res) => {
 
   cachedState = {
     id: stateId,
-    state,
+    state: nextStateString,
     meta: nextMeta,
     updatedAt,
     hash
@@ -376,7 +528,7 @@ app.put('/api/state', async (req, res) => {
   }
   await appendLog(logEntry);
 
-  broadcast({ state, meta: meta || null, updatedAt });
+  broadcast({ state: nextStateString, meta: nextMeta, updatedAt });
   res.json({ ok: true, hash, updatedAt });
 });
 
