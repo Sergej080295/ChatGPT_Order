@@ -138,6 +138,11 @@
   --tile:#fee2e2; --tileBorder:#fecaca;
 }
 
+#settingsDlg{
+  width:min(90vw,960px);
+  max-width:960px;
+}
+
 /* общие */
 *{box-sizing:border-box}
 body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;color:#0f172a;background:var(--bg)}
@@ -541,9 +546,9 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section summary::-webkit-details-marker{display:none;}
 .settings-mapping-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
-.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;max-height:50vh;overflow:auto;}
 .settings-mapping-rows{display:flex;flex-direction:column;gap:6px;}
-.settings-mapping-row{display:grid;grid-template-columns:minmax(160px,1.6fr) minmax(160px,2fr);align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
+.settings-mapping-row{display:grid;grid-template-columns:1fr minmax(0,360px);column-gap:12px;align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
 .settings-mapping-row[data-unmapped="1"]{border-color:#f97316;background:#fff7ed;}
 .settings-mapping-row[data-new="1"]::before{content:'Новое';position:absolute;top:-10px;left:12px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;box-shadow:0 2px 6px rgba(239,68,68,0.35);}
 .settings-mapping-row[data-ignored="1"]{border-color:#cbd5f5;background:#f1f5f9;opacity:0.85;}
@@ -1022,6 +1027,10 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row settings-shared-actions" id="sharedSettingsActions" data-dirty="0">
         <div class="settings-dirty-hint" id="sharedSettingsDirtyHint">Есть несохранённые изменения</div>
+        <label class="small" style="display:flex;align-items:center;gap:6px;white-space:nowrap">
+          <input type="checkbox" id="crmMappingReset">
+          Сбросить прошлые сопоставления
+        </label>
         <div class="grow"></div>
         <div class="row" style="gap:8px;flex-wrap:wrap;">
           <button id="sharedSettingsCancel" class="btn ghost" type="button" disabled>Отмена</button>
@@ -11423,7 +11432,8 @@ function persistNow(stageOverride, opts={}){
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
-    sharedContext=null
+    sharedContext=null,
+    settingsReplace=false
   } = opts;
   let pushPromise = Promise.resolve(true);
   if(!userCanEdit() && source !== 'system') return;
@@ -11966,7 +11976,19 @@ function persistNow(stageOverride, opts={}){
         const remoteDiff = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
         const remoteVersion = isSettingsChange && !diffChanged ? settingsVersionForRemote : newVersion;
-        const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
+        let remoteSettingsMeta = null;
+        if(isSettingsChange){
+          remoteSettingsMeta = {
+            entries: settingsChange.entries,
+            summary: settingsSummary,
+            updatedAt: stateMeta.settings?.updatedAt || nowStr
+          };
+        }
+        if(settingsReplace){
+          remoteSettingsMeta = remoteSettingsMeta || {};
+          remoteSettingsMeta.replace = true;
+        }
+        const remoteExtras = remoteSettingsMeta ? { settings: remoteSettingsMeta } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         pushPromise = remoteBridge.push(payload, {
           stage:remoteStage,
@@ -12185,6 +12207,7 @@ function persistSharedPreferencesChange(entries, options={}){
   const immediate = !!options.immediate;
   const context = typeof options.context === 'string' ? options.context : null;
   const timestampOverride = typeof options.timestamp === 'string' ? options.timestamp : null;
+  const replaceRequested = !!options.replace;
   const normalized = entries
     .map(entry=>{
       if(!entry || !entry.key) return null;
@@ -12218,7 +12241,8 @@ function persistSharedPreferencesChange(entries, options={}){
       source:'settings',
       force:true,
       settingsChange:{ entries: merged, timestamp },
-      sharedContext: context
+      sharedContext: context,
+      settingsReplace: replaceRequested
     });
   };
 
@@ -12257,6 +12281,24 @@ function cloneCrmMappingForSnapshot(map){
     }
   });
   return result;
+}
+
+function diffCrmMappingSnapshot(prev, next){
+  const diff = {};
+  const prevMap = prev && typeof prev === 'object' ? prev : {};
+  const nextMap = next && typeof next === 'object' ? next : {};
+  const keys = new Set([
+    ...Object.keys(prevMap),
+    ...Object.keys(nextMap)
+  ]);
+  keys.forEach(key=>{
+    const prevValue = prevMap[key] || '';
+    const nextValue = nextMap[key] || '';
+    if(prevValue !== nextValue){
+      diff[key] = nextValue;
+    }
+  });
+  return diff;
 }
 
 function crmMappingsEqual(a, b){
@@ -12378,6 +12420,10 @@ function restoreSharedSettingsSnapshot(){
   captureSharedSettingsSnapshot(true);
   applyTableColumnWidths();
   updateSharedSettingsButtons();
+  const resetCheckbox = document.getElementById('crmMappingReset');
+  if(resetCheckbox){
+    resetCheckbox.checked = false;
+  }
 }
 
 function maybeResolveSharedSettingsAck(stamp){
@@ -12398,6 +12444,10 @@ function handleSharedSettingsCommitSuccess(){
   renderSystemSettingsUI();
   applyTableColumnWidths();
   updateSharedSettingsButtons();
+  const resetCheckbox = document.getElementById('crmMappingReset');
+  if(resetCheckbox){
+    resetCheckbox.checked = false;
+  }
   showToast({
     title:'Настройки сохранены',
     message:'Общие параметры обновлены для всех пользователей.',
@@ -12489,12 +12539,19 @@ function commitSharedSettingsChanges(){
   const nextSnapshot = cloneCrmMappingForSnapshot(nextMappingRaw);
   sharedSettingsDraft.crmStageMapping = nextSnapshot;
   const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, nextSnapshot);
+  const resetCheckbox = document.getElementById('crmMappingReset');
+  const mappingReplaceRequested = !!(mappingChanged && resetCheckbox && resetCheckbox.checked);
+  const mappingPayload = mappingReplaceRequested
+    ? cloneCrmMappingForSnapshot(crmStageMapping)
+    : diffCrmMappingSnapshot(prevMappingSnapshot, nextSnapshot);
+  const mappingPayloadHasEntries = Object.keys(mappingPayload).length > 0;
+  const shouldSendMapping = mappingChanged && (mappingReplaceRequested || mappingPayloadHasEntries);
 
   const changedKeys = new Set();
   if(changedColumnKeys.length) changedKeys.add('tableColumns');
   if(extraChanged) changedKeys.add('extraTime');
   if(logChanged) changedKeys.add('logLimit');
-  if(mappingChanged) changedKeys.add('crmStageMapping');
+  if(shouldSendMapping) changedKeys.add('crmStageMapping');
 
   requestedKeys.forEach(key=>{
     if(!changedKeys.has(key)){
@@ -12563,8 +12620,8 @@ function commitSharedSettingsChanges(){
     entries.push({ key:'logLimit', label:'Лимит журнала', value: stateMeta.settings.logLimit });
   }
 
-  if(mappingChanged){
-    entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
+  if(shouldSendMapping){
+    entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: mappingPayload });
   }
 
   if(extraChanged){
@@ -12579,7 +12636,15 @@ function commitSharedSettingsChanges(){
   }
   renderCrmMappingSettingsUI();
 
-  const flushResult = persistSharedPreferencesChange(entries, { immediate:true, context:'sharedSettings', timestamp });
+  const flushResult = persistSharedPreferencesChange(entries, {
+    immediate:true,
+    context:'sharedSettings',
+    timestamp,
+    replace: mappingReplaceRequested
+  });
+  if(mappingReplaceRequested && resetCheckbox){
+    resetCheckbox.checked = false;
+  }
   if(flushResult && typeof flushResult.then === 'function'){
     flushResult.then(()=>{
       if(!remoteSyncEnabled()){

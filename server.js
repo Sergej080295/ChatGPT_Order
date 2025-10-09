@@ -39,6 +39,136 @@ const simpleHash = (str) => {
   return hash.toString(16);
 };
 
+const isPlainObject = (value) => Object.prototype.toString.call(value) === '[object Object]';
+
+const clonePlain = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => clonePlain(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.keys(value).reduce((acc, key) => {
+      const cloned = clonePlain(value[key]);
+      if (cloned !== undefined) {
+        acc[key] = cloned;
+      }
+      return acc;
+    }, {});
+  }
+  return value;
+};
+
+const mergeSettings = (base, updates) => {
+  const source = isPlainObject(base) ? clonePlain(base) : {};
+  if (!isPlainObject(updates)) {
+    return source;
+  }
+  Object.entries(updates).forEach(([key, value]) => {
+    if (value === undefined) {
+      return;
+    }
+    if (isPlainObject(value) && isPlainObject(source[key])) {
+      source[key] = mergeSettings(source[key], value);
+      return;
+    }
+    if (isPlainObject(value)) {
+      source[key] = mergeSettings({}, value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      source[key] = value.map((item) => clonePlain(item));
+      return;
+    }
+    source[key] = value;
+  });
+  return source;
+};
+
+const applySettingsEntryToPatch = (patch, entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return;
+  }
+  const keyRaw = typeof entry.key === 'string' ? entry.key.trim() : '';
+  const value = entry.to;
+  if (keyRaw) {
+    if (keyRaw.startsWith('tableColumn.')) {
+      const columnKey = keyRaw.slice('tableColumn.'.length);
+      if (!columnKey) return;
+      if (!isPlainObject(patch.tableColumns)) {
+        patch.tableColumns = {};
+      }
+      patch.tableColumns[columnKey] = clonePlain(value);
+      return;
+    }
+    if (keyRaw === 'crmStageMapping' && isPlainObject(value)) {
+      patch.crmStageMapping = clonePlain(value);
+      return;
+    }
+    if (keyRaw.includes('.')) {
+      const segments = keyRaw.split('.').filter(Boolean);
+      if (segments.length === 0) return;
+      const [head, ...rest] = segments;
+      const topKey = head === 'tableColumn' ? 'tableColumns' : head;
+      if (!patch[topKey] || typeof patch[topKey] !== 'object') {
+        patch[topKey] = {};
+      }
+      let cursor = patch[topKey];
+      for (let i = 0; i < rest.length; i += 1) {
+        const segment = rest[i];
+        if (i === rest.length - 1) {
+          cursor[segment] = clonePlain(value);
+        } else {
+          if (!cursor[segment] || typeof cursor[segment] !== 'object') {
+            cursor[segment] = {};
+          }
+          cursor = cursor[segment];
+        }
+      }
+      return;
+    }
+    patch[keyRaw] = clonePlain(value);
+    return;
+  }
+  const kind = typeof entry.kind === 'string' ? entry.kind : '';
+  if ((kind === 'capacity' || kind === 'parallel') && typeof entry.stage === 'string' && entry.stage) {
+    const targetKey = kind === 'capacity' ? 'capacity' : 'parallel';
+    if (!patch[targetKey] || typeof patch[targetKey] !== 'object') {
+      patch[targetKey] = {};
+    }
+    patch[targetKey][entry.stage] = clonePlain(value);
+  }
+};
+
+const buildSettingsPatchFromMeta = (entries) => {
+  const patch = {};
+  if (!Array.isArray(entries)) {
+    return patch;
+  }
+  entries.forEach((entry) => applySettingsEntryToPatch(patch, entry));
+  return patch;
+};
+
+const projectSettingsForMerge = (incomingSettings, patch) => {
+  const result = {};
+  const assign = (key, value) => {
+    if (value === undefined) {
+      return;
+    }
+    result[key] = clonePlain(value);
+  };
+
+  if (patch && Object.keys(patch).length > 0) {
+    Object.entries(patch).forEach(([key, value]) => {
+      assign(key, value);
+    });
+  }
+
+  if (incomingSettings && Object.prototype.hasOwnProperty.call(incomingSettings, 'updatedAt')) {
+    assign('updatedAt', incomingSettings.updatedAt);
+  }
+
+  return result;
+};
+
 const DEFAULT_STATE = {
   t: [],
   orders: [],
@@ -313,9 +443,6 @@ app.put('/api/state', async (req, res) => {
     return;
   }
 
-  const updatedAt = new Date().toISOString();
-  const hash = simpleHash(state);
-  const nextMeta = meta || null;
   const stateId = current.id;
 
   if (!stateId) {
@@ -323,9 +450,60 @@ app.put('/api/state', async (req, res) => {
     return;
   }
 
+  let nextStateObjFinal = nextStateObj;
+  let metaForStorage = meta ? clonePlain(meta) : null;
+  const replaceRequested = meta?.settings && typeof meta.settings === 'object' && meta.settings.replace === true;
+
+  if (metaForStorage?.settings && typeof metaForStorage.settings === 'object') {
+    delete metaForStorage.settings.replace;
+    if (Object.keys(metaForStorage.settings).length === 0) {
+      delete metaForStorage.settings;
+    }
+  }
+
+  if (stage === 'settings') {
+    const currentSettings = currentStateObj?.meta && isPlainObject(currentStateObj.meta.settings)
+      ? currentStateObj.meta.settings
+      : {};
+    const incomingSettingsRaw = nextStateObj?.meta && isPlainObject(nextStateObj.meta.settings)
+      ? nextStateObj.meta.settings
+      : {};
+    const settingsPatch = buildSettingsPatchFromMeta(meta?.settings?.entries);
+    const incomingSettings = replaceRequested
+      ? clonePlain(incomingSettingsRaw)
+      : projectSettingsForMerge(incomingSettingsRaw, settingsPatch);
+
+    const mergedSettings = replaceRequested
+      ? incomingSettings
+      : mergeSettings(currentSettings, incomingSettings);
+
+    const mergedMeta = {
+      ...(currentStateObj?.meta && isPlainObject(currentStateObj.meta) ? currentStateObj.meta : {}),
+      ...(nextStateObj?.meta && isPlainObject(nextStateObj.meta) ? nextStateObj.meta : {}),
+      settings: mergedSettings
+    };
+
+    nextStateObjFinal = {
+      ...(currentStateObj && isPlainObject(currentStateObj) ? currentStateObj : {}),
+      ...(nextStateObj && isPlainObject(nextStateObj) ? nextStateObj : {}),
+      meta: mergedMeta
+    };
+  }
+
+  let nextStateString;
+  try {
+    nextStateString = JSON.stringify(nextStateObjFinal);
+  } catch (err) {
+    res.status(500).send('Failed to serialize state');
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+  const hash = simpleHash(nextStateString);
+
   const updateResult = await pool.query(
     'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5 AND hash = $6',
-    [state, nextMeta, hash, updatedAt, stateId, current.hash]
+    [nextStateString, metaForStorage, hash, updatedAt, stateId, current.hash]
   );
 
   if (updateResult.rowCount === 0) {
@@ -352,8 +530,8 @@ app.put('/api/state', async (req, res) => {
 
   cachedState = {
     id: stateId,
-    state,
-    meta: nextMeta,
+    state: nextStateString,
+    meta: metaForStorage,
     updatedAt,
     hash
   };
@@ -376,7 +554,7 @@ app.put('/api/state', async (req, res) => {
   }
   await appendLog(logEntry);
 
-  broadcast({ state, meta: meta || null, updatedAt });
+  broadcast({ state: nextStateString, meta: metaForStorage, updatedAt });
   res.json({ ok: true, hash, updatedAt });
 });
 
