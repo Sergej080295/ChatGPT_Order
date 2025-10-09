@@ -32,6 +32,22 @@ h3{margin:0 0 10px;font-size:16px}
 .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .muted{color:var(--muted)}
 .small{font-size:12px}
+.delta-list{display:flex;flex-direction:column;gap:4px}
+.delta-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:2px 0}
+.delta-row label{flex:1;display:flex;align-items:center;gap:6px;cursor:pointer}
+.delta-order{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.delta-stages{display:inline-flex;align-items:center;gap:4px;color:inherit;margin-left:4px}
+.delta-stage-icons{display:inline-flex;gap:4px;align-items:center}
+.delta-info-btn{border:none;background:transparent;cursor:pointer;font-size:18px;line-height:1;color:#475569;padding:2px}
+.delta-info-btn:hover{color:#1d4ed8}
+.delta-info-btn:focus{outline:2px solid #bfdbfe;outline-offset:2px;border-radius:50%}
+.stage-sticker{display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid #cbd5e1}
+.delta-detail{border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:6px 0}
+.delta-detail-title{display:flex;align-items:center;gap:6px;font-weight:600;margin-bottom:6px}
+.delta-detail-title .stage-sticker{border-color:transparent}
+.delta-detail-grid{display:grid;grid-template-columns:120px 1fr;gap:4px 10px;font-size:13px;margin:0}
+.delta-detail-grid dt{color:#64748b;font-weight:500}
+.delta-detail-grid dd{margin:0;color:#0f172a;word-break:break-word}
 
 .btn{
   padding:6px 10px;
@@ -563,6 +579,14 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
   </div>
 </dialog>
 
+<dialog id="deltaInfoDlg">
+  <h3 style="margin:0 0 6px">Подробности изменений</h3>
+  <div id="deltaInfoContent" class="small" style="max-width:640px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="deltaInfoClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
 <dialog id="undoDlg">
   <h3 style="margin:0 0 6px">Откат импорта — выбрать изменения</h3>
   <div id="undoContent" class="small" style="max-width:720px"></div>
@@ -683,6 +707,7 @@ const parseNum=(s)=>{ if(s==null) return NaN; const t=String(s).replace(/\s+/g,'
 const parseHours=s=>parseNum(s);
 const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
+const escapeHtml=str=>String(str??'').replace(/[&<>"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]||ch));
 
 const VERSION='v2025.09.22-rc2';
 
@@ -708,6 +733,7 @@ let lastRows=null;           // сырые строки последнего и�
 let lastImportTime='';
 let lastSnapshotJson='';     // для «Откат импорта»
 let lastDiffApplied=null;    // запомненный diff для выборочного отката
+let currentDeltaAggregated=null; // сгруппированные изменения для предпросмотра импорта
 let allTasksFromState = null;	// полный снимок задач всех переделов, если он приехал из импорта состояния
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
@@ -872,9 +898,15 @@ function stageIcon(name){
     case 'proc' : return '🛒 Закупка';
     case 'shear': return '✂️ Рубка';
     case 'pack' : return '📦 Упаковка';
-	case 'ship': return '🚚 Отгрузка';
+        case 'ship': return '🚚 Отгрузка';
     default: return '◻︎';
   }
+}
+
+function stageSticker(stage){
+  const cls = STAGE_CLASS[stage] || '';
+  const title = STAGE_TITLE[stage] || stage || '—';
+  return `<span class="stage-sticker ${cls}" title="${title}"></span>`;
 }
 
 function fitSliceText(el, label, hours, pct){
@@ -1126,6 +1158,16 @@ function mapRows(rows, process='bend'){
     out.push(rec);
   }
   return out;
+}
+
+function mapAllStagesFromRows(rows){
+  if(!rows || !rows.length) return [];
+  const all=[];
+  STAGES.forEach(stage=>{
+    const list = mapRows(rows, stage);
+    if(Array.isArray(list) && list.length){ all.push(...list); }
+  });
+  return all;
 }
 
 /* =========
@@ -2865,73 +2907,245 @@ function buildDeltaPreview(current, incoming){
   return {added, removed, changed, toDone};
 }
 
-function renderDeltaDialog(diff){
-  const el=$("#deltaContent");
-  const block = (key, arr, fmt) => `
-    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
-      <legend style="padding:0 6px">${key} (${arr.length})</legend>
-      ${arr.length? arr.map(fmt).join('') : '—'}
-    </fieldset>`;
+function formatIdValue(val){
+  if(val===undefined || val===null) return '—';
+  const str = String(val).trim();
+  return str || '—';
+}
 
-  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
-  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
-  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+function formatHours(val){
+  const num = Number(val);
+  if(!Number.isFinite(num)) return '—';
+  return num.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)[0]+$/, '$1');
+}
+
+function formatDateDetail(d){
+  if(!(d instanceof Date) || Number.isNaN(+d)) return '—';
+  const date = d.toLocaleDateString('ru-RU');
+  const time = d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
+  return `${date} ${time}`.trim();
+}
+
+function formatDateTimeDetail(d){
+  if(!(d instanceof Date) || Number.isNaN(+d)) return '—';
+  return d.toLocaleString('ru-RU');
+}
+
+function aggregateDeltaItems(list, type){
+  const orderKeys=[];
+  const map=new Map();
+  list.forEach(item=>{
+    if(!item) return;
+    const stage = type==='chg' ? (item?.to?.stage || item?.from?.stage || item.stage || '') : (item.stage || '');
+    const orderId = type==='chg' ? (item?.to?.orderId || item?.from?.orderId || '') : (item.orderId || '');
+    if(!orderId) return;
+    if(!map.has(orderId)){
+      map.set(orderId, { orderId, entries: [] });
+      orderKeys.push(orderId);
+    }
+    map.get(orderId).entries.push({ stage, item });
+  });
+  return orderKeys.map(orderId=>{
+    const entry = map.get(orderId);
+    const seen = new Set();
+    const stages=[];
+    entry.entries.forEach(({stage})=>{
+      if(stage && !seen.has(stage)){
+        seen.add(stage);
+        stages.push(stage);
+      }
+    });
+    entry.stages = stages;
+    return entry;
+  });
+}
+
+const deltaFieldLabels = {
+  hours:'Часы',
+  start:'Начало',
+  end:'Конец',
+  status:'Статус',
+  state:'Состояние',
+  when:'Когда'
+};
+
+function rowsToHtml(rows){
+  if(!rows.length) return '';
+  return `<dl class="delta-detail-grid">${rows.map(([label,value])=>`<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join('')}</dl>`;
+}
+
+function buildDeltaDetailBlock(type, entry){
+  const stage = entry.stage || (type==='chg' ? (entry.item?.to?.stage || entry.item?.from?.stage || '') : (entry.item?.stage || ''));
+  const title = STAGE_TITLE[stage] || stage || '—';
+  const sticker = stageSticker(stage);
+  const rows=[];
+  if(type==='add' || type==='del'){
+    const t = entry.item;
+    rows.push(['UID', formatIdValue(t.uid)]);
+    rows.push(['Parent ID', formatIdValue(t.parentId)]);
+    rows.push(['Child ID', formatIdValue(t.childId)]);
+    rows.push([deltaFieldLabels.hours, formatHours(t.hours)]);
+    rows.push([deltaFieldLabels.start, formatDateDetail(t.startDate)]);
+    rows.push([deltaFieldLabels.end, formatDateDetail(t.endDate)]);
+    rows.push([deltaFieldLabels.status, t.status || '—']);
+    rows.push([deltaFieldLabels.state, t.state || '—']);
+  } else if(type==='chg'){
+    const {from,to,fields} = entry.item;
+    rows.push(['UID', formatIdValue(to.uid || from.uid)]);
+    rows.push(['Parent ID', formatIdValue(to.parentId ?? from.parentId)]);
+    rows.push(['Child ID', formatIdValue(to.childId ?? from.childId)]);
+    if(fields.includes('часы')){
+      rows.push([deltaFieldLabels.hours, `${formatHours(from.hours)} → ${formatHours(to.hours)}`]);
+    }
+    if(fields.includes('начало')){
+      rows.push([deltaFieldLabels.start, `${formatDateDetail(from.startDate)} → ${formatDateDetail(to.startDate)}`]);
+    }
+    if(fields.includes('конец')){
+      rows.push([deltaFieldLabels.end, `${formatDateDetail(from.endDate)} → ${formatDateDetail(to.endDate)}`]);
+    }
+    if(fields.includes('статус')){
+      rows.push([deltaFieldLabels.status, `${(from.status||'—')} → ${(to.status||'—')}`]);
+    }
+    if(fields.includes('состояние')){
+      rows.push([deltaFieldLabels.state, `${(from.state||'—')} → ${(to.state||'—')}`]);
+    }
+  } else if(type==='done'){
+    const t = entry.item;
+    rows.push(['UID', formatIdValue(t.uid)]);
+    rows.push(['Parent ID', formatIdValue(t.parentId)]);
+    rows.push(['Child ID', formatIdValue(t.childId)]);
+    rows.push([deltaFieldLabels.hours, formatHours(t.hours)]);
+    rows.push([deltaFieldLabels.start, formatDateDetail(t.startDate)]);
+    rows.push([deltaFieldLabels.end, formatDateDetail(t.endDate)]);
+    rows.push([deltaFieldLabels.status, t.status || '—']);
+    rows.push([deltaFieldLabels.state, t.state || '—']);
+    rows.push([deltaFieldLabels.when, formatDateTimeDetail(t.when)]);
+  }
+  return `<div class="delta-detail"><div class="delta-detail-title">${sticker}${escapeHtml(title)}</div>${rowsToHtml(rows)}</div>`;
+}
+
+function renderDeltaDialog(diff, currentAll, incomingAll){
+  const el=$("#deltaContent");
+  const groups={
+    add: aggregateDeltaItems(diff.added||[], 'add'),
+    chg: aggregateDeltaItems(diff.changed||[], 'chg'),
+    del: aggregateDeltaItems(diff.removed||[], 'del'),
+    done: aggregateDeltaItems(diff.toDone||[], 'done')
+  };
+  currentDeltaAggregated = { diff, groups, currentAll: Array.isArray(currentAll)? currentAll.slice(): [], incomingAll: Array.isArray(incomingAll)? incomingAll.slice(): [] };
+
+  const block = (title, entries, type)=>{
+    const total = entries.reduce((sum, entry)=> sum + entry.entries.length, 0);
+    const rowsHtml = entries.length
+      ? `<div class="delta-list">${entries.map((entry, idx)=>{
+          const orderText = escapeHtml(entry.orderId);
+          const icons = entry.stages.length ? entry.stages.map(stageSticker).join('') : '';
+          const iconsHtml = icons ? `<span class="delta-stage-icons">${icons}</span>` : '<span class="delta-stage-icons">—</span>';
+          return `<div class="delta-row">
+            <label>
+              <input type="checkbox" data-apply="${type}" data-index="${idx}" checked>
+              <span class="delta-order" title="${orderText}">${orderText}</span>
+              <span class="delta-stages">(${iconsHtml})</span>
+            </label>
+            <button type="button" class="delta-info-btn" data-apply="${type}" data-index="${idx}" aria-label="Подробнее">ⓘ</button>
+          </div>`;
+        }).join('')}</div>`
+      : '<div class="muted">—</div>';
+    return `<fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
+      <legend style="padding:0 6px">${title} (${total})</legend>
+      ${rowsHtml}
+    </fieldset>`;
+  };
 
   el.innerHTML =
-    block('Новые', diff.added, fmtAdd) +
-    block('Изменённые', diff.changed, fmtChg) +
-    block('Удаляемые', diff.removed, fmtDel) +
-    block('Статус = Готово', diff.toDone, fmtDone);
+    block('Новые', groups.add, 'add') +
+    block('Изменённые', groups.chg, 'chg') +
+    block('Удаляемые', groups.del, 'del') +
+    block('Статус = Готово', groups.done, 'done');
+
+  $$('#deltaContent .delta-info-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      const type = btn.dataset.apply;
+      const idx = Number(btn.dataset.index);
+      if(Number.isNaN(idx)) return;
+      openDeltaInfo(type, idx);
+    };
+  });
 
   $("#deltaDlg").showModal();
 
   $("#deltaApply").onclick = ()=>{
-    lastSnapshotJson = serializeState(); // снимок для отката
-    // перед применением сняем старые подсветки «isNew»
+    lastSnapshotJson = serializeState();
     tasks.forEach(t=>{ t.isNew=false; });
 
-    const sel = new Map(); $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
-      if(ch.checked) sel.set(ch.dataset.uid, ch.dataset.apply);
+    const selected = { add:new Set(), chg:new Set(), del:new Set(), done:new Set() };
+    $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
+      const type = ch.dataset.apply;
+      if(!(type in selected)) return;
+      const idx = Number(ch.dataset.index);
+      if(!ch.checked || Number.isNaN(idx)) return;
+      selected[type].add(idx);
+    });
+
+    const filtered = { added:[], removed:[], changed:[], toDone:[] };
+    selected.add.forEach(idx=>{
+      const entry = groups.add[idx];
+      if(entry) entry.entries.forEach(info=> filtered.added.push(info.item));
+    });
+    selected.del.forEach(idx=>{
+      const entry = groups.del[idx];
+      if(entry) entry.entries.forEach(info=> filtered.removed.push(info.item));
+    });
+    selected.chg.forEach(idx=>{
+      const entry = groups.chg[idx];
+      if(entry) entry.entries.forEach(info=> filtered.changed.push(info.item));
+    });
+    selected.done.forEach(idx=>{
+      const entry = groups.done[idx];
+      if(entry) entry.entries.forEach(info=> filtered.toDone.push(info.item));
     });
 
     const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    const allMap = new Map((currentDeltaAggregated?.currentAll || snapshotAllStagesForExport()).map(t=>[t.uid, {...t}]));
     const now = new Date();
+    const currentStage = $("#process").value;
 
-    // Удаления (только выбранные)
-    diff.removed.forEach(r=>{
-      if(!sel.has(r.uid) || sel.get(r.uid)!=='del') return;
+    filtered.removed.forEach(r=>{
+      if(r.stage !== currentStage) return;
+      if(!byId.has(r.uid)) return;
       const idx = byId.get(r.uid);
-      if(idx!=null){ tasks.splice(idx,1); byId.delete(r.uid); }
+      tasks.splice(idx,1);
+      byId.delete(r.uid);
     });
 
-	// В архив (статус Готово)
-	diff.toDone.forEach(d=>{
-	  if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
-	  if(byId.has(d.uid)){
-		const old=tasks.splice(byId.get(d.uid),1)[0];
-		doneTasks.push({
-		  uid:old.uid, orderId:old.orderId, stage:old.stage,
-		  parentId:old.parentId, childId:old.childId,
-		  hours:old.hours, extra:old.extraHours,
-		  start:old.startDate, end:old.endDate,
-		  when:now, source:'csv_status'
-		});
-		byId.delete(d.uid);
-	  } else {
-		doneTasks.push({
-		  uid:d.uid, orderId:d.orderId, stage:d.stage||d.stage,  // d.stage есть у incoming
-		  parentId:d.parentId, childId:d.childId,
-		  hours:d.hours, extra:d.extraHours,
-		  start:d.startDate, end:d.endDate,
-		  when:now, source:'csv_status'
-		});
-	  }
-	});
+    filtered.removed.forEach(r=>{ allMap.delete(r.uid); });
 
-    // Изменения
-    diff.changed.forEach(({from,to})=>{
-      if(!sel.has(to.uid) || sel.get(to.uid)!=='chg') return;
+    filtered.toDone.forEach(d=>{
+      if(byId.has(d.uid)){
+        const old=tasks.splice(byId.get(d.uid),1)[0];
+        doneTasks.push({
+          uid:old.uid, orderId:old.orderId, stage:old.stage,
+          parentId:old.parentId, childId:old.childId,
+          hours:old.hours, extra:old.extraHours,
+          start:old.startDate, end:old.endDate,
+          when:now, source:'csv_status'
+        });
+        byId.delete(d.uid);
+      } else {
+        doneTasks.push({
+          uid:d.uid, orderId:d.orderId, stage:d.stage||'',
+          parentId:d.parentId, childId:d.childId,
+          hours:d.hours, extra:d.extraHours,
+          start:d.startDate, end:d.endDate,
+          when:now, source:'csv_status'
+        });
+      }
+    });
+
+    filtered.toDone.forEach(d=>{ allMap.delete(d.uid); });
+
+    filtered.changed.forEach(({from,to})=>{
+      if(to.stage !== currentStage) return;
       if(!byId.has(from.uid)) return;
       const t=tasks[byId.get(from.uid)];
       t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
@@ -2942,26 +3156,65 @@ function renderDeltaDialog(diff){
       t.orderId=to.orderId||t.orderId;
       t.route=to.route||t.route;
       if(!t.origStartDate) t.origStartDate = t.startDate;
-      t.isNew=true; // подсветим именно текущую волну изменений
+      t.isNew=true;
     });
 
-    // Новые
-    diff.added.forEach(n=>{
-      if(!sel.has(n.uid) || sel.get(n.uid)!=='add') return;
-      n.isNew=true; tasks.push(n);
+    filtered.changed.forEach(({to})=>{
+      if(!to?.uid) return;
+      const next={...to};
+      next.startDate = next.startDate ? new Date(next.startDate) : null;
+      next.endDate = next.endDate ? new Date(next.endDate) : null;
+      allMap.set(next.uid, next);
     });
 
-    lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
-    lastRows = pendingRows; // установим из глобалки (см. importRows)
+    filtered.added.forEach(n=>{
+      if(n.stage !== currentStage) return;
+      n.isNew=true;
+      tasks.push(n);
+    });
+
+    filtered.added.forEach(n=>{
+      if(!n?.uid) return;
+      const copy={...n};
+      copy.startDate = copy.startDate ? new Date(copy.startDate) : null;
+      copy.endDate = copy.endDate ? new Date(copy.endDate) : null;
+      allMap.set(copy.uid, copy);
+    });
+
+    allTasksFromState = Array.from(allMap.values());
+
+    lastDiffApplied = filtered;
+    lastRows = pendingRows;
     lastImportTime = new Date().toLocaleString();
     $("#freshness").textContent = lastImportTime;
-	sortTasksByStart();
-	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
-	persistNow();
+        sortTasksByStart();
+        if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
+        persistNow();
 
+    const infoDlg = $("#deltaInfoDlg");
+    if(infoDlg && infoDlg.open) infoDlg.close();
+    currentDeltaAggregated = null;
     $("#deltaDlg").close();
   };
-  $("#deltaCancel").onclick = ()=> $("#deltaDlg").close();
+  $("#deltaCancel").onclick = ()=>{
+    const infoDlg = $("#deltaInfoDlg");
+    if(infoDlg && infoDlg.open) infoDlg.close();
+    currentDeltaAggregated = null;
+    $("#deltaDlg").close();
+  };
+}
+
+function openDeltaInfo(type, index){
+  if(!currentDeltaAggregated) return;
+  const list = currentDeltaAggregated.groups?.[type];
+  if(!Array.isArray(list)) return;
+  const entry = list[index];
+  if(!entry) return;
+  const content = $("#deltaInfoContent");
+  const header = `<div style="font-weight:600;margin-bottom:6px">${escapeHtml(entry.orderId)}</div>`;
+  const blocks = entry.entries.map(info=> buildDeltaDetailBlock(type, info)).join('');
+  content.innerHTML = header + (blocks || '<div class="muted">Нет данных</div>');
+  $("#deltaInfoDlg").showModal();
 }
 
 let pendingRows=null;
@@ -3012,37 +3265,71 @@ async function importRows(rows){
   }
 
   // дельта
-  const incoming = mapRows(rows, p);
-  const diff = buildDeltaPreview(tasks, incoming);
-  renderDeltaDialog(diff);
+  const currentAll = snapshotAllStagesForExport();
+  const incomingAll = mapAllStagesFromRows(rows);
+  const diff = buildDeltaPreview(currentAll, incomingAll);
+  renderDeltaDialog(diff, currentAll, incomingAll);
 }
 
 /* =========
    СОХРАНЕНИЕ
 ========= */
 const LS_KEY='yougile_planner_state_v5';
-function serializeState(){
-  const t = tasks.map(x=>({
-    uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-    hours:x.hours, extraHours:x.extraHours,
-    startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
-    startMissing:!!x.startMissing, endMissing:!!x.endMissing,
-    state:x.state||'', status:x.status||'',
-    useReserve:!!x.useReserve, progress:x.progress||0,
-    origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
-	route:{
-	  laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
-	  bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'',   end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
-	  draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'',   end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
-	  weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'',   end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
-	  mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'',   end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
-	  proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'',   end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
-	  shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
-	  pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'',   end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
-	  ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'',   end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
-	}
+function serializeRouteSegment(seg){
+  if(!seg) return null;
+  const hours = Number(seg.hours);
+  const start = seg.start instanceof Date ? seg.start : (seg.start ? new Date(seg.start) : null);
+  const end   = seg.end   instanceof Date ? seg.end   : (seg.end   ? new Date(seg.end)   : null);
+  return {
+    hours: Number.isFinite(hours) ? hours : 0,
+    start: start ? start.toISOString() : '',
+    end:   end   ? end.toISOString()   : ''
+  };
+}
 
-  }));
+function serializeTaskList(source){
+  if(!Array.isArray(source)) return [];
+  return source.map(item=>{
+    if(!item) return null;
+    const start = item.startDate instanceof Date ? item.startDate : (item.startDate ? new Date(item.startDate) : null);
+    const end   = item.endDate   instanceof Date ? item.endDate   : (item.endDate   ? new Date(item.endDate)   : null);
+    const orig  = item.origStartDate instanceof Date ? item.origStartDate : (item.origStartDate ? new Date(item.origStartDate) : null);
+    const route = item.route || {};
+    return {
+      uid:item.uid,
+      orderId:item.orderId,
+      stage:item.stage,
+      childId:item.childId,
+      parentId:item.parentId,
+      hours:item.hours,
+      extraHours:item.extraHours,
+      startDate:start ? start.toISOString() : '',
+      endDate:end ? end.toISOString() : '',
+      startMissing:!!item.startMissing,
+      endMissing:!!item.endMissing,
+      state:item.state||'',
+      status:item.status||'',
+      useReserve:!!item.useReserve,
+      progress:item.progress||0,
+      origStartDate:orig ? orig.toISOString() : '',
+      route:{
+        laser: serializeRouteSegment(route.laser),
+        bend:  serializeRouteSegment(route.bend),
+        draw:  serializeRouteSegment(route.draw),
+        weld:  serializeRouteSegment(route.weld),
+        mech:  serializeRouteSegment(route.mech),
+        proc:  serializeRouteSegment(route.proc),
+        shear: serializeRouteSegment(route.shear),
+        pack:  serializeRouteSegment(route.pack),
+        ship:  serializeRouteSegment(route.ship)
+      }
+    };
+  }).filter(Boolean);
+}
+
+function serializeState(){
+  const t = serializeTaskList(tasks);
+
   const done = doneTasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage||'',
     parentId:x.parentId||'', childId:x.childId||'',
@@ -3225,37 +3512,48 @@ function persistNow(stageOverride){
 
     // 2) Предыдущее состояние из LS (если было)
     const rawPrev = localStorage.getItem(LS_KEY);
+    let prev = null;
     if (rawPrev) {
       try{
-        const prev = JSON.parse(rawPrev);
+        prev = JSON.parse(rawPrev);
+      }catch(_){ prev = null; }
+    }
 
-        // --- слить задачи: оставляем все предыдущие, КРОМЕ текущего передела, и добавляем текущие ---
-        const prevTasks = Array.isArray(prev.t) ? prev.t : [];
-        const others = prevTasks.filter(x => x && x.stage !== curStage);
-        cur.t = others.concat(cur.t || []);
-		
-		// де-дуп по uid (оставляем последнее вхождение)
-		const seen = new Set();
-		cur.t = cur.t.filter(x=>{
-		  if(!x || !x.uid) return false;
-		  if(seen.has(x.uid)) return false;
-		  seen.add(x.uid);
-		  return true;
-		});
+    const byUid = new Map();
+    (cur.t || []).forEach(obj=>{
+      if(!obj || !obj.uid) return;
+      byUid.set(obj.uid, obj);
+    });
 
-        // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
-        if (Array.isArray(prev.orders)) {
-          const map = new Map(prev.orders);
-          (cur.orders || []).forEach(([k,v])=> map.set(k, v));
-          cur.orders = [...map.entries()];
-        }
+    if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+      const others = serializeTaskList(allTasksFromState.filter(x=>x && x.stage !== curStage));
+      others.forEach(obj=>{
+        if(!obj || !obj.uid) return;
+        byUid.set(obj.uid, obj);
+      });
+    } else if(prev){
+      const prevTasks = Array.isArray(prev.t) ? prev.t : [];
+      prevTasks.forEach(obj=>{
+        if(!obj || obj.stage === curStage || !obj.uid) return;
+        byUid.set(obj.uid, obj);
+      });
+    }
 
-        // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
-        if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
-        if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
+    cur.t = [...byUid.values()];
 
-        // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
-      }catch(_){ /* если вдруг не распарсилось — просто перезапишем */ }
+    if (prev) {
+      // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
+      if (Array.isArray(prev.orders)) {
+        const map = new Map(prev.orders);
+        (cur.orders || []).forEach(([k,v])=> map.set(k, v));
+        cur.orders = [...map.entries()];
+      }
+
+      // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
+      if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
+      if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
+
+      // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
     }
 
     // 3) Запись в LS
@@ -3602,6 +3900,7 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // маршрут диалог
   $("#routeClose").addEventListener('click', ()=> $("#routeDlg").close());
+  $("#deltaInfoClose").addEventListener('click', ()=> $("#deltaInfoDlg").close());
 
   // откат импорта — выборочно
   $("#undoImport").addEventListener('click', ()=>{
