@@ -650,6 +650,8 @@ kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;back
 </div>
 <div id="ovStats" class="ov-stats"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.9.0/sql-wasm.js" crossorigin="anonymous"></script>
+
 <script>
 
 
@@ -685,6 +687,334 @@ const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
 const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
 
 const VERSION='v2025.09.22-rc2';
+
+/* =========
+   ХРАНИЛИЩЕ / БАЗА ДАННЫХ
+========= */
+const LEGACY_LS_KEY = 'yougile_planner_state_v5';
+const DB_STORAGE_KEY = 'yougile_planner_sqlite_v1';
+const ROUTE_KEYS = ['laser','bend','draw','weld','mech','proc','shear','pack','ship'];
+
+let SQLLib = null;
+let dbInstance = null;
+let dbInitPromise = null;
+
+const base64ToUint8 = (base64)=>{
+  if(!base64) return new Uint8Array();
+  const bin = atob(base64);
+  const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+};
+
+const uint8ToBase64 = (arr)=>{
+  let bin='';
+  for(let i=0;i<arr.length;i++) bin += String.fromCharCode(arr[i]);
+  return btoa(bin);
+};
+
+async function ensureDatabase(){
+  if(dbInitPromise) return dbInitPromise;
+  if(typeof initSqlJs !== 'function'){
+    dbInitPromise = Promise.resolve(null);
+    return dbInitPromise;
+  }
+  dbInitPromise = initSqlJs({ locateFile:file=>`https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.9.0/${file}` })
+    .then(SQL=>{
+      SQLLib = SQL;
+      try{
+        const stored = localStorage.getItem(DB_STORAGE_KEY);
+        if(stored){
+          dbInstance = new SQL.Database(base64ToUint8(stored));
+        }else{
+          dbInstance = new SQL.Database();
+        }
+      }catch(err){
+        console.warn('Не удалось восстановить базу, создаём новую', err);
+        dbInstance = new SQL.Database();
+      }
+      bootstrapSchema();
+      migrateLegacyState();
+      return dbInstance;
+    })
+    .catch(err=>{
+      console.warn('Инициализация sql.js не удалась, используется режим без БД', err);
+      dbInstance = null;
+      return null;
+    });
+  return dbInitPromise;
+}
+
+function bootstrapSchema(){
+  if(!dbInstance) return;
+  dbInstance.run(`
+    CREATE TABLE IF NOT EXISTS stage_tasks (
+      stage TEXT PRIMARY KEY,
+      tasks_json TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+}
+
+function saveDatabase(){
+  if(!dbInstance) return;
+  try{
+    const data = dbInstance.export();
+    localStorage.setItem(DB_STORAGE_KEY, uint8ToBase64(data));
+  }catch(err){
+    console.warn('Не удалось сохранить базу', err);
+  }
+}
+
+function setMeta(key, value){
+  if(!dbInstance) return;
+  dbInstance.run('INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)', [key, value]);
+}
+
+function getMeta(key){
+  if(!dbInstance) return null;
+  const stmt = dbInstance.prepare('SELECT value FROM meta WHERE key = ?');
+  try{
+    stmt.bind([key]);
+    if(stmt.step()){
+      const { value } = stmt.getAsObject();
+      return value ?? null;
+    }
+    return null;
+  }finally{
+    stmt.free();
+  }
+}
+
+function saveStageTasks(stage, tasks){
+  if(!dbInstance) return;
+  const normalized = Array.isArray(tasks) ? tasks.map(t=>({ ...t, stage: t?.stage || stage })) : [];
+  const payload = JSON.stringify(normalized);
+  dbInstance.run('INSERT OR REPLACE INTO stage_tasks(stage,tasks_json) VALUES(?,?)', [stage, payload]);
+}
+
+function loadStageTasksRaw(stage){
+  if(!dbInstance) return null;
+  const stmt = dbInstance.prepare('SELECT tasks_json FROM stage_tasks WHERE stage = ?');
+  try{
+    stmt.bind([stage]);
+    if(!stmt.step()) return [];
+    const row = stmt.getAsObject();
+    if(!row.tasks_json) return [];
+    try{
+      const parsed = JSON.parse(row.tasks_json);
+      return Array.isArray(parsed)? parsed : [];
+    }catch(err){
+      console.warn('Не удалось распарсить задачи из БД', err);
+      return [];
+    }
+  }finally{
+    stmt.free();
+  }
+}
+
+function loadStageFromDB(stage){
+  const raw = loadStageTasksRaw(stage);
+  if(!raw) return null;
+  const seen = new Set();
+  const arr = [];
+  raw.forEach(x=>{
+    if(!x || !x.uid || seen.has(x.uid)) return;
+    seen.add(x.uid);
+    arr.push(rehydrateTask(x));
+  });
+  return arr;
+}
+
+function loadAllTasksFromDb(){
+  if(!dbInstance) return [];
+  const stmt = dbInstance.prepare('SELECT stage, tasks_json FROM stage_tasks');
+  const all = [];
+  try{
+    while(stmt.step()){
+      const row = stmt.getAsObject();
+      if(!row.tasks_json) continue;
+      try{
+        const parsed = JSON.parse(row.tasks_json);
+        if(Array.isArray(parsed)){
+          parsed.forEach(t=>{
+            if(t){
+              if(!t.stage) t.stage = row.stage;
+              all.push(t);
+            }
+          });
+        }
+      }catch(err){
+        console.warn('Ошибка чтения задач из БД', err);
+      }
+    }
+  }finally{
+    stmt.free();
+  }
+  return all;
+}
+
+function saveGlobalState(cur){
+  if(!dbInstance) return;
+  const globalState = {
+    done: cur.done || [],
+    trash: cur.trash || [],
+    exc: cur.exc || [],
+    res: cur.res || [],
+    routeOverrides: cur.routeOverrides || [],
+    process: cur.process,
+    capByProc: cur.capByProc || null,
+    parallelByProc: cur.parallelByProc || null,
+    filter: cur.filter || 'all',
+    locked: cur.locked || [],
+    orders: cur.orders || [],
+    freshness: cur.freshness || '—',
+    lastImportTime: cur.lastImportTime || '',
+    autosaveOn: cur.autosaveOn ?? true,
+    autoOptimizeOn: cur.autoOptimizeOn ?? true,
+    shiftOnProgress: cur.shiftOnProgress ?? true
+  };
+  setMeta('global_state', JSON.stringify(globalState));
+}
+
+function loadGlobalState(){
+  const raw = getMeta('global_state');
+  if(!raw) return null;
+  try{ return JSON.parse(raw); }catch(err){ console.warn('Не удалось распарсить глобальное состояние', err); return null; }
+}
+
+function getRowCount(table){
+  if(!dbInstance) return 0;
+  try{
+    const res = dbInstance.exec(`SELECT COUNT(*) AS cnt FROM ${table}`);
+    const val = res?.[0]?.values?.[0]?.[0];
+    return Number(val)||0;
+  }catch(err){
+    console.warn('Не удалось получить размер таблицы', table, err);
+    return 0;
+  }
+}
+
+function migrateLegacyState(){
+  if(!dbInstance) return;
+  const hasStageData = getRowCount('stage_tasks')>0;
+  const hasGlobal = !!getMeta('global_state');
+  if(hasStageData || hasGlobal) return;
+  const legacy = localStorage.getItem(LEGACY_LS_KEY);
+  if(!legacy) return;
+  try{
+    const data = JSON.parse(legacy);
+    writeLegacyStateToDb(data);
+    saveDatabase();
+    localStorage.removeItem(LEGACY_LS_KEY);
+  }catch(err){
+    console.warn('Не удалось мигрировать состояние из localStorage', err);
+  }
+}
+
+function writeLegacyStateToDb(data){
+  if(!dbInstance || !data) return;
+  const byStage = new Map();
+  (data.t||[]).forEach(t=>{
+    if(!t || !t.stage) return;
+    if(!byStage.has(t.stage)) byStage.set(t.stage, []);
+    byStage.get(t.stage).push(t);
+  });
+  byStage.forEach((arr, stage)=> saveStageTasks(stage, arr));
+  const globalState = {
+    done: data.done || [],
+    trash: data.trash || [],
+    exc: data.exc || [],
+    res: data.res || [],
+    routeOverrides: data.routeOverrides || [],
+    process: data.process || 'bend',
+    capByProc: data.capByProc || null,
+    parallelByProc: data.parallelByProc || null,
+    filter: data.filter || 'all',
+    locked: data.locked || [],
+    orders: data.orders || [],
+    freshness: data.freshness || '—',
+    lastImportTime: data.lastImportTime || '',
+    autosaveOn: data.autosaveOn ?? true,
+    autoOptimizeOn: data.autoOptimizeOn ?? true,
+    shiftOnProgress: data.shiftOnProgress ?? true
+  };
+  setMeta('global_state', JSON.stringify(globalState));
+}
+
+function loadFullStateFromDb(){
+  if(!dbInstance) return null;
+  const tasks = loadAllTasksFromDb();
+  const global = loadGlobalState();
+  if(!tasks.length && !global) return null;
+  return {
+    t: tasks,
+    done: global?.done || [],
+    trash: global?.trash || [],
+    exc: global?.exc || [],
+    res: global?.res || [],
+    routeOverrides: global?.routeOverrides || [],
+    process: global?.process || ($("#process")?.value || 'bend'),
+    capByProc: global?.capByProc || null,
+    parallelByProc: global?.parallelByProc || null,
+    filter: global?.filter || 'all',
+    locked: global?.locked || [],
+    orders: global?.orders || [],
+    freshness: global?.freshness || '—',
+    lastImportTime: global?.lastImportTime || '',
+    autosaveOn: global?.autosaveOn ?? true,
+    autoOptimizeOn: global?.autoOptimizeOn ?? true,
+    shiftOnProgress: global?.shiftOnProgress ?? true
+  };
+}
+
+function resetDatabase(){
+  if(SQLLib){
+    try{ dbInstance?.close?.(); }catch(_){ /* ignore */ }
+    dbInstance = new SQLLib.Database();
+    bootstrapSchema();
+    dbInitPromise = Promise.resolve(dbInstance);
+  }
+  localStorage.removeItem(DB_STORAGE_KEY);
+}
+
+function rehydrateRoute(route){
+  const obj={};
+  ROUTE_KEYS.forEach(key=>{
+    const src = route?.[key];
+    obj[key] = src ? {
+      hours: src.hours || 0,
+      start: src.start ? new Date(src.start) : null,
+      end:   src.end   ? new Date(src.end)   : null
+    } : null;
+  });
+  return obj;
+}
+
+function rehydrateTask(x){
+  return {
+    uid:x.uid,
+    orderId:x.orderId,
+    stage:x.stage,
+    childId:x.childId,
+    parentId:x.parentId,
+    hours:x.hours,
+    extraHours:x.extraHours,
+    startDate: x.startDate? new Date(x.startDate): today0(),
+    endDate: x.endDate? new Date(x.endDate): null,
+    startMissing: !!x.startMissing,
+    endMissing: !!x.endMissing,
+    state:x.state||'',
+    status:x.status||'',
+    useReserve: !!x.useReserve,
+    progress: x.progress||0,
+    origStartDate: x.origStartDate? new Date(x.origStartDate): null,
+    route: rehydrateRoute(x.route)
+  };
+}
 
 /* =========
    СОСТОЯНИЕ
@@ -1313,7 +1643,7 @@ function applyEditImmediate(cell, task){
     const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
     if(safe!==task.progress){
       task.progress=safe;
-      if($('#shiftOnProgress').checked){
+      if($('#shiftOnProgress')?.checked){
         if(!task.origStartDate) task.origStartDate = task.startDate;
         if(+task.origStartDate===+task.startDate) task.origStartDate = task.startDate;
         task.startDate=today0();
@@ -2505,7 +2835,10 @@ function exportStateCSV(){
   lines.push(`process${sep}${$("#process").value}`);
   lines.push(`ganttFilter${sep}${$("#ganttFilter").value}`);
   lines.push(`autosaveOn${sep}${autosaveOn?1:0}`);
-  lines.push(`shiftOnProgress${sep}${$("#shiftOnProgress").checked?1:0}`);
+  const shiftMetaEl = document.getElementById('shiftOnProgress');
+  const shiftMeta = shiftMetaEl ? !!shiftMetaEl.checked : shiftOnProgress;
+  shiftOnProgress = shiftMeta;
+  lines.push(`shiftOnProgress${sep}${shiftMeta?1:0}`);
   STAGES.forEach(s=> lines.push(`cap.${s}${sep}${capByProc[s] ?? DEFAULT_CAP[s] ?? ''}`));
   
   // параллельные операции для безчасовых этапов
@@ -2793,11 +3126,17 @@ function importStateFromCSV(text){
   // meta / UI
   if(meta.process) $("#process").value = meta.process;
   if(meta.ganttFilter) $("#ganttFilter").value = meta.ganttFilter;
-  autosaveOn = !!Number(meta.autosaveOn); $("#autosave").checked = autosaveOn;
+  if(meta.autosaveOn !== undefined){ autosaveOn = !!Number(meta.autosaveOn); }
+  const autosaveMetaEl = document.getElementById('autosave');
+  if(autosaveMetaEl) autosaveMetaEl.checked = autosaveOn;
   autoOptimizeOn = !!Number(meta.autoOptimizeOn);
-  $("#autoOptimize").checked = autoOptimizeOn;
+  const autoOptimizeMetaEl = document.getElementById('autoOptimize');
+  if(autoOptimizeMetaEl) autoOptimizeMetaEl.checked = autoOptimizeOn;
 
-  $("#shiftOnProgress").checked = !!Number(meta.shiftOnProgress);
+  const shiftMetaRaw = meta.shiftOnProgress;
+  if(shiftMetaRaw !== undefined){ shiftOnProgress = !!Number(shiftMetaRaw); }
+  const shiftMetaEl = document.getElementById('shiftOnProgress');
+  if(shiftMetaEl) shiftMetaEl.checked = shiftOnProgress;
 
   const capNew = { ...DEFAULT_CAP };
   STAGES.forEach(s=>{
@@ -3020,7 +3359,7 @@ async function importRows(rows){
 /* =========
    СОХРАНЕНИЕ
 ========= */
-const LS_KEY='yougile_planner_state_v5';
+const LS_KEY = LEGACY_LS_KEY;
 function serializeState(){
   const t = tasks.map(x=>({
     uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
@@ -3066,21 +3405,24 @@ function serializeState(){
 	end:   v.end   ? v.end.toISOString()   : ''
   }]);
 
+  const shiftEl = document.getElementById('shiftOnProgress');
+  const shiftChecked = shiftEl ? !!shiftEl.checked : shiftOnProgress;
+  shiftOnProgress = shiftChecked;
   return JSON.stringify({
-	routeOverrides: ro,
-	t, done, trash: trashArr, exc, res,
+        routeOverrides: ro,
+        t, done, trash: trashArr, exc, res,
 
-	process: $("#process").value,
-	capByProc,
-	parallelByProc,        // <— ДОБАВЛЕНО
-	filter: $("#ganttFilter").value,
-	locked:[...lockedUids],
-	orders:[...ordersByStage.entries()],
-	freshness: $("#freshness").textContent || '',
-	lastImportTime,
-	autosaveOn,
-	autoOptimizeOn,
-	shiftOnProgress: $("#shiftOnProgress").checked
+        process: $("#process").value,
+        capByProc,
+        parallelByProc,        // <— ДОБАВЛЕНО
+        filter: $("#ganttFilter").value,
+        locked:[...lockedUids],
+        orders:[...ordersByStage.entries()],
+        freshness: $("#freshness").textContent || '',
+        lastImportTime,
+        autosaveOn,
+        autoOptimizeOn,
+        shiftOnProgress: shiftChecked
   });
 
 }
@@ -3170,98 +3512,99 @@ function restoreState(json){
     $("#ganttFilter").value = s.filter || 'all';
     $("#freshness").textContent = s.freshness || '—';
     lastImportTime = s.lastImportTime || '';
-    autosaveOn = !!s.autosaveOn;
-    $("#autosave").checked = autosaveOn;
-    $("#shiftOnProgress").checked = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    autosaveOn = s.autosaveOn !== undefined ? !!s.autosaveOn : autosaveOn;
+    const autosaveEl = document.getElementById('autosave');
+    if(autosaveEl) autosaveEl.checked = autosaveOn;
+    shiftOnProgress = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : shiftOnProgress;
+    const shiftEl = document.getElementById('shiftOnProgress');
+    if(shiftEl) shiftEl.checked = shiftOnProgress;
     recompute();
 	updateTrashAttention?.();
   }catch(e){ console.warn('restoreState failed', e); }
 }
 
 function loadStageFromLS(stage){
+  if(dbInstance){
+    try{
+      const arr = loadStageFromDB(stage);
+      if(arr) return arr;
+    }catch(err){ console.warn('Не удалось загрузить задачи из БД для', stage, err); }
+  }
   try{
     const raw = localStorage.getItem(LS_KEY);
     if(!raw) return null;
     const s = JSON.parse(raw);
-	
-	// поднимем сохранённый порядок строк по переделам
-	if (Array.isArray(s.orders)) {
-	  ordersByStage = new Map(s.orders);
-	}
 
-    const arr = (s.t||[]).filter(x=> x.stage===stage).map(x=>({
-      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
-      hours:x.hours, extraHours:x.extraHours,
-      startDate: x.startDate? new Date(x.startDate): today0(),
-      endDate: x.endDate? new Date(x.endDate): null,
-      startMissing: !!x.startMissing, endMissing: !!x.endMissing,
-      state:x.state||'', status:x.status||'',
-      useReserve: !!x.useReserve, progress: x.progress||0,
-      origStartDate: x.origStartDate? new Date(x.origStartDate): null,
-      route:{
-        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
-        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,   end:x.route.bend.end?new Date(x.route.bend.end):null}   : null,
-        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,   end:x.route.draw.end?new Date(x.route.draw.end):null}   : null,
-        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,   end:x.route.weld.end?new Date(x.route.weld.end):null}   : null,
-        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,   end:x.route.mech.end?new Date(x.route.mech.end):null}   : null,
-        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,   end:x.route.proc.end?new Date(x.route.proc.end):null}   : null,
-        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
-        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null}   : null,
-        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null}   : null
-      }
-    }));
+        if (Array.isArray(s.orders)) {
+          ordersByStage = new Map(s.orders);
+        }
+
+    const arr = (s.t||[]).filter(x=> x.stage===stage).map(rehydrateTask);
     const seen = new Set();
-	return arr.filter(x => !seen.has(x.uid) && (seen.add(x.uid), true));
+    return arr.filter(x => !seen.has(x.uid) && (seen.add(x.uid), true));
 
   }catch(_){ return null; }
 }
 
 function persistNow(stageOverride){
   try{
-    // 1) Текущее состояние только активного передела
     const cur = JSON.parse(serializeState());
     const curStage = stageOverride || cur.process || ($("#process")?.value || 'bend');
-    cur.process = curStage; // зафиксируем явным образом
+    cur.process = curStage;
 
-    // 2) Предыдущее состояние из LS (если было)
+    let persisted = false;
+    if(dbInstance){
+      try{
+        saveStageTasks(curStage, cur.t || []);
+        saveGlobalState(cur);
+        saveDatabase();
+        localStorage.removeItem(LS_KEY);
+        persisted = true;
+      }catch(err){
+        console.warn('Не удалось сохранить состояние в БД', err);
+      }
+    }
+
+    if(!persisted){
+      persistLegacy(curStage, cur);
+    }
+  }catch(e){
+    console.warn('persist failed', e);
+  }
+}
+
+function persistLegacy(curStage, cur){
+  try{
     const rawPrev = localStorage.getItem(LS_KEY);
     if (rawPrev) {
       try{
         const prev = JSON.parse(rawPrev);
-
-        // --- слить задачи: оставляем все предыдущие, КРОМЕ текущего передела, и добавляем текущие ---
         const prevTasks = Array.isArray(prev.t) ? prev.t : [];
         const others = prevTasks.filter(x => x && x.stage !== curStage);
         cur.t = others.concat(cur.t || []);
-		
-		// де-дуп по uid (оставляем последнее вхождение)
-		const seen = new Set();
-		cur.t = cur.t.filter(x=>{
-		  if(!x || !x.uid) return false;
-		  if(seen.has(x.uid)) return false;
-		  seen.add(x.uid);
-		  return true;
-		});
 
-        // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
+        const seen = new Set();
+        cur.t = cur.t.filter(x=>{
+          if(!x || !x.uid) return false;
+          if(seen.has(x.uid)) return false;
+          seen.add(x.uid);
+          return true;
+        });
+
         if (Array.isArray(prev.orders)) {
           const map = new Map(prev.orders);
           (cur.orders || []).forEach(([k,v])=> map.set(k, v));
           cur.orders = [...map.entries()];
         }
 
-        // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
         if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
         if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
-
-        // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
-      }catch(_){ /* если вдруг не распарсилось — просто перезапишем */ }
+      }catch(_){ /* ignore legacy parse errors */ }
     }
 
-    // 3) Запись в LS
     localStorage.setItem(LS_KEY, JSON.stringify(cur));
-  }catch(e){
-    console.warn('persist failed', e);
+  }catch(err){
+    console.warn('persist legacy failed', err);
   }
 }
 
@@ -3395,7 +3738,7 @@ function switchProcess(newProc){
     persistNow(prev);
   }
 
-  // пытаемся загрузить задачи ИЗ localStorage для newProc
+  // пытаемся загрузить задачи из БД (или legacy localStorage) для newProc
   const saved = loadStageFromLS(newProc);
   if(saved && saved.length){
     tasks = saved;
@@ -3536,22 +3879,23 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 
   // очистка
   document.getElementById('clearAll')?.addEventListener('click', ()=>{
-	if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+        if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
 
-	tasks = [];
-	doneTasks = [];
-	exceptions = new Map();
-	reserves = new Map();
-	routeOverrides = new Map();
-	ordersByStage = new Map();
-	lockedUids = new Set();
-	lastRows = null;
-	allTasksFromState = null;
-	trash = [];
-	localStorage.removeItem(LS_KEY);
-	lastImportTime = '';
-	$("#freshness").textContent = '—';
-	updateTrashAttention?.();
+        tasks = [];
+        doneTasks = [];
+        exceptions = new Map();
+        reserves = new Map();
+        routeOverrides = new Map();
+        ordersByStage = new Map();
+        lockedUids = new Set();
+        lastRows = null;
+        allTasksFromState = null;
+        trash = [];
+        resetDatabase();
+        localStorage.removeItem(LS_KEY);
+        lastImportTime = '';
+        $("#freshness").textContent = '—';
+        updateTrashAttention?.();
 
 	capByProc      = { ...DEFAULT_CAP };
 	parallelByProc = { ...DEFAULT_PARALLEL };
@@ -3570,15 +3914,27 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
   });
 
   // автосохранение / ручное сохранение
-  $("#autosave").addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(); });
-  $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
-  $("#saveBtn").addEventListener('click', ()=>{ persistNow(); alert('Состояние сохранено.'); });
+  const autosaveEl = document.getElementById('autosave');
+  if(autosaveEl){
+    autosaveEl.addEventListener('change', e=>{ autosaveOn = !!e.target.checked; if(autosaveOn) persistNow(); });
+  }
+  const shiftProgressEl = document.getElementById('shiftOnProgress');
+  if(shiftProgressEl){
+    shiftProgressEl.addEventListener('change', e=>{ shiftOnProgress = !!e.target.checked; persistMaybe(); });
+  }
+  const saveBtn = document.getElementById('saveBtn');
+  if(saveBtn){
+    saveBtn.addEventListener('click', ()=>{ persistNow(); alert('Состояние сохранено.'); });
+  }
   
   // Авто оптимизация
-  $("#autoOptimize").addEventListener('change', e=>{
-    autoOptimizeOn = !!e.target.checked;
-    persistMaybe();
-  });
+  const autoOptimizeEl = document.getElementById('autoOptimize');
+  if(autoOptimizeEl){
+    autoOptimizeEl.addEventListener('change', e=>{
+      autoOptimizeOn = !!e.target.checked;
+      persistMaybe();
+    });
+  }
 
   // Гант — FS
   $("#toggleFS").addEventListener('click', ()=>{
@@ -3726,35 +4082,67 @@ C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.202
 	  }
 	  routeEditsWorking.clear();
 	  recompute();    // таблица/подетально/гант
-	  persistNow();   // и в localStorage
+          persistNow();   // и в базу
 	  alert('Изменения сохранены.');
 	  renderOverview();
 	});
 	$('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
 
-$("#autosave").checked = autosaveOn;
+const autosaveInitEl = document.getElementById('autosave');
+if(autosaveInitEl) autosaveInitEl.checked = autosaveOn;
 }
 
 /* =========
    ИНИЦИАЛИЗАЦИЯ
 ========= */
 document.addEventListener('DOMContentLoaded', ()=>{
+  (async()=>{
+    try{ await ensureDatabase(); }catch(_){ /* ignore init errors */ }
 
-  wireHandlers();
-  const saved=localStorage.getItem(LS_KEY);
-  if (saved) {
-    restoreState(saved);
-  } else {
-    const st = $("#process").value;
-	currentProc = st;
-    adjustUIForProcess(st);
-    if (!NOHOUR_STAGES.has(st)) {
-      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
-    } else {
-      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
+    wireHandlers();
+
+    let restored = false;
+    const dbState = loadFullStateFromDb();
+    if(dbState){
+      try{
+        restoreState(JSON.stringify(dbState));
+        restored = true;
+      }catch(err){ console.warn('restore from DB failed', err); }
     }
-    recompute();
-  }
+
+    if(!restored){
+      const saved = localStorage.getItem(LS_KEY);
+      if(saved){
+        try{
+          restoreState(saved);
+          restored = true;
+          if(dbInstance){
+            try{ persistNow(); }catch(_){ /* ignore */ }
+          }
+        }catch(err){ console.warn('restore from localStorage failed', err); }
+      }
+    }
+
+    if(!restored){
+      const st = $("#process").value;
+      currentProc = st;
+      adjustUIForProcess(st);
+      const capEl = document.getElementById('capacity');
+      if (!NOHOUR_STAGES.has(st)) {
+        if(capEl) capEl.value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
+      } else {
+        const parEl = document.getElementById('parallelOps');
+        if(parEl) parEl.value = String(parallelByProc[st] ?? 3);
+        if(capEl) capEl.dataset.stage = '';
+      }
+      recompute();
+    }
+
+    const autosaveInit = document.getElementById('autosave');
+    if(autosaveInit) autosaveInit.checked = autosaveOn;
+    const shiftEl = document.getElementById('shiftOnProgress');
+    if(shiftEl) shiftEl.checked = shiftOnProgress;
+  })();
 });
 </script>
 </body>
