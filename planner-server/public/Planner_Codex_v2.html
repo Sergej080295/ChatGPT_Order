@@ -1,0 +1,3883 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Планировщик — CSV only</title>
+<style>
+:root{
+  /* базовые */
+  --line:#e5e7eb; --muted:#64748b; --bg:#ffffff;
+  --cell:28px; --gcell:30.8px;
+
+  /* размеры */
+  --leftWidth: 1160px;       /* Широкий список — влезают все колонки */
+  --labelW: 300px;           /* Левый столбец Ганта */
+  --dayWidth: 94px;          /* День в Ганте */
+
+  /* цвета статусов */
+  --ok:#e7f7ec; --okText:#14532d;
+  --early:#fff6cc; --earlyText:#7a5d00;
+  --late:#ffe4e4; --lateText:#7f1d1d;
+
+  /* плитки «Срыв» */
+  --tile:#fee2e2; --tileBorder:#fecaca;
+}
+
+/* общие */
+*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:0;color:#0f172a;background:var(--bg)}
+h1{margin:0 0 6px;font-size:20px}
+h3{margin:0 0 10px;font-size:16px}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+
+.save-indicator{margin-left:10px;font-size:12px;color:var(--muted);transition:color .2s ease}
+.save-indicator.loading,.save-indicator.syncing{color:#2563eb}
+.save-indicator.saved,.save-indicator.synced{color:#15803d}
+.save-indicator.error{color:#dc2626}
+.save-indicator.offline{color:#6b7280}
+
+.btn{
+  padding:6px 10px;
+  border:1px solid #d1d5db;
+  border-radius:8px;
+  background:#f8fafc;
+  cursor:pointer;
+  transition:transform .08s ease, filter .15s ease, box-shadow .2s ease;
+}
+.btn:hover{ filter:brightness(.97) }
+.btn:active{ transform:translateY(1px) scale(.98) }
+.btn.primary{background:#2563eb;color:#fff;border-color:#1d4ed8}
+.btn.warn{background:#f59e0b;color:#111;border-color:#d97706}
+.btn.ghost{background:#fff}
+.btn.toggled{box-shadow:0 0 0 2px #2563eb33 inset}
+.btn.attn{background:#fee2e2;border-color:#ef4444;color:#991b1b;font-weight:700}
+.btn.attn::after{content:' •';font-weight:900}
+
+/* верхняя панель */
+header{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);padding:12px 20px}
+.badgeDot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#aaa;vertical-align:middle}
+.badgeDot.on{background:#22c55e}
+
+/* компоновка: основной контент + правый сайдбар */
+.main{
+  display:grid;
+  grid-template-columns:minmax(480px, var(--leftWidth)) minmax(280px, 1fr);
+  gap:16px;
+  padding:16px 20px;
+}
+@media (max-width:1400px){
+  .main{ grid-template-columns:1fr; }
+}
+
+/* карточки */
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px}
+
+/* таблица */
+.table-wrap{max-height:calc(var(--cell)*16 + 44px);overflow:auto;border:1px solid var(--line);border-radius:10px}
+.table-wrap::-webkit-scrollbar{height:10px;width:10px}
+.table-wrap::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:6px}
+.table-wrap:hover::-webkit-scrollbar-thumb{background:#94a3b8}
+table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:14px}
+thead th{position:sticky;top:0;z-index:2;background:#fafafa;font-weight:600;user-select:none}
+th,td{border-bottom:1px solid var(--line);padding:4px 6px;height:var(--cell);vertical-align:middle;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td[contenteditable="true"]{background:#fffceb;outline:0;border-radius:4px}
+.error{background:#ffdada}
+.newRow td{font-weight:700}
+.lock-btn{background:transparent;border:none;cursor:pointer;padding:0;line-height:0}
+.lock-btn:focus{outline:2px solid #bfdbfe;outline-offset:2px;border-radius:6px}
+.rest-cell{background:#f8fafc;font-weight:600}
+td[data-field="progress"]{background:#fffef3}
+.start-cell{line-height:1.1}
+.start-cell .orig{display:block;font-size:11px;color:#64748b;margin-top:2px}
+
+/* статусы (легенда) */
+.legend{display:flex;gap:14px;font-size:13px;margin-top:8px}
+.chip{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:4px}
+.chip.green{background:#22c55e}
+.chip.amber{background:#f59e0b}
+.chip.red{background:#ef4444}
+.status-ok{background:var(--ok);color:var(--okText);font-weight:600;border-radius:6px}
+.status-early{background:var(--early);color:var(--earlyText);font-weight:600;border-radius:6px}
+.status-late{background:var(--late);color:var(--lateText);font-weight:600;border-radius:6px}
+
+/* сайдбар: «Сорваны сроки» */
+.overdue-list{display:grid;gap:8px}
+.overdue-tile{
+  border:1px solid var(--tileBorder); background:var(--tile);
+  border-radius:10px; padding:8px 10px; display:flex; justify-content:space-between; align-items:center;
+}
+.overdue-tile .ttl{font-weight:600}
+.overdue-tile .date{font-variant-numeric:tabular-nums}
+
+/* Подетально — 2 секции: Обшая / Бронь */
+.detail7{margin-top:12px}
+.stack-wrap{display:flex;gap:14px;overflow:auto}
+.stack-col{min-width:280px;border:1px solid var(--line);border-radius:10px;padding:8px;background:#fff}
+.stack-title{font-weight:600;margin-bottom:8px;text-align:center}
+.stack-sec{margin-bottom:8px;border:1px dashed #cbd5e1;border-radius:8px;background:#f8fafc;padding:6px}
+.stack-sec h4{margin:2px 0 6px;font-size:13px;color:#334155;display:flex;justify-content:space-between}
+.stack{position:relative;height:220px;border:1px dashed #e2e8f0;border-radius:8px;background:#fff;display:flex;flex-direction:column;gap:4px;padding:4px}
+.slice{border:1px solid #94a3b8;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#0f172a;padding:0 8px;white-space:nowrap;overflow:hidden}
+
+/* Гант (внизу страницы) */
+.section-bottom{padding:0 20px 20px}
+.gantt-toolbar{display:flex;gap:8px;align-items:center;margin:8px 0}
+.gantt-wrap{border:1px solid var(--line);border-radius:10px;display:grid;grid-template-columns:var(--labelW) 1fr;max-height:min(calc(var(--gcell)*16+56px),calc(100vh - 260px))}
+.gantt-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow-y:auto}
+.gantt-right{display:flex;flex-direction:column;overflow:hidden}
+.gantt-header-x{background:#fff;border-bottom:1px solid var(--line);overflow:hidden}
+.gantt-header-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth);will-change:transform}
+.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.gantt-body{display:flex;overflow:auto}
+.gantt-dates{min-width:calc(var(--dayWidth)*var(--dayCount));display:grid;grid-auto-rows:var(--gcell);grid-auto-flow:row}
+.gantt-dates-row{display:grid;grid-template-columns:repeat(var(--dayCount),var(--dayWidth))}
+.gcell{position:relative;min-height:var(--gcell);border-left:1px solid #f0f0f0;border-bottom:1px solid var(--line);background:#fff}
+.gfill{position:absolute;inset:3px;border-radius:4px;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;color:#0a0a0a;background:#22c55e33}
+.gfill.late{background:#ef444433}
+.row-label{height:var(--gcell);display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row-label.header{height:calc(var(--gcell)*0.9);font-weight:600;border-bottom:1px solid var(--line)}
+
+/* Полноэкранный Гант */
+.gantt-overlay{position:fixed;inset:0;background:#fff;z-index:1000;display:none;flex-direction:column}
+.gantt-overlay.active{display:flex}
+.gantt-overlay .topbar{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line)}
+.gantt-overlay .title{font-weight:700}
+.gantt-overlay .content{flex:1;display:grid;grid-template-columns:var(--labelW) 1fr;overflow:hidden}
+
+/* диалоги */
+dialog{border:1px solid var(--line);border-radius:10px;padding:12px}
+dialog::backdrop{background:rgba(0,0,0,.2)}
+textarea.tall{width:min(70vw,720px);height:220px;border:1px solid #e5e7eb;border-radius:8px;padding:8px}
+kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#f3f4f6;border:1px solid #e5e7eb;border-bottom-width:2px;border-radius:6px;padding:0 6px}
+
+.del-btn{background:#fff;border:1px solid #ef4444;border-radius:6px;cursor:pointer;padding:2px 6px}
+.del-btn:hover{background:#fee2e2}
+
+/* === Общий маршрут заказов === */
+.ov-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.ov-toolbar .group{display:flex;gap:8px;align-items:center}
+.badge{display:inline-block;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;font-size:12px;background:#fff}
+.switch{display:inline-flex;gap:4px;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden}
+.switch button{padding:4px 8px;border:none;background:#fff;cursor:pointer}
+.switch button.active{background:#eef2ff;font-weight:700}
+
+/* Сегодня — подсветка колонки */
+.gantt-header-cell.today,
+.ov-head-cell.today { background:#fff7e6; border-bottom-color:#f59e0b; }
+
+.gcell.today::before,
+.ov-cell.today::before {
+  content:"";
+  position:absolute; inset:0;
+  background:rgba(245,158,11,.12);   /* мягкая янтарная вуаль */
+  pointer-events:none;
+}
+
+#overview{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ov-wrap{display:grid;grid-template-columns:260px 1fr;max-height:min(calc(var(--gcell)*18+56px),calc(100vh - 260px))}
+.ov-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow:auto}
+.ov-right{display:flex;flex-direction:column;overflow:hidden}
+.ov-head{background:#fff;border-bottom:1px solid var(--line)}
+.ov-head-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth)}
+.ov-head-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.ov-left .row-label{height:var(--ovRow, var(--gcell));display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ov-left .row-label.stage{padding-left:18px;color:#475569;font-size:13px}
+.ov-left .row-label.header{height:calc(var(--gcell)*0.9);font-weight:600}
+
+.ov-body{display:flex;overflow:auto}
+.ov-grid{min-width:calc(var(--dayWidth)*var(--ovDayCount));display:grid;grid-auto-rows:var(--ovRow, var(--gcell));grid-auto-flow:row}
+.ov-row{position:relative;display:grid;grid-template-columns:repeat(var(--ovDayCount),var(--dayWidth))}
+.ov-cell{position:relative;border-left:1px solid #f0f0f0;border-bottom:1px solid var(--line);min-height:var(--ovRow, var(--gcell));background:#fff}
+
+/* полосы этапов */
+.ov-bar{position:absolute;top:4px;bottom:4px;border-radius:6px;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;color:#0a0a0a;border:1px solid #0a0a0a22;user-select:none;cursor:grab}
+.ov-bar.drag{opacity:.85;outline:2px dashed #94a3b8;cursor:grabbing}
+.ov-letter{margin-right:6px}
+
+/* цвета этапов — новая схема
+   Техн.: голубой; Закупка: зелёный; Рубка: жёлтый; Лазер: оранжевый;
+   Гибка: красный; Сварка: бордовый; Мехобраб.: серый; Упаковка: коричневый;
+   Отгрузка: фиолетовый (на будущее) */
+.stage-draw{background:#38bdf8}
+.stage-proc{background:#22c55e}
+.stage-shear{background:#fde047}
+.stage-laser{background:#f97316}
+.stage-bend{background:#ef4444}
+.stage-weld{background:#7f1d1d}
+.stage-mech{background:#6b7280}
+.stage-pack{background:#8b5e3c}
+.stage-ship{background:#8b5cf6}
+
+/* скрытие «часовых» колонок, когда для передела часов нет */
+#tasksTable[data-nohours="1"] col#colProg,
+#tasksTable[data-nohours="1"] col#colHours,
+#tasksTable[data-nohours="1"] col#colExtra,
+#tasksTable[data-nohours="1"] col#colRest { display:none }
+
+/* шапка — скрываем те же 4 колонки (Прогресс/Часов/Доп.время/Остаток) */
+#tasksTable[data-nohours="1"] thead th:nth-child(6),
+#tasksTable[data-nohours="1"] thead th:nth-child(7),
+#tasksTable[data-nohours="1"] thead th:nth-child(8),
+#tasksTable[data-nohours="1"] thead th:nth-child(9) { display:none }
+
+/* тело таблицы — скрываем соответствующие TD */
+#tasksTable[data-nohours="1"] tbody td:nth-child(6),
+#tasksTable[data-nohours="1"] tbody td:nth-child(7),
+#tasksTable[data-nohours="1"] tbody td:nth-child(8),
+#tasksTable[data-nohours="1"] tbody td:nth-child(9) { display:none }
+/* Безчасовые этапы: убираем колонку «Бронь» */
+#tasksTable[data-nohours="1"] col#colReserve { display:none }
+#tasksTable[data-nohours="1"] thead th:nth-child(14) { display:none }
+#tasksTable[data-nohours="1"] tbody td:nth-child(14) { display:none }
+
+/* итоговую строку «Итого» для безчасовых не показываем */
+#tasksTable[data-nohours="1"] tfoot { display:none }
+
+/* ВАЖНО: «Бронь» оставляем видимой (ничего не скрываем) */
+
+/* компактный режим */
+.compact-wrap{border:1px solid var(--line);border-radius:10px;overflow:auto}
+.compact-table{width:100%;border-collapse:separate;border-spacing:0}
+.compact-table th,.compact-table td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;white-space:nowrap}
+.compact-bar{display:flex;gap:8px;align-items:center;height:28px}
+.compact-seg{
+  display:flex;align-items:center;justify-content:center;
+  height:100%; border-radius:10px; padding:2px 10px;
+  font-weight:700; color:#fff;  /* белые подписи как на примере */
+}
+
+.compact-legend{display:flex;gap:10px;font-size:12px;margin-top:8px;flex-wrap:wrap}
+.compact-legend .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
+
+/* статистика под графиком */
+.ov-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.ov-stat{border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;background:#fff;display:flex;gap:10px;align-items:center}
+.ov-stat .k{font-weight:700}
+
+/* комбинированная полоса в сжатом виде */
+.ov-combo{
+  position:absolute; top:3px; bottom:3px;
+  display:flex; gap:6px; align-items:stretch;
+  border:1px solid #94a3b8; border-radius:10px; background:#fff; padding:2px;
+}
+.ov-combo .compact-seg{
+  height:100%; display:flex; align-items:center; justify-content:center;
+  border-radius:8px; padding:0 8px; font-weight:700; color:#fff;
+}
+
+/* плавное скрытие строки в «Готовых» при возврате */
+.fade-out{ opacity:.0; transition: opacity .2s ease }
+
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="pageTitle">Планировщик — <span id="procTitle">Гибка</span></h1>
+  <div class="row" style="align-items:flex-end">
+    <label>Передел:
+	  <select id="process">
+		<option value="bend">Гибка</option>
+		<option value="laser">Лазер</option>
+		<option value="draw">Технологи: подготовка в работу</option>
+		<option value="weld">Сварка</option>
+		<option value="mech">Мехобработка</option>
+		<option value="proc">Закупка</option>
+		<option value="shear">Рубка</option>
+		<option value="pack">Упаковка</option>
+		<option value="ship">Отгрузка</option>
+
+	  </select>
+    </label>
+
+	<label id="parallelOpsBox" style="display:none">Параллельные операции:
+	  <input id="parallelOps" type="number" min="1" step="1" value="3" style="width:80px">
+	</label>
+	
+	<label>Вместимость, ч/день:
+	  <input id="capacity" type="number" min="0" step="0.25" value="15" style="width:80px">
+	</label>
+
+
+    <div class="tools">
+      <label class="btn">Импорт (.csv)
+        <input id="file" type="file" accept=".csv" style="display:none">
+      </label>
+      <button id="loadExample" class="btn">Загрузить пример</button>
+      <button id="exceptionsBtn" class="btn">Исключения</button>
+      <button id="reserveBtn" class="btn">Бронь</button>
+      <button id="optimizeBtn" class="btn warn">Оптимизация</button>
+      <button id="undoImport" class="btn">Откат импорта</button> 
+	  <button id="exportCSV" class="btn">Экспорт (.csv)</button>
+	  <label class="btn">Импорт состояния
+	    <input id="stateFile" type="file" accept=".csv" style="display:none">
+	  </label>
+      <button id="clearAll" class="btn">Очистить</button>
+    </div>
+
+    <div class="row" style="margin-left:auto">
+      <label class="small"><input type="checkbox" id="autosave"> Автосохранение</label>
+      <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
+      <button id="saveBtn" class="btn small">Сохранить</button>
+      <span id="saveStatus" class="save-indicator small">—</span>
+      <div class="muted small">Актуальность: <b id="freshness">—</b></div>
+    </div>
+	<label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
+  </div>
+</header>
+
+<div class="main">
+  <!-- ЛЕВАЯ КОЛОНКА: Список заказов + Подетально -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h3>Список заказов</h3>
+      <div class="row">
+        <button id="showDone" class="btn ghost">Готовые</button>
+		<button id="showTrash" class="btn ghost">Корзина</button>
+        <button id="addOrder" class="btn">Добавить</button>
+      </div>
+    </div>
+
+    <div class="table-wrap" id="ordersScroller">
+      <table id="tasksTable">
+        <colgroup>
+          <col style="width:42px">   <!-- № -->
+          <col style="width:34px">   <!-- замок -->
+          <col style="width:34px">   <!-- готово -->
+          <col style="width:34px">   <!-- глаз -->
+          <col id="colOrderId" style="width:340px">
+          <col id="colProg"    style="width:110px">  <!-- Прогресс, % -->
+          <col id="colHours"   style="width:96px">   <!-- Часов -->
+          <col id="colExtra"   style="width:104px">  <!-- Доп. время -->
+          <col id="colRest"    style="width:100px">  <!-- Остаток -->
+          <col id="colStart"   style="width:118px">
+          <col id="colEnd"     style="width:118px">
+          <col id="colState"   style="width:180px">
+          <col id="colDelta"   style="width:120px">
+          <col id="colReserve" style="width:74px">   <!-- Бронь -->
+          <col style="width:54px">   <!-- 🗑 -->
+        </colgroup>
+        <thead>
+          <tr>
+            <th>№</th>
+            <th>🔐</th>
+            <th>✔</th>
+            <th>👁</th>
+            <th>Заказ</th>
+            <th>Прогресс, %</th>
+            <th>Часов</th>
+            <th id="thExtra">Доп. время</th>
+            <th>Остаток</th>
+            <th id="thStart" title="Сортировать по дате начала (по возрастанию)">Начало ⇅</th>
+            <th>Конец</th>
+            <th>Состояние</th>
+            <th>Статус</th>
+            <th title="Использовать Бронь">Бронь</th>
+            <th>🗑</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+        <tfoot>
+          <tr id="totalsRow">
+            <td colspan="6" style="text-align:right;font-weight:700">Итого:</td>
+            <td id="totHours"  style="font-weight:700">0</td>
+            <td id="totExtra"  style="font-weight:700">0</td>
+            <td id="totRest"   style="font-weight:700">0</td>
+            <td colspan="6"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="legend">
+      <span><i class="chip green"></i> Точно в срок</span>
+      <span><i class="chip amber"></i> 0- дн</span>
+      <span><i class="chip red"></i> 0+дн</span>
+    </div>
+
+    <div id="detail7" class="detail7">
+      <h3>Подетально</h3>
+      <div class="stack-wrap" id="stackWrap"></div>
+    </div>
+  </div>
+
+  <!-- ПРАВАЯ КОЛОНКА: Сорваны сроки -->
+  <div class="card" id="overdueCard">
+    <h3>⚠️ Сорваны сроки</h3>
+    <div id="overDays" class="overdue-list muted">
+      нет
+    </div>
+  </div>
+</div>
+
+
+
+<!-- НИЖНИЙ БЛОК: Гант -->
+<div class="section-bottom">
+  <div class="card" id="ganttCard">
+    <div class="gantt-toolbar">
+      <h3 style="margin:0">Диаграмма Ганта</h3>
+      <span class="muted">Фильтр дней:</span>
+      <select id="ganttFilter">
+        <option value="all">Все</option>
+        <option value="free">Свободно</option>
+        <option value="busy">Занято</option>
+      </select>
+      <button id="toggleFS" class="btn" style="margin-left:auto">Во весь экран</button>
+    </div>
+
+    <div class="gantt-wrap" id="ganttWrap">
+      <div class="gantt-left" id="ganttLeft">
+        <div class="row-label header">Заказ / Дата</div>
+        <div id="ganttLeftBody"></div>
+      </div>
+      <div class="gantt-right">
+        <div class="gantt-header-x">
+          <div class="gantt-header-row" id="ganttDatesHeader"></div>
+        </div>
+        <div class="gantt-body" id="ganttBody">
+          <div class="gantt-dates" id="ganttDates"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Полноэкранный Гант -->
+<div class="gantt-overlay" id="ganttFS">
+  <div class="topbar">
+    <div class="row">
+      <span class="title">Диаграмма Ганта — полноэкранный режим</span>
+      <span class="muted small">| Передел:</span>
+	  <select id="processFS">
+		<option value="bend">Гибка</option>
+		<option value="laser">Лазер</option>
+		<option value="draw">Технологи: подготовка в работу</option>
+		<option value="weld">Сварка</option>
+		<option value="mech">Мехобработка</option>
+		<option value="proc">Закупка</option>
+		<option value="shear">Рубка</option>
+		<option value="pack">Упаковка</option>
+		<option value="ship">Отгрузка</option>
+	  </select>
+
+      <span class="muted small">Фильтр:</span>
+      <select id="ganttFilterFS">
+        <option value="all">Все</option>
+        <option value="free">Свободно</option>
+        <option value="busy">Занято</option>
+      </select>
+    </div>
+    <div class="row">
+      <button id="exitFS" class="btn">Выйти</button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="gantt-left" id="ganttLeftFS">
+      <div class="row-label header">Заказ / Дата</div>
+      <div id="ganttLeftBodyFS"></div>
+    </div>
+    <div class="gantt-right">
+      <div class="gantt-header-x">
+        <div class="gantt-header-row" id="ganttDatesHeaderFS"></div>
+      </div>
+      <div class="gantt-body" id="ganttBodyFS">
+        <div class="gantt-dates" id="ganttDatesFS"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Диалоги: Исключения / Бронь / Готовые / Маршрут / Превью дельты / Откат -->
+<dialog id="exceptionsDlg">
+  <h3 style="margin:0 0 6px">Исключения календаря</h3>
+  <p class="muted" style="margin-top:0">
+    Каждая строка: дата или дата с ёмкостью.<br>
+    <code>12.09.2025</code> → выходной (0 ч) &nbsp; | &nbsp; <code>12.09.2025 (18)</code> → ёмкость 18 ч
+  </p>
+  <textarea id="exceptionsText" class="tall"></textarea>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="excCancel" class="btn">Отмена</button>
+    <button id="excApply"  class="btn primary">Применить</button>
+  </div>
+</dialog>
+
+<dialog id="reserveDlg">
+  <h3 style="margin:0 0 6px">Бронь</h3>
+  <p class="muted" style="margin-top:0">
+    Каждая строка: <code>ДД.ММ.ГГГГ (часы)</code>. Эти часы становятся дневной квотой «Брони». Система никогда не превысит ёмкость дня.
+    <br><b>Диагностика:</b> справа будет показано «Будет применено: N ч (из M)».
+  </p>
+  <textarea id="reserveText" class="tall" placeholder="20.09.2025 (10)
+21.09.2025 (5)"></textarea>
+  <div id="reserveDiag" class="small muted" style="margin-top:6px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="resCancel" class="btn">Отмена</button>
+    <button id="resApply"  class="btn primary">Применить</button>
+  </div>
+</dialog>
+
+<dialog id="doneDlg">
+  <h3 style="margin:0 0 6px">Готовые заказы</h3>
+  <div class="table-wrap" style="max-height:55vh">
+    <table id="doneTable" style="table-layout:auto">
+      <thead><tr>
+        <th>Вернуть</th><th>Заказ</th><th>Часов</th><th>Начало</th><th>Конец</th><th>Источник</th><th>Когда</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="doneClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="trashDlg">
+  <h3 style="margin:0 0 6px">Корзина удалённых</h3>
+  <div class="table-wrap" style="max-height:55vh">
+    <table id="trashTable" style="table-layout:auto">
+      <thead><tr>
+        <th>Вернуть</th><th>Заказ</th><th>Передел</th>
+        <th>Часов</th><th>Начало</th><th>Конец</th>
+        <th>Источник</th><th>Когда</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="trashClear" class="btn attn">Очистить корзину</button>
+    <button id="trashClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="routeDlg">
+  <h3 style="margin:0 0 6px">Маршрут заказа: <span id="routeTitle"></span></h3>
+  <div id="routeContent" class="small" style="max-width:700px;line-height:1.6"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="routeClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="deltaDlg">
+  <h3 style="margin:0 0 6px">Изменения при импорте</h3>
+  <div id="deltaContent" class="small" style="max-width:720px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="deltaCancel" class="btn">Отмена</button>
+    <button id="deltaApply" class="btn primary">Применить</button>
+  </div>
+</dialog>
+
+<dialog id="undoDlg">
+  <h3 style="margin:0 0 6px">Откат импорта — выбрать изменения</h3>
+  <div id="undoContent" class="small" style="max-width:720px"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px">
+    <button id="undoCancel" class="btn">Отмена</button>
+    <button id="undoApply" class="btn primary">Откатить выбранные</button>
+  </div>
+</dialog>
+
+
+
+<!-- ОБЩИЙ МАРШРУТ ЗАКАЗОВ -->
+<div class="section-bottom">
+  <div class="card">
+    <div class="ov-toolbar">
+      <h3 style="margin:0">Общий маршрут заказов</h3>
+	  <div class="group">
+		<span class="muted small">Фильтр этапов:</span>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="draw"  checked> Технологи</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="proc"  checked> Закупка</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="shear" checked> Рубка</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="laser" checked> Лазер</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="bend"  checked> Гибка</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="weld"  checked> Сварка</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="mech"  checked> Мех</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="pack"  checked> Упаковка</label>
+		<label class="badge"><input type="checkbox" class="ov-filter" value="ship" checked> Отгрузка</label>
+	  </div>
+
+      <div class="group">
+        <span class="muted small">Вид:</span>
+        <div class="switch" id="ovMode">
+          <button data-mode="detailed" class="active">Подробный</button>
+          <button data-mode="compact">Сжатый</button>
+        </div>
+      </div>
+      <div class="group" style="margin-left:auto">
+        <button id="ovReset" class="btn">Сброс</button>
+        <button id="ovApply" class="btn primary">Сохранить изменения</button>
+      </div>
+    </div>
+
+    <!-- подробный -->
+    <div id="overview">
+      <div class="ov-wrap">
+        <div class="ov-left">
+          <div class="row-label header">Заказ</div>
+          <div id="ovLeftBody"></div>
+        </div>
+        <div class="ov-right">
+          <div class="ov-head"><div class="ov-head-row" id="ovHeadRow"></div></div>
+          <div class="ov-body" id="ovBody">
+            <div class="ov-grid" id="ovGrid"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+<!-- сжатый -->
+<div id="overviewCompact" class="ov-compact" style="display:none">
+  <div class="ov-wrap">
+    <div class="ov-left">
+      <div class="row-label header">Заказ</div>
+      <div id="ovLeftBodyC"></div>
+    </div>
+    <div class="ov-right">
+      <div class="ov-head"><div class="ov-head-row" id="ovHeadRowC"></div></div>
+      <div class="ov-body" id="ovBodyC">
+        <div class="ov-grid" id="ovGridC"></div>
+      </div>
+    </div>
+  </div>
+  <div class="compact-legend" style="margin-top:8px">
+	<span><i class="dot stage-draw"></i>Технологи</span>
+	<span><i class="dot stage-proc"></i>Закупка</span>
+	<span><i class="dot stage-shear"></i>Рубка</span>
+	<span><i class="dot stage-laser"></i>Лазер</span>
+	<span><i class="dot stage-bend"></i>Гибка</span>
+	<span><i class="dot stage-weld"></i>Сварка</span>
+	<span><i class="dot stage-mech"></i>Мех</span>
+	<span><i class="dot stage-pack"></i>Упаковка</span>
+	<span><i class="dot stage-ship"></i>Отгрузка</span>
+  </div>
+
+</div>
+<div id="ovStats" class="ov-stats"></div>
+
+<script>
+
+
+
+/* =========
+   УТИЛИТЫ
+========= */
+const $  = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+
+const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);x.setHours(0,0,0,0);return x;}
+const fmtDate=d=>`${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`
+
+// dd.mm.yyyy — для CSV-экспорта состояния
+const fmtDateCSV = d => `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
+
+// скачать текст как .csv (с BOM для корректной кириллицы в Excel)
+function downloadText(filename, text){
+  const blob = new Blob([text], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
+}
+const normalize=(s)=>String(s||'').trim().replace(/\./g,'-');
+const parseDate=s=>{const m=/^(\d{2})[-.](\d{2})[-.](\d{4})$/.exec(normalize(s)); if(!m) return null; const d=new Date(+m[3],+m[2]-1,+m[1]); if(isNaN(d)) return null; d.setHours(0,0,0,0); return d;}
+const daysBetween=(a,b)=>Math.round((b-a)/86400000);
+const parseNum=(s)=>{ if(s==null) return NaN; const t=String(s).replace(/\s+/g,'').replace(',','.'); const m=t.match(/-?\d+(?:\.\d+)?/); return m? Number(m[0]): NaN; }
+const parseHours=s=>parseNum(s);
+const today0=()=>{const t=new Date();t.setHours(0,0,0,0);return t;}
+const hashColor=k=>{let h=0;for(let i=0;i<k.length;i++)h=(h*31+k.charCodeAt(i))|0;return`hsl(${(h&255)}deg 70% 78%)`;}
+
+const VERSION='v2025.09.22-rc2';
+const SERVER_STATE_URL='/api/state';
+const SAVE_STATUS_TEXT={
+  idle:'—',
+  loading:'Загрузка…',
+  syncing:'Сохранение…',
+  saved:'Сохранено',
+  synced:'Синхронизировано',
+  error:'Ошибка сохранения',
+  offline:'Сохранено локально'
+};
+let saveStatusResetTimer=null;
+
+function setSaveStatus(state='idle', detail=''){
+  const el=$('#saveStatus');
+  if(!el) return;
+  const text=detail || SAVE_STATUS_TEXT[state] || SAVE_STATUS_TEXT.idle;
+  el.textContent=text;
+  el.dataset.state=state;
+  el.className=`save-indicator small ${state}`;
+  if(['saved','synced'].includes(state)){
+    if(saveStatusResetTimer) clearTimeout(saveStatusResetTimer);
+    saveStatusResetTimer=setTimeout(()=>setSaveStatus('idle'),4000);
+  } else if(state!=='saved' && state!=='synced' && saveStatusResetTimer){
+    clearTimeout(saveStatusResetTimer);
+    saveStatusResetTimer=null;
+  }
+}
+
+/* =========
+   СОСТОЯНИЕ
+========= */
+const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
+const DEFAULT_PARALLEL = { proc:5, shear:5, pack:3, ship:5 };
+let parallelByProc = { ...DEFAULT_PARALLEL };
+let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
+let schedule=null;           // результат allocate()
+let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
+let reserves=new Map();      // { 'DD-MM-YYYY' => reservedHours } — дневная квота
+let doneTasks=[];            // архив
+let trash=[];                // корзина удалённых
+let lockedUids=new Set();    // замки на позициях (по uid)
+let autosaveOn=true;
+let shiftOnProgress=true;
+let autoOptimizeOn = true;
+let capByProc = { ...DEFAULT_CAP };   // вместимость по переделам
+let freshnessStr='—';
+let lastRows=null;           // сырые строки последнего импорта
+let lastImportTime='';
+let lastSnapshotJson='';     // для «Откат импорта»
+let lastDiffApplied=null;    // запомненный diff для выборочного отката
+let allTasksFromState = null;	// полный снимок задач всех переделов, если он приехал из импорта состояния
+// Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
+let ordersByStage = new Map();
+let currentProc = '';
+
+// Зафиксировать текущий порядок видимого передела
+function rememberStageOrder(stage){
+  const st = stage || $("#process").value;
+  ordersByStage.set(st, tasks.map(t=>t.uid));
+}
+
+// Отсортировать массив записей по сохранённому порядку (если есть)
+function sortBySavedOrder(arr, stage){
+  const ord = ordersByStage.get(stage);
+  if(!ord) return arr;
+  const pos = new Map(ord.map((u,i)=>[u,i]));
+  arr.sort((a,b)=>{
+    const ia = pos.has(a.uid) ? pos.get(a.uid) : Number.MAX_SAFE_INTEGER;
+    const ib = pos.has(b.uid) ? pos.get(b.uid) : Number.MAX_SAFE_INTEGER;
+    if(ia!==ib) return ia-ib;
+    // стабильный тай-брейкер
+    return (a.startDate?.getTime()||0) - (b.startDate?.getTime()||0) || a.uid.localeCompare(b.uid);
+  });
+  return arr;
+}
+
+/* === Общий маршрут — состояние === */
+// этапы: добавлены безчасовые proc(Закупка), shear(Рубка), pack(Упаковка), ship (отгрузка)
+const STAGES = ['draw','proc','shear','laser','bend','weld','mech','pack','ship'];
+
+const STAGE_TITLE = {
+  draw:'Технологи: подготовка в работу',
+  proc:'Закупка',
+  shear:'Рубка',
+  laser:'Лазер',
+  bend:'Гибка',
+  weld:'Сварка',
+  mech:'Мехобработка',
+  pack:'Упаковка',
+  ship:'Отгрузка' // на будущее
+};
+
+// буквы для полос
+const STAGE_LETTER = {
+  draw:'Т',
+  proc:'З',
+  shear:'Р',
+  laser:'Л',
+  bend:'Г',
+  weld:'С',
+  mech:'М',
+  pack:'У',
+  ship:'О'
+};
+
+// css-классы для цветов
+const STAGE_CLASS = {
+  draw:'stage-draw',
+  proc:'stage-proc',
+  shear:'stage-shear',
+  laser:'stage-laser',
+  bend:'stage-bend',
+  weld:'stage-weld',
+  mech:'stage-mech',
+  pack:'stage-pack',
+  ship:'stage-ship'
+};
+
+// Переключение UI под безчасовые этапы
+function adjustUIForProcess(p){
+  const noHours = NOHOUR_STAGES.has(p);
+  // показать/скрыть столбцы часов
+  const tbl = document.getElementById('tasksTable');
+  if(tbl) tbl.setAttribute('data-nohours', noHours ? '1' : '0');
+
+  // Бронь/Исключения/«Подетально»
+  document.getElementById('reserveBtn').style.display    = noHours ? 'none' : '';
+  document.getElementById('exceptionsBtn').style.display = noHours ? 'none' : '';
+  document.getElementById('detail7').style.display       = noHours ? 'none' : '';
+
+  // Вместимость vs Параллельность (безопасно, если #capacity вдруг отсутствует)
+  const capEl = document.getElementById('capacity');
+  const capBox = capEl ? capEl.parentElement : null;
+  const parBox = document.getElementById('parallelOpsBox');
+
+  if(noHours){
+    if(capBox) capBox.style.display = 'none';
+    if(parBox) parBox.style.display = '';
+    const v = Math.max(1, parallelByProc[p] ?? DEFAULT_PARALLEL[p] ?? 3);
+    parallelByProc[p] = v;
+    const parEl = document.getElementById('parallelOps');
+    if(parEl) parEl.value = String(v);
+    if(capEl) capEl.dataset.stage = '';
+  }else{
+    if(capBox) capBox.style.display = '';
+    if(parBox) parBox.style.display = 'none';
+    if(capEl){
+      const stored = capByProc[p] ?? DEFAULT_CAP[p] ?? 15;
+      capEl.value = String(stored);
+      capEl.dataset.stage = p;
+    }
+  }
+
+}
+
+// Правка "Вместимость, ч/день" — только для часовых переделов
+document.getElementById('capacity')?.addEventListener('change', (e)=>{
+  const cur = document.getElementById('process').value;
+  if (!NOHOUR_STAGES.has(cur)) {
+    const v = Number(e.target.value);
+    if (Number.isFinite(v) && v >= 0) {
+      capByProc[cur] = v;
+      persistMaybe();
+      recompute();
+    }
+  }
+});
+
+// Правка "Параллельные операции" — только для безчасовых переделов
+document.getElementById('parallelOps')?.addEventListener('change', (e)=>{
+  const cur = document.getElementById('process').value;
+  if (NOHOUR_STAGES.has(cur)) {
+    const v = parseInt(String(e.target.value), 10);
+    if (Number.isFinite(v) && v > 0) {
+      parallelByProc[cur] = v;
+      persistMaybe();
+      recompute();
+    }
+  }
+});
+
+// безчасовые этапы: нет "Часов/Прогресса/Брони" и «Подетально»
+const NOHOUR_STAGES = new Set(['proc','shear','pack','ship']);
+
+let ovFilter = new Set(STAGES);  // какие этапы показаны на «Общем маршруте»
+let ovModeCurrent = 'detailed';  // 'detailed' | 'compact'
+let routeOverrides = new Map();  // `${parentId}::${stage}` => {start:Date|null,end:Date|null}
+let routeEditsWorking = new Map(); // несохранённые правки (как overrides)
+
+/* =========
+   ВСПОМОГАТ.
+========= */
+const capFor = (ds, base)=> exceptions.has(ds)? exceptions.get(ds) : base;
+const isDoneStatus = s => /готов|done|сдан|закрыт|closed/i.test(String(s||''));
+function remainingTotal(t){
+  const base = (+t.hours||0)+(+t.extraHours||0);
+  const p = Math.max(0, Math.min(100, +t.progress || 0));
+  return +(base * (1 - p/100)).toFixed(4);
+}
+function lockSvg(locked){
+  return locked
+    ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#ef4444" d="M7 10V7a5 5 0 1 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1Zm2 0h6V7a3 3 0 1 0-6 0v3Z"/></svg>'
+    : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#94a3b8" d="M17 10h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 1 1 2-2h9V7a3 3 0 1 0-6 0 1 1 0 1 1-2 0 5 5 0 1 1 10 0v3Z"/></svg>';
+}
+function stageIcon(name){
+  switch(name){
+    case 'laser': return '🔦 Лазер';
+    case 'bend' : return '🗜️ Гибка';
+    case 'draw' : return '📐 Технологи: подготовка в работу';
+    case 'weld' : return '🔩 Сварка';
+    case 'mech' : return '⚙️ Мехобработка';
+    case 'proc' : return '🛒 Закупка';
+    case 'shear': return '✂️ Рубка';
+    case 'pack' : return '📦 Упаковка';
+	case 'ship': return '🚚 Отгрузка';
+    default: return '◻︎';
+  }
+}
+
+function fitSliceText(el, label, hours, pct){
+  const suffix = ` — ${hours.toFixed(1)}ч (${pct.toFixed(0)}%)`; let name=label;
+  el.textContent = name + suffix;
+  if(el.scrollWidth <= el.clientWidth) return;
+  for(let i=0;i<name.length;i++){
+    const txt = name.slice(0, Math.max(1,name.length-1-i)) + '…' + suffix;
+    el.textContent = txt; if(el.scrollWidth <= el.clientWidth) return;
+  }
+  el.textContent = suffix.trimStart();
+}
+
+/* =========
+   CSV
+========= */
+async function readTextSmart(file){
+  const buff = new Uint8Array(await file.arrayBuffer());
+  if(buff[0]===0xEF && buff[1]===0xBB && buff[2]===0xBF){ return new TextDecoder('utf-8').decode(buff.subarray(3)); }
+  let txt = new TextDecoder('utf-8',{fatal:false}).decode(buff);
+  const bad=(txt.match(/\uFFFD/g)||[]).length, hasHigh=buff.some(b=>b>=0x80), hasCyr=/[ЁА-Яёа-я]/.test(txt);
+  if((bad>3 || (!hasCyr && hasHigh))){
+    const map=[...'ЂЃ‚ѓ„…†‡€‰Љ‹ЊЌЋЏђ‘’“”•–—�™љ›њќћџ ЎўЈ¤Ґ¦§Ё©Є«¬­®Ї°±Ііґµ¶·ё№є»јЅѕїАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя'];
+    txt = Array.from(buff, b=> b<128?String.fromCharCode(b): (map[b-128]||'?')).join('');
+  }
+  return txt;
+}
+function detectSep(line){
+  const c=[{s:';',n:0},{s:',',n:0},{s:'|',n:0},{s:'\t',n:0}];
+  c.forEach(k=>k.n=(line.match(new RegExp('\\'+k.s,'g'))||[]).length);
+  c.sort((a,b)=>b.n-a.n);
+  return c[0].n>0? c[0].s : ';';
+}
+function splitRow(line, sep){
+  if(!line) return [];
+  let out=[], cur='', inQ=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch === '"'){
+      if(inQ && line[i+1] === '"'){ cur+='"'; i++; }
+      else inQ = !inQ;
+    } else if(ch === sep && !inQ){ out.push(cur); cur=''; }
+    else cur+=ch;
+  }
+  out.push(cur);
+  return out;
+}
+function parseCSVText(text){
+  const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+  if(!lines.length) return [];
+  const sep = detectSep(lines[0]);
+  return lines.map(l=> splitRow(l, sep));
+}
+function parseKVLines(text, type='exc'){
+  const map=new Map();
+  (String(text||'').split(/\r?\n/)).map(l=>l.trim()).filter(Boolean).forEach(line=>{
+    const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})(?:\s*\((\d+(?:[.,]\d+)?)\))?$/.exec(line);
+    if(!m) return;
+    const d=parseDate(m[1]); if(!d) return;
+    if(type==='exc'){
+      const val = m[2]!=null ? Number(String(m[2]).replace(',','.')) : 0;
+      map.set(fmtDate(d), val);
+    } else {
+      if(m[2]==null) return;
+      const val = Number(String(m[2]).replace(',','.'));
+      if(val>0) map.set(fmtDate(d), val);
+    }
+  });
+  return map;
+}
+
+/* =========
+   ПАРСИНГ CSV (дети только, стабильный ключ uid) — 5 переделов
+========= */
+function mapRows(rows, process='bend'){
+  if(!rows || !rows.length) return [];
+  const hdr = rows[0].map(v=>String(v).trim());
+  const lower = hdr.map(v=>v.toLowerCase());
+  const body = rows.slice(1);
+
+  // Новая схема:
+  // "Id задачи	Id родителя	Задача	Доска	Состояние	Статус	К-во подзадач	№	Резка, час	Гибка, час	Обработка чертежей, час	Сварка, час	Мехобработка	Сумма услуг	Заказчик	Начало	Конец	Изм. JSON"
+  const IDX = { id:0, pid:1, name:2, board:3, state:4, status:5, cnt:6, num:7,
+                cut:8, bend:9, draw:10, weld:11, mech:12, sum:13, customer:14,
+                start:15, end:16, changed:17 };
+
+  const schemaOk = lower.length >= 18;
+
+  // Фрешность (если есть)
+  const firstData = rows[1] || [];
+  const fresh = schemaOk && firstData[IDX.changed] != null ? String(firstData[IDX.changed]).trim() : '';
+  if(fresh){ freshnessStr = fresh; $("#freshness").textContent = fresh; }
+
+  // Маппинг процессов -> индекс и тест названия подзадачи
+  const PROC = {
+	laser:{col:'cut',  rx:/лазер|резк/i},
+	bend :{col:'bend', rx:/гибк/i},
+	draw :{col:'draw', rx:/(технолог|подготов)|черт|обраб\.*\s*черт/i},
+	weld :{col:'weld', rx:/свар/i},
+	mech :{col:'mech', rx:/мех/i},
+	// новые безчасовые:
+	proc :{col:null,   rx:/^закуп/i},            // "Закупка ..."
+	shear:{col:null,   rx:/^рубк/i},             // "Рубка" / "Рубка листа"
+	pack :{col:null,   rx:/^упаков/i},            // "Упаковка"
+	ship :{col:null,   rx:/^отгруз/i}			// "Отгрузка"
+  };
+
+  if(!schemaOk){
+    // fallback (старый формат)
+    const hasRu = lower.includes('заказ') || lower.includes('часов') || lower.includes('начало') || lower.includes('конец');
+    const named = lower.includes('orderid') || hasRu;
+    const body2 = named ? rows.slice(1) : rows;
+    const norm = n => n.replace(/\s+/g,'');
+    const idx = name => lower.findIndex(h=>norm(h)===norm(name));
+    return body2.map(r=>{
+      const get=(n,f)=> (named ? r[(idx(n)>-1? idx(n):f)] : r[f]) ?? '';
+      const orderId = String(get(hasRu?'заказ':'orderId',0)).trim();
+      const hours   = parseHours(get(hasRu?'часов':'hours',1));
+      const sd      = parseDate(get(hasRu?'начало':'startDate',2));
+      const edRaw   = get(hasRu?'конец':'endDate',3);
+      const ed      = parseDate(edRaw);
+      if(!orderId || (!sd && !ed)) return null;
+      const uid = 'fallback::'+orderId+'::'+process;
+      const rec={uid,orderId,stage:process,childId:'',parentId:'',hours:isFinite(hours)?hours:0,extraHours:Math.max(0.25,(isFinite(hours)?hours:0)*0.05),startDate:sd||today0(),endDate:ed||null,startMissing:!sd,endMissing:!edRaw,state:'',status:'',useReserve:false,progress:0,origStartDate:sd||today0(),route:{}};
+
+	  // применим сохранённые overrides по датам этапа (ключ parentId::process)
+	  if(rec.parentId){
+	    const ovr = routeOverrides.get(`${rec.parentId}::${process}`);
+	    if(ovr){
+	  	  if(ovr.start){ rec.startDate = new Date(ovr.start); rec.startMissing=false; }
+		  if('end' in ovr){ rec.endDate = ovr.end ? new Date(ovr.end) : null; rec.endMissing = !ovr.end; }
+		  if(rec.route && rec.route[process]){
+		    if(ovr.start) rec.route[process].start = new Date(ovr.start);
+		    if('end' in ovr) rec.route[process].end = ovr.end ? new Date(ovr.end) : null;
+		  }
+	    }
+	  }
+
+	  
+	  rec.startDate.setHours(0,0,0,0);
+      return rec;
+    }).filter(Boolean);
+  }
+
+  // Собираем родителей и детей
+  const parentsById = new Map();
+  const children = [];
+  body.forEach(r=>{
+    const id=(r[IDX.id]??'').toString().trim();
+    const pid=(r[IDX.pid]??'').toString().trim();
+    if(id && !pid) parentsById.set(id, r);
+    else if(pid) children.push(r);
+  });
+
+  // Для маршрута — по pid
+  const kidsByPid = new Map();
+  children.forEach(r=>{
+    const pid=(r[IDX.pid]??'').toString().trim();
+    if(!kidsByPid.has(pid)) kidsByPid.set(pid, []);
+    kidsByPid.get(pid).push(r);
+  });
+
+  const out=[];
+  for(const ch of children){
+    const pid=(ch[IDX.pid]??'').toString().trim();
+    const name=(ch[IDX.name]??'').toString().trim();
+    const prow = parentsById.get(pid);
+    if(!prow) continue;
+
+    const orderNum=(prow[IDX.num]??'').toString().trim();
+    const customer=(prow[IDX.customer]??'').toString().trim();
+    const orderId=[orderNum,customer].filter(Boolean).join(' ').trim();
+    if(!orderId) continue;
+
+    // текущий передел
+    const meta=PROC[process];
+    if(!meta) continue;
+    const isThis = meta.rx.test(name);
+    if(!isThis) continue;
+
+    // часы: сначала берем у ребёнка, если 0 — у родителя
+	const childH = meta.col ? (parseHours(ch[IDX[meta.col]]??'') || 0) : 0;
+	const parentH= meta.col ? (parseHours(prow[IDX[meta.col]]??'') || 0) : 0;
+	const useH = childH>0 ? childH : parentH; // для безчасовых останется 0
+
+    const sd = parseDate((ch[IDX.start]??'').toString().trim()) || parseDate((prow[IDX.start]??'').toString().trim());
+    const ed = parseDate((ch[IDX.end]  ??'').toString().trim()) || parseDate((prow[IDX.end]  ??'').toString().trim());
+
+    if(!sd && !ed) continue;
+
+	const clean = v => {
+	  const s = String(v ?? '').trim();
+	  return (s==='—' || s==='-' || s==='–') ? '' : s;
+	};
+	const status = clean(ch[IDX.status]) || clean(prow?.[IDX.status]);
+	const state  = clean(ch[IDX.state])  || clean(prow?.[IDX.state]);
+
+
+	// Сбор маршрута по всем этапам (только реальные подзадачи; даты берём ТОЛЬКО из подзадач)
+	const siblings = kidsByPid.get(pid) || [];
+
+	function stageInfo(key, rx){
+	  const kid = siblings.find(r => rx.test(String(r[IDX.name]||'')));
+	  const hChild  = (key && kid) ? (parseHours(kid[IDX[key]] ?? '') || 0) : 0;
+	  const hParent = key ? (parseHours(prow?.[IDX[key]] ?? '') || 0) : 0;
+	  const h = hChild > 0 ? hChild : hParent;
+	  const s = kid ? (parseDate(String(kid[IDX.start] ?? '').trim()) || null) : null;
+	  const e = kid ? (parseDate(String(kid[IDX.end]   ?? '').trim()) || null) : null;
+	  if(h <= 0 && !s && !e) return null;
+	  return { hours: h, start: s, end: e };
+	}	
+
+	const route = {};
+	[
+	  ['draw',  'draw',  /(технолог|подготов)|черт|обраб\.*\s*черт/i],
+	  ['proc',  null,    /^закуп/i],
+	  ['shear', null,    /^рубк/i],
+	  ['laser', 'cut',   /лазер|резк/i],
+	  ['bend',  'bend',  /гибк/i],
+	  ['weld',  'weld',  /свар/i],
+	  ['mech',  'mech',  /мех/i],
+	  ['pack',  null,    /^упаков/i],
+	  ['ship',  null,    /^отгруз/i]
+	].forEach(([key,col,rx])=>{
+	  const info = stageInfo(col, rx);
+	  if(info) route[key] = info;
+	});
+
+    const uid = `${String(ch[IDX.id]).trim()}::${process}`;
+    const rec={
+      uid,
+      orderId,
+      stage:process,
+      childId:String(ch[IDX.id]).trim(),
+      parentId:pid,
+      hours: useH||0,
+      extraHours: Math.max(0.25,(useH||0)*0.05),
+      startDate: sd || today0(),
+      endDate: ed || null,
+      startMissing: !sd,
+      endMissing: !ed,
+      state, status,
+      useReserve:false,
+      progress:0,
+      origStartDate: sd || today0(),
+      route
+    };
+    rec.startDate.setHours(0,0,0,0);
+    out.push(rec);
+  }
+  return out;
+}
+
+/* =========
+   РАСПРЕДЕЛЕНИЕ (с «Бронь»/«Общая» секциями)
+========= */
+function allocate(inputTasks, baseCapacity, excMap, resMap){
+  if(!inputTasks.length){
+    const t=today0();
+    return {minD:t,maxD:t,perTask:new Map(),perDay:new Map(),metaByDay:new Map()};
+  }
+
+  const starts=inputTasks.map(t=>t.startDate), ends=inputTasks.map(t=>t.endDate||t.startDate);
+  const minD=new Date(Math.min.apply(null,starts)), maxD0=new Date(Math.max.apply(null,ends));
+  minD.setHours(0,0,0,0); maxD0.setHours(0,0,0,0);
+
+  const perTask=new Map(); // key = uid
+  const perDay=new Map();  // ds -> [{uid, hours, late, section:'reserve'|'public'}]
+  const metaByDay=new Map();// ds -> {capDay, resLim, excluded, pubCap, resRem, pubRem}
+
+  // инициализация дней
+  for(let d=new Date(minD); d<=maxD0; d=addDays(d,1)){
+    const ds=fmtDate(d);
+    const capDay = capFor(ds, baseCapacity);
+    const resReq = Math.max(0,(resMap?.get(ds)||0));
+    const resLim = Math.min(resReq, capDay);       // бронь не превышает ёмкость
+    const pubCap = capDay - resLim;
+
+    perDay.set(ds, []);
+    metaByDay.set(ds, {capDay,resLim,pubCap,resRem:resLim,pubRem:pubCap,excluded:Math.max(0, baseCapacity - capDay)});
+  }
+
+  function pushSeg(ds, uid, hours, late, section){
+    perDay.get(ds).push({uid,hours,late,section});
+  }
+  function placeInDay(ds, task, remain, late, day){
+    let used=0;
+    if(task.useReserve && day.resRem>0){
+      const take=Math.min(remain, day.resRem);
+      if(take>0){ day.resRem-=take; used+=take; remain-=take; pushSeg(ds, task.uid, take, late, 'reserve'); }
+    }
+    if(day.pubRem>0 && remain>0){
+      const take=Math.min(remain, day.pubRem);
+      if(take>0){ day.pubRem-=take; used+=take; remain-=take; pushSeg(ds, task.uid, take, late, 'public'); }
+    }
+    return {used, remain};
+  }
+
+  for(const t of inputTasks){
+    const total = remainingTotal(t);
+    const start=t.startDate||today0();
+    const end=t.endDate||new Date(start);
+    let remain=total;
+    const rec={segments:[],lateHours:0};
+
+    for(let d=new Date(start); d<=end && remain>1e-9; d=addDays(d,1)){
+      const ds=fmtDate(d);
+      if(!metaByDay.has(ds)){
+        const capDay = capFor(ds, baseCapacity);
+        const resReq = Math.max(0,(resMap?.get(ds)||0));
+        const resLim = Math.min(resReq, capDay);
+        metaByDay.set(ds,{capDay,resLim,pubCap:capDay-resLim,resRem:resLim,pubRem:capDay-resLim,excluded:Math.max(0, baseCapacity-capDay)});
+        perDay.set(ds,[]);
+      }
+      const day=metaByDay.get(ds);
+      const {used, remain:r2} = placeInDay(ds, t, remain, false, day);
+      if(used>0){ rec.segments.push({date:new Date(d),hours:used,late:false}); remain=r2; }
+    }
+    let cur=addDays(end,1);
+    while(remain>1e-9){
+      const ds=fmtDate(cur);
+      if(!metaByDay.has(ds)){
+        const capDay = capFor(ds, baseCapacity);
+        const resReq = Math.max(0,(resMap?.get(ds)||0));
+        const resLim = Math.min(resReq, capDay);
+        metaByDay.set(ds,{capDay,resLim,pubCap:capDay-resLim,resRem:resLim,pubRem:capDay-resLim,excluded:Math.max(0, baseCapacity-capDay)});
+        perDay.set(ds,[]);
+      }
+      const day=metaByDay.get(ds);
+      const {used, remain:r2} = placeInDay(ds, t, remain, true, day);
+      if(used>0){ rec.segments.push({date:new Date(cur),hours:used,late:true}); rec.lateHours+=used; remain=r2; }
+      cur=addDays(cur,1);
+    }
+    perTask.set(t.uid,rec);
+  }
+
+  let maxD=maxD0; for(const ds of perDay.keys()){ const d=parseDate(ds); if(d>maxD) maxD=d; }
+  return {minD,maxD,perTask,perDay,metaByDay};
+}
+
+/* =========
+   СТАТУСЫ ДЛЯ ТАБЛИЦЫ
+========= */
+function statusForTask(t){
+  const rec = schedule?.perTask?.get(t.uid);
+  if(!rec) return {text:'', cls:''};
+
+  // последняя дата фактического распределения
+  let last = null;
+  for (const s of rec.segments) {
+    if (!last || s.date > last) last = new Date(s.date);
+  }
+
+  if (last && t.endDate) {
+    const ms = last - t.endDate;
+    const daysAbs = Math.ceil(Math.abs(ms) / 86400000);
+
+    if (ms < 0)  return { text: `−${daysAbs}дн`, cls: 'status-early' }; // раньше срока
+    if (ms > 0)  return { text: `+${daysAbs}дн`, cls: 'status-late'  }; // просрочка
+    return { text: '0', cls: 'status-ok' };                              // в день
+  }
+  return {text:'', cls:''};
+}
+
+
+/* =========
+   СОРТИРОВКА/ОПТИМИЗАЦИЯ
+========= */
+function sortTasksByStart(){
+  tasks.sort((a,b)=> +a.startDate - +b.startDate);
+  rememberStageOrder();
+}
+
+function optimizeQueue(){
+  if(!tasks.length) return;
+  const lockedPositions = []; tasks.forEach((t,i)=>{ if(lockedUids.has(t.uid)) lockedPositions.push({pos:i, task:t}); });
+  const freeTasks = tasks.filter(t=>!lockedUids.has(t.uid));
+  freeTasks.sort((a,b)=>{
+    const ea=a.endDate?+a.endDate:Infinity, eb=b.endDate?+b.endDate:Infinity;
+    if(ea!==eb) return ea-eb;
+    const sa=+a.startDate, sb=+b.startDate;
+    if(sa!==sb) return sa-sb;
+    return a.orderId.localeCompare(b.orderId);
+  });
+  const N=tasks.length; const res=new Array(N).fill(null);
+  lockedPositions.forEach(lp=>{ res[lp.pos]=lp.task; });
+  let p=0; for(const t of freeTasks){ while(p<N && res[p]) p++; if(p<N) res[p++]=t; }
+  tasks = res.filter(Boolean);
+  recompute();
+  rememberStageOrder();
+  recompute();
+  persistMaybe();
+}
+
+/* =========
+   ТАБЛИЦА
+========= */
+function applyEditImmediate(cell, task){
+  const field=cell.dataset.field, val=cell.textContent.trim();
+  if(field==='orderId'){ if(val) task.orderId=val; }
+  else if(field==='hours'){ const h=parseHours(val); if(isFinite(h)&&h>=0){ task.hours=h; task.extraHours=Math.max(0.25,h*0.05); task.route[task.stage]={...(task.route[task.stage]||{}),hours:h,start:task.startDate,end:task.endDate}; } }
+  else if(field==='extraHours'){ const e=parseHours(val); if(isFinite(e)&&e>=0) task.extraHours=e; }
+  
+	// --- НАЧАЛО: robust-парсер даты из первой строки ячейки ---
+	else if(field==='startDate'){
+	  // В ячейке может быть "ДД-ММ-ГГГГ\nисх.: ДД-ММ-ГГГГ".
+	  // Берём ТОЛЬКО первую найденную дату.
+	  const txt = cell.textContent || '';
+	  const m = txt.match(/\b(\d{2}[.\-]\d{2}[.\-]\d{4})\b/); // первая дата
+	  const d = m ? parseDate(m[1]) : null;
+
+	  if(d){
+		if(!task.origStartDate) task.origStartDate = task.startDate;  // сохраним исходник один раз
+		task.startDate = d;
+		task.startMissing = false;
+		cell.classList.remove('error');
+
+		// синхронизируем маршрут текущего передела
+		task.route[task.stage] = { ...(task.route[task.stage]||{}), start: d };
+		// если конец раньше старта — подтянем конец к старту (см. безопасный фикс ниже)
+		if(task.endDate && task.endDate < task.startDate){
+		  task.endDate = new Date(task.startDate);
+		  task.endMissing = false;
+		}
+	  } else {
+		cell.classList.add('error');
+	  }
+	}
+	// --- КОНЕЦ замены ---
+  
+  
+  else if(field==='endDate'){ const d=parseDate(val); task.endDate=d||null; task.endMissing=!d; cell.textContent=d?fmtDate(d):'—'; cell.classList.toggle('error',!d); task.route[task.stage]={...(task.route[task.stage]||{}),end:d||null}; }
+  else if(field==='state'){ task.state = val; }
+  else if(field==='progress'){
+    const p=parseHours(val);
+    const safe = (isFinite(p)&&p>=0&&p<=100)?p:0;
+    if(safe!==task.progress){
+      task.progress=safe;
+      if($('#shiftOnProgress').checked){
+        if(!task.origStartDate) task.origStartDate = task.startDate;
+        if(+task.origStartDate===+task.startDate) task.origStartDate = task.startDate;
+        task.startDate=today0();
+        task.startMissing=false;
+		if(task.endDate && task.endDate < task.startDate){
+		  task.endDate = new Date(task.startDate);  // подтянем конец к старту
+		  task.endMissing = false;
+		}
+        task.route[task.stage]={...(task.route[task.stage]||{}),start:task.startDate};
+      }
+    }
+  }
+}
+function renderTasksTable(){
+  const tb=$("#tasksTable tbody"); tb.innerHTML='';
+  tasks.forEach((t,i)=>{
+    const st=statusForTask(t);
+    const rest = Math.max(0, remainingTotal(t));
+    const tr=document.createElement('tr');
+    tr.draggable=true; tr.dataset.index=i; if(t.isNew) tr.classList.add('newRow');
+
+    const useRes   = t.useReserve ? 'checked' : '';
+
+    tr.innerHTML=`
+      <td>${i+1}</td>
+      <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
+      <td><input type="checkbox" data-done></td>
+      <td class="eye" title="Маршрут заказа">👁</td>
+      <td class="drag-handle" ${t.isUserNew?'contenteditable="true" data-field="orderId"':''}>${t.orderId}</td>
+      <td contenteditable="true" data-field="progress">${String(t.progress||0).replace('.',',')}</td>
+      <td contenteditable="true" data-field="hours">${String(t.hours).replace('.',',')}</td>
+      <td contenteditable="true" data-field="extraHours">${String(t.extraHours??0.25).replace('.',',')}</td>
+      <td class="rest-cell">${rest.toFixed(1).replace('.',',')}</td>
+      <td contenteditable="true" data-field="startDate" class="start-cell ${t.startMissing?'error':''}">
+          ${fmtDate(t.startDate)}
+          ${t.origStartDate && (+t.origStartDate!==+t.startDate) ? `<span class="orig">исх.: ${fmtDate(t.origStartDate)}</span>`:''}
+      </td>
+      <td contenteditable="true" data-field="endDate"   class="${t.endMissing?'error':''}">${t.endDate?fmtDate(t.endDate):'—'}</td>
+      <td contenteditable="true" data-field="state">${t.state||''}</td>
+      <td class="${st.cls}">${st.text}</td>
+      <td><input type="checkbox" data-reserve ${useRes} title="Использовать Бронь"></td>
+      <td><button class="del-btn" title="Удалить" data-del>×</button></td>
+    `;
+
+    // замок
+    tr.querySelector('.lock-btn').addEventListener('click', (e)=>{
+      if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
+      e.currentTarget.dataset.locked = lockedUids.has(t.uid);
+      e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
+      persistMaybe();
+    });
+
+    // готово (в архив вручную)
+	tr.querySelector('input[data-done]').addEventListener('change', e=>{
+	  if(e.target.checked){
+		doneTasks.push({
+		  uid:t.uid, orderId:t.orderId, stage:t.stage,
+		  parentId:t.parentId, childId:t.childId,
+		  hours:t.hours, extra:t.extraHours,
+		  start:t.startDate, end:t.endDate,
+		  when:new Date(), source:'checkbox'
+		});
+		tasks.splice(i,1);
+		rememberStageOrder();
+		updateDoneAttention();
+		recompute();
+		persistMaybe();
+	  }
+	});
+
+	tr.querySelector('[data-del]').addEventListener('click', ()=>{
+	  if (!confirm('Удалить заказ из списка? Он будет перемещён в «Корзину».')) return;
+
+	  const idx = tasks.findIndex(x=>x.uid===t.uid);
+	  if(idx>-1){
+		// перемещаем в корзину
+		trash.push({
+		  uid: t.uid, orderId: t.orderId, stage: t.stage,
+		  parentId: t.parentId, childId: t.childId,
+		  hours: t.hours, extra: t.extraHours,
+		  start: t.startDate, end: t.endDate,
+		  when: new Date(), source: 'delete'
+		});
+
+		tasks.splice(idx,1);
+		rememberStageOrder();
+		updateTrashAttention?.(); // подсветим кнопку «Корзина», если функция уже определена
+		recompute();
+		persistMaybe();
+	  }
+	});
+
+    // маршрут
+    tr.querySelector('.eye').addEventListener('click', ()=> openRoute(t));
+
+    // edits
+    tr.querySelectorAll('[contenteditable]').forEach(cell=>{
+      const field=cell.dataset.field;
+      cell.addEventListener('keydown', e=>{
+        if(e.key==='Enter'){ e.preventDefault(); applyEditImmediate(cell,t); recompute(); cell.blur(); persistMaybe(); }
+        else if(e.key==='Escape'){ e.preventDefault();
+          if(field==='orderId') cell.textContent=t.orderId;
+          if(field==='hours') cell.textContent=String(t.hours).replace('.',',');
+          if(field==='extraHours') cell.textContent=String(t.extraHours??0.25).replace('.',',');
+          if(field==='startDate') cell.textContent=fmtDate(t.startDate);
+          if(field==='endDate') cell.textContent=t.endDate?fmtDate(t.endDate):'—';
+          if(field==='state') cell.textContent=t.state||'';
+          if(field==='progress') cell.textContent=String(t.progress||0).replace('.',',');
+          cell.blur();
+        }
+      });
+      cell.addEventListener('blur', ()=>{ applyEditImmediate(cell,t); recompute(); persistMaybe(); });
+    });
+
+    // флажок «Бронь»
+    tr.querySelector('input[data-reserve]').addEventListener('change', e=>{
+      t.useReserve = !!e.target.checked;
+      recompute();
+      persistMaybe();
+    });
+
+    // drag & drop
+    let dropAbove=true;
+    tr.addEventListener('dragstart', e=>{ tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; tr.dataset.dragIndex=i; });
+    tr.addEventListener('dragend', ()=>{ tr.classList.remove('dragging'); $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below')); persistMaybe(); });
+    tr.addEventListener('dragover', e=>{
+      e.preventDefault();
+      const rect=tr.getBoundingClientRect(); const mid=rect.top+rect.height/2;
+      dropAbove = e.clientY < mid;
+      $$('tr.drop-above, tr.drop-below').forEach(x=>x.classList.remove('drop-above','drop-below'));
+      tr.classList.add(dropAbove?'drop-above':'drop-below');
+    });
+    tr.addEventListener('drop', e=>{
+      e.preventDefault();
+      const dragIndex = Number(document.querySelector('tr.dragging')?.dataset.index ?? tr.dataset.index);
+      const targetIndex = Number(tr.dataset.index);
+      if(dragIndex===targetIndex) return;
+      const item = tasks.splice(dragIndex,1)[0];
+      let insertIndex = targetIndex + (dropAbove?0:1);
+      if(insertIndex<0) insertIndex=0; if(insertIndex>tasks.length) insertIndex=tasks.length;
+      tasks.splice(insertIndex,0,item);
+	  rememberStageOrder();
+      recompute();
+      persistMaybe();
+    });
+
+    tb.appendChild(tr);
+  });
+
+  // ИТОГИ
+  const sHours = tasks.reduce((s,x)=>s+(+x.hours||0),0);
+  const sExtra = tasks.reduce((s,x)=>s+(+x.extraHours||0),0);
+  const sRest  = tasks.reduce((s,x)=>s+Math.max(0, remainingTotal(x)),0);
+  $("#totHours").textContent = sHours.toFixed(1).replace('.',',');
+  $("#totExtra").textContent = sExtra.toFixed(1).replace('.',',');
+  $("#totRest").textContent  = sRest.toFixed(1).replace('.',',');
+
+  requestAnimationFrame(()=>{
+    const w=Math.min(2200,Math.max(960,$("#tasksTable").offsetWidth+24));
+    document.documentElement.style.setProperty('--leftWidth', w+'px');
+  });
+}
+
+/* =========
+   МАРШРУТ (диалог «глаз») — иконки + суммы
+========= */
+function openRoute(task){
+  $("#routeTitle").textContent = task.orderId;
+
+	const stages = STAGES;
+	let lines = '';
+	let sumAll = 0;
+
+	// собираем только реально присутствующие этапы
+	const items = stages.map(s => ({ s, info: task.route?.[s] }))
+	  .filter(x => x.info && (isFinite(x.info.hours) || x.info.start || x.info.end));
+
+	// сортировка по старту: раньше — выше; без даты старта — в конец.
+	// при равенстве дат — в порядке stages.
+	items.sort((a,b)=>{
+	  const as = a.info.start instanceof Date ? a.info.start.getTime() : Infinity;
+	  const bs = b.info.start instanceof Date ? b.info.start.getTime() : Infinity;
+	  if(as !== bs) return as - bs;
+	  return stages.indexOf(a.s) - stages.indexOf(b.s);
+	});
+
+	// рендер
+	for(const {s, info} of items){
+	  const h = isFinite(info.hours) ? info.hours : 0;
+	  sumAll += (h || 0);
+	  const sTxt = info.start ? fmtDate(info.start) : '—';
+	  const eTxt = info.end   ? fmtDate(info.end)   : '—';
+	  lines += `<div><b>${stageIcon(s)}</b>: ${sTxt} → ${eTxt}, ${h} ч</div>`;
+	}
+
+
+  const totalCurrent = (+task.hours||0)+(+task.extraHours||0);
+  const html = `
+    ${lines}
+    <hr>
+    <div><b>Итого по заказу (все этапы):</b> ${sumAll.toFixed(1)} ч</div>
+    <div><b>По текущему переделу:</b> ${totalCurrent.toFixed(1)} ч, прогресс: ${Math.max(0,Math.min(100,task.progress||0))}%</div>
+    ${task.origStartDate ? `<div class="muted" style="margin-top:6px">Изначальная дата старта (по текущему переделу): <b>${fmtDate(task.origStartDate)}</b></div>` : ''}
+  `;
+  $("#routeContent").innerHTML = html;
+  $("#routeDlg").showModal();
+}
+
+/* =========
+   ПОДЕТАЛЬНО: «Общая» сверху, «Бронь» ниже (скрывается, если нет)
+========= */
+function renderDetail(){
+  const wrap=$("#stackWrap"); wrap.innerHTML=''; if(!schedule) return;
+
+  const totalDays=daysBetween(schedule.minD,schedule.maxD)+1;
+  const days=[...Array(totalDays)].map((_,i)=>addDays(schedule.minD,i));
+  const totalBy=new Map(tasks.map(t=>[t.uid,(+t.hours||0)+(+t.extraHours||0)]));
+  const cumBy=new Map([...totalBy.keys()].map(k=>[k,0]));
+  const labelByUid = new Map(tasks.map(t=>[t.uid,t.orderId]));
+
+  // есть ли вообще Бронь
+  let anyReserve = false;
+  for(const d of days){
+    const ds=fmtDate(d);
+    const meta = schedule.metaByDay?.get(ds);
+    const segs = (schedule.perDay.get(ds)||[]).some(x=>x.section==='reserve' && x.hours>0);
+    if((meta?.resLim||0)>0 || segs){ anyReserve=true; break; }
+  }
+
+  days.forEach(d=>{
+    const ds=fmtDate(d);
+    const meta = schedule.metaByDay?.get(ds) || {capDay:0,resLim:0,pubCap:0,resRem:0,pubRem:0,excluded:0};
+    const col=document.createElement('div'); col.className='stack-col';
+    const title=document.createElement('div'); title.className='stack-title';
+    title.textContent = fmtDate(d) + (meta.excluded>0? `  ·  Исключение: −${meta.excluded.toFixed(1)}ч` : '');
+    col.appendChild(title);
+
+    // ОБЩАЯ
+    const secPub = document.createElement('div'); secPub.className='stack-sec';
+    secPub.innerHTML = `<h4><span>Общая</span><span>${meta.pubCap.toFixed(1)} ч</span></h4>`;
+    const stackPub = document.createElement('div'); stackPub.className='stack';
+    let usedPub=0;
+    (schedule.perDay.get(ds)||[]).filter(x=>x.section==='public').forEach(seg=>{
+      usedPub += seg.hours;
+      const uid=seg.uid, hours=seg.hours;
+      const prev=cumBy.get(uid)||0, now=prev+hours; cumBy.set(uid,now);
+      const total=totalBy.get(uid)||0, pct= total? Math.min(100,(now/total)*100):0;
+      const slice=document.createElement('div'); slice.className='slice';
+      slice.style.height=`max(8px, ${(hours/Math.max(0.0001, meta.pubCap)*100).toFixed(2)}%)`;
+      slice.style.background=hashColor(uid);
+      requestAnimationFrame(()=>fitSliceText(slice, labelByUid.get(uid)||uid, hours, pct));
+      stackPub.appendChild(slice);
+    });
+    const freePub = Math.max(0, meta.pubCap - usedPub);
+    if(freePub>0){
+      const free=document.createElement('div'); free.className='slice';
+      free.style.height=`${Math.max(6,(freePub/Math.max(0.0001, meta.pubCap)*100))}%`;
+      free.style.background='#e5f6ff'; free.style.borderStyle='dashed';
+      free.textContent=`Свободно — ${freePub.toFixed(1)}ч`;
+      stackPub.appendChild(free);
+    }
+    secPub.appendChild(stackPub);
+    col.appendChild(secPub);
+
+    // БРОНЬ — ниже (и только если где-то есть)
+    if(anyReserve){
+      const secRes = document.createElement('div'); secRes.className='stack-sec';
+      secRes.innerHTML = `<h4><span>Бронь</span><span>${meta.resLim.toFixed(1)} ч</span></h4>`;
+      const stackRes = document.createElement('div'); stackRes.className='stack';
+      let usedRes=0;
+      (schedule.perDay.get(ds)||[]).filter(x=>x.section==='reserve').forEach(seg=>{
+        usedRes += seg.hours;
+        const uid=seg.uid, hours=seg.hours;
+        const prev=cumBy.get(uid)||0, now=prev+hours; cumBy.set(uid,now);
+        const total=totalBy.get(uid)||0, pct= total? Math.min(100,(now/total)*100):0;
+        const slice=document.createElement('div'); slice.className='slice';
+        slice.style.height=`max(8px, ${(hours/Math.max(0.0001, meta.resLim)*100).toFixed(2)}%)`;
+        slice.style.background=hashColor(uid);
+        requestAnimationFrame(()=>fitSliceText(slice, labelByUid.get(uid)||uid, hours, pct));
+        stackRes.appendChild(slice);
+      });
+      const resLeft = Math.max(0, meta.resLim - usedRes);
+      if(resLeft>0){
+        const free=document.createElement('div'); free.className='slice';
+        free.style.height=`${Math.max(6,(resLeft/Math.max(0.0001, meta.resLim)*100))}%`;
+        free.style.background='#e3f2fd'; free.style.borderStyle='dashed';
+        free.textContent=`Остаток брони — ${resLeft.toFixed(1)}ч`;
+        stackRes.appendChild(free);
+      }
+      secRes.appendChild(stackRes);
+      col.appendChild(secRes);
+    }
+
+    $("#stackWrap").appendChild(col);
+  });
+}
+
+/* =========
+   СОРВАННЫЕ СРОКИ (правый сайдбар)
+========= */
+function renderOverdue(){
+  const box=$("#overDays"); if(!schedule){ box.textContent='нет'; box.classList.add('muted'); return; }
+  const items=[];
+  for(const t of tasks){
+    const rec=schedule.perTask.get(t.uid);
+    if(!rec||!t.endDate) continue;
+    let last=null; for(const s of rec.segments){ if(!last||s.date>last) last=new Date(s.date); }
+    if(last>t.endDate) items.push({orderId:t.orderId,date:last});
+  }
+  if(!items.length){ box.textContent='нет'; box.classList.add('muted'); return; }
+  box.classList.remove('muted'); items.sort((a,b)=>a.date-b.date);
+  box.innerHTML = items.map(x=>`
+    <div class="overdue-tile">
+      <div class="ttl">${x.orderId}</div>
+      <div class="date">${fmtDate(x.date)}</div>
+    </div>`).join('');
+}
+
+/* =========
+   ГАНТ + FS
+========= */
+function visibleDayIndices(filter, cap, perDay, minD, maxD){
+  const idx=[]; const N=daysBetween(minD,maxD)+1;
+  for(let i=0;i<N;i++){
+    const d=addDays(minD,i), ds=fmtDate(d);
+    const used=(perDay.get(ds)||[]).reduce((s,x)=>s+x.hours,0);
+    const capacity = capFor(ds, cap);
+    const free=Math.max(0, capacity - used);
+    if(filter==='all') idx.push(i);
+    else if(filter==='free' && free>0) idx.push(i);
+    else if(filter==='busy' && capacity>0 && Math.abs(used-capacity)<1e-6) idx.push(i);
+  }
+  return idx.length? idx : [...Array(N).keys()];
+}
+function renderGantt(intoFS=false){
+  const cards = {
+    leftBody: intoFS ? $("#ganttLeftBodyFS") : $("#ganttLeftBody"),
+    header:   intoFS ? $("#ganttDatesHeaderFS") : $("#ganttDatesHeader"),
+    dates:    intoFS ? $("#ganttDatesFS") : $("#ganttDates"),
+    leftPane: intoFS ? $("#ganttLeftFS") : $("#ganttLeft"),
+    bodyPane: intoFS ? $("#ganttBodyFS") : $("#ganttBody"),
+  };
+
+  cards.leftBody.innerHTML=''; cards.header.innerHTML=''; cards.dates.innerHTML='';
+  if(!schedule){ return; }
+
+  const curProc = $("#process").value;
+  const noHours = NOHOUR_STAGES.has(curProc);
+  let baseCap;
+  if(noHours){
+    baseCap = Math.max(1, parallelByProc[curProc] ?? DEFAULT_PARALLEL[curProc] ?? 3);
+  } else {
+    const capEl = document.getElementById('capacity');
+    const capStage = capEl?.dataset?.stage;
+    const rawCap = capEl ? Number(capEl.value) : NaN;
+    const stored = capByProc[curProc] ?? DEFAULT_CAP[curProc] ?? 15;
+    baseCap = (capStage === curProc && Number.isFinite(rawCap)) ? rawCap : stored;
+  }
+
+  const filter = intoFS ? $("#ganttFilterFS").value : $("#ganttFilter").value;
+
+  const visIdx = visibleDayIndices(filter, baseCap, schedule.perDay, schedule.minD, schedule.maxD);
+  document.documentElement.style.setProperty('--dayCount', visIdx.length);
+
+  const todayDs = fmtDate(today0());
+  visIdx.forEach(i=>{
+	const d=addDays(schedule.minD,i);
+	const c=document.createElement('div');
+	c.className='gantt-header-cell';
+	c.textContent=fmtDate(d);
+	if (fmtDate(d)===todayDs) c.classList.add('today');
+	cards.header.appendChild(c);
+  });
+
+  tasks.forEach(t=>{
+    const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=t.orderId;
+    cards.leftBody.appendChild(lab);
+
+    const row=document.createElement('div'); row.className='gantt-dates-row';
+    const rec=schedule.perDay;
+    visIdx.forEach(i=>{
+      const d=addDays(schedule.minD,i), ds=fmtDate(d);
+      const cell=document.createElement('div'); cell.className='gcell';
+	  if (fmtDate(d)===todayDs) cell.classList.add('today');
+      const segs=(rec.get(ds)||[]).filter(x=>x.uid===t.uid);
+      const val=segs.reduce((s,x)=>s+x.hours,0);
+      const late=segs.some(x=>x.late);
+	  if (val > 0) {
+		const f = document.createElement('div');
+		f.className = 'gfill' + (late ? ' late' : '');
+		const noHours = NOHOUR_STAGES.has($("#process").value);
+		f.textContent = noHours ? '' : `${val.toFixed(1)}ч`;
+		cell.appendChild(f);
+	  }
+
+      row.appendChild(cell);
+    });
+    cards.dates.appendChild(row);
+  });
+
+  // синхронная прокрутка
+  let lock=0;
+  cards.leftPane.addEventListener('scroll',()=>{ if(lock) return; lock=1; cards.bodyPane.scrollTop=cards.leftPane.scrollTop; lock=0; }, {passive:true});
+  cards.bodyPane.addEventListener('scroll',()=>{ if(lock) return; lock=1; cards.leftPane.scrollTop=cards.bodyPane.scrollTop; lock=0; (intoFS?$("#ganttDatesHeaderFS"):$("#ganttDatesHeader")).style.transform = `translateX(${-cards.bodyPane.scrollLeft}px)`; }, {passive:true});
+}
+
+/* синхронизация прокрутки для «Общего маршрута» */
+function bindOverviewScroll(compact=false){
+  const body = compact ? $("#ovBodyC") : $("#ovBody");
+  const left = compact ? $("#overviewCompact .ov-left") : $("#overview .ov-left");
+  const head = compact ? $("#ovHeadRowC") : $("#ovHeadRow");
+  if(!body || !left || !head) return;
+  // прокрутка дат по X и синхрон по Y
+  body.onscroll = ()=>{ head.style.transform = `translateX(${-body.scrollLeft}px)`; left.scrollTop = body.scrollTop; };
+  left.onscroll = ()=>{ body.scrollTop = left.scrollTop; };
+}
+
+
+function mapAllProcessesFromRows(rows){
+  const byStage = {}; STAGES.forEach(s=> byStage[s] = mapRows(rows, s));
+  const orders = new Map(); // parentId => {parentId, orderId, stages:{stage:{start,end,hours}}, number}
+  for(const st of STAGES){
+    for(const t of byStage[st]){
+      const key = t.parentId || ('no-parent::'+t.orderId);
+      if(!orders.has(key)) orders.set(key,{parentId:key, orderId:t.orderId, stages:{}, number:0});
+
+      const hours=(+t.hours||0)+(+t.extraHours||0);
+
+      // 1) плановые даты из маршрута/CSV
+      let startPlanned = t.route?.[st]?.start || t.startDate || null;
+      let endPlanned   = t.route?.[st]?.end   || t.endDate   || null;
+
+      // 2) если этап совпадает с выбранным в UI — берём ФАКТ из allocate (как в Ганте)
+      if (st === $("#process").value && schedule?.perTask) {
+        const fact = schedule.perTask.get(t.uid);
+        if (fact && Array.isArray(fact.segments) && fact.segments.length){
+          startPlanned = new Date(Math.min(...fact.segments.map(s=> +s.date)));
+          endPlanned   = new Date(Math.max(...fact.segments.map(s=> +s.date)));
+        }
+      }
+
+
+      // 3) поверх — возможные ручные правки пользователя (overrides)
+      const ovr = routeOverrides.get(`${t.parentId}::${st}`);
+
+      // --- агрегируем этап по РОДИТЕЛЮ: сумма часов, мин(старт), макс(конец) ---
+      // 1) базовые (план/маршрут)
+      let sEff = startPlanned;
+      let eEff = endPlanned;
+
+      // 2) если этот передел выбран в UI — берём ФАКТ из allocate (как в Ганте) по этой дочке
+      if (st === $("#process").value && schedule?.perTask) {
+        const fact = schedule.perTask.get(t.uid);
+        if (fact && Array.isArray(fact.segments) && fact.segments.length){
+          sEff = new Date(Math.min(...fact.segments.map(s=> +s.date)));
+          eEff = new Date(Math.max(...fact.segments.map(s=> +s.date)));
+        }
+      }
+
+      // 3) учтём пользовательские правки (overrides) на уровне родителя::этап
+      if (ovr?.start) sEff = new Date(ovr.start);
+      if (ovr && 'end' in ovr) eEff = ovr.end ? new Date(ovr.end) : null;
+
+      // 4) накопительный объект по родителю
+      const agg = orders.get(key).stages[st] || {start:null,end:null,hours:0};
+      agg.hours += (+hours||0);
+      if (sEff && (!agg.start || sEff < agg.start)) agg.start = new Date(sEff);
+      if (eEff && (!agg.end   || eEff > agg.end))   agg.end   = new Date(eEff);
+      orders.get(key).stages[st] = agg;
+
+    }
+  }
+  
+  // === Поверх: фактические даты из allocate по текущему выбранному этапу (агрегация по всем дочкам родителя)
+  if(schedule && schedule.perTask){
+    const cur = $("#process").value; // bend/laser/...
+    // сгруппируем все дочерние задачи текущего этапа по parentId из активного списка (tasks)
+    const byParent = new Map();
+    tasks.forEach(t=>{
+      if(t.stage===cur){
+        if(!byParent.has(t.parentId)) byParent.set(t.parentId, []);
+        byParent.get(t.parentId).push(t.uid);
+      }
+    });
+    for(const [pid,uids] of byParent.entries()){
+      let sMin=null, sMax=null;
+      uids.forEach(uid=>{
+        const fact = schedule.perTask.get(uid);
+        if(!fact || !Array.isArray(fact.segments) || !fact.segments.length) return;
+        const locMin = new Date(Math.min(...fact.segments.map(s=> +s.date)));
+        const locMax = new Date(Math.max(...fact.segments.map(s=> +s.date)));
+        if(!sMin || locMin < sMin) sMin = locMin;
+        if(!sMax || locMax > sMax) sMax = locMax;
+      });
+      if(sMin || sMax){
+        const o = orders.get(pid);
+        if(o){
+          const seg = o.stages[cur] || {start:null,end:null,hours:0};
+          if(sMin) seg.start = sMin;
+          if(sMax) seg.end   = sMax;
+          o.stages[cur] = seg;
+        }
+      }
+    }
+  }
+
+  const arr=[...orders.values()].sort((a,b)=> a.orderId.localeCompare(b.orderId));
+  arr.forEach((o,i)=> o.number=i+1);
+  return arr;
+}
+
+// fallback: когда нет lastRows (работаем только по текущим tasks)
+function mapOrdersFromTasks(ts){
+  const orders = new Map(); // key = parentId || 'no-parent::<orderId>'
+
+  for(const t of ts){
+    const key = t.parentId || ('no-parent::'+t.orderId);
+    if(!orders.has(key)) orders.set(key, { parentId:key, orderId:t.orderId, stages:{}, number:0 });
+
+    // берём часы и даты по каждому этапу из route; если по текущему переделу route пуст — подставим start/end самого таска
+    for(const s of STAGES){
+      let info = t.route?.[s] || null;
+      if(!info && t.stage===s){
+        info = { hours:(+t.hours||0)+(+t.extraHours||0), start:t.startDate||null, end:t.endDate||null };
+      }
+      if(!info) continue;
+
+      const agg = orders.get(key).stages[s] || {start:null,end:null,hours:0};
+      agg.hours += (+info.hours||0);
+      if(info.start && (!agg.start || info.start < agg.start)) agg.start = new Date(info.start);
+      if(info.end   && (!agg.end   || info.end   > agg.end))   agg.end   = new Date(info.end);
+      orders.get(key).stages[s] = agg;
+    }
+  }
+
+  const arr = [...orders.values()].sort((a,b)=> a.orderId.localeCompare(b.orderId));
+  arr.forEach((o,i)=> o.number=i+1);
+  return arr;
+}
+
+function visibleDayIdxForRange(minD,maxD){
+  const n=daysBetween(minD,maxD)+1; return [...Array(n).keys()];
+}
+function calcBoundsForOrders(orders){
+  let minD=null, maxD=null;
+  for(const o of orders){
+    for(const st of STAGES){
+      if(!ovFilter.has(st)) continue;
+      const seg=o.stages[st]; if(!seg) continue;
+      if(seg.start){ minD = (!minD||seg.start<minD)? new Date(seg.start): minD; }
+      if(seg.end){   maxD = (!maxD||seg.end>maxD)?   new Date(seg.end): maxD; }
+    }
+  }
+  if(!minD || !maxD){ const t=today0(); return {minD:t,maxD:t}; }
+  minD.setHours(0,0,0,0); maxD.setHours(0,0,0,0); return {minD,maxD};
+}
+function daysSpan(start,end){ if(!start||!end) return 1; return Math.max(1, daysBetween(start,end)+1); }
+
+/* перетаскивание полос по дням */
+let dragCtx=null; // {key,parentId,stage,start0,end0,dayW,lastShift}
+function attachBarDrag(barEl, parentId, stage, seg, minD){
+  barEl.addEventListener('mousedown', (e)=>{
+    dragCtx = {
+      key:`${parentId}::${stage}`,
+      parentId, stage,
+      start0: seg.start? new Date(seg.start): null,
+      end0: seg.end? new Date(seg.end): null,
+      dayW: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dayWidth')) || 94,
+      lastShift:0
+    };
+    barEl.classList.add('drag');
+    document.addEventListener('mousemove', onBarDrag);
+    document.addEventListener('mouseup', onBarDrop, {once:true});
+  });
+}
+function onBarDrag(e){
+  if(!dragCtx) return;
+  const dx = e.movementX || 0;
+  const el = document.querySelector(`.ov-bar[data-key="${dragCtx.key}"]`);
+  dragCtx.lastShift += dx/dragCtx.dayW;
+  const snap = Math.round(dragCtx.lastShift);
+  document.querySelectorAll(`.ov-bar[data-key="${dragCtx.key}"]`).forEach(b=>{
+    b.style.transform=`translateX(${snap*dragCtx.dayW}px)`;
+  });
+}
+function onBarDrop(){
+  if(!dragCtx) return;
+  const shift = Math.round(dragCtx.lastShift);
+  document.querySelectorAll(`.ov-bar[data-key="${dragCtx.key}"]`).forEach(b=>{
+    b.classList.remove('drag'); b.style.transform='';
+  });
+  if(shift!==0){
+    const ns = dragCtx.start0 ? addDays(dragCtx.start0, shift) : null;
+    const ne = dragCtx.end0   ? addDays(dragCtx.end0,   shift) : null;
+    routeEditsWorking.set(dragCtx.key, {start:ns, end:ne});
+    renderOverview();
+  }
+  document.removeEventListener('mousemove', onBarDrag);
+  dragCtx=null;
+}
+
+/* статистика */
+function renderOvStats(orders){
+  const sums = Object.fromEntries(STAGES.map(s => [s, {cnt:0, h:0}]));
+  for(const o of orders){
+    for(const st of STAGES){
+      if(!ovFilter.has(st)) continue;
+      const seg=o.stages[st]; if(!seg) continue;
+      sums[st].cnt++; sums[st].h += (+seg.hours||0);
+    }
+  }
+  const box=$("#ovStats");
+  box.innerHTML = STAGES.filter(s=>ovFilter.has(s)).map(s=>`
+    <div class="ov-stat"><span class="k ${STAGE_CLASS[s]} badge">${STAGE_TITLE[s]}</span>
+      <span>заказов: <b>${sums[s].cnt}</b></span>
+      <span>часов: <b>${sums[s].h.toFixed(1)}</b></span>
+    </div>`).join('');
+}
+
+/* рендер общего маршрута */
+function renderOverview(){
+  let orders;
+  if (lastRows && lastRows.length){
+    orders = mapAllProcessesFromRows(lastRows);
+  } else if (Array.isArray(allTasksFromState) && allTasksFromState.length){
+    // есть полный снимок всех переделов — используем его
+    orders = mapOrdersFromTasks(allTasksFromState);
+  } else {
+    // крайний случай — только активный передел
+    orders = mapOrdersFromTasks(tasks);
+  }
+
+  // применим несохранённые правки поверх
+  for(const [k,ov] of routeEditsWorking.entries()){
+    const [pid, st] = k.split('::');
+    const o = orders.find(x=>x.parentId===pid);
+    if(o && o.stages[st]){
+      if(ov.start) o.stages[st].start = new Date(ov.start);
+      if('end' in ov) o.stages[st].end = ov.end ? new Date(ov.end) : null;
+    }
+  }
+  // фильтр этапов
+  orders.forEach(o=>{
+    for(const st of Object.keys(o.stages)){
+      if(!ovFilter.has(st)) delete o.stages[st];
+    }
+  });
+
+  const detailed = ovModeCurrent==='detailed';
+  $("#overview").style.display = detailed? '' : 'none';
+  $("#overviewCompact").style.display = detailed? 'none' : '';
+
+  if(detailed){
+    // границы шкалы берём как в Ганте (из allocate), а если allocate ещё не готов — из самих этапов
+	const b = calcBoundsForOrders(orders);
+	const minD = (schedule && schedule.minD) ? new Date(Math.min(+schedule.minD, +b.minD)) : b.minD;
+	const maxD = (schedule && schedule.maxD) ? new Date(Math.max(+schedule.maxD, +b.maxD)) : b.maxD;
+    const idxs = visibleDayIdxForRange(minD,maxD);
+
+
+    // тонкие строки для этапов
+    $("#overview").style.setProperty('--ovDayCount', idxs.length);
+    $("#overview").style.setProperty('--ovRow', '24px');
+
+    const hdr=$("#ovHeadRow"); hdr.innerHTML='';
+	const todayDs = fmtDate(today0());
+	idxs.forEach(i=>{
+	  const d=addDays(minD,i);
+	  const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
+	  if (fmtDate(d)===todayDs) cell.classList.add('today');
+	  hdr.appendChild(cell);
+	});
+
+    const left=$("#ovLeftBody"); left.innerHTML='';
+    const grid=$("#ovGrid"); grid.innerHTML='';
+
+    for(const o of orders){
+      const stagesKeys = STAGES.filter(s=>ovFilter.has(s) && o.stages[s] && o.stages[s].start && o.stages[s].end);
+      if(stagesKeys.length===0) continue;
+
+      // 1) строка-заголовок заказа (без полос)
+      const orderLab=document.createElement('div'); orderLab.className='row-label'; orderLab.textContent=`${o.number}. ${o.orderId}`;
+      left.appendChild(orderLab);
+	  const emptyRow=document.createElement('div'); emptyRow.className='ov-row';
+	  idxs.forEach(i=>{
+		const d=addDays(minD,i);
+		const c=document.createElement('div'); c.className='ov-cell';
+		if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
+		emptyRow.appendChild(c);
+	  });
+	  grid.appendChild(emptyRow);
+
+
+      // 2) строки этапов
+      for(const st of stagesKeys){
+        const seg=o.stages[st];
+        const lab=document.createElement('div'); lab.className='row-label stage'; lab.textContent='— '+STAGE_TITLE[st];
+        left.appendChild(lab);
+
+		const row=document.createElement('div'); row.className='ov-row';
+		idxs.forEach(i=>{
+		  const d=addDays(minD,i);
+		  const c=document.createElement('div'); c.className='ov-cell';
+		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
+		  row.appendChild(c);
+		});
+
+        const startIdx = daysBetween(minD, seg.start);
+        const spanDays = daysSpan(seg.start, seg.end);
+        const bar = document.createElement('div');
+        bar.className = `ov-bar ${STAGE_CLASS[st]}`;
+        bar.dataset.key = `${o.parentId}::${st}`;
+        bar.style.left = `calc(${startIdx} * var(--dayWidth))`;
+        bar.style.width = `calc(${spanDays} * var(--dayWidth) - 8px)`;
+        bar.style.top = `4px`; bar.style.bottom = `4px`;
+        const labelOV = NOHOUR_STAGES.has(st)
+		? `${STAGE_LETTER[st]}`
+		: `${STAGE_LETTER[st]} ${(+seg.hours||0).toFixed(1)}ч`;
+		bar.innerHTML = `<span class="ov-letter">${labelOV}</span>`;
+
+        attachBarDrag(bar, o.parentId, st, seg, minD);
+        row.appendChild(bar);
+        grid.appendChild(row);
+      }
+    }
+	bindOverviewScroll(false);
+    
+	} else {
+	  // Сжатый режим: один комбинированный бар на заказ.
+	  // Бар занимает интервал [minStart; maxEnd] по реальной шкале дат,
+	  // а внутри он делится на сегменты ∝ часам этапов в порядке старта.
+
+	  const cont = $("#overviewCompact");
+	  cont.style.setProperty('--ovRow','22px');
+
+	  // границы общей шкалы для заголовка — как в Ганте
+	  const b = calcBoundsForOrders(orders);
+	  const minD = (schedule && schedule.minD) ? new Date(Math.min(+schedule.minD, +b.minD)) : b.minD;
+	  const maxD = (schedule && schedule.maxD) ? new Date(Math.max(+schedule.maxD, +b.maxD)) : b.maxD;
+
+	  const idxs = visibleDayIdxForRange(minD,maxD);
+
+	  cont.style.setProperty('--ovDayCount', idxs.length);
+
+	  const hdrC=$("#ovHeadRowC"); hdrC.innerHTML='';
+	  const todayDs = fmtDate(today0());
+	  idxs.forEach(i=>{
+		const d=addDays(minD,i);
+		const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
+		if (fmtDate(d)===todayDs) cell.classList.add('today');
+		hdrC.appendChild(cell);
+	  });
+
+	  const leftC=$("#ovLeftBodyC"); leftC.innerHTML='';
+	  const gridC=$("#ovGridC"); gridC.innerHTML='';
+
+	  orders.forEach(o=>{
+		// видимые этапы заказа
+		let keys = STAGES.filter(s=> ovFilter.has(s) && o.stages[s]);
+		if(keys.length===0) return;
+
+		// мин/макс даты по заказу (без них строить нечего)
+		let earliest=null, latest=null;
+		keys.forEach(k=>{
+		  const seg = o.stages[k];
+		  const a = seg.start || seg.end;
+		  const b = seg.end   || seg.start;
+		  if (a) earliest = (!earliest || a < earliest) ? new Date(a) : earliest;
+		  if (b) latest   = (!latest   || b > latest)   ? new Date(b) : latest;
+		});
+
+		if(!earliest || !latest) return; // нет дат — пропускаем строку
+
+		// сортировка по старту (без даты — в конец), затем по порядку STAGES
+		keys.sort((a,b)=>{
+		  const as = o.stages[a].start instanceof Date ? o.stages[a].start.getTime() : Infinity;
+		  const bs = o.stages[b].start instanceof Date ? o.stages[b].start.getTime() : Infinity;
+		  if(as!==bs) return as-bs;
+		  return STAGES.indexOf(a) - STAGES.indexOf(b);
+		});
+
+		const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=`${o.number}. ${o.orderId}`;
+		leftC.appendChild(lab);
+
+		const row=document.createElement('div'); row.className='ov-row';
+		idxs.forEach(i=>{
+		  const d=addDays(minD,i);
+		  const c=document.createElement('div'); c.className='ov-cell';
+		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
+		  row.appendChild(c);
+		});
+
+		// контейнер бара: ставим по реальным датам (левый край — earliest, правый — latest)
+		const startIdx = daysBetween(minD, earliest);
+		const spanDays = daysSpan(earliest, latest);
+		const combo = document.createElement('div');
+		combo.className = 'ov-combo';
+		combo.style.left  = `calc(${startIdx} * var(--dayWidth))`;
+		combo.style.width = `calc(${spanDays} * var(--dayWidth) - 8px)`;
+
+		// сегменты ∝ часам
+
+function segWeight(seg){
+  const h = (+seg.hours || 0);
+  if (h > 0) return h;
+  if (seg.start || seg.end){
+    const s = seg.start || seg.end;
+    const e = seg.end   || seg.start;
+    return Math.max(1, daysSpan(s, e)); // хотя бы 1
+  }
+  return 0;
+}
+let totalW = keys.reduce((s,k)=> s + segWeight(o.stages[k]), 0);
+
+// если вообще нет часов/длительности — делим поровну
+const equalShare = keys.length ? (100/keys.length).toFixed(2)+'%' : '0%';
+
+keys.forEach(k=>{
+  const seg = o.stages[k];
+  const w   = segWeight(seg);
+  const share = totalW>0 ? (w/totalW*100).toFixed(2)+'%' : equalShare;
+
+  const part = document.createElement('div');
+  part.className = 'compact-seg ' + STAGE_CLASS[k];
+  part.style.flex = `0 0 ${share}`;
+  const hShow = Math.round(+seg.hours||0);
+  part.textContent = hShow>0 ? `${STAGE_LETTER[k]} ${hShow}ч` : `${STAGE_LETTER[k]}`;
+  part.title = `${STAGE_TITLE[k]} — ${hShow>0? (seg.hours.toFixed(1)+' ч') : 'без часов'}`;
+  combo.appendChild(part);
+});
+
+
+		row.appendChild(combo);
+		gridC.appendChild(row);
+	  });
+    bindOverviewScroll(true);
+	}
+
+	renderOvStats(orders);
+}
+
+/* =========
+   ГОТОВЫЕ
+========= */
+function updateDoneAttention(){
+  const btn=$("#showDone");
+  if(!btn) return;
+  if(doneTasks.length>0) btn.classList.add('attn'); else btn.classList.remove('attn');
+}
+function renderDoneList(){
+  const dlg = $("#doneDlg");
+  const tbl = $("#doneTable");
+  const thead = tbl.querySelector('thead');
+  const tbody = tbl.querySelector('tbody');
+
+  // --- 1) Панель фильтра по переделам (создаём один раз) ---
+  let bar = dlg.querySelector('#doneFilterBar');
+  if(!bar){
+    bar = document.createElement('div');
+    bar.id = 'doneFilterBar';
+    bar.className = 'row small';
+    bar.style.cssText = 'margin:6px 0 8px;gap:8px;align-items:center';
+	bar.innerHTML = `
+	  <span class="muted">Фильтр по переделам:</span>
+	  <label class="badge"><input type="checkbox" value="draw"  checked> ${STAGE_TITLE.draw}</label>
+	  <label class="badge"><input type="checkbox" value="proc"  checked> ${STAGE_TITLE.proc}</label>
+	  <label class="badge"><input type="checkbox" value="shear" checked> ${STAGE_TITLE.shear}</label>
+	  <label class="badge"><input type="checkbox" value="laser" checked> ${STAGE_TITLE.laser}</label>
+	  <label class="badge"><input type="checkbox" value="bend"  checked> ${STAGE_TITLE.bend}</label>
+	  <label class="badge"><input type="checkbox" value="weld"  checked> ${STAGE_TITLE.weld}</label>
+	  <label class="badge"><input type="checkbox" value="mech"  checked> ${STAGE_TITLE.mech}</label>
+	  <label class="badge"><input type="checkbox" value="pack"  checked> ${STAGE_TITLE.pack}</label>
+	  <label class="badge"><input type="checkbox" value="ship"  checked> ${STAGE_TITLE.ship}</label>
+    `;
+    // вставим панель перед таблицей
+    dlg.querySelector('.table-wrap').insertAdjacentElement('beforebegin', bar);
+
+    // инициализируем набор выбранных этапов (храним прямо на функции)
+    renderDoneList.stageFilter = new Set(STAGES);
+
+    // обработчики чекбоксов
+    bar.querySelectorAll('input[type="checkbox"]').forEach(ch=>{
+      ch.addEventListener('change', ()=>{
+        if(ch.checked) renderDoneList.stageFilter.add(ch.value);
+        else renderDoneList.stageFilter.delete(ch.value);
+        renderDoneList(); // перерисовать
+      });
+    });
+  }
+  const stageFilter = renderDoneList.stageFilter || new Set(STAGES);
+
+  // --- 2) Обновим заголовок таблицы: добавим колонку «Передел» ---
+  thead.innerHTML = `
+    <tr>
+      <th>Вернуть</th>
+      <th>Заказ</th>
+      <th>Передел</th>
+      <th>Часов</th>
+      <th>Начало</th>
+      <th>Конец</th>
+      <th>Источник</th>
+      <th>Когда</th>
+    </tr>
+  `;
+
+  // --- 3) Рендер строк с учётом фильтра ---
+  tbody.innerHTML = '';
+  // последние – сверху
+  const rows = doneTasks.slice().reverse().filter(d=> stageFilter.has(d.stage||''));
+  rows.forEach((d, idx)=>{
+    const tr = document.createElement('tr');
+
+    const stageKey = (d.stage||'');
+    const stageTitle = STAGE_TITLE[stageKey] || '—';
+    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»">Вернуть в ${stageTitle}</button>`;
+
+    tr.innerHTML = `
+      <td>${btn}</td>
+      <td>${d.orderId}</td>
+      <td>${stageTitle}</td>
+      <td>${(+d.hours||0).toFixed(1)}</td>
+      <td>${d.start?fmtDate(d.start):'—'}</td>
+      <td>${d.end?fmtDate(d.end):'—'}</td>
+      <td>${d.source||''}</td>
+      <td>${d.when?fmtDate(d.when):''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // --- 4) Обработчики «Вернуть» — строго по uid (+stage) и с проверкой на текущий передел ---
+  tbody.querySelectorAll('button.restore').forEach(el=>{
+    el.addEventListener('click', e=>{
+      const btn  = e.currentTarget;
+      const tr   = btn.closest('tr');
+      const uid  = btn.dataset.uid;
+      const stg  = btn.dataset.stage || '';
+      const wrap = dlg.querySelector('.table-wrap');
+      const before = wrap ? wrap.scrollTop : 0;
+      const delta  = wrap && tr && tr.offsetTop < (before+1) ? (tr.offsetHeight||0) : 0;
+
+      // анимация исчезновения
+      tr.classList.add('fade-out');
+
+      setTimeout(()=>{
+        // 1) найдём запись именно по uid (+stage, если есть)
+        let realIdx = doneTasks.findIndex(x => x.uid===uid && (x.stage||'')===stg);
+        if(realIdx===-1) realIdx = doneTasks.findIndex(x => x.uid===uid); // фолбэк для старых записей без stage
+        if(realIdx===-1){ renderDoneList(); return; }
+
+        // 2) проверяем совпадение с текущим переделом
+        const cur = $("#process").value;
+        const d0  = doneTasks[realIdx];
+        if((d0.stage||'') !== cur){
+          // не удаляем из архива; просто подсказываем куда перейти
+          tr.classList.remove('fade-out');
+          alert(`Этот заказ относится к переделу «${STAGE_TITLE[d0.stage||'']||d0.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
+          return;
+        }
+
+		// 3) теперь безопасно вынимаем из «Готовых» и возвращаем в список
+		const d = doneTasks.splice(realIdx,1)[0];
+
+		// восстановим childId из uid, а parentId — из сохранённого поля или по lastRows
+		const parsed = splitUid(d.uid);
+		const childId = d.childId || (parsed ? parsed.childId : '');
+		const parentId = d.parentId || findParentIdByChild(childId);
+
+		const stage = d.stage || cur;
+		const start = d.start || today0();
+		const end   = d.end || null;
+
+		const route = {laser:null,bend:null,draw:null,weld:null,mech:null};
+		route[stage] = { hours: (+d.hours||0), start, end };
+
+		tasks.push({
+		  uid: d.uid || ('restored::'+Date.now()),
+		  orderId: d.orderId,
+		  stage,
+		  childId,
+		  parentId,
+		  hours: d.hours,
+		  extraHours: Math.max(0.25,(+d.hours||0)*0.05),
+		  startDate: start,
+		  endDate: end,
+		  startMissing: !d.start,
+		  endMissing: !d.end,
+		  state: '',
+		  status: '',
+		  useReserve: false,
+		  progress: 0,
+		  origStartDate: start,
+		  route,
+		  isNew: true
+		});
+
+        if(typeof sortTasksByStart==='function') sortTasksByStart();
+
+        updateDoneAttention();
+        recompute();
+        renderDoneList();
+        if(wrap) wrap.scrollTop = Math.max(0, before - delta);
+        persistMaybe();
+      }, 200);
+    });
+  });
+}
+
+/* =========
+   КОРЗИНА
+========= */
+function updateTrashAttention(){
+  const btn=$("#showTrash");
+  if(!btn) return;
+  if(trash.length>0) btn.classList.add('attn'); else btn.classList.remove('attn');
+}
+function renderTrashList(){
+  const dlg = $("#trashDlg");
+  const tbl = $("#trashTable");
+  const tbody = tbl.querySelector('tbody');
+  tbody.innerHTML = '';
+
+  // последние — сверху
+  const rows = trash.slice().reverse();
+  rows.forEach((d, idx)=>{
+    const tr = document.createElement('tr');
+
+    const stageKey = (d.stage||'');
+    const stageTitle = STAGE_TITLE[stageKey] || '—';
+    const btn = `<button class="btn small restore" data-uid="${d.uid}" data-stage="${stageKey}" title="Вернуть в «${stageTitle}»">Вернуть в ${stageTitle}</button>`;
+
+    tr.innerHTML = `
+      <td>${btn}</td>
+      <td>${d.orderId}</td>
+      <td>${stageTitle}</td>
+      <td>${(+d.hours||0).toFixed(1)}</td>
+      <td>${d.start?fmtDate(d.start):'—'}</td>
+      <td>${d.end?fmtDate(d.end):'—'}</td>
+      <td>${d.source||''}</td>
+      <td>${d.when?fmtDate(d.when):''}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Восстановление из корзины
+  tbody.querySelectorAll('button.restore').forEach(el=>{
+    el.addEventListener('click', e=>{
+      const uid = e.currentTarget.dataset.uid;
+      const stg = e.currentTarget.dataset.stage || '';
+      const cur = $("#process").value;
+
+      // можно возвращать только в соответствующий передел
+      const idx = trash.findIndex(x=> x.uid===uid && (x.stage||'')===stg);
+      if(idx===-1) return;
+
+      const rec = trash[idx];
+      if((rec.stage||'') !== cur){
+        alert(`Этот заказ относится к переделу «${STAGE_TITLE[rec.stage||'']||rec.stage||'—'}». Переключитесь на него, чтобы вернуть заказ в таблицу.`);
+        return;
+      }
+
+      // достаём из корзины
+      trash.splice(idx,1);
+
+      // восстановим childId/parentId как в «Готовых»
+      const parsed = splitUid(rec.uid);
+      const childId = rec.childId || (parsed ? parsed.childId : '');
+      const parentId = rec.parentId || findParentIdByChild(childId);
+      const stage = rec.stage || cur;
+      const start = rec.start || today0();
+      const end   = rec.end || null;
+
+      const route = {laser:null,bend:null,draw:null,weld:null,mech:null,proc:null,shear:null,pack:null,ship:null};
+      route[stage] = { hours: (+rec.hours||0), start, end };
+
+      tasks.push({
+        uid: rec.uid || ('restored-trash::'+Date.now()),
+        orderId: rec.orderId,
+        stage, childId, parentId,
+        hours: rec.hours,
+        extraHours: Math.max(0.25,(+rec.hours||0)*0.05),
+        startDate: start, endDate: end,
+        startMissing: !rec.start, endMissing: !rec.end,
+        state: '', status: '', useReserve:false, progress:0,
+        origStartDate: start, route, isNew:true
+      });
+
+      if(typeof sortTasksByStart==='function') sortTasksByStart();
+
+      updateTrashAttention();
+      recompute();
+      renderTrashList();
+      persistMaybe();
+    });
+  });
+
+  // Кнопки «Очистить» и «Закрыть»
+  $("#trashClear").onclick = ()=>{
+    if(trash.length===0) { dlg.close(); return; }
+    if(confirm('Очистить корзину без возможности восстановления?')){
+      trash = [];
+      updateTrashAttention();
+      renderTrashList();
+      persistMaybe();
+    }
+  };
+  $("#trashClose").onclick = ()=> dlg.close();
+
+  dlg.showModal();
+}
+
+
+// ——— восстановление связей при возврате из «Готовых»
+function splitUid(uid){
+  const m = /^(.+?)::(laser|bend|draw|weld|mech)$/.exec(String(uid||''));
+  return m ? { childId: m[1], stage: m[2] } : null;
+}
+// ищем parentId по childId в текущей выгрузке (новая схема: колонки 0=id,1=pid)
+function findParentIdByChild(childId){
+  if(!childId || !lastRows || lastRows.length<2) return '';
+  for(let i=1;i<lastRows.length;i++){
+    const r = lastRows[i];
+    if(String(r[0]).trim() === String(childId).trim()){
+      return String(r[1]||'').trim();
+    }
+  }
+  return '';
+}
+
+/* =========
+   ЭКСПОРТ / ИМПОРТ СОСТОЯНИЯ (CSV-секции)
+========= */
+
+// Собрать задачи всех переделов для экспорта состояния.
+// Источники приоритетом: lastRows -> allTasksFromState -> текущие tasks.
+function snapshotAllStagesForExport(){
+  const out = [];
+
+  // 1) если есть исходная выгрузка — построим по ней для 5 переделов
+  if (lastRows && lastRows.length){
+    STAGES.forEach(st => {
+      let arr = mapRows(lastRows, st);
+
+      // применим сохранённые overrides по датам (parentId::stage)
+      arr.forEach(rec => {
+        const o = routeOverrides.get(`${rec.parentId}::${st}`);
+        if(o){
+          if (o.start){ rec.startDate = new Date(o.start); rec.startMissing=false; rec.route[st] && (rec.route[st].start = new Date(o.start)); }
+          if ('end' in o){ rec.endDate = o.end ? new Date(o.end) : null; rec.endMissing = !o.end; rec.route[st] && (rec.route[st].end = o.end ? new Date(o.end) : null); }
+        }
+      });
+
+      out.push(...arr);
+    });
+  }
+  // 2) иначе, если состояние уже было импортировано
+  else if (Array.isArray(allTasksFromState) && allTasksFromState.length){
+    out.push(...allTasksFromState);
+  }
+  // 3) крайний случай — только текущий передел
+  else {
+    out.push(...tasks);
+  }
+
+  // поверх — актуальные правки из текущего открытого передела
+  const cur = new Map(tasks.map(t => [t.uid, t]));
+  out.forEach(t => {
+    const c = cur.get(t.uid);
+    if(!c) return;
+    t.hours = c.hours; t.extraHours = c.extraHours;
+    t.startDate = c.startDate; t.endDate = c.endDate;
+    t.progress = c.progress; t.useReserve = c.useReserve;
+    t.origStartDate = c.origStartDate;
+    if (c.route) t.route = c.route;
+  });
+
+  return out;
+}
+
+// сформировать state.csv с секциями
+function exportStateCSV(){
+  rememberStageOrder(); // чтобы выгрузить актуальный порядок для всех переделов
+  const sep=';';
+  const lines=[];
+  lines.push(`#PLANNER_STATE;${VERSION};${new Date().toLocaleString()}`);
+
+  // META
+  lines.push(`#SECTION;meta`);
+  lines.push(`key${sep}value`);
+  lines.push(`process${sep}${$("#process").value}`);
+  lines.push(`ganttFilter${sep}${$("#ganttFilter").value}`);
+  lines.push(`autosaveOn${sep}${autosaveOn?1:0}`);
+  lines.push(`shiftOnProgress${sep}${$("#shiftOnProgress").checked?1:0}`);
+  STAGES.forEach(s=> lines.push(`cap.${s}${sep}${capByProc[s] ?? DEFAULT_CAP[s] ?? ''}`));
+  
+  // параллельные операции для безчасовых этапов
+  ['proc','shear','pack','ship'].forEach(s=>{
+    lines.push(`par.${s}${sep}${parallelByProc[s] ?? 3}`);
+  });
+  
+  lines.push(`freshness${sep}${$("#freshness").textContent||''}`);
+  lines.push(`lastImportTime${sep}${lastImportTime||''}`);
+  lines.push(`autoOptimizeOn${sep}${autoOptimizeOn?1:0}`);
+
+  // EXCEPTIONS
+  lines.push(`#SECTION;exceptions`);
+  lines.push(`date${sep}capacity`);
+  exceptions.forEach((val,ds)=>{ lines.push(`${ds.replace(/-/g,'.')}${sep}${val}`); });
+
+  // RESERVES
+  lines.push(`#SECTION;reserves`);
+  lines.push(`date${sep}hours`);
+  reserves.forEach((val,ds)=>{ lines.push(`${ds.replace(/-/g,'.')}${sep}${val}`); });
+
+  // OVERRIDES (route)
+  lines.push(`#SECTION;overrides`);
+  lines.push(`key${sep}start${sep}end`);
+  routeOverrides.forEach((ov,k)=>{
+    const s=ov.start?fmtDateCSV(ov.start):'';
+    const e=ov.end?fmtDateCSV(ov.end):'';
+    lines.push(`${k}${sep}${s}${sep}${e}`);
+  });
+  
+  // ORDERS — сохранённый пользователем порядок задач по каждому переделу
+  lines.push(`#SECTION;orders`);
+  lines.push(`stage${sep}uid${sep}pos`);
+  for(const st of STAGES){
+    // берём сохранённый порядок; если его нет — строим по доступным данным
+    let uids = ordersByStage.get(st);
+    if(!uids){
+      if (Array.isArray(allTasksFromState) && allTasksFromState.length){
+        uids = allTasksFromState.filter(t=>t.stage===st).map(t=>t.uid);
+      } else if (st === $("#process").value) {
+        uids = tasks.map(t=>t.uid);
+      } else {
+        uids = []; // ничего лучше нет — оставим пусто
+      }
+    }
+    uids.forEach((uid,i)=> lines.push([st, uid, i+1].join(sep)));
+  }
+
+  // TASKS — все переделы (единым списком)
+  lines.push(`#SECTION;tasks`);
+  lines.push([
+    'order','uid','parentId','childId','orderId','stage',
+    'hours','extraHours','startDate','endDate','origStartDate',
+    'progress','useReserve','state','status','locked','isNew',
+    'rLaserH','rLaserS','rLaserE','rBendH','rBendS','rBendE',
+    'rDrawH','rDrawS','rDrawE','rWeldH','rWeldS','rWeldE','rMechH','rMechS','rMechE',
+    'rProcH','rProcS','rProcE','rShearH','rShearS','rShearE','rPackH','rPackS','rPackE','rShipH','rShipS','rShipE'
+  ].join(sep));
+
+  const dump = snapshotAllStagesForExport();
+  dump.forEach((t,idx)=>{
+    const r = k => t.route?.[k] || null;
+    const f = d => d? fmtDateCSV(d): '';
+    const n = x => (x==null?'': String(x).replace('.',','));
+    const locked = lockedUids.has(t.uid) ? 1 : 0;
+    lines.push([
+      idx+1, t.uid, t.parentId||'', t.childId||'', t.orderId, t.stage,
+      n(t.hours), n(t.extraHours), f(t.startDate), f(t.endDate), f(t.origStartDate),
+      n(t.progress||0), t.useReserve?1:0, t.state||'', t.status||'', locked, t.isNew?1:0,
+      n(r('laser')?.hours||''), f(r('laser')?.start||null), f(r('laser')?.end||null),
+      n(r('bend') ?.hours||''), f(r('bend') ?.start||null), f(r('bend') ?.end||null),
+      n(r('draw') ?.hours||''), f(r('draw') ?.start||null), f(r('draw') ?.end||null),
+      n(r('weld') ?.hours||''), f(r('weld') ?.start||null), f(r('weld') ?.end||null),
+      n(r('mech') ?.hours||''),  f(r('mech') ?.start||null),  f(r('mech') ?.end||null),
+      n(r('proc') ?.hours||''),  f(r('proc') ?.start||null),  f(r('proc') ?.end||null),
+      n(r('shear')?.hours||''),  f(r('shear')?.start||null),  f(r('shear')?.end||null),
+      n(r('pack') ?.hours||''),  f(r('pack') ?.start||null),  f(r('pack') ?.end||null),
+      n(r('ship') ?.hours||''),  f(r('ship') ?.start||null),  f(r('ship') ?.end||null)
+    ].join(sep));
+  });
+
+  // DONE — архив
+  lines.push(`#SECTION;done`);
+  lines.push(['uid','orderId','stage','parentId','childId','hours','extra','start','end','when','source'].join(sep));
+  doneTasks.forEach(d=>{
+    const f = x => x? fmtDateCSV(x): '';
+    const n = x => (x==null?'': String(x).replace('.',','));
+    lines.push([
+      d.uid, d.orderId, d.stage||'', d.parentId||'', d.childId||'',
+      n(d.hours), n(d.extra), f(d.start), f(d.end), f(d.when), d.source||''
+    ].join(sep));
+  });
+  
+  // TRASH — корзина
+  lines.push(`#SECTION;trash`);
+  lines.push(['uid','orderId','stage','parentId','childId','hours','extra','start','end','when','source'].join(sep));
+  trash.forEach(d=>{
+    const f = x => x? fmtDateCSV(x): '';
+    const n = x => (x==null?'': String(x).replace('.',','));
+    lines.push([
+      d.uid, d.orderId, d.stage||'', d.parentId||'', d.childId||'',
+      n(d.hours), n(d.extra), f(d.start), f(d.end), f(d.when), d.source||''
+    ].join(sep));
+  });
+
+  // BOM + текст
+  const text = '\uFEFF' + lines.join('\n');
+  downloadText(`planner_state_${(new Date()).toISOString().slice(0,10)}.csv`, text);
+}
+
+// импорт файла состояния (секционный CSV)
+async function importStateFile(file){
+  try{
+    const txt = await readTextSmart(file);
+    importStateFromCSV(txt);
+  }catch(e){
+    console.error(e);
+    alert('Не удалось импортировать состояние (.csv).');
+  }
+}
+
+function importStateFromCSV(text){
+  const lines = text.split(/\r?\n/).filter(l=> l.trim().length>0);
+  if(!lines.length){ alert('Пустой файл'); return; }
+  const sep = detectSep(lines[0]) || ';';
+
+  let section=''; let i=0;
+  let headerTasks=null, headerDone=null, headerTrash=null;
+
+  const tArr=[]; const dArr=[];
+  const exc=new Map(); const res=new Map(); const ovr=new Map(); const meta={};
+  const newLocked = new Set();
+
+  function parseNumStr(v){ const n=Number(String(v??'').replace(',','.')); return isFinite(n)?n:0; }
+  function parseDateStr(v){ const d=parseDate(v); return d||null; }
+
+  while(i<lines.length){
+    const raw=lines[i];
+    if(/^#plann/i.test(raw)){ i++; continue; }
+    const m=/^#section\s*;\s*([a-z_]+)/i.exec(raw);
+    if(m){ section=m[1].toLowerCase(); i++; continue; }
+
+    const cols = splitRow(raw, sep);
+
+    if(section==='meta'){
+      if(/^key\s*;/i.test(raw)) { i++; continue; }
+      const k=(cols[0]||'').trim(); const v=(cols[1]||'').trim();
+      if(k) meta[k]=v; i++; continue;
+    }
+
+    if(section==='exceptions'){
+      if(/^(date|дата)\s*;/i.test(raw)) { i++; continue; }
+      const d=parseDateStr(cols[0]); if(d){ exc.set(fmtDate(d), parseNumStr(cols[1])); }
+      i++; continue;
+    }
+
+    if(section==='reserves'){
+      if(/^(date|дата)\s*;/i.test(raw)) { i++; continue; }
+      const d=parseDateStr(cols[0]); if(d){ res.set(fmtDate(d), parseNumStr(cols[1])); }
+      i++; continue;
+    }
+
+	if(section==='overrides'){
+	  if(/^key\s*;/i.test(raw)) { i++; continue; }
+	  const key=(cols[0]||'').trim();
+	  if(key){
+		const s=parseDateStr(cols[1]); const e=parseDateStr(cols[2]);
+		ovr.set(key,{start:s||null, end:e||null});
+	  }
+	  i++; continue;
+	}
+	
+	if(section==='orders'){
+	  // Ожидаем строки вида: stage;uid;pos
+	  if(/^(stage|этап)\s*;?/i.test(raw)) { i++; continue; }
+	  const st  = (cols[0]||'').trim();
+	  const uid = (cols[1]||'').trim();
+	  const pos = Number(String(cols[2]||'').replace(',','.')) || 0;
+	  if(st && uid && pos>0){
+		if(!ordersByStage.has(st)) ordersByStage.set(st, []);
+		const arr = ordersByStage.get(st);
+		if(arr.length < pos) arr.length = pos;
+		arr[pos-1] = uid;
+	  }
+	  i++; continue;
+	}
+
+    if(section==='tasks'){
+      if(!headerTasks){ headerTasks = cols.map(x=> String(x).trim().toLowerCase()); i++; continue; }
+      const h=headerTasks;
+      const gv = (name)=>{ const j=h.indexOf(name); return j>-1? cols[j] : ''; };
+      const gn = (name)=> parseNumStr(gv(name));
+      const gd = (name)=> parseDateStr(gv(name));
+
+      const t={
+        uid: gv('uid'),
+        orderId: gv('orderid'),
+        stage: gv('stage') || ($("#process").value),
+        childId: gv('childid'),
+        parentId: gv('parentid'),
+        hours: gn('hours'),
+        extraHours: gn('extrahours'),
+        startDate: gd('startdate') || today0(),
+        endDate: gd('enddate'),
+        startMissing: !gv('startdate'),
+        endMissing: !gv('enddate'),
+        state: (gv('state')||'').trim(),
+        status: (gv('status')||'').trim(),
+        useReserve: Number(gv('usereserve'))? true:false,
+        progress: gn('progress'),
+        origStartDate: gd('origstartdate'),
+        route: {laser:null,bend:null,draw:null,weld:null,mech:null},
+        isNew: Number(gv('isnew'))? true:false
+      };
+
+      function fillR(prefix,key){
+        const h = gn(prefix+'h');
+        const s = gd(prefix+'s');
+        const e = gd(prefix+'e');
+        if(h || s || e) t.route[key] = {hours:h||0, start:s||null, end:e||null};
+      }
+      fillR('rlaser','laser'); fillR('rbend','bend'); fillR('rdraw','draw'); fillR('rweld','weld'); fillR('rmech','mech');
+	  fillR('rproc','proc');
+	  fillR('rshear','shear');
+	  fillR('rpack','pack');
+	  fillR('rship','ship');
+
+
+      if(Number(gv('locked'))) newLocked.add(t.uid);
+      tArr.push(t);
+      i++; continue;
+    }
+
+    if(section==='done'){
+      if(!headerDone){ headerDone = cols.map(x=> String(x).trim().toLowerCase()); i++; continue; }
+      const h=headerDone;
+      const gv = (name)=>{ const j=h.indexOf(name); return j>-1? cols[j] : ''; };
+      dArr.push({
+        uid: gv('uid'), orderId: gv('orderid'), stage: gv('stage')||'',
+        parentId: gv('parentid')||'', childId: gv('childid')||'',
+        hours: parseNumStr(gv('hours')), extra: parseNumStr(gv('extra')),
+        start: parseDateStr(gv('start')), end: parseDateStr(gv('end')),
+        when: parseDateStr(gv('when')), source: gv('source')||''
+      });
+      i++; continue;
+    }
+	
+	if(section==='trash'){
+	  if(!headerTrash){ headerTrash = cols.map(x=> String(x).trim().toLowerCase()); i++; continue; }
+	  const h=headerTrash;
+	  const gv = (name)=>{ const j=h.indexOf(name); return j>-1? cols[j] : ''; };
+	  // временный массив для корзины
+	  if(!importStateFromCSV._trash) importStateFromCSV._trash = [];
+	  importStateFromCSV._trash.push({
+		uid: gv('uid'), orderId: gv('orderid'), stage: gv('stage')||'',
+		parentId: gv('parentid')||'', childId: gv('childid')||'',
+		hours: parseNumStr(gv('hours')), extra: parseNumStr(gv('extra')),
+		start: parseDateStr(gv('start')), end: parseDateStr(gv('end')),
+		when: parseDateStr(gv('when')), source: gv('source')||''
+	  });
+	  i++; continue;
+	}
+
+    // неизвестная секция — пропустим строку
+    i++;
+  }
+  
+  // полный набор задач из файла состояния
+  allTasksFromState = tArr.slice();
+
+  // применяем состояние
+  // в рабочий список кладем только выбранный передел
+  const proc = (meta.process || $("#process").value || 'bend');
+  $("#process").value = proc;
+  tasks = tArr.filter(x => x.stage === proc);
+  sortBySavedOrder(tasks, proc);
+  rememberStageOrder();
+
+  doneTasks = dArr;
+  exceptions = exc;
+  reserves = res;
+  routeOverrides = ovr;
+  lockedUids = newLocked;
+
+  // meta / UI
+  if(meta.process) $("#process").value = meta.process;
+  if(meta.ganttFilter) $("#ganttFilter").value = meta.ganttFilter;
+  autosaveOn = !!Number(meta.autosaveOn); $("#autosave").checked = autosaveOn;
+  autoOptimizeOn = !!Number(meta.autoOptimizeOn);
+  $("#autoOptimize").checked = autoOptimizeOn;
+
+  $("#shiftOnProgress").checked = !!Number(meta.shiftOnProgress);
+
+  const capNew = { ...DEFAULT_CAP };
+  STAGES.forEach(s=>{
+    const k='cap.'+s; if(meta[k]!==undefined && meta[k]!==''){
+      const v = Number(String(meta[k]).replace(',','.')); capNew[s] = isFinite(v)? v : DEFAULT_CAP[s];
+    }
+  });
+  capByProc = capNew;
+  $("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+
+  $("#freshness").textContent = meta.freshness || '—';
+  lastImportTime = meta.lastImportTime || '';
+  
+  // параллельные операции (включая ship)
+  ['proc','shear','pack','ship'].forEach(s=>{
+    const k = 'par.'+s;
+    const raw = meta[k];
+    if(raw!==undefined && raw!==''){
+      const v = parseInt(String(raw).trim(),10);
+      if(Number.isFinite(v) && v>0) parallelByProc[s]=v;
+    }
+  });
+  // дефолты на случай отсутствия в meta
+  parallelByProc = {
+    proc: parallelByProc.proc || 5,
+    shear: parallelByProc.shear || 5,
+    pack: parallelByProc.pack || 3,
+    ship: parallelByProc.ship || 5
+  };
+
+  trash = Array.isArray(importStateFromCSV._trash) ? importStateFromCSV._trash : [];
+  delete importStateFromCSV._trash;
+  updateTrashAttention?.();
+
+  recompute();
+  persistMaybe();
+  alert('Состояние импортировано.');
+}
+
+/* =========
+   ИМПОРТ / ДЕЛЬТА (с превью и откатом)
+========= */
+function buildDeltaPreview(current, incoming){
+  const curBy = new Map(current.map(t=>[t.uid,t]));
+  const inBy  = new Map(incoming.map(t=>[t.uid,t]));
+  const added=[], removed=[], changed=[], toDone=[];
+
+  incoming.forEach(n=>{
+    if(isDoneStatus(n.status)){ toDone.push(n); return; }
+    if(!curBy.has(n.uid)){ added.push(n); }
+    else{
+      const c=curBy.get(n.uid);
+      const diff = [];
+      if((c.hours||0)!==(n.hours||0)) diff.push('часы');
+      const sd1=c.startDate?+c.startDate:0, sd2=n.startDate?+n.startDate:0;
+      const ed1=c.endDate?+c.endDate:0, ed2=n.endDate?+n.endDate:0;
+      if(sd1!==sd2) diff.push('начало');
+      if(ed1!==ed2) diff.push('конец');
+      if((c.state||'')!==(n.state||'')) diff.push('состояние');
+      if((c.status||'')!==(n.status||'')) diff.push('статус');
+      if(diff.length) changed.push({from:c,to:n,fields:diff});
+    }
+  });
+  current.forEach(c=>{ if(!inBy.has(c.uid)) removed.push(c); });
+  return {added, removed, changed, toDone};
+}
+
+function renderDeltaDialog(diff){
+  const el=$("#deltaContent");
+  const block = (key, arr, fmt) => `
+    <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
+      <legend style="padding:0 6px">${key} (${arr.length})</legend>
+      ${arr.length? arr.map(fmt).join('') : '—'}
+    </fieldset>`;
+
+  const fmtAdd = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="add" data-uid="${t.uid}" checked> Добавить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtDel = t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="del" data-uid="${t.uid}" checked> Удалить — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+  const fmtChg = x => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="chg" data-uid="${x.to.uid}" checked> Изменить — ${x.from.orderId} <span class="muted">[${x.to.uid}]</span> <i class="muted">(${x.fields.join(', ')})</i></label>`;
+  const fmtDone= t => `<label style="display:block;margin:4px 0"><input type="checkbox" data-apply="done" data-uid="${t.uid}" checked> В архив — ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+
+  el.innerHTML =
+    block('Новые', diff.added, fmtAdd) +
+    block('Изменённые', diff.changed, fmtChg) +
+    block('Удаляемые', diff.removed, fmtDel) +
+    block('Статус = Готово', diff.toDone, fmtDone);
+
+  $("#deltaDlg").showModal();
+
+  $("#deltaApply").onclick = ()=>{
+    lastSnapshotJson = serializeState(); // снимок для отката
+    // перед применением сняем старые подсветки «isNew»
+    tasks.forEach(t=>{ t.isNew=false; });
+
+    const sel = new Map(); $$('#deltaContent input[type="checkbox"]').forEach(ch=>{
+      if(ch.checked) sel.set(ch.dataset.uid, ch.dataset.apply);
+    });
+
+    const byId=new Map(tasks.map((t,i)=>[t.uid,i]));
+    const now = new Date();
+
+    // Удаления (только выбранные)
+    diff.removed.forEach(r=>{
+      if(!sel.has(r.uid) || sel.get(r.uid)!=='del') return;
+      const idx = byId.get(r.uid);
+      if(idx!=null){ tasks.splice(idx,1); byId.delete(r.uid); }
+    });
+
+	// В архив (статус Готово)
+	diff.toDone.forEach(d=>{
+	  if(!sel.has(d.uid) || sel.get(d.uid)!=='done') return;
+	  if(byId.has(d.uid)){
+		const old=tasks.splice(byId.get(d.uid),1)[0];
+		doneTasks.push({
+		  uid:old.uid, orderId:old.orderId, stage:old.stage,
+		  parentId:old.parentId, childId:old.childId,
+		  hours:old.hours, extra:old.extraHours,
+		  start:old.startDate, end:old.endDate,
+		  when:now, source:'csv_status'
+		});
+		byId.delete(d.uid);
+	  } else {
+		doneTasks.push({
+		  uid:d.uid, orderId:d.orderId, stage:d.stage||d.stage,  // d.stage есть у incoming
+		  parentId:d.parentId, childId:d.childId,
+		  hours:d.hours, extra:d.extraHours,
+		  start:d.startDate, end:d.endDate,
+		  when:now, source:'csv_status'
+		});
+	  }
+	});
+
+    // Изменения
+    diff.changed.forEach(({from,to})=>{
+      if(!sel.has(to.uid) || sel.get(to.uid)!=='chg') return;
+      if(!byId.has(from.uid)) return;
+      const t=tasks[byId.get(from.uid)];
+      t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
+      t.startDate=to.startDate; t.endDate=to.endDate;
+      t.startMissing=to.startMissing; t.endMissing=to.endMissing;
+      t.state=to.state||t.state;
+      t.status=to.status||t.status;
+      t.orderId=to.orderId||t.orderId;
+      t.route=to.route||t.route;
+      if(!t.origStartDate) t.origStartDate = t.startDate;
+      t.isNew=true; // подсветим именно текущую волну изменений
+    });
+
+    // Новые
+    diff.added.forEach(n=>{
+      if(!sel.has(n.uid) || sel.get(n.uid)!=='add') return;
+      n.isNew=true; tasks.push(n);
+    });
+
+    lastDiffApplied = diff; // сохраним для отката (будем «зеркалить» выбор)
+    lastRows = pendingRows; // установим из глобалки (см. importRows)
+    lastImportTime = new Date().toLocaleString();
+    $("#freshness").textContent = lastImportTime;
+	sortTasksByStart();
+	if (document.querySelector('#autoOptimize')?.checked) { optimizeQueue(); } else { recompute(); }
+	persistNow();
+
+    $("#deltaDlg").close();
+  };
+  $("#deltaCancel").onclick = ()=> $("#deltaDlg").close();
+}
+
+let pendingRows=null;
+
+async function importFile(file){
+  if(!file) return;
+  const name=file.name.toLowerCase();
+  if(!name.endsWith('.csv')){ alert('Поддерживается только .csv'); $("#file").value=''; return; }
+  const text=await readTextSmart(file);
+  const rows=parseCSVText(text);
+  await importRows(rows);
+  $("#file").value='';
+}
+async function importRows(rows){
+  const p=$("#process").value;
+  pendingRows = rows; // сохраним для выставления lastRows после применения
+
+  // первичный импорт
+  if(!lastRows && tasks.length===0){
+    lastRows = rows;
+    const mapped = mapRows(rows, p);
+
+    // статусы -> «Готовые»
+    const now = new Date();
+    const active = [];
+    mapped.forEach(t=>{
+	  if(isDoneStatus(t.status)){
+		doneTasks.push({
+		  uid:t.uid, orderId:t.orderId, stage:t.stage,
+		  parentId:t.parentId, childId:t.childId,
+		  hours:t.hours, extra:t.extraHours,
+		  start:t.startDate, end:t.endDate,
+		  when:now, source:'csv_status'
+		});
+	  } else {
+		active.push(t);
+	  }
+    });
+	tasks = active;
+	sortTasksByStart();
+	rememberStageOrder();
+	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+
+    lastImportTime = new Date().toLocaleString();
+    if(!freshnessStr) $("#freshness").textContent = lastImportTime;
+    persistMaybe();
+    return;
+  }
+
+  // дельта
+  const incoming = mapRows(rows, p);
+  const diff = buildDeltaPreview(tasks, incoming);
+  renderDeltaDialog(diff);
+}
+
+/* =========
+   СОХРАНЕНИЕ
+========= */
+const LS_KEY='yougile_planner_state_v5';
+function serializeState(){
+  const t = tasks.map(x=>({
+    uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+    hours:x.hours, extraHours:x.extraHours,
+    startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
+    startMissing:!!x.startMissing, endMissing:!!x.endMissing,
+    state:x.state||'', status:x.status||'',
+    useReserve:!!x.useReserve, progress:x.progress||0,
+    origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
+	route:{
+	  laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?x.route.laser.start.toISOString():'', end:x.route.laser.end?x.route.laser.end.toISOString():''} : null,
+	  bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?x.route.bend.start.toISOString():'',   end:x.route.bend.end?x.route.bend.end.toISOString():''}   : null,
+	  draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?x.route.draw.start.toISOString():'',   end:x.route.draw.end?x.route.draw.end.toISOString():''}   : null,
+	  weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?x.route.weld.start.toISOString():'',   end:x.route.weld.end?x.route.weld.end.toISOString():''}   : null,
+	  mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?x.route.mech.start.toISOString():'',   end:x.route.mech.end?x.route.mech.end.toISOString():''}   : null,
+	  proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?x.route.proc.start.toISOString():'',   end:x.route.proc.end?x.route.proc.end.toISOString():''}   : null,
+	  shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?x.route.shear.start.toISOString():'', end:x.route.shear.end?x.route.shear.end.toISOString():''} : null,
+	  pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?x.route.pack.start.toISOString():'',   end:x.route.pack.end?x.route.pack.end.toISOString():''}   : null,
+	  ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?x.route.ship.start.toISOString():'',   end:x.route.ship.end?x.route.ship.end.toISOString():''}   : null
+	}
+
+  }));
+  const done = doneTasks.map(x=>({
+    uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+    parentId:x.parentId||'', childId:x.childId||'',
+    hours:x.hours, extra:x.extra,
+    start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
+    when:x.when?x.when.toISOString():'', source:x.source||''
+  }));
+  
+  const trashArr = trash.map(x=>({
+	uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+	parentId:x.parentId||'', childId:x.childId||'',
+	hours:x.hours, extra:x.extra,
+	start:x.start?x.start.toISOString():'', end:x.end?x.end.toISOString():'',
+	when:x.when?x.when.toISOString():'', source:x.source||''
+  }));
+
+  const exc=[...exceptions.entries()];
+  const res=[...reserves.entries()];
+  const ro = [...routeOverrides.entries()].map(([k,v])=>[k,{
+	start: v.start ? v.start.toISOString() : '',
+	end:   v.end   ? v.end.toISOString()   : ''
+  }]);
+
+  return JSON.stringify({
+	routeOverrides: ro,
+	t, done, trash: trashArr, exc, res,
+
+	process: $("#process").value,
+	capByProc,
+	parallelByProc,        // <— ДОБАВЛЕНО
+	filter: $("#ganttFilter").value,
+	locked:[...lockedUids],
+	orders:[...ordersByStage.entries()],
+	freshness: $("#freshness").textContent || '',
+	lastImportTime,
+	autosaveOn,
+	autoOptimizeOn,
+	shiftOnProgress: $("#shiftOnProgress").checked
+  });
+
+}
+function restoreState(json){
+  try{
+    const s=JSON.parse(json);
+    const tAll = (s.t||[]).map(x=>({
+      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+      hours:x.hours, extraHours:x.extraHours,
+      startDate: x.startDate? new Date(x.startDate): today0(),
+      endDate: x.endDate? new Date(x.endDate): null,
+      startMissing: !!x.startMissing,
+      endMissing: !!x.endMissing,
+      state: x.state||'',
+      status: x.status||'',
+      useReserve: !!x.useReserve,
+      progress: x.progress||0,
+      origStartDate: x.origStartDate?new Date(x.origStartDate):null,
+      route:{
+        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
+        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,     end:x.route.bend.end?new Date(x.route.bend.end):null}     : null,
+        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,     end:x.route.draw.end?new Date(x.route.draw.end):null}     : null,
+        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,     end:x.route.weld.end?new Date(x.route.weld.end):null}     : null,
+        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,     end:x.route.mech.end?new Date(x.route.mech.end):null}     : null
+      }
+    }));
+	
+	allTasksFromState = tAll.slice();
+	const st0 = s.process || $("#process").value || 'bend';
+	tasks = tAll.filter(x => x.stage === st0);
+
+	doneTasks = (s.done||[]).map(x=>({
+	  uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+	  parentId:x.parentId||'', childId:x.childId||'',
+	  hours:x.hours, extra:x.extra,
+	  start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
+	  when:x.when?new Date(x.when):null, source:x.source||''
+	}));
+	
+	trash = (s.trash||[]).map(x=>({
+	  uid:x.uid, orderId:x.orderId, stage:x.stage||'',
+	  parentId:x.parentId||'', childId:x.childId||'',
+	  hours:x.hours, extra:x.extra,
+	  start:x.start?new Date(x.start):null, end:x.end?new Date(x.end):null,
+	  when:x.when?new Date(x.when):null, source:x.source||''
+	}));
+
+    exceptions = new Map(s.exc||[]);
+    reserves   = new Map(s.res||[]);
+    lockedUids = new Set(s.locked||[]);
+	ordersByStage = new Map(s.orders || []);
+	// слияние с дефолтами + мягкая миграция старых значений
+	const savedCap = s.capByProc || {};
+	capByProc = { ...DEFAULT_CAP, ...savedCap };
+	
+	routeOverrides = new Map( (s.routeOverrides||[]).map(([k,v])=>[k,{
+	  start: v.start ? new Date(v.start) : null,
+	  end:   v.end   ? new Date(v.end)   : null
+	}]) );
+
+
+	// если видим старые «устаревшие» значения — обновим их на новые дефолты
+	let migrated = false;
+	if(savedCap.draw === 12 || savedCap.draw === 15 || savedCap.draw == null){ capByProc.draw = DEFAULT_CAP.draw; migrated = true; }
+	if(savedCap.weld === 15 || savedCap.weld == null){ capByProc.weld = DEFAULT_CAP.weld; migrated = true; }
+	if(savedCap.mech === 20 || savedCap.mech === 15 || savedCap.mech == null){ capByProc.mech = DEFAULT_CAP.mech; migrated = true; }
+
+	// восстановим UI
+	$("#process").value = s.process||'bend';
+	currentProc = $("#process").value;
+	$("#capacity").value = capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+	
+	if(s.parallelByProc){
+	  Object.assign(parallelByProc, s.parallelByProc);
+	}
+	
+	// миграция/подстановка дефолтов, если в старом состоянии их не было
+	['proc','shear','pack','ship'].forEach(k=>{
+	  if(!Number.isFinite(parallelByProc[k]) || parallelByProc[k] <= 0){
+		parallelByProc[k] = (k==='pack' ? 3 : 5);
+      }
+	});
+
+	// если что-то мигрировали — сразу сохраним новое состояние
+	if(migrated){ try{ persistNow(); }catch(_){ /* ignore */ } }
+
+    $("#ganttFilter").value = s.filter || 'all';
+    $("#freshness").textContent = s.freshness || '—';
+    lastImportTime = s.lastImportTime || '';
+    autosaveOn = !!s.autosaveOn;
+    $("#autosave").checked = autosaveOn;
+    $("#shiftOnProgress").checked = s.shiftOnProgress!==undefined ? !!s.shiftOnProgress : true;
+    recompute();
+	updateTrashAttention?.();
+  }catch(e){ console.warn('restoreState failed', e); }
+}
+
+function loadStageFromLS(stage){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+	
+	// поднимем сохранённый порядок строк по переделам
+	if (Array.isArray(s.orders)) {
+	  ordersByStage = new Map(s.orders);
+	}
+
+    const arr = (s.t||[]).filter(x=> x.stage===stage).map(x=>({
+      uid:x.uid, orderId:x.orderId, stage:x.stage, childId:x.childId, parentId:x.parentId,
+      hours:x.hours, extraHours:x.extraHours,
+      startDate: x.startDate? new Date(x.startDate): today0(),
+      endDate: x.endDate? new Date(x.endDate): null,
+      startMissing: !!x.startMissing, endMissing: !!x.endMissing,
+      state:x.state||'', status:x.status||'',
+      useReserve: !!x.useReserve, progress: x.progress||0,
+      origStartDate: x.origStartDate? new Date(x.origStartDate): null,
+      route:{
+        laser: x.route?.laser ? {hours:x.route.laser.hours||0, start:x.route.laser.start?new Date(x.route.laser.start):null, end:x.route.laser.end?new Date(x.route.laser.end):null} : null,
+        bend:  x.route?.bend  ? {hours:x.route.bend.hours||0,  start:x.route.bend.start?new Date(x.route.bend.start):null,   end:x.route.bend.end?new Date(x.route.bend.end):null}   : null,
+        draw:  x.route?.draw  ? {hours:x.route.draw.hours||0,  start:x.route.draw.start?new Date(x.route.draw.start):null,   end:x.route.draw.end?new Date(x.route.draw.end):null}   : null,
+        weld:  x.route?.weld  ? {hours:x.route.weld.hours||0,  start:x.route.weld.start?new Date(x.route.weld.start):null,   end:x.route.weld.end?new Date(x.route.weld.end):null}   : null,
+        mech:  x.route?.mech  ? {hours:x.route.mech.hours||0,  start:x.route.mech.start?new Date(x.route.mech.start):null,   end:x.route.mech.end?new Date(x.route.mech.end):null}   : null,
+        proc:  x.route?.proc  ? {hours:x.route.proc.hours||0,  start:x.route.proc.start?new Date(x.route.proc.start):null,   end:x.route.proc.end?new Date(x.route.proc.end):null}   : null,
+        shear: x.route?.shear ? {hours:x.route.shear.hours||0, start:x.route.shear.start?new Date(x.route.shear.start):null, end:x.route.shear.end?new Date(x.route.shear.end):null} : null,
+        pack:  x.route?.pack  ? {hours:x.route.pack.hours||0,  start:x.route.pack.start?new Date(x.route.pack.start):null,   end:x.route.pack.end?new Date(x.route.pack.end):null}   : null,
+        ship:  x.route?.ship  ? {hours:x.route.ship.hours||0,  start:x.route.ship.start?new Date(x.route.ship.start):null,   end:x.route.ship.end?new Date(x.route.ship.end):null}   : null
+      }
+    }));
+    const seen = new Set();
+	return arr.filter(x => !seen.has(x.uid) && (seen.add(x.uid), true));
+
+  }catch(_){ return null; }
+}
+
+function persistNow(stageOverride, options={}){
+  const {markSaved=false, reason='manual'} = options;
+  let snapshot='';
+  try{
+    // 1) Текущее состояние только активного передела
+    const cur = JSON.parse(serializeState());
+    const curStage = stageOverride || cur.process || ($("#process")?.value || 'bend');
+    cur.process = curStage; // зафиксируем явным образом
+
+    // 2) Предыдущее состояние из LS (если было)
+    const rawPrev = localStorage.getItem(LS_KEY);
+    if (rawPrev) {
+      try{
+        const prev = JSON.parse(rawPrev);
+
+        // --- слить задачи: оставляем все предыдущие, КРОМЕ текущего передела, и добавляем текущие ---
+        const prevTasks = Array.isArray(prev.t) ? prev.t : [];
+        const others = prevTasks.filter(x => x && x.stage !== curStage);
+        cur.t = others.concat(cur.t || []);
+
+                // де-дуп по uid (оставляем последнее вхождение)
+                const seen = new Set();
+                cur.t = cur.t.filter(x=>{
+                  if(!x || !x.uid) return false;
+                  if(seen.has(x.uid)) return false;
+                  seen.add(x.uid);
+                  return true;
+                });
+
+        // --- слить сохранённый порядок: не теряем ключи по другим переделам ---
+        if (Array.isArray(prev.orders)) {
+          const map = new Map(prev.orders);
+          (cur.orders || []).forEach(([k,v])=> map.set(k, v));
+          cur.orders = [...map.entries()];
+        }
+
+        // --- дефенсивно дольём parallelByProc/capByProc, если вдруг были в старом состоянии ---
+        if (prev.parallelByProc && !cur.parallelByProc) cur.parallelByProc = prev.parallelByProc;
+        if (prev.capByProc && !cur.capByProc) cur.capByProc = prev.capByProc;
+
+        // DONE/EXC/RES/overrides у нас и так глобальные; берём из cur (они актуальны)
+      }catch(_){ /* если вдруг не распарсилось — просто перезапишем */ }
+    }
+
+    // 3) Запись в LS
+    snapshot = JSON.stringify(cur);
+    localStorage.setItem(LS_KEY, snapshot);
+  }catch(e){
+    console.warn('persist failed', e);
+    setSaveStatus('error', 'Ошибка локального сохранения');
+    return Promise.resolve({ ok:false, error:e, step:'local' });
+  }
+
+  return syncStateWithServer(snapshot, {markSaved, reason});
+}
+
+function syncStateWithServer(snapshot, {markSaved=false, reason='manual'}={}){
+  if(!snapshot) return Promise.resolve({ ok:false, step:'empty' });
+  if(typeof fetch !== 'function'){
+    setSaveStatus('offline');
+    return Promise.resolve({ ok:false, step:'offline' });
+  }
+
+  setSaveStatus('syncing', markSaved? 'Сохранение…' : 'Синхронизация…');
+  return fetch(SERVER_STATE_URL, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:snapshot,
+    keepalive: reason==='autosave',
+    cache:'no-store',
+    credentials:'same-origin'
+  }).then(resp=>{
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    setSaveStatus(markSaved? 'saved':'synced');
+    return { ok:true };
+  }).catch(error=>{
+    console.warn('remote persist failed', error);
+    setSaveStatus('error', 'Ошибка синхронизации');
+    return { ok:false, error, step:'remote' };
+  });
+}
+
+function persistMaybe(){ if(autosaveOn) return persistNow(undefined,{reason:'autosave'}); return Promise.resolve({ok:false, step:'skipped'}); }
+
+/* =========
+   ПЕРЕСЧЁТ
+========= */
+function recompute(){
+	tasks.forEach(t=>{
+	  // Если конец раньше начала — НЕ свапаем, а двигаем конец к началу.
+	  // Это сохраняет дату начала, которую ты только что установил (в т.ч. "сегодня").
+	  if(t.endDate && t.startDate && t.endDate < t.startDate){
+		t.endDate = new Date(t.startDate);
+		t.endMissing = false;
+	  }
+
+    if(!isFinite(t.hours)) t.hours=0;
+    if(typeof t.extraHours!=='number'||isNaN(t.extraHours)) t.extraHours=Math.max(0.25,(t.hours||0)*0.05);
+  });
+
+  // актуальная вместимость для передела
+  const proc=$("#process").value;
+  adjustUIForProcess(proc);
+  
+  $("#procTitle").textContent = 
+    proc==='bend' ? 'Гибка' :
+    proc==='laser' ? 'Лазер' :
+    proc==='draw' ? 'Технологи: подготовка в работу' :
+    proc==='weld' ? 'Сварка' :
+    proc==='mech' ? 'Мехобработка' :
+    proc==='proc' ? 'Закупка' :
+    proc==='shear'? 'Рубка' :
+    proc==='pack' ? 'Упаковка' :
+    proc==='ship' ? 'Отгрузка' : '—';
+  
+const noHours = NOHOUR_STAGES.has(proc);
+const capEl = document.getElementById('capacity');
+let cap;
+if (noHours) {
+  const storedParallel = Math.max(1, parallelByProc[proc] ?? DEFAULT_PARALLEL[proc] ?? 3);
+  parallelByProc[proc] = storedParallel;
+  const parEl = document.getElementById('parallelOps');
+  if(parEl && parEl.value !== String(storedParallel)){
+    parEl.value = String(storedParallel);
+  }
+  if(capEl) capEl.dataset.stage = '';
+  cap = storedParallel;
+} else {
+  const capStage = capEl?.dataset?.stage;
+  const storedCap = capByProc[proc] ?? DEFAULT_CAP[proc] ?? 15;
+  let capVal = capEl ? Number(capEl.value) : NaN;
+  if(capStage !== proc || !Number.isFinite(capVal)){
+    capVal = storedCap;
+  }
+  cap = Math.max(0, capVal);
+  if(capEl){
+    capEl.dataset.stage = proc;
+    if(capEl.value !== String(cap)) capEl.value = String(cap);
+  }
+  capByProc[proc] = cap;
+}
+
+// подготовим задачи для аллокатора
+let allocTasks = tasks;
+if (noHours) {
+  // вес = количество календарных дней в интервале, чтобы полоса заполняла весь диапазон
+  allocTasks = tasks.map(t => {
+    const s = t.startDate || today0();
+    const e = t.endDate || t.startDate || today0();
+    const days = Math.max(1, Math.round((e - s) / 86400000) + 1);
+    return { ...t, hours: days, extraHours: 0, useReserve: false };
+  });
+}
+
+// для безчасовых бронирование не учитываем
+const excMap = noHours ? new Map() : exceptions;
+const resMap = noHours ? new Map() : reserves;
+
+schedule = allocate(allocTasks, cap, excMap, resMap);
+
+  renderTasksTable();
+  renderDetail();
+  renderOverdue();
+  renderGantt(false);
+  updateDoneAttention();
+  renderOverview();
+}
+
+/* =========
+   РЕЗЕРВ/ИСКЛЮЧЕНИЯ — UI
+========= */
+function openExceptions(){
+  const lines = [...exceptions.entries()].map(([ds,val])=> val===0? ds : `${ds} (${String(val).replace('.',',')})`).join('\n');
+  $("#exceptionsText").value = lines;
+  $("#exceptionsDlg").showModal();
+}
+function applyExceptions(){ exceptions = parseKVLines($("#exceptionsText").value,'exc'); $("#exceptionsDlg").close(); recompute(); persistMaybe(); }
+
+function openReserve(){
+  const lines = [...reserves.entries()].map(([ds,val])=> `${ds} (${String(val).replace('.',',')})`).join('\n');
+  $("#reserveText").value = lines;
+  renderReserveDiag($("#reserveText").value);
+  $("#reserveDlg").showModal();
+}
+function renderReserveDiag(text){
+  const lines = String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const base = Number($("#capacity").value) || capByProc[$("#process").value] || DEFAULT_CAP[$("#process").value] || 15;
+  const arr = lines.map(l=>{
+    const m=/^(\d{2}[.\-]\d{2}[.\-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(l);
+    if(!m) return null;
+    const ds = fmtDate(parseDate(m[1]));
+    const want = Number(m[2].replace(',','.'));
+    const capDay = capFor(ds, base);
+    const will = Math.min(want, capDay);
+    const excl = Math.max(0, base - capDay);
+    return {ds, want, will, excl, capDay};
+  }).filter(Boolean);
+  $("#reserveDiag").innerHTML = arr.length? arr.map(x=>`<div>${x.ds}: Будет применено <b>${x.will}</b> ч (из ${x.want}), исключение: ${x.excl} ч, ёмкость: ${x.capDay} ч</div>`).join('') : '';
+}
+function applyReserve(){ reserves = parseKVLines($("#reserveText").value,'res'); $("#reserveDlg").close(); recompute(); persistMaybe(); }
+
+// Безопасное переключение передела c загрузкой сохранённого состояния
+function switchProcess(newProc){
+  // добьём текущие правки (чтобы сработал onblur)
+  const ae = document.activeElement;
+  if(ae && ae.matches('#tasksTable [contenteditable="true"]')) ae.blur();
+  const prev = currentProc;
+  if(prev && prev !== newProc){
+    if(tasks.length) rememberStageOrder(prev);
+    persistNow(prev);
+  }
+
+  // пытаемся загрузить задачи ИЗ localStorage для newProc
+  const saved = loadStageFromLS(newProc);
+  if(saved && saved.length){
+    tasks = saved;
+  }else if(lastRows && lastRows.length){
+    // fallback — из исходной выгрузки, исключая уже «Готовые»
+    const doneSet = new Set(doneTasks.map(d=>d.uid));
+    tasks = mapRows(lastRows, newProc).filter(t=> !doneSet.has(t.uid));
+  }else{
+    // на крайний случай — отфильтруем по stage из текущего массива
+    tasks = tasks.filter(t=> t.stage === newProc);
+  }
+
+  sortBySavedOrder(tasks, newProc); // восстановим пользовательский порядок, если сохранён
+  
+  // Если для этого передела ещё не сохраняли порядок — применим автооптимизацию один раз
+  const hadOrder = ordersByStage.has(newProc);
+  sortBySavedOrder(tasks, newProc);
+  currentProc = newProc;
+  adjustUIForProcess(newProc);
+  if(!hadOrder && document.querySelector('#autoOptimize')?.checked){
+    optimizeQueue();
+  }else{
+    recompute();
+    rememberStageOrder(newProc);
+  }
+}
+
+function syncProcessFS(){
+  const p = $("#process").value;
+  const fs = $("#processFS");
+  if(fs) fs.value = p;
+}
+
+$("#process").addEventListener('change', e=>{
+  switchProcess(e.target.value);
+  syncProcessFS();
+});
+
+$("#processFS").addEventListener('change', e=>{
+  $("#process").value = e.target.value;
+  switchProcess(e.target.value);
+});
+
+/* =========
+   ОБРАБОТЧИКИ UI
+========= */
+function wireHandlers(){
+  // импорт CSV
+  $("#file").addEventListener('change', async e=>{
+    const f=e.target.files[0];
+    await importFile(f);
+    e.target.value='';
+  });
+  
+  // экспорт / импорт состояния
+  $("#exportCSV").addEventListener('click', exportStateCSV);
+  $("#stateFile").addEventListener('change', async e=>{
+    const f=e.target.files[0];
+    if(f) await importStateFile(f);
+    e.target.value='';
+  });
+
+  // пример выгрузки (новая схема с 5 переделами)
+  const exampleCSV = `Id задачи;Id родителя;Задача;Доска;Состояние;Статус;К-во подзадач;№;Резка, час;Гибка, час;Обработка чертежей, час;Сварка, час;Мехобработка;Сумма услуг;Заказчик;Начало;Конец;Изм. JSON
+P1;;Родитель A;Производство;В работе;—;2;ORD-001;5;10;2;3;4;—;Клиент А;05.09.2025;10.09.2025;2025-09-14 12:00
+C1;P1;Лазер;—;—;—;—;ORD-001;5;0;0;0;0;—;Клиент А;05.09.2025;06.09.2025;
+C2;P1;Гибка;—;—;—;—;ORD-001;0;10;0;0;0;—;Клиент А;07.09.2025;10.09.2025;
+P2;;Родитель B;Производство;Ожидание;—;3;ORD-002;3;0;1;0;2;—;Клиент Б;09.09.2025;12.09.2025;2025-09-14 12:00
+C3;P2;Лазер;—;—;—;—;ORD-002;3;0;0;0;0;—;Клиент Б;09.09.2025;10.09.2025;`;
+  $("#loadExample").addEventListener('click', ()=>{
+    lastRows = parseCSVText(exampleCSV);
+    const doneSet = new Set(doneTasks.map(d=> d.uid));
+	tasks = mapRows(lastRows, $("#process").value).filter(t=> !doneSet.has(t.uid));
+	sortTasksByStart();
+	rememberStageOrder();
+	if (autoOptimizeOn) { optimizeQueue(); } else { recompute(); }
+    $("#file").value='';
+  });
+
+  // исключения/бронь
+  $("#exceptionsBtn").addEventListener('click', openExceptions);
+  $("#excCancel").addEventListener('click', ()=>$("#exceptionsDlg").close());
+  $("#excApply").addEventListener('click', applyExceptions);
+
+  $("#reserveBtn").addEventListener('click', openReserve);
+  $("#resCancel").addEventListener('click', ()=>$("#reserveDlg").close());
+  $("#resApply").addEventListener('click', applyReserve);
+  $("#reserveText").addEventListener('input', e=> renderReserveDiag(e.target.value));
+  
+  // параллельные операции для безчасовых этапов (Закупка/Рубка/Упаковка/Отгрузка)
+  $("#parallelOps").addEventListener('input', e=>{
+    const v = Math.max(1, parseInt(e.target.value, 10) || 1);
+    parallelByProc[$("#process").value] = v;  // сохраняем для текущего передела
+    recompute(); 
+    persistMaybe();                           // чтобы осталось после переключения вкладок
+  });
+
+  // сортировка/оптимизация
+  $("#thStart").addEventListener('click', ()=>{ sortTasksByStart(); recompute(); });
+  $("#optimizeBtn").addEventListener('click', optimizeQueue);
+
+  // готовые
+  $("#showDone").addEventListener('click', ()=>{ renderDoneList(); $("#doneDlg").showModal(); });
+  document.getElementById('showTrash')?.addEventListener('click', ()=>{
+    renderTrashList();
+  });
+  $("#doneClose").addEventListener('click', ()=>$("#doneDlg").close());
+
+  // добавить ручной заказ
+  $("#addOrder").addEventListener('click', ()=>{
+    const uid='user-'+Date.now()+'::'+$("#process").value;
+    const t={uid,orderId:'Новый заказ',stage:$("#process").value,childId:'',parentId:'',hours:1,extraHours:Math.max(0.25,1*0.05),startDate:today0(),endDate:null,startMissing:false,endMissing:true,state:'',status:'',useReserve:false,progress:0,origStartDate:null,route:{laser:null,bend:null,draw:null,weld:null,mech:null},isUserNew:true,isNew:true};
+    tasks.push(t);
+	rememberStageOrder();
+	recompute();
+	persistMaybe();
+
+  });
+
+  // вместимость и фильтр
+  $("#capacity").addEventListener('input', ()=>{
+    const p=$("#process").value;
+    const v=Number($("#capacity").value)|| capByProc[p] || 15;
+    capByProc[p]=v;
+    recompute();
+    persistMaybe();
+  });
+  
+  document.getElementById('parallelOps').addEventListener('input', e=>{
+    const p = document.getElementById('process').value;
+    const v = Math.max(1, parseInt(e.target.value||'3',10));
+    parallelByProc[p] = v;
+    recompute();
+    persistMaybe();
+  });
+  
+  $("#ganttFilter").addEventListener('change', ()=>{ renderGantt(false); persistMaybe(); });
+
+  // очистка
+  document.getElementById('clearAll')?.addEventListener('click', ()=>{
+	if(!confirm('Очистить все данные и вернуть значения по умолчанию?')) return;
+
+	tasks = [];
+	doneTasks = [];
+	exceptions = new Map();
+	reserves = new Map();
+	routeOverrides = new Map();
+	ordersByStage = new Map();
+	lockedUids = new Set();
+	lastRows = null;
+	allTasksFromState = null;
+	trash = [];
+	localStorage.removeItem(LS_KEY);
+	lastImportTime = '';
+	$("#freshness").textContent = '—';
+	updateTrashAttention?.();
+
+	capByProc      = { ...DEFAULT_CAP };
+	parallelByProc = { ...DEFAULT_PARALLEL };
+
+	// обновим UI под текущий выбранный передел
+	const cur = document.getElementById('process').value;
+	adjustUIForProcess(cur);
+	const capEl = document.getElementById('capacity');
+	if (capEl) capEl.value = capByProc[cur] ?? DEFAULT_CAP[cur] ?? 15;
+	if (NOHOUR_STAGES.has(cur) && document.getElementById('parallelOps')) {
+      document.getElementById('parallelOps').value = String(parallelByProc[cur] ?? 3);
+    }
+
+    persistNow();
+    recompute();
+  });
+
+  // автосохранение / ручное сохранение
+  $("#autosave").addEventListener('change', e=>{
+    autosaveOn = !!e.target.checked;
+    if(autosaveOn) persistNow(undefined,{markSaved:true, reason:'manual'});
+  });
+  $("#shiftOnProgress").addEventListener('change', ()=> persistMaybe());
+  $("#saveBtn").addEventListener('click', ()=>{
+    persistNow(undefined,{markSaved:true, reason:'manual'}).then(result=>{
+      if(result?.ok){
+        alert('Состояние сохранено.');
+      } else if(result?.step === 'local'){
+        alert('Не удалось сохранить состояние. Проверьте консоль.');
+      } else {
+        alert('Не удалось синхронизировать с сервером. Данные сохранены локально.');
+      }
+    });
+  });
+  
+  // Авто оптимизация
+  $("#autoOptimize").addEventListener('change', e=>{
+    autoOptimizeOn = !!e.target.checked;
+    persistMaybe();
+  });
+
+  // Гант — FS
+  $("#toggleFS").addEventListener('click', ()=>{
+    $("#processFS").value = $("#process").value;
+    $("#ganttFilterFS").value = $("#ganttFilter").value;
+    $("#ganttFS").classList.add('active');
+    renderGantt(true);
+  });
+  $("#exitFS").addEventListener('click', ()=> $("#ganttFS").classList.remove('active'));
+  $("#processFS").addEventListener('change', ()=>{
+    $("#process").value = $("#processFS").value;
+    const ev=new Event('change'); $("#process").dispatchEvent(ev);
+    renderGantt(true);
+    persistMaybe();
+  });
+  $("#ganttFilterFS").addEventListener('change', ()=>{
+    $("#ganttFilter").value = $("#ganttFilterFS").value;
+    renderGantt(true);
+    persistMaybe();
+  });
+
+  // маршрут диалог
+  $("#routeClose").addEventListener('click', ()=> $("#routeDlg").close());
+
+  // откат импорта — выборочно
+  $("#undoImport").addEventListener('click', ()=>{
+    if(!lastSnapshotJson){ alert('Нет снимка для отката. Сначала примените импорт с изменениями.'); return; }
+
+    const prev = lastDiffApplied;
+    const box=$("#undoContent");
+    if(prev){
+      const block = (key, arr, fmt) => `
+        <fieldset style="border:1px solid #e5e7eb;border-radius:8px;padding:8px;margin:8px 0">
+          <legend style="padding:0 6px">${key} (${arr.length})</legend>
+          ${arr.length? arr.map(fmt).join('') : '—'}
+        </fieldset>`;
+      const fmt = (type) => (x)=>{
+        const t = (type==='chg'? x.from : x);
+        return `<label style="display:block;margin:4px 0"><input type="checkbox" data-undo="${type}" data-uid="${t.uid}" checked> ${t.orderId} <span class="muted">[${t.uid}]</span></label>`;
+      };
+      box.innerHTML =
+        block('Добавленные — удалить', prev.added, fmt('add')) +
+        block('Удалённые — вернуть',  prev.removed, fmt('del')) +
+        block('Изменённые — откатить',prev.changed, fmt('chg')) +
+        block('Ушедшие в архив — вернуть', prev.toDone, fmt('done'));
+      $("#undoDlg").showModal();
+
+      $("#undoApply").onclick = ()=>{
+        // Базово откатим всё состояние…
+        restoreState(lastSnapshotJson);
+
+        // …а затем применим только исключения (т.е. те, которые НЕ отмечены к откату)
+        const keep = new Map(); $$('#undoContent input[type="checkbox"]').forEach(ch=>{
+          if(ch.checked) keep.set(ch.dataset.uid, ch.dataset.undo);
+        });
+
+        // Повторно «прокрутим» diff, возвращая то, что НЕ выбрано к откату
+        if(prev){
+          const byId=new Map(tasks.map((t,i)=>[t.uid,i])); // после restoreState
+          // добавленные в импорте — добавим обратно, если пользователь НЕ отметил их удалять
+          prev.added.forEach(n=>{
+            if(keep.has(n.uid) && keep.get(n.uid)==='add') return; // пользователь хочет удалить — уже удалено restoreState-ом
+            if(!byId.has(n.uid)){ tasks.push(n); byId.set(n.uid, tasks.length-1); }
+          });
+          // удалённые в импорте — удалим снова, если пользователь НЕ отметил возвращать
+          prev.removed.forEach(r=>{
+            if(keep.has(r.uid) && keep.get(r.uid)==='del') return; // вернуть — уже вернули restoreState
+            const idx = tasks.findIndex(x=>x.uid===r.uid);
+            if(idx>-1) tasks.splice(idx,1);
+          });
+          // изменённые — снова применим изменения, кроме отмеченных к откату
+          prev.changed.forEach(({from,to})=>{
+            if(keep.has(from.uid) && keep.get(from.uid)==='chg') return; // оставить «до импорта»
+            const idx = tasks.findIndex(x=>x.uid===from.uid);
+            if(idx>-1){
+              const t=tasks[idx];
+              t.hours=to.hours; t.extraHours=Math.max(0.25,(to.hours||0)*0.05);
+              t.startDate=to.startDate; t.endDate=to.endDate;
+              t.startMissing=to.startMissing; t.endMissing=to.endMissing;
+              t.state=to.state||t.state;
+              t.status=to.status||t.status;
+              t.orderId=to.orderId||t.orderId;
+              t.route=to.route||t.route;
+            }
+          });
+          // toDone — опять увести в архив, если пользователь не отметил «вернуть»
+		  prev.toDone.forEach(d=>{
+		    if(keep.has(d.uid) && keep.get(d.uid)==='done') return;
+		    const idx = tasks.findIndex(x=>x.uid===d.uid);
+		    if(idx>-1){
+			  const old=tasks.splice(idx,1)[0];
+			  doneTasks.push({
+			    uid:old.uid, orderId:old.orderId, stage:old.stage,
+			    parentId:old.parentId, childId:old.childId,
+			    hours:old.hours, extra:old.extraHours,
+			    start:old.startDate, end:old.endDate,
+			    when:new Date(), source:'undo->redo_done'
+			  });
+		    }
+		  });
+        }
+
+        sortTasksByStart(); recompute(); persistNow();
+        $("#undoDlg").close();
+      };
+      $("#undoCancel").onclick = ()=> $("#undoDlg").close();
+    } else {
+      // нет диффа — просто полный откат
+      restoreState(lastSnapshotJson); lastSnapshotJson=''; sortTasksByStart(); recompute(); persistNow();
+      alert('Откат выполнен.');
+    }
+  });
+
+	// Общий маршрут — фильтры этапов
+	$$('.ov-filter').forEach(ch=>{
+	  ch.addEventListener('change', ()=>{
+		if(ch.checked) ovFilter.add(ch.value); else ovFilter.delete(ch.value);
+		renderOverview();
+	  });
+	});
+	// Общий маршрут — переключатель вида
+	$('#ovMode').addEventListener('click', (e)=>{
+	  if(!(e.target instanceof HTMLButtonElement)) return;
+	  const m=e.target.dataset.mode; if(!m) return;
+	  ovModeCurrent=m;
+	  $$('#ovMode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===m));
+	  renderOverview();
+	});
+	// Общий маршрут — Сохранить/Сброс
+	$('#ovApply').addEventListener('click', ()=>{
+	  // коммитим рабочие правки в постоянные overrides
+	  for(const [k,ov] of routeEditsWorking.entries()){
+		routeOverrides.set(k, {start:ov.start||null, end:('end' in ov)? (ov.end||null): null});
+		const [pid, st] = k.split('::');
+		// отражаем в текущем списке задач (если этот этап сейчас отображается)
+		const rec = tasks.find(t=> t.parentId===pid && t.stage===st);
+		if(rec){
+		  if(ov.start){ rec.startDate=new Date(ov.start); rec.startMissing=false; if(!rec.origStartDate) rec.origStartDate=rec.startDate; }
+		  if('end' in ov){ rec.endDate = ov.end? new Date(ov.end): null; rec.endMissing = !ov.end; }
+		  if(rec.route && rec.route[st]){
+			if(ov.start) rec.route[st].start = new Date(ov.start);
+			if('end' in ov) rec.route[st].end = ov.end? new Date(ov.end): null;
+		  }
+		}
+	  }
+	  routeEditsWorking.clear();
+	  recompute();    // таблица/подетально/гант
+          persistNow(undefined,{markSaved:true, reason:'manual'});   // и в localStorage
+	  alert('Изменения сохранены.');
+	  renderOverview();
+	});
+	$('#ovReset').addEventListener('click', ()=>{ routeEditsWorking.clear(); renderOverview(); });
+
+$("#autosave").checked = autosaveOn;
+}
+
+/* =========
+   ИНИЦИАЛИЗАЦИЯ
+========= */
+document.addEventListener('DOMContentLoaded', async ()=>{
+  setSaveStatus('loading');
+  wireHandlers();
+
+  let restored=false;
+  let restoredFrom='';
+  let remoteFailed=false;
+
+  if(typeof fetch === 'function'){
+    try{
+      const resp = await fetch(SERVER_STATE_URL, {cache:'no-store', credentials:'same-origin'});
+      if(resp.ok){
+        const text=(await resp.text()).trim();
+        if(text){
+          const applied = restoreState(text);
+          if(applied === null){
+            remoteFailed=true;
+            setSaveStatus('error','Некорректный ответ сервера');
+          } else {
+            restored=true;
+            restoredFrom='remote';
+            setSaveStatus('synced','Загружено с сервера');
+          }
+        } else {
+          setSaveStatus('idle');
+        }
+      } else if(resp.status!==204){
+        remoteFailed=true;
+      }
+    }catch(err){
+      remoteFailed=true;
+      console.warn('load remote state failed', err);
+    }
+  }
+
+  if(!restored){
+    const saved=localStorage.getItem(LS_KEY);
+    if(saved){
+      restoreState(saved);
+      restored=true;
+      restoredFrom='local';
+      setSaveStatus('offline','Локальный снимок');
+    }
+  }
+
+  if(!restored){
+    const st = $("#process").value;
+    currentProc = st;
+    adjustUIForProcess(st);
+    if (!NOHOUR_STAGES.has(st)) {
+      $("#capacity").value = String(capByProc[st] ?? (DEFAULT_CAP?.[st] ?? 15));
+    } else {
+      $("#parallelOps").value = String(parallelByProc[st] ?? 3);
+    }
+    recompute();
+    setSaveStatus(remoteFailed ? 'error' : 'idle', remoteFailed ? 'Сервер недоступен' : '');
+  } else if(restoredFrom==='local' && remoteFailed){
+    setSaveStatus('offline','Сервер недоступен — использован локальный снимок');
+  }
+});
+</script>
+</body>
+</html>
