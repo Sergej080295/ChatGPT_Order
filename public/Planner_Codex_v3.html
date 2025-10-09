@@ -541,9 +541,9 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section summary::-webkit-details-marker{display:none;}
 .settings-mapping-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
-.settings-mapping-list{display:flex;flex-direction:column;gap:12px;margin-top:12px;}
-.settings-mapping-rows{display:flex;flex-direction:column;gap:8px;}
-.settings-mapping-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(180px,240px);align-items:center;gap:12px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
+.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.settings-mapping-rows{display:flex;flex-direction:column;gap:6px;}
+.settings-mapping-row{display:grid;grid-template-columns:minmax(160px,1.6fr) minmax(160px,2fr);align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
 .settings-mapping-row[data-unmapped="1"]{border-color:#f97316;background:#fff7ed;}
 .settings-mapping-row[data-new="1"]::before{content:'Новое';position:absolute;top:-10px;left:12px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;box-shadow:0 2px 6px rgba(239,68,68,0.35);}
 .settings-mapping-row[data-ignored="1"]{border-color:#cbd5f5;background:#f1f5f9;opacity:0.85;}
@@ -12439,8 +12439,6 @@ function commitSharedSettingsChanges(){
   const draft = ensureSharedSettingsDraft();
   if(!stateMeta.settings) stateMeta.settings = {};
   const requestedKeys = new Set(sharedSettingsDirtyKeys);
-  const changedKeys = new Set();
-  const entries = [];
 
   const prevColumns = {};
   TABLE_COLUMN_DEFS.forEach(def=>{
@@ -12454,31 +12452,9 @@ function commitSharedSettingsChanges(){
     nextColumns[def.key] = sanitizeColumnWidth(source, def.defaultWidth);
   });
   sharedSettingsDraft.tableColumns = { ...nextColumns };
-  tableColumnWidths = { ...nextColumns };
-  stateMeta.settings.tableColumns = { ...tableColumnWidths };
   const changedColumnKeys = TABLE_COLUMN_DEFS
     .map(def=>def.key)
     .filter(key=> nextColumns[key] !== prevColumns[key]);
-  if(changedColumnKeys.length){
-    const nowTs = Date.now();
-    lastColumnWidthChangeAt = nowTs;
-    cleanupPendingColumnWidthEdits(nowTs);
-    Object.entries(tableColumnWidths).forEach(([colKey, width])=>{
-      pendingColumnWidthEdits.set(colKey, { value: width, timestamp: nowTs });
-    });
-    applyTableColumnWidths();
-    requestAnimationFrame(()=>{ renderTasksTable(); });
-    changedColumnKeys.forEach(colKey=>{
-      const def = TABLE_COLUMN_DEFS.find(item=>item.key === colKey);
-      const label = TABLE_COLUMN_LABEL_MAP[colKey] || def?.label || colKey;
-      entries.push({
-        key:`tableColumn.${colKey}`,
-        label:`Ширина колонки «${label}»`,
-        value:nextColumns[colKey]
-      });
-    });
-    changedKeys.add('tableColumns');
-  }
 
   const prevExtra = {
     percent: sanitizeExtraPercent(extraTimeSettings.percent),
@@ -12494,14 +12470,7 @@ function commitSharedSettingsChanges(){
     )
   };
   sharedSettingsDraft.extraTime = { ...nextExtra };
-  extraTimeSettings = { ...nextExtra };
-  stateMeta.settings.extraTime = { ...extraTimeSettings };
   const extraChanged = nextExtra.percent !== prevExtra.percent || nextExtra.minimum !== prevExtra.minimum;
-  if(extraChanged){
-    entries.push({ key:'extraTime.percent', label:'Автодовес, %', value: extraTimeSettings.percent });
-    entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value: extraTimeSettings.minimum });
-    changedKeys.add('extraTime');
-  }
 
   const prevLog = logLimitSetting === null ? null : Number(logLimitSetting);
   const draftHasLog = Object.prototype.hasOwnProperty.call(draft, 'logLimit');
@@ -12509,13 +12478,7 @@ function commitSharedSettingsChanges(){
   const sanitizedLog = sanitizeLogLimit(nextLogRaw);
   const nextLogComparable = sanitizedLog === null ? null : Number(sanitizedLog);
   sharedSettingsDraft.logLimit = nextLogComparable === null ? null : Number(nextLogComparable);
-  logLimitSetting = nextLogComparable === null ? null : Number(nextLogComparable);
-  stateMeta.settings.logLimit = logLimitSetting === null ? null : Number(logLimitSetting);
   const logChanged = (nextLogComparable ?? null) !== (prevLog ?? null);
-  if(logChanged){
-    entries.push({ key:'logLimit', label:'Лимит журнала', value: stateMeta.settings.logLimit });
-    changedKeys.add('logLimit');
-  }
   const logInput = document.getElementById('logLimitInput');
   if(logInput){
     logInput.value = sharedSettingsDraft.logLimit === null ? '' : String(sharedSettingsDraft.logLimit);
@@ -12525,13 +12488,13 @@ function commitSharedSettingsChanges(){
   const nextMappingRaw = sanitizeCrmStageMapping(draft.crmStageMapping || crmStageMapping);
   const nextSnapshot = cloneCrmMappingForSnapshot(nextMappingRaw);
   sharedSettingsDraft.crmStageMapping = nextSnapshot;
-  crmStageMapping = nextSnapshot;
-  stateMeta.settings.crmStageMapping = { ...crmStageMapping };
   const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, nextSnapshot);
-  if(mappingChanged){
-    entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
-    changedKeys.add('crmStageMapping');
-  }
+
+  const changedKeys = new Set();
+  if(changedColumnKeys.length) changedKeys.add('tableColumns');
+  if(extraChanged) changedKeys.add('extraTime');
+  if(logChanged) changedKeys.add('logLimit');
+  if(mappingChanged) changedKeys.add('crmStageMapping');
 
   requestedKeys.forEach(key=>{
     if(!changedKeys.has(key)){
@@ -12550,14 +12513,59 @@ function commitSharedSettingsChanges(){
   const timestamp = new Date().toLocaleString();
   sharedSettingsPendingStamp = timestamp;
   sharedSettingsApplying = true;
-  stateMeta.settings.updatedAt = timestamp;
+
+  tableColumnWidths = { ...nextColumns };
+  extraTimeSettings = { ...nextExtra };
+  logLimitSetting = nextLogComparable === null ? null : Number(nextLogComparable);
+  crmStageMapping = { ...nextSnapshot };
+
+  const sanitizedSettings = syncSharedSettingsToMeta(timestamp);
+  tableColumnWidths = { ...sanitizedSettings.tableColumns };
+  extraTimeSettings = { ...sanitizedSettings.extraTime };
+  logLimitSetting = sanitizedSettings.logLimit === null ? null : Number(sanitizedSettings.logLimit);
+  crmStageMapping = { ...sanitizedSettings.crmStageMapping };
+
   sharedSettingsDraft = {
-    tableColumns: { ...tableColumnWidths },
-    extraTime: { ...extraTimeSettings },
+    tableColumns: { ...sanitizedSettings.tableColumns },
+    extraTime: { ...sanitizedSettings.extraTime },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
     crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
   };
   updateSharedSettingsButtons();
+
+  const entries = [];
+  if(changedColumnKeys.length){
+    const nowTs = Date.now();
+    lastColumnWidthChangeAt = nowTs;
+    cleanupPendingColumnWidthEdits(nowTs);
+    Object.entries(tableColumnWidths).forEach(([colKey, width])=>{
+      pendingColumnWidthEdits.set(colKey, { value: width, timestamp: nowTs });
+    });
+    applyTableColumnWidths();
+    requestAnimationFrame(()=>{ renderTasksTable(); });
+    changedColumnKeys.forEach(colKey=>{
+      const def = TABLE_COLUMN_DEFS.find(item=>item.key === colKey);
+      const label = TABLE_COLUMN_LABEL_MAP[colKey] || def?.label || colKey;
+      entries.push({
+        key:`tableColumn.${colKey}`,
+        label:`Ширина колонки «${label}»`,
+        value:tableColumnWidths[colKey]
+      });
+    });
+  }
+
+  if(extraChanged){
+    entries.push({ key:'extraTime.percent', label:'Автодовес, %', value: extraTimeSettings.percent });
+    entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value: extraTimeSettings.minimum });
+  }
+
+  if(logChanged){
+    entries.push({ key:'logLimit', label:'Лимит журнала', value: stateMeta.settings.logLimit });
+  }
+
+  if(mappingChanged){
+    entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
+  }
 
   if(extraChanged){
     recompute();
