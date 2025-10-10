@@ -390,12 +390,12 @@ td[data-field="progress"]{background:#fffef3}
 .progress-wrap{display:flex;flex-direction:column;gap:6px}
 .progress-remaining{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted)}
 .progress-bar{position:relative;height:18px;border-radius:999px;background:#e2e8f0;overflow:hidden;font-size:11px;font-weight:600;color:#0f172a}
-.progress-bar span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
+.progress-bar>span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
 .progress-label{display:flex;align-items:center;gap:4px;white-space:nowrap}
 .progress-label .progress-actual{font-weight:600}
 .progress-label .progress-hours{color:var(--muted);font-weight:400}
 .progress-label .progress-expected{color:var(--muted);font-weight:600}
-.progress-label .progress-expected.behind{color:#dc2626}
+.progress-label .progress-expected.behind{color:#dc2626;background:rgba(220,38,38,.12);padding:0 4px;border-radius:4px}
 .progress-fill{height:100%;background:#3b82f6}
 .progress-bar[data-state="done"]{background:#dcfce7;color:#14532d}
 .progress-bar[data-state="done"] .progress-fill{background:#22c55e}
@@ -7435,9 +7435,34 @@ function allocate(inputTasks, baseCapacity, excMap, resMap){
     return {minD:t,maxD:t,perTask:new Map(),perDay:new Map(),metaByDay:new Map()};
   }
 
-  const starts=inputTasks.map(t=>t.startDate), ends=inputTasks.map(t=>t.endDate||t.startDate);
-  const minD=new Date(Math.min.apply(null,starts)), maxD0=new Date(Math.max.apply(null,ends));
-  minD.setHours(0,0,0,0); maxD0.setHours(0,0,0,0);
+  const anchor=today0();
+  const anchorMs=anchor.getTime();
+  const startTimes=inputTasks.map(t=>{
+    const d=(t&&t.startDate instanceof Date)?t.startDate:null;
+    return d && !Number.isNaN(d.getTime()) ? d.getTime() : anchorMs;
+  });
+  const endTimes=inputTasks.map(t=>{
+    let d=null;
+    if(t){
+      if(t.endDate instanceof Date){
+        d=t.endDate;
+      }else if(t.startDate instanceof Date){
+        d=t.startDate;
+      }
+    }
+    return d && !Number.isNaN(d.getTime()) ? d.getTime() : anchorMs;
+  });
+
+  let minD=new Date(Math.min.apply(null,startTimes));
+  let maxD0=new Date(Math.max.apply(null,endTimes));
+  minD.setHours(0,0,0,0);
+  maxD0.setHours(0,0,0,0);
+  if(minD.getTime()<anchorMs){
+    minD=new Date(anchor);
+  }
+  if(maxD0.getTime()<minD.getTime()){
+    maxD0=new Date(minD);
+  }
 
   const perTask=new Map(); // key = uid
   const perDay=new Map();  // ds -> [{uid, hours, late, section:'reserve'|'public'}]
@@ -7506,6 +7531,15 @@ function allocate(inputTasks, baseCapacity, excMap, resMap){
       cur=addDays(cur,1);
     }
     perTask.set(t.uid,rec);
+  }
+
+  const minStamp=minD.getTime();
+  for(const ds of Array.from(perDay.keys())){
+    const d=parseDate(ds);
+    if(d && d.getTime()<minStamp){
+      perDay.delete(ds);
+      metaByDay.delete(ds);
+    }
   }
 
   let maxD=maxD0; for(const ds of perDay.keys()){ const d=parseDate(ds); if(d>maxD) maxD=d; }
