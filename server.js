@@ -43,6 +43,43 @@ const simpleHash = (str) => {
   return hash.toString(16);
 };
 
+const normalizeWeakEtag = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === '*') return '*';
+  const withoutWeak = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+  const stripped = withoutWeak.replace(/^"|"$/g, '');
+  return stripped || null;
+};
+
+const parseIfMatchHeader = (value) => {
+  if (!value) {
+    return { hash: null, any: false };
+  }
+  const raw = Array.isArray(value) ? value.join(',') : String(value);
+  const tokens = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  for (const token of tokens) {
+    if (token === '*') {
+      return { hash: null, any: true };
+    }
+    const normalized = normalizeWeakEtag(token);
+    if (normalized && normalized !== '*') {
+      return { hash: normalized, any: false };
+    }
+  }
+  return { hash: null, any: false };
+};
+
+const sanitizeHashCandidate = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return sanitizeHashCandidate(String(value));
+};
+
 const DEFAULT_STATE = {
   routeOverrides: [],
   t: [],
@@ -114,9 +151,13 @@ const loadLegacyStateFromDisk = async () => {
   return null;
 };
 
-const readPlannerStateRow = async (client) => {
+const readPlannerStateRow = async (client, options = {}) => {
   const runner = client || pool;
-  const { rows } = await runner.query('SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1');
+  const { forUpdate = false } = options;
+  const suffix = forUpdate ? ' FOR UPDATE' : '';
+  const { rows } = await runner.query(
+    `SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1${suffix}`
+  );
   if (rows.length > 0) {
     const row = rows[0];
     return {
@@ -347,23 +388,27 @@ const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
   return { stateObj: nextStateObj, touched: true };
 };
 
-const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt) => {
-  const existing = await readPlannerStateRow(client);
-  if (existing) {
-    await client.query('UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5', [
-      stateString,
-      meta,
-      hash,
-      updatedAt,
-      existing.id
-    ]);
-    return existing.id;
+const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt, options = {}) => {
+  const { expectedHash = null, existing = null } = options;
+  const existingRow = existing || await readPlannerStateRow(client);
+  if (existingRow) {
+    const params = [stateString, meta, hash, updatedAt, existingRow.id];
+    let sql = 'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5';
+    if (expectedHash && existingRow.hash) {
+      params.push(expectedHash);
+      sql += ' AND hash = $6';
+    }
+    const result = await client.query(sql, params);
+    if (expectedHash && result.rowCount === 0) {
+      return { conflict: true, id: existingRow.id };
+    }
+    return { conflict: false, id: existingRow.id };
   }
   const { rows } = await client.query(
     'INSERT INTO planner_state (state, meta, hash, updated_at) VALUES ($1,$2,$3,$4) RETURNING id',
     [stateString, meta, hash, updatedAt]
   );
-  return rows[0].id;
+  return { conflict: false, id: rows[0].id };
 };
 
 const persistSnapshotToSql = async (client, stateObj) => {
@@ -894,7 +939,7 @@ app.get('/api/events', async (req, res) => {
   });
 
   const current = cachedState || await refreshCachedState();
-  res.write(`data: ${JSON.stringify({ type: 'state', state: current.state, meta: current.meta, updatedAt: current.updatedAt, hash: current.hash })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: 'state', state: current.state, meta: current.meta, updatedAt: current.updatedAt, hash: current.hash, etag: current.etag })}\n\n`);
 });
 
 app.get('/api/state', async (req, res) => {
@@ -941,6 +986,7 @@ app.put('/api/state', async (req, res) => {
   }
 
   const current = cachedState || await refreshCachedState();
+  const currentHash = sanitizeHashCandidate(current?.hash);
   let currentStateObj = {};
   try {
     currentStateObj = JSON.parse(current.state || '{}');
@@ -973,6 +1019,57 @@ app.put('/api/state', async (req, res) => {
     return;
   }
 
+  const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
+  let expectedHash = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
+  if (!expectedHash && meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    const metaExpected = sanitizeHashCandidate(meta.expectedHash) || sanitizeHashCandidate(meta.baseHash);
+    if (metaExpected) {
+      expectedHash = metaExpected;
+    } else if (meta.baseEtag) {
+      const parsed = normalizeWeakEtag(meta.baseEtag);
+      if (parsed && parsed !== '*') {
+        expectedHash = sanitizeHashCandidate(parsed);
+      }
+    }
+  }
+  const ifMatchAllowsAny = ifMatchHeader.any;
+
+  if (currentHash) {
+    if (!expectedHash && !ifMatchAllowsAny) {
+      res.status(428).json({
+        error: 'Precondition Required',
+        message: 'Planner state update requires an If-Match header or base hash',
+        stage,
+        updatedAt: current.updatedAt,
+        currentHash
+      });
+      return;
+    }
+    if (ifMatchAllowsAny && !expectedHash) {
+      res.status(428).json({
+        error: 'Precondition Required',
+        message: 'Wildcard If-Match is not allowed once planner state exists',
+        stage,
+        updatedAt: current.updatedAt,
+        currentHash
+      });
+      return;
+    }
+    if (expectedHash && expectedHash !== currentHash) {
+      const lastAuthor = stage ? currentStateObj?.meta?.lastAuthors?.[stage] ?? null : null;
+      res.status(409).json({
+        error: 'Conflict',
+        stage,
+        reason: 'hash_mismatch',
+        expectedHash,
+        currentHash,
+        lastAuthor,
+        updatedAt: current.updatedAt
+      });
+      return;
+    }
+  }
+
   const updatedAt = new Date().toISOString();
   let nextStateString = state;
   if (meta?.stage === 'settings') {
@@ -988,13 +1085,69 @@ app.put('/api/state', async (req, res) => {
   }
 
   const hash = simpleHash(nextStateString);
-  const nextMeta = meta || null;
+  let nextMeta = meta || null;
+  if (nextMeta && typeof nextMeta === 'object' && !Array.isArray(nextMeta)) {
+    const cleaned = { ...nextMeta };
+    delete cleaned.baseHash;
+    delete cleaned.baseEtag;
+    delete cleaned.expectedHash;
+    delete cleaned.ifMatch;
+    if (Object.keys(cleaned).length > 0) {
+      nextMeta = cleaned;
+    } else {
+      nextMeta = null;
+    }
+  }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const existingRow = await readPlannerStateRow(client, { forUpdate: true });
+    const dbHash = sanitizeHashCandidate(existingRow?.hash);
+    if (dbHash) {
+      if (!expectedHash) {
+        await client.query('ROLLBACK');
+        res.status(428).json({
+          error: 'Precondition Required',
+          message: 'Planner state update requires an If-Match header or base hash',
+          stage,
+          updatedAt: existingRow.updatedAt,
+          currentHash: dbHash
+        });
+        return;
+      }
+      if (expectedHash !== dbHash) {
+        await client.query('ROLLBACK');
+        res.status(409).json({
+          error: 'Conflict',
+          stage,
+          reason: 'hash_mismatch',
+          expectedHash,
+          currentHash: dbHash,
+          updatedAt: existingRow.updatedAt
+        });
+        return;
+      }
+    } else if (!dbHash && ifMatchAllowsAny) {
+      expectedHash = null;
+    }
+
     await persistSnapshotToSql(client, nextStateObj);
-    await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt);
+    const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
+      expectedHash,
+      existing: existingRow
+    });
+    if (upsertResult?.conflict) {
+      await client.query('ROLLBACK');
+      res.status(409).json({
+        error: 'Conflict',
+        stage,
+        reason: 'hash_mismatch',
+        expectedHash,
+        updatedAt: existingRow?.updatedAt ?? current.updatedAt
+      });
+      return;
+    }
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -1027,8 +1180,9 @@ app.put('/api/state', async (req, res) => {
   }
   await appendLog(logEntry);
 
-  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, delta });
-  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt });
+  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
+  res.setHeader('ETag', refreshed.etag);
+  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag });
 });
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
