@@ -337,6 +337,9 @@ td[contenteditable="true"]{background:#fffceb;outline:0;border-radius:4px}
 .lock-btn:focus{outline:2px solid #bfdbfe;outline-offset:2px;border-radius:6px}
 .rest-cell{background:#f8fafc;font-weight:600}
 td[data-field="progress"]{background:#fffef3}
+td[data-field="progress"][data-expected]{position:relative;white-space:nowrap;font-variant-numeric:tabular-nums}
+td[data-field="progress"][data-expected]:after{content:" /" attr(data-expected) "%";margin-left:4px;color:var(--muted);font-weight:600;display:inline-block}
+td[data-field="progress"][data-expected][data-behind="1"]:after{color:#dc2626;background:rgba(220,38,38,.12);border-radius:4px;padding:0 4px;margin-left:6px}
 .start-cell{line-height:1.1}
 .start-cell .orig{display:block;font-size:11px;color:#64748b;margin-top:2px}
 
@@ -764,6 +767,7 @@ body.overview-fs-active{overflow:hidden}
             <option value="current" selected>Текущие</option>
             <option value="all">Все заказы</option>
             <option value="done">Готовые</option>
+            <option value="late">С опозданием</option>
           </select>
         </label>
       </div>
@@ -774,6 +778,7 @@ body.overview-fs-active{overflow:hidden}
             <option value="current" selected>Текущие</option>
             <option value="all">Все заказы</option>
             <option value="done">Готовые</option>
+            <option value="late">С опозданием</option>
           </select>
         </label>
       </div>
@@ -4162,6 +4167,9 @@ function collectStageActiveEntries(stage){
   const filtered = orderSearchNormalized
     ? base.filter(({ task })=> taskMatchesSearch(task))
     : base;
+  if(mode === 'late'){
+    return filtered.filter(({ task })=> isTaskBehindSchedule(task));
+  }
   return filtered;
 }
 
@@ -4246,7 +4254,7 @@ function forgetTaskFromStageOrder(stage, uid){
 }
 
 const OVERVIEW_STAGE = 'orders';
-const ORDER_LIST_FILTERS = new Set(['current','all','done']);
+const ORDER_LIST_FILTERS = new Set(['current','all','done','late']);
 const ORDER_FILTER_DEFAULT = 'current';
 const stageListFilterByStage = new Map();
 
@@ -4683,6 +4691,18 @@ function compareOrdersForOverview(a,b){
   return a.order.orderId.localeCompare(b.order.orderId);
 }
 
+function orderStageHasWork(orderEntry, stage, stageTasks, doneStageSet){
+  if(!orderEntry || !stage) return false;
+  const key = orderEntry.key;
+  if(key && stageTasks && stageTasks.get(key)?.get(stage)?.length){
+    return true;
+  }
+  if(doneStageSet && doneStageSet.has(`${key}::${stage}`)) return true;
+  if(orderEntry.order?.stages && orderEntry.order.stages[stage]) return true;
+  if(stage === 'ship' && orderEntry.isDone) return true;
+  return false;
+}
+
 function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
   const mode = ORDER_LIST_FILTERS.has(filterMode) ? filterMode : ORDER_FILTER_DEFAULT;
   const opts = options || {};
@@ -4778,6 +4798,16 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
     const isActive = !orderDoneFlag && activeKeys.has(key);
     const isDone = orderDoneFlag;
     const parts = parseOrderParts(order.orderId);
+    const entryCandidate = { order, key, isActive, isDone, parts };
+    const hasLateStage = PROGRESS_STAGES.some(stageName => {
+      if(!orderStageHasWork(entryCandidate, stageName, stageTasks, doneStageSet)) return false;
+      const metrics = computeStageMetrics(entryCandidate, stageName, stageTasks, doneStageSet);
+      const actualValue = Math.max(0, Math.min(100, Number(metrics.percent)||0));
+      if(actualValue >= 100) return false;
+      const expected = computeExpectedProgressForStage(entryCandidate, stageName, stageTasks);
+      if(expected == null) return false;
+      return actualValue < expected - 0.49;
+    });
     const matchesTarget = wantsSpecific && matchesOrderIdentity(key, order, targetIdentity);
     if(wantsSpecific && !matchesTarget) return;
     if(!wantsSpecific && !ignoreSearch && !overviewMatchesSearch(order, parts)) return;
@@ -4785,8 +4815,9 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
       if(mode === 'current' && !isActive) return;
       if(mode === 'done' && !isDone) return;
       if(mode === 'all' && !isActive && !isDone) return;
+      if(mode === 'late' && !hasLateStage) return;
     }
-    rows.push({ order, key, isActive, isDone, parts });
+    rows.push({ order, key, isActive, isDone, parts, isLate: hasLateStage });
   });
 
   rows.sort(compareOrdersForOverview);
@@ -4946,6 +4977,33 @@ function computeExpectedProgressForStage(orderEntry, stage, stageTasks){
   const expected = computeExpectedProgressPercent(startCandidate, endCandidate, reference);
   if(expected == null) return null;
   return Math.max(0, Math.min(100, expected));
+}
+
+function computeExpectedProgressForTask(task){
+  if(!task || !task.stage || NOHOUR_STAGES.has(task.stage)) return null;
+  const stage = task.stage;
+  const segInfo = task.route && task.route[stage] ? task.route[stage] : {};
+  const startCandidate = segInfo?.start || task.startDate || null;
+  let endCandidate = null;
+  if(segInfo && Object.prototype.hasOwnProperty.call(segInfo,'end')){
+    endCandidate = segInfo.end;
+  }else if(Object.prototype.hasOwnProperty.call(task,'endDate')){
+    endCandidate = task.endDate;
+  }
+  if(!startCandidate || !endCandidate) return null;
+  const expected = computeExpectedProgressPercent(startCandidate, endCandidate, expectedReferenceDate());
+  if(expected == null) return null;
+  return Math.max(0, Math.min(100, expected));
+}
+
+function isTaskBehindSchedule(task){
+  if(!task) return false;
+  if(task.isDone || isDoneStatus(task.status)) return false;
+  const actual = clampProgressValue(task.progress);
+  if(actual >= 100) return false;
+  const expected = computeExpectedProgressForTask(task);
+  if(expected == null) return false;
+  return actual < expected - 0.49;
 }
 
 function partitionDoneTasks(list){
@@ -6067,20 +6125,14 @@ function renderOrdersOverviewTable(){
     return;
   }
 
-  const totals = { orders: rows.length, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const totals = { orders: 0, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const showLateOnly = mode === 'late';
 
   rows.forEach(entry => {
     const tr = document.createElement('tr');
     const parts = entry.parts || parseOrderParts(entry.order.orderId);
 
-    const tasksForStage = stage => stageTasks.get(entry.key)?.get(stage) || [];
-    const stageHasWork = stage => {
-      if(tasksForStage(stage).length > 0) return true;
-      if(doneStageSet.has(`${entry.key}::${stage}`)) return true;
-      if(entry.order?.stages && entry.order.stages[stage]) return true;
-      if(stage === 'ship' && entry.isDone) return true;
-      return false;
-    };
+    const stageHasWork = stage => orderStageHasWork(entry, stage, stageTasks, doneStageSet);
 
     const indicatorState = stage => {
       if(!stageHasWork(stage)) return 'missing';
@@ -6091,12 +6143,32 @@ function renderOrdersOverviewTable(){
     };
 
     const metricsCache = {};
-    const slipFlags = {};
+    const expectedCache = {};
+    const behindCache = {};
+    let computedLate = false;
 
     PROGRESS_STAGES.forEach(stage => {
       const metrics = computeStageMetrics(entry, stage, stageTasks, doneStageSet);
       metricsCache[stage] = metrics;
-      totals[stage] += metrics.remaining;
+      const actualValue = Math.max(0, Math.min(100, Number(metrics.percent) || 0));
+      const expected = computeExpectedProgressForStage(entry, stage, stageTasks);
+      expectedCache[stage] = expected;
+      const stageDone = actualValue >= 100;
+      const behind = expected != null && !stageDone && actualValue < expected - 0.49;
+      behindCache[stage] = behind;
+      if(behind) computedLate = true;
+    });
+
+    const entryIsLate = entry.isLate != null ? !!entry.isLate : computedLate;
+    if(showLateOnly && !entryIsLate){
+      return;
+    }
+
+    const slipFlags = {};
+
+    PROGRESS_STAGES.forEach(stage => {
+      const metrics = metricsCache[stage];
+      if(metrics){ totals[stage] += metrics.remaining; }
       slipFlags[stage] = detectStageSlipForOrder(entry.key, stage, stageTasks);
     });
 
@@ -6104,6 +6176,8 @@ function renderOrdersOverviewTable(){
       if(stageHasWork(stage)){ totals[stage] += 1; }
       slipFlags[stage] = detectStageSlipForOrder(entry.key, stage, stageTasks);
     });
+
+    totals.orders += 1;
 
     const renderProgress = stage => {
       if(!stageHasWork(stage)){
@@ -6117,10 +6191,11 @@ function renderOrdersOverviewTable(){
       const state = pct >= 100 ? 'done' : (metrics.totalHours <= 0 ? 'empty' : 'active');
       const width = Math.max(0, Math.min(100, pct));
       const slipAttr = slipFlags[stage] ? ' data-slip="true"' : '';
-      const expected = computeExpectedProgressForStage(entry, stage, stageTasks);
+      const expected = expectedCache[stage];
       const expectedRounded = expected != null ? Math.round(expected) : null;
-      const behind = expected != null && actualValue < expected - 0.49;
-      const expectedMarkup = expectedRounded != null
+      const behind = behindCache[stage] && state !== 'done';
+      const showExpected = expectedRounded != null && state !== 'done';
+      const expectedMarkup = showExpected
         ? `<span class="progress-expected${behind ? ' behind' : ''}">/${expectedRounded}%</span>`
         : '';
       const labelHtml = `<span class="progress-label"><span class="progress-actual">${pct}%</span>${expectedMarkup}<span class="progress-hours">(${totalText}ч)</span></span>`;
@@ -6180,6 +6255,16 @@ function renderOrdersOverviewTable(){
 
     tbody.appendChild(tr);
   });
+
+  if(!tbody.children.length){
+    const emptyRow = document.createElement('tr');
+    const emptyCell = document.createElement('td');
+    emptyCell.colSpan = 13;
+    emptyCell.className = 'orders-overview-empty';
+    emptyCell.textContent = 'Нет заказов для отображения';
+    emptyRow.appendChild(emptyCell);
+    tbody.appendChild(emptyRow);
+  }
 
   updateTotalsUI(totals);
   if(totalsBox){ totalsBox.style.display = ''; }
@@ -7921,7 +8006,7 @@ function renderTasksTable(){
   }
   const filterMode = getStageListFilter(stage);
   const includeActive = filterMode !== 'done';
-  const includeDone = filterMode !== 'current';
+  const includeDone = filterMode === 'all' || filterMode === 'done';
 
   const activeEntriesBase = includeActive ? collectStageActiveEntries(stage) : [];
   const filteredActive = activeEntriesBase;
@@ -7965,6 +8050,17 @@ function renderTasksTable(){
     const rest = Math.max(0, remainingTotal(t));
     const allowEdit = canEdit && !isDoneRecord;
     const progressText = String(t.progress ?? 0).replace('.',',');
+    const actualProgress = clampProgressValue(t.progress);
+    const expectedForTask = computeExpectedProgressForTask(t);
+    const expectedRounded = expectedForTask != null ? Math.round(expectedForTask) : null;
+    const showTaskExpected = expectedRounded != null && actualProgress < 100 && !t.isDone && !isDoneStatus(t.status);
+    const behindTask = showTaskExpected && actualProgress < expectedForTask - 0.49;
+    const progressAttrParts = [];
+    if(showTaskExpected){
+      progressAttrParts.push(`data-expected="${expectedRounded}"`);
+      if(behindTask) progressAttrParts.push('data-behind="1"');
+    }
+    const progressAttrString = progressAttrParts.length ? ` ${progressAttrParts.join(' ')}` : '';
     const hoursText = String(t.hours ?? 0).replace('.',',');
     const restText = rest.toFixed(1).replace('.',',');
     const startText = t.startDate instanceof Date ? fmtDate(t.startDate) : '—';
@@ -7986,7 +8082,7 @@ function renderTasksTable(){
       <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
       <td class="eye" title="Маршрут заказа">👁</td>
       <td class="drag-handle" ${orderAttrs}>${orderDisplay}</td>
-      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="progress">${progressText}</td>
+      <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="progress"${progressAttrString}>${progressText}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="hours">${hoursText}</td>
       <td class="rest-cell">${restText}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="startDate" class="start-cell ${t.startMissing?'error':''}">${startText}${origMarkup}</td>
@@ -8005,7 +8101,12 @@ function renderTasksTable(){
       el.title = text.trim();
     };
     assignTitle('.drag-handle', orderDisplay);
-    assignTitle('[data-field="progress"]', progressText);
+    const progressTitleParts = [progressText];
+    if(showTaskExpected){
+      progressTitleParts.push(`План: ${expectedRounded}%`);
+      if(behindTask) progressTitleParts.push('Отстаёт от плана');
+    }
+    assignTitle('[data-field="progress"]', progressTitleParts.join(' · '));
     assignTitle('[data-field="hours"]', hoursText);
     assignTitle('.rest-cell', restText);
     assignTitle('[data-field="state"]', t.state || '');
