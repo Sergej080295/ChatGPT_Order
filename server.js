@@ -48,7 +48,10 @@ const normalizeWeakEtag = (value) => {
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (trimmed === '*') return '*';
-  const withoutWeak = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+  const hasWeakPrefix = trimmed.length >= 2
+    && (trimmed[0] === 'W' || trimmed[0] === 'w')
+    && trimmed[1] === '/';
+  const withoutWeak = hasWeakPrefix ? trimmed.slice(2) : trimmed;
   const stripped = withoutWeak.replace(/^"|"$/g, '');
   return stripped || null;
 };
@@ -78,6 +81,11 @@ const sanitizeHashCandidate = (value) => {
     return trimmed ? trimmed : null;
   }
   return sanitizeHashCandidate(String(value));
+};
+
+const normalizeHashValue = (value) => {
+  const sanitized = sanitizeHashCandidate(value);
+  return sanitized ? sanitized.toLowerCase() : null;
 };
 
 const DEFAULT_STATE = {
@@ -396,7 +404,7 @@ const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt,
     let sql = 'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5';
     if (expectedHash && existingRow.hash) {
       params.push(expectedHash);
-      sql += ' AND hash = $6';
+      sql += ' AND LOWER(hash) = LOWER($6)';
     }
     const result = await client.query(sql, params);
     if (expectedHash && result.rowCount === 0) {
@@ -985,13 +993,18 @@ app.put('/api/state', async (req, res) => {
     return;
   }
 
-  const current = cachedState || await refreshCachedState();
-  const currentHash = sanitizeHashCandidate(current?.hash);
-  let currentStateObj = {};
-  try {
-    currentStateObj = JSON.parse(current.state || '{}');
-  } catch (err) {
-    currentStateObj = {};
+  let current = cachedState || await refreshCachedState();
+  let currentHashRaw = sanitizeHashCandidate(current?.hash);
+  let currentHash = normalizeHashValue(currentHashRaw);
+  let currentStateObj = current?.parsed && typeof current.parsed === 'object'
+    ? current.parsed
+    : {};
+  if (!currentStateObj || typeof currentStateObj !== 'object') {
+    try {
+      currentStateObj = JSON.parse(current.state || '{}');
+    } catch (err) {
+      currentStateObj = {};
+    }
   }
 
   let nextStateObj = {};
@@ -1020,15 +1033,21 @@ app.put('/api/state', async (req, res) => {
   }
 
   const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
-  let expectedHash = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
+  let expectedHashRaw = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
+  let expectedHash = normalizeHashValue(expectedHashRaw);
   if (!expectedHash && meta && typeof meta === 'object' && !Array.isArray(meta)) {
-    const metaExpected = sanitizeHashCandidate(meta.expectedHash) || sanitizeHashCandidate(meta.baseHash);
-    if (metaExpected) {
-      expectedHash = metaExpected;
+    const metaExpectedRaw = sanitizeHashCandidate(meta.expectedHash) || sanitizeHashCandidate(meta.baseHash);
+    if (metaExpectedRaw) {
+      expectedHashRaw = metaExpectedRaw;
+      expectedHash = normalizeHashValue(metaExpectedRaw);
     } else if (meta.baseEtag) {
       const parsed = normalizeWeakEtag(meta.baseEtag);
       if (parsed && parsed !== '*') {
-        expectedHash = sanitizeHashCandidate(parsed);
+        const parsedCandidate = sanitizeHashCandidate(parsed);
+        if (parsedCandidate) {
+          expectedHashRaw = parsedCandidate;
+          expectedHash = normalizeHashValue(parsedCandidate);
+        }
       }
     }
   }
@@ -1041,22 +1060,42 @@ app.put('/api/state', async (req, res) => {
         message: 'Wildcard If-Match is not allowed once planner state exists',
         stage,
         updatedAt: current.updatedAt,
-        currentHash
+        currentHash: currentHashRaw
       });
       return;
     }
     if (expectedHash && expectedHash !== currentHash) {
-      const lastAuthor = stage ? currentStateObj?.meta?.lastAuthors?.[stage] ?? null : null;
-      res.status(409).json({
-        error: 'Conflict',
-        stage,
-        reason: 'hash_mismatch',
-        expectedHash,
-        currentHash,
-        lastAuthor,
-        updatedAt: current.updatedAt
-      });
-      return;
+      const refreshed = await refreshCachedState();
+      const refreshedHashRaw = sanitizeHashCandidate(refreshed?.hash);
+      const refreshedHash = normalizeHashValue(refreshedHashRaw);
+      if (refreshedHash && (!currentHash || refreshedHash !== currentHash)) {
+        current = refreshed;
+        currentHashRaw = refreshedHashRaw;
+        currentHash = refreshedHash;
+        currentStateObj = refreshed?.parsed && typeof refreshed.parsed === 'object'
+          ? refreshed.parsed
+          : {};
+        if (!currentStateObj || typeof currentStateObj !== 'object') {
+          try {
+            currentStateObj = JSON.parse(refreshed.state || '{}');
+          } catch (err) {
+            currentStateObj = {};
+          }
+        }
+      }
+      if (expectedHash && currentHash && expectedHash !== currentHash) {
+        const lastAuthor = stage ? currentStateObj?.meta?.lastAuthors?.[stage] ?? null : null;
+        res.status(409).json({
+          error: 'Conflict',
+          stage,
+          reason: 'hash_mismatch',
+          expectedHash: expectedHashRaw,
+          currentHash: currentHashRaw,
+          lastAuthor,
+          updatedAt: current.updatedAt
+        });
+        return;
+      }
     }
   }
 
@@ -1093,7 +1132,8 @@ app.put('/api/state', async (req, res) => {
   try {
     await client.query('BEGIN');
     const existingRow = await readPlannerStateRow(client, { forUpdate: true });
-    const dbHash = sanitizeHashCandidate(existingRow?.hash);
+    const dbHashRaw = sanitizeHashCandidate(existingRow?.hash);
+    const dbHash = normalizeHashValue(dbHashRaw);
     if (dbHash) {
       if (!expectedHash) {
         await client.query('ROLLBACK');
@@ -1104,7 +1144,7 @@ app.put('/api/state', async (req, res) => {
             : 'Planner state update requires an If-Match header or base hash',
           stage,
           updatedAt: existingRow.updatedAt,
-          currentHash: dbHash
+          currentHash: dbHashRaw
         });
         return;
       }
@@ -1114,19 +1154,20 @@ app.put('/api/state', async (req, res) => {
           error: 'Conflict',
           stage,
           reason: 'hash_mismatch',
-          expectedHash,
-          currentHash: dbHash,
+          expectedHash: expectedHashRaw,
+          currentHash: dbHashRaw,
           updatedAt: existingRow.updatedAt
         });
         return;
       }
     } else if (!dbHash && ifMatchAllowsAny) {
       expectedHash = null;
+      expectedHashRaw = null;
     }
 
     await persistSnapshotToSql(client, nextStateObj);
     const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
-      expectedHash,
+      expectedHash: expectedHashRaw,
       existing: existingRow
     });
     if (upsertResult?.conflict) {
@@ -1135,7 +1176,7 @@ app.put('/api/state', async (req, res) => {
         error: 'Conflict',
         stage,
         reason: 'hash_mismatch',
-        expectedHash,
+        expectedHash: expectedHashRaw,
         updatedAt: existingRow?.updatedAt ?? current.updatedAt
       });
       return;
