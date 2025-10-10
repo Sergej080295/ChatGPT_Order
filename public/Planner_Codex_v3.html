@@ -2191,7 +2191,10 @@ function applyStateFromExternal(raw, opts={}){
 
     const jsonText = typeof raw === 'string' ? raw : JSON.stringify(parsed);
     const fingerprint = simpleHash(jsonText);
-    const skipToasts = !!(opts.skipToasts || (fingerprint && fingerprint === lastPushedFingerprint));
+    const previousFingerprint = lastAppliedRemoteFingerprint || '';
+    const skipToasts = !!(opts.skipToasts
+      || (fingerprint && fingerprint === lastPushedFingerprint)
+      || (fingerprint && fingerprint === previousFingerprint));
     lastAppliedRemoteFingerprint = fingerprint;
     if(fingerprint && fingerprint === lastPushedFingerprint){
       lastPushedFingerprint = '';
@@ -11663,7 +11666,7 @@ function persistNow(stageOverride, opts={}){
               try{
                 const latest = await remoteBridge.pull();
                 if(latest){
-                  applyStateFromExternal(latest, { origin:'remote' });
+                  applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
                 }
               }catch(pullErr){
                 console.warn('failed to refresh after conflict', pullErr);
@@ -12019,6 +12022,7 @@ function persistNow(stageOverride, opts={}){
         };
         const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
+        skipRealtimeToastOnce = true;
         pushPromise = remoteBridge.push(payload, {
           stage:remoteStage,
           diff:remoteDiff,
