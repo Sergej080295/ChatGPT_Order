@@ -23,21 +23,44 @@
   };
 
   const updateFingerprint = ({ etag, hash }) => {
+    let applied = false;
     if (etag && typeof etag === 'string') {
       const parsed = parseEtagHash(etag);
       if (parsed) {
-        currentEtag = etag;
         currentHash = parsed;
-        return;
+        currentEtag = etag.startsWith('W/') ? etag : `W/"${parsed}"`;
+        applied = true;
       }
     }
     if (hash) {
       const normalized = String(hash).trim();
       if (normalized) {
         currentHash = normalized;
-        currentEtag = `W/"${normalized}"`;
+        if (!applied || !parseEtagHash(currentEtag || '')) {
+          currentEtag = `W/"${normalized}"`;
+        }
       }
     }
+  };
+
+  const extractBodyFingerprint = (text) => {
+    if (!text || typeof text !== 'string') return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') {
+        const bodyEtag = typeof parsed.etag === 'string' ? parsed.etag : null;
+        const bodyHash = typeof parsed.hash === 'string' ? parsed.hash : null;
+        if (bodyEtag || bodyHash) {
+          updateFingerprint({ etag: bodyEtag, hash: bodyHash });
+        }
+        return { parsed, hash: bodyHash, etag: bodyEtag };
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+    return null;
   };
 
   window.PLANNER_STATE_ENDPOINT = STATE_ENDPOINT;
@@ -97,11 +120,11 @@
       throw new Error(detail || `HTTP ${res.status}`);
     }
     const text = await res.text();
+    const bodyInfo = extractBodyFingerprint(text);
     const etag = res.headers.get('ETag');
-    updateFingerprint({ etag });
+    updateFingerprint({ etag, hash: bodyInfo?.hash });
     if (options && (options.withMeta || options.returnMeta)) {
-      const hash = parseEtagHash(etag) || currentHash || null;
-      return { state: text, etag, hash };
+      return { state: text, etag: currentEtag, hash: currentHash };
     }
     return text;
   };
@@ -115,89 +138,96 @@
         /* ignore */
       }
     }
-    let metaPayload = null;
+
     const metaIsObject = meta && typeof meta === 'object' && !Array.isArray(meta);
-    if (metaIsObject) {
-      metaPayload = { ...meta };
-    } else if (meta === null || meta === undefined) {
-      metaPayload = {};
-    }
-    let ifMatchHeader = null;
-    if (metaPayload && typeof metaPayload === 'object') {
-      if (Object.prototype.hasOwnProperty.call(metaPayload, 'ifMatch')) {
-        const explicit = metaPayload.ifMatch == null ? '' : String(metaPayload.ifMatch).trim();
-        if (explicit) {
-          ifMatchHeader = explicit;
+    const metaTemplate = metaIsObject ? { ...meta } : meta;
+
+    const buildRequestPayload = () => {
+      let metaPayload = null;
+      let ifMatchHeader = null;
+      if (metaIsObject) {
+        const working = { ...metaTemplate };
+        if (Object.prototype.hasOwnProperty.call(working, 'ifMatch')) {
+          const explicit = working.ifMatch == null ? '' : String(working.ifMatch).trim();
+          if (explicit) {
+            ifMatchHeader = explicit;
+          }
+          delete working.ifMatch;
         }
-        delete metaPayload.ifMatch;
-      }
-      const providedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
-      const providedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
-      if (currentHash && !providedBaseHash) metaPayload.baseHash = currentHash;
-      if (currentEtag && !providedBaseEtag) metaPayload.baseEtag = currentEtag;
-      const normalizedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
-      const normalizedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
-      if (!ifMatchHeader) {
-        if (normalizedBaseEtag) {
-          ifMatchHeader = normalizedBaseEtag;
-        } else if (normalizedBaseHash) {
-          ifMatchHeader = `W/"${normalizedBaseHash}"`;
+        const providedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
+        const providedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
+        if (currentHash && !providedBaseHash) working.baseHash = currentHash;
+        if (currentEtag && !providedBaseEtag) working.baseEtag = currentEtag;
+        const normalizedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
+        const normalizedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
+        if (!ifMatchHeader) {
+          if (normalizedBaseEtag) {
+            ifMatchHeader = normalizedBaseEtag;
+          } else if (normalizedBaseHash) {
+            ifMatchHeader = `W/"${normalizedBaseHash}"`;
+          }
         }
+        if (!normalizedBaseHash) delete working.baseHash;
+        if (!normalizedBaseEtag) delete working.baseEtag;
+        if (working.forceOverwrite !== true) delete working.forceOverwrite;
+        metaPayload = Object.keys(working).length > 0 ? working : null;
+      } else if (meta !== undefined) {
+        metaPayload = metaTemplate;
       }
-      if (!normalizedBaseHash) delete metaPayload.baseHash;
-      if (!normalizedBaseEtag) delete metaPayload.baseEtag;
-    }
-    let metaForBody = null;
-    if (metaPayload && typeof metaPayload === 'object') {
-      metaForBody = Object.keys(metaPayload).length > 0 ? metaPayload : null;
-    } else if (meta !== undefined) {
-      metaForBody = meta;
-    } else {
-      metaForBody = null;
-    }
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json,text/plain'
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json,text/plain'
+      };
+      const effectiveIfMatch = ifMatchHeader
+        || (currentEtag ? currentEtag : currentHash ? `W/"${currentHash}"` : '*');
+      headers['If-Match'] = effectiveIfMatch;
+      const body = JSON.stringify({ state: stateString, meta: metaPayload });
+      return { headers, body };
     };
-    if (ifMatchHeader) {
-      headers['If-Match'] = ifMatchHeader;
-    } else if (currentEtag) {
-      headers['If-Match'] = currentEtag;
-    } else if (currentHash) {
-      headers['If-Match'] = `W/"${currentHash}"`;
-    } else {
-      headers['If-Match'] = '*';
-    }
-    const body = JSON.stringify({ state: stateString, meta: metaForBody });
-    const res = await fetch(STATE_ENDPOINT, {
-      method: 'PUT',
-      headers,
-      body
-    });
-    const text = await res.text().catch(() => '') || '';
-    const trimmed = text.trim();
-    let parsed = null;
-    if (trimmed) {
-      try { parsed = JSON.parse(trimmed); }
-      catch (_err) { parsed = null; }
-    }
-    if (!res.ok) {
-      const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
-      err.status = res.status;
-      if (parsed !== null) {
-        err.detail = parsed;
-      } else if (trimmed) {
-        err.detail = trimmed;
+
+    const attemptSave = async (attempt = 0) => {
+      const { headers, body } = buildRequestPayload();
+      const res = await fetch(STATE_ENDPOINT, {
+        method: 'PUT',
+        headers,
+        body
+      });
+      const text = await res.text().catch(() => '') || '';
+      const trimmed = text.trim();
+      let parsed = null;
+      if (trimmed) {
+        try { parsed = JSON.parse(trimmed); }
+        catch (_err) { parsed = null; }
       }
-      err.body = text;
-      if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
-        err.name = 'PlannerConflictError';
+      if (!res.ok) {
+        const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
+        err.status = res.status;
+        if (parsed !== null) {
+          err.detail = parsed;
+        } else if (trimmed) {
+          err.detail = trimmed;
+        }
+        err.body = text;
+        if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+          err.name = 'PlannerConflictError';
+        }
+        if (attempt === 0 && (err.status === 409 || err.status === 412 || err.status === 428)) {
+          try {
+            await loadState({ withMeta: true });
+          } catch (_reloadErr) {
+            /* ignore and retry with existing fingerprint */
+          }
+          return attemptSave(attempt + 1);
+        }
+        throw err;
       }
-      throw err;
-    }
-    updateFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
-    if (!trimmed) return true;
-    return parsed ?? text;
+      updateFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
+      extractBodyFingerprint(text);
+      if (!trimmed) return true;
+      return parsed ?? text;
+    };
+
+    return attemptSave(0);
   };
 
   window.plannerRemote = {

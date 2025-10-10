@@ -34,6 +34,9 @@ app.use(express.text({ limit: '10mb', type: ['text/plain', 'text/*'] }));
 
 const sseClients = new Set();
 
+const DEFAULT_HISTORY_LIMIT = Number.parseInt(process.env.PLANNER_HISTORY_LIMIT || '50', 10);
+const DEFAULT_HISTORY_DAILY_LIMIT = Number.parseInt(process.env.PLANNER_HISTORY_DAILY_LIMIT || '3', 10);
+
 const simpleHash = (str) => {
   if (!str) return '';
   let hash = 0;
@@ -87,6 +90,8 @@ const normalizeHashValue = (value) => {
   const sanitized = sanitizeHashCandidate(value);
   return sanitized ? sanitized.toLowerCase() : null;
 };
+
+const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
 
 const DEFAULT_STATE = {
   routeOverrides: [],
@@ -271,6 +276,55 @@ const deepMergePlain = (target, source) => {
     }
   });
   return base;
+};
+
+const readAdminSettings = (stateObj) => {
+  const adminSettings = stateObj?.meta?.settings?.admin;
+  const limit = Number.parseInt(adminSettings?.historyLimit ?? adminSettings?.historyRetentionLimit ?? DEFAULT_HISTORY_LIMIT, 10);
+  const dailyLimitRaw = Number.parseInt(adminSettings?.historyDailyLimit ?? DEFAULT_HISTORY_DAILY_LIMIT, 10);
+  return {
+    allowForceOverwrite: adminSettings?.allowForceOverwrite === true,
+    historyLimit: Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_HISTORY_LIMIT,
+    historyDailyLimit: Number.isFinite(dailyLimitRaw) && dailyLimitRaw > 0
+      ? dailyLimitRaw
+      : Math.max(1, Math.min(DEFAULT_HISTORY_DAILY_LIMIT, DEFAULT_HISTORY_LIMIT))
+  };
+};
+
+const normalizeSummaryObject = (value) => {
+  if (!isPlainObject(value)) return null;
+  return Object.entries(value).reduce((acc, [key, val]) => {
+    if (val === undefined) return acc;
+    if (isPlainObject(val)) {
+      const nested = normalizeSummaryObject(val);
+      if (nested && Object.keys(nested).length > 0) {
+        acc[key] = nested;
+      }
+      return acc;
+    }
+    if (Array.isArray(val)) {
+      acc[key] = val.slice(0);
+      return acc;
+    }
+    acc[key] = val;
+    return acc;
+  }, {});
+};
+
+const resolveActorFromMeta = (meta) => {
+  if (!isPlainObject(meta)) return null;
+  return meta.actor
+    || meta.user
+    || meta.userName
+    || meta.username
+    || meta.operator
+    || meta.author
+    || null;
+};
+
+const resolveSourceFromMeta = (meta) => {
+  if (!isPlainObject(meta)) return null;
+  return meta.source || meta.stage || meta.channel || null;
 };
 
 const serializeStateForStorage = (stateObj) => {
@@ -767,6 +821,62 @@ const persistSnapshotToSql = async (client, stateObj) => {
   );
 };
 
+const pruneHistory = async (client, { historyLimit, historyDailyLimit }) => {
+  const limit = Number.isFinite(historyLimit) && historyLimit > 0 ? historyLimit : DEFAULT_HISTORY_LIMIT;
+  const dailyLimit = Number.isFinite(historyDailyLimit) && historyDailyLimit > 0
+    ? historyDailyLimit
+    : Math.max(1, Math.min(limit, DEFAULT_HISTORY_DAILY_LIMIT));
+  await client.query(
+    `DELETE FROM planner_state_history
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn,
+                 ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC) AS daily_rn
+            FROM planner_state_history
+        ) ranked
+        WHERE rn > $1 AND daily_rn > $2
+      )`,
+    [limit, dailyLimit]
+  );
+};
+
+const insertPlannerHistory = async (client, {
+  prevState,
+  nextState,
+  hash,
+  meta,
+  actor,
+  source,
+  note,
+  adminSettings
+}) => {
+  const sanitizedHash = sanitizeHashCandidate(hash);
+  if (!sanitizedHash) {
+    return;
+  }
+  const summary = buildHistorySummary({ prevState, nextState, meta, actor, source, note });
+  const etag = `W/"${sanitizedHash}"`;
+  const statePayload = isPlainObject(nextState) ? nextState : {};
+  const { rows } = await client.query(
+    `INSERT INTO planner_state_history (hash, etag, state, summary, actor, source, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (hash) DO NOTHING
+     RETURNING hash, etag, summary, actor, source, note, created_at`,
+    [
+      sanitizedHash,
+      etag,
+      statePayload,
+      summary ?? null,
+      actor ?? null,
+      source ?? null,
+      note ?? null
+    ]
+  );
+  await pruneHistory(client, adminSettings || {});
+  return rows[0] ?? null;
+};
+
 const buildStateFromSql = async () => {
   const client = await pool.connect();
   try {
@@ -908,6 +1018,16 @@ const buildStateFromSql = async () => {
     if (!isPlainObject(stateObj.meta.settings)) {
       stateObj.meta.settings = {};
     }
+    if (!isPlainObject(stateObj.meta.settings.admin)) {
+      stateObj.meta.settings.admin = {};
+    }
+    const adminDefaults = readAdminSettings(stateObj);
+    stateObj.meta.settings.admin = {
+      ...stateObj.meta.settings.admin,
+      historyLimit: adminDefaults.historyLimit,
+      historyDailyLimit: adminDefaults.historyDailyLimit,
+      allowForceOverwrite: adminDefaults.allowForceOverwrite
+    };
     stateObj.meta.settings.capacity = { ...stateObj.capByProc };
     stateObj.meta.settings.parallel = { ...stateObj.parallelByProc };
 
@@ -965,25 +1085,25 @@ const refreshCachedState = async () => {
   return cachedState;
 };
 
+const buildStageSnapshotMaps = (state) => {
+  const map = new Map();
+  if (!Array.isArray(state?.t)) {
+    return map;
+  }
+  state.t.forEach((entry) => {
+    if (!entry || !entry.uid) return;
+    map.set(entry.uid, {
+      stage: entry.stage || null,
+      payload: entry,
+      serialized: JSON.stringify(entry)
+    });
+  });
+  return map;
+};
+
 const computeDelta = (prevState, nextState) => {
-  const prevStages = new Map();
-  const nextStages = new Map();
-
-  if (Array.isArray(prevState?.t)) {
-    prevState.t.forEach((stage) => {
-      if (stage && stage.uid) {
-        prevStages.set(stage.uid, JSON.stringify(stage));
-      }
-    });
-  }
-
-  if (Array.isArray(nextState?.t)) {
-    nextState.t.forEach((stage) => {
-      if (stage && stage.uid) {
-        nextStages.set(stage.uid, JSON.stringify(stage));
-      }
-    });
-  }
+  const prevStages = buildStageSnapshotMaps(prevState);
+  const nextStages = buildStageSnapshotMaps(nextState);
 
   const added = [];
   const updated = [];
@@ -992,7 +1112,7 @@ const computeDelta = (prevState, nextState) => {
   nextStages.forEach((value, uid) => {
     if (!prevStages.has(uid)) {
       added.push(uid);
-    } else if (prevStages.get(uid) !== value) {
+    } else if (prevStages.get(uid).serialized !== value.serialized) {
       updated.push(uid);
     }
   });
@@ -1009,6 +1129,89 @@ const computeDelta = (prevState, nextState) => {
     stages: { added, updated, removed },
     settingsChanged
   };
+};
+
+const summarizeStageDifferences = (prevState, nextState) => {
+  const prevStages = buildStageSnapshotMaps(prevState);
+  const nextStages = buildStageSnapshotMaps(nextState);
+  const summary = new Map();
+
+  const ensureStage = (code) => {
+    const key = code || 'unknown';
+    if (!summary.has(key)) {
+      summary.set(key, { added: 0, updated: 0, removed: 0 });
+    }
+    return summary.get(key);
+  };
+
+  nextStages.forEach((nextEntry, uid) => {
+    if (!prevStages.has(uid)) {
+      ensureStage(nextEntry.stage).added += 1;
+      return;
+    }
+    const prevEntry = prevStages.get(uid);
+    if ((prevEntry.stage || null) !== (nextEntry.stage || null)) {
+      ensureStage(prevEntry.stage).removed += 1;
+      ensureStage(nextEntry.stage).added += 1;
+      return;
+    }
+    if (prevEntry.serialized !== nextEntry.serialized) {
+      ensureStage(nextEntry.stage).updated += 1;
+    }
+  });
+
+  prevStages.forEach((prevEntry, uid) => {
+    if (!nextStages.has(uid)) {
+      ensureStage(prevEntry.stage).removed += 1;
+    }
+  });
+
+  const result = {};
+  summary.forEach((value, key) => {
+    if (value.added || value.updated || value.removed) {
+      result[key] = value;
+    }
+  });
+  return result;
+};
+
+const collectSettingsDiffKeys = (prevSettings, nextSettings, prefix = '') => {
+  const prevObj = isPlainObject(prevSettings) ? prevSettings : {};
+  const nextObj = isPlainObject(nextSettings) ? nextSettings : {};
+  const keys = new Set([...Object.keys(prevObj), ...Object.keys(nextObj)]);
+  const result = [];
+  keys.forEach((key) => {
+    const nextPrefix = prefix ? `${prefix}.${key}` : key;
+    const prevValue = prevObj[key];
+    const nextValue = nextObj[key];
+    if (isPlainObject(prevValue) && isPlainObject(nextValue)) {
+      result.push(...collectSettingsDiffKeys(prevValue, nextValue, nextPrefix));
+      return;
+    }
+    if (Array.isArray(prevValue) && Array.isArray(nextValue)) {
+      if (prevValue.length !== nextValue.length || prevValue.some((item, idx) => JSON.stringify(item) !== JSON.stringify(nextValue[idx]))) {
+        result.push(nextPrefix);
+      }
+      return;
+    }
+    if (JSON.stringify(prevValue) !== JSON.stringify(nextValue)) {
+      result.push(nextPrefix);
+    }
+  });
+  return result;
+};
+
+const buildHistorySummary = ({ prevState, nextState, meta, actor, source, note }) => {
+  const stages = summarizeStageDifferences(prevState, nextState);
+  const settingsChanged = collectSettingsDiffKeys(prevState?.meta?.settings ?? null, nextState?.meta?.settings ?? null);
+  const summary = normalizeSummaryObject({
+    stages,
+    settingsChanged,
+    actor,
+    source,
+    note
+  });
+  return summary && Object.keys(summary).length > 0 ? summary : null;
 };
 
 let cachedState = null;
@@ -1099,6 +1302,9 @@ app.get('/api/state', async (req, res) => {
     return;
   }
   res.setHeader('ETag', current.etag);
+  if (current.hash) {
+    res.setHeader('X-Hash', current.hash);
+  }
   res.type('application/json').send(current.state);
 });
 
@@ -1145,6 +1351,7 @@ app.put('/api/state', async (req, res) => {
 
   const stage = meta?.stage ?? null;
   const incomingVersion = meta?.version ?? (nextStateObj?.meta?.versions?.[stage] ?? null);
+  const forceOverwriteRequested = meta?.forceOverwrite === true;
 
   const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
   let expectedHashRaw = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
@@ -1179,6 +1386,9 @@ app.put('/api/state', async (req, res) => {
   let currentStateObj = {};
   let dbHashRaw = null;
   let dbHashNormalized = null;
+  let adminSettings = { allowForceOverwrite: false, historyLimit: DEFAULT_HISTORY_LIMIT, historyDailyLimit: DEFAULT_HISTORY_DAILY_LIMIT };
+  let forceOverwriteApplied = false;
+  let historyEntry = null;
   try {
     await client.query('BEGIN');
     existingRow = await readPlannerStateRow(client, { forUpdate: true });
@@ -1198,14 +1408,19 @@ app.put('/api/state', async (req, res) => {
       currentStateObj = {};
     }
 
-    if (existingRow) {
+    adminSettings = readAdminSettings(currentStateObj);
+    const forceOverwrite = forceOverwriteRequested && adminSettings.allowForceOverwrite;
+    forceOverwriteApplied = forceOverwrite;
+
+    if (existingRow && !forceOverwrite) {
       if (dbHashRaw) {
         if (ifMatchAllowsAny && !expectedHash) {
           await client.query('ROLLBACK');
           res.status(428).json({
             error: 'Precondition Required',
             message: 'Wildcard If-Match is not allowed once planner state exists',
-            currentHash: dbHashRaw
+            currentHash: dbHashRaw,
+            currentEtag: `W/"${dbHashRaw}"`
           });
           return;
         }
@@ -1214,15 +1429,17 @@ app.put('/api/state', async (req, res) => {
           res.status(428).json({
             error: 'Precondition Required',
             message: 'Planner state update requires an If-Match header',
-            currentHash: dbHashRaw
+            currentHash: dbHashRaw,
+            currentEtag: `W/"${dbHashRaw}"`
           });
           return;
         }
         if (expectedHash !== dbHashNormalized) {
           await client.query('ROLLBACK');
           res.status(412).json({
-            error: 'Precondition Failed',
-            expected: dbHashRaw
+            error: 'Precondition',
+            currentHash: dbHashRaw,
+            currentEtag: `W/"${dbHashRaw}"`
           });
           return;
         }
@@ -1233,7 +1450,7 @@ app.put('/api/state', async (req, res) => {
     }
 
     const currentVersion = stage != null ? currentStateObj?.meta?.versions?.[stage] ?? null : null;
-    if (incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
+    if (!forceOverwrite && incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
       const lastAuthor = currentStateObj?.meta?.lastAuthors?.[stage] ?? null;
       await client.query('ROLLBACK');
       res.status(409).json({
@@ -1265,6 +1482,7 @@ app.put('/api/state', async (req, res) => {
       delete nextMeta.baseEtag;
       delete nextMeta.expectedHash;
       delete nextMeta.ifMatch;
+      delete nextMeta.forceOverwrite;
       if (Object.keys(nextMeta).length === 0) {
         nextMeta = null;
       }
@@ -1274,7 +1492,7 @@ app.put('/api/state', async (req, res) => {
 
     await persistSnapshotToSql(client, normalizedStateObj);
     const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
-      expectedHash: dbHashRaw,
+      expectedHash: forceOverwrite ? null : dbHashRaw,
       existing: existingRow
     });
     if (upsertResult?.conflict) {
@@ -1288,6 +1506,17 @@ app.put('/api/state', async (req, res) => {
       });
       return;
     }
+
+    historyEntry = await insertPlannerHistory(client, {
+      prevState: previousState,
+      nextState: normalizedStateObj,
+      hash,
+      meta,
+      actor: resolveActorFromMeta(meta) || meta?.user || null,
+      source: resolveSourceFromMeta(meta) || meta?.source || null,
+      note: meta?.note ?? null,
+      adminSettings: readAdminSettings(normalizedStateObj)
+    });
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -1319,9 +1548,321 @@ app.put('/api/state', async (req, res) => {
   }
   await appendLog(logEntry);
 
+  if (forceOverwriteApplied) {
+    await appendLog({
+      timestamp: updatedAt,
+      stage: 'admin.rollback',
+      version: null,
+      user: logEntry.user,
+      session: logEntry.session,
+      source: logEntry.source ?? 'admin',
+      summary: 'force-overwrite by admin',
+      ip: req.ip
+    });
+  }
+
   broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
+  if (historyEntry) {
+    broadcast({
+      type: 'history',
+      hash: historyEntry.hash,
+      etag: historyEntry.etag,
+      summary: historyEntry.summary ?? null,
+      actor: historyEntry.actor ?? null,
+      source: historyEntry.source ?? null,
+      note: historyEntry.note ?? null,
+      createdAt: historyEntry.created_at ?? null
+    });
+  }
   res.setHeader('ETag', refreshed.etag);
   res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag });
+});
+
+app.get('/api/admin/history', async (req, res) => {
+  const limitRaw = Number.parseInt(req.query.limit, 10);
+  const offsetRaw = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
+  const filters = [];
+  const params = [];
+
+  if (isNonEmptyString(req.query.actor)) {
+    params.push(`%${req.query.actor.trim()}%`);
+    filters.push(`actor ILIKE $${params.length}`);
+  }
+  if (isNonEmptyString(req.query.source)) {
+    params.push(req.query.source.trim());
+    filters.push(`source = $${params.length}`);
+  }
+  if (isNonEmptyString(req.query.from)) {
+    const fromDate = new Date(req.query.from);
+    if (!Number.isNaN(fromDate.getTime())) {
+      params.push(fromDate.toISOString());
+      filters.push(`created_at >= $${params.length}`);
+    }
+  }
+  if (isNonEmptyString(req.query.to)) {
+    const toDate = new Date(req.query.to);
+    if (!Number.isNaN(toDate.getTime())) {
+      params.push(toDate.toISOString());
+      filters.push(`created_at <= $${params.length}`);
+    }
+  }
+
+  params.push(limit);
+  params.push(offset);
+  const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const { rows } = await pool.query(
+    `SELECT hash, etag, summary, actor, source, note, created_at
+       FROM planner_state_history
+       ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
+  );
+  res.json({
+    items: rows.map((row) => ({
+      hash: row.hash,
+      etag: row.etag,
+      summary: row.summary ?? null,
+      actor: row.actor ?? null,
+      source: row.source ?? null,
+      note: row.note ?? null,
+      createdAt: row.created_at
+    })),
+    limit,
+    offset
+  });
+});
+
+app.get('/api/admin/history/:hash', async (req, res) => {
+  const hash = sanitizeHashCandidate(req.params.hash);
+  if (!hash) {
+    res.status(400).json({ error: 'Bad Request', message: 'Invalid hash' });
+    return;
+  }
+  const { rows } = await pool.query(
+    `SELECT hash, etag, state, summary, actor, source, note, created_at
+       FROM planner_state_history
+      WHERE LOWER(hash) = LOWER($1)
+      LIMIT 1`,
+    [hash]
+  );
+  if (!rows.length) {
+    res.status(404).json({ error: 'Not Found' });
+    return;
+  }
+  const row = rows[0];
+  res.json({
+    hash: row.hash,
+    etag: row.etag,
+    state: row.state,
+    summary: row.summary ?? null,
+    actor: row.actor ?? null,
+    source: row.source ?? null,
+    note: row.note ?? null,
+    createdAt: row.created_at
+  });
+});
+
+const bumpRollbackVersions = (stateObj) => {
+  if (!isPlainObject(stateObj.meta)) {
+    stateObj.meta = {};
+  }
+  stateObj.meta.version = Number.isFinite(Number(stateObj.meta.version))
+    ? Number(stateObj.meta.version) + 1
+    : 1;
+  if (!isPlainObject(stateObj.meta.versions)) {
+    stateObj.meta.versions = {};
+  }
+  Object.keys(stateObj.meta.versions).forEach((key) => {
+    const numeric = Number(stateObj.meta.versions[key]);
+    stateObj.meta.versions[key] = Number.isFinite(numeric) ? numeric + 1 : 1;
+  });
+  stateObj.meta.versions['admin.rollback'] = (Number(stateObj.meta.versions['admin.rollback']) || 0) + 1;
+};
+
+const setRollbackMetadata = (stateObj, { actor, note, timestamp }) => {
+  if (!isPlainObject(stateObj.meta)) {
+    stateObj.meta = {};
+  }
+  stateObj.meta.stage = 'admin.rollback';
+  stateObj.meta.source = 'rollback';
+  stateObj.meta.user = actor;
+  if (!isPlainObject(stateObj.meta.lastAuthors)) {
+    stateObj.meta.lastAuthors = {};
+  }
+  stateObj.meta.lastAuthors['admin.rollback'] = { name: actor, at: timestamp };
+  stateObj.meta.lastChange = {
+    stage: 'admin.rollback',
+    user: actor,
+    source: 'rollback',
+    summary: note || `Откат к ${stateObj.hash || ''}`,
+    time: timestamp
+  };
+  if (Array.isArray(stateObj.meta.history)) {
+    stateObj.meta.history = stateObj.meta.history.slice(-199);
+  } else {
+    stateObj.meta.history = [];
+  }
+  stateObj.meta.history.push({
+    id: `rollback-${Date.now().toString(36)}`,
+    stage: 'admin.rollback',
+    user: actor,
+    source: 'rollback',
+    summary: note || `Откат к ${stateObj.hash || ''}`,
+    time: timestamp
+  });
+};
+
+app.post('/api/admin/rollback', async (req, res) => {
+  const targetHash = sanitizeHashCandidate(req.body?.targetHash);
+  const note = isNonEmptyString(req.body?.note) ? req.body.note.trim() : null;
+  const actor = isNonEmptyString(req.body?.actor) ? req.body.actor.trim() : 'admin';
+  if (!targetHash) {
+    res.status(400).json({ error: 'Bad Request', message: 'targetHash required' });
+    return;
+  }
+
+  const client = await pool.connect();
+  let historyEntry = null;
+  let previousStateSnapshot = null;
+  try {
+    await client.query('BEGIN');
+    const currentRow = await readPlannerStateRow(client, { forUpdate: true });
+    if (!currentRow) {
+      await client.query('ROLLBACK');
+      res.status(409).json({ error: 'Conflict', message: 'Planner state is not initialized' });
+      return;
+    }
+    let currentStateObj;
+    try {
+      currentStateObj = currentRow.state ? JSON.parse(currentRow.state) : {};
+    } catch (err) {
+      currentStateObj = {};
+    }
+    previousStateSnapshot = cloneDeepPlain(currentStateObj);
+
+    const { rows } = await client.query(
+      `SELECT state, hash FROM planner_state_history WHERE LOWER(hash) = LOWER($1) LIMIT 1`,
+      [targetHash]
+    );
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      res.status(404).json({ error: 'Not Found', message: 'Snapshot not found' });
+      return;
+    }
+    const historyState = rows[0].state;
+    const snapshotState = isPlainObject(historyState) ? cloneDeepPlain(historyState) : {};
+    const timestamp = new Date().toISOString();
+
+    bumpRollbackVersions(snapshotState);
+    setRollbackMetadata(snapshotState, { actor, note, timestamp });
+    ensureFullSettingsSnapshot(currentStateObj, snapshotState);
+
+    const { stateObj: normalizedStateObj, stateString, hash } = serializeStateForStorage(snapshotState);
+    await persistSnapshotToSql(client, normalizedStateObj);
+    const metaPayload = {
+      stage: 'admin.rollback',
+      source: 'rollback',
+      user: actor,
+      summary: note || `Откат к ${rows[0].hash}`,
+      note
+    };
+    await upsertPlannerStateRow(client, stateString, metaPayload, hash, timestamp, {
+      existing: currentRow,
+      expectedHash: null
+    });
+    historyEntry = await insertPlannerHistory(client, {
+      prevState: currentStateObj,
+      nextState: normalizedStateObj,
+      hash,
+      meta: metaPayload,
+      actor,
+      source: 'rollback',
+      note,
+      adminSettings: readAdminSettings(normalizedStateObj)
+    });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Rollback failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+    return;
+  } finally {
+    client.release();
+  }
+
+  const refreshed = await refreshCachedState();
+  const delta = computeDelta(previousStateSnapshot, refreshed.parsed);
+  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
+  if (historyEntry) {
+    broadcast({
+      type: 'history',
+      hash: historyEntry.hash,
+      etag: historyEntry.etag,
+      summary: historyEntry.summary ?? null,
+      actor: historyEntry.actor ?? null,
+      source: historyEntry.source ?? null,
+      note: historyEntry.note ?? null,
+      createdAt: historyEntry.created_at ?? null
+    });
+  }
+  await appendLog({
+    timestamp: refreshed.updatedAt,
+    stage: 'admin.rollback',
+    version: null,
+    user: actor,
+    source: 'rollback',
+    summary: note || `Откат к ${targetHash}`,
+    ip: req.ip
+  });
+  res.setHeader('ETag', refreshed.etag);
+  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
+});
+
+app.post('/api/admin/snapshot', async (req, res) => {
+  const actor = isNonEmptyString(req.body?.actor) ? req.body.actor.trim() : 'admin';
+  const source = isNonEmptyString(req.body?.source) ? req.body.source.trim() : 'manual';
+  const note = isNonEmptyString(req.body?.note) ? req.body.note.trim() : null;
+  const current = cachedState || await refreshCachedState();
+  const client = await pool.connect();
+  let historyEntry = null;
+  try {
+    await client.query('BEGIN');
+    historyEntry = await insertPlannerHistory(client, {
+      prevState: current.parsed,
+      nextState: current.parsed,
+      hash: current.hash,
+      meta: { stage: 'admin.snapshot', source, user: actor, summary: note },
+      actor,
+      source,
+      note,
+      adminSettings: readAdminSettings(current.parsed)
+    });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Manual snapshot failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+    return;
+  } finally {
+    client.release();
+  }
+
+  if (historyEntry) {
+    broadcast({
+      type: 'history',
+      hash: historyEntry.hash,
+      etag: historyEntry.etag,
+      summary: historyEntry.summary ?? null,
+      actor: historyEntry.actor ?? null,
+      source: historyEntry.source ?? null,
+      note: historyEntry.note ?? null,
+      createdAt: historyEntry.created_at ?? null
+    });
+  }
+  res.json({ ok: true, hash: current.hash, etag: current.etag, createdAt: historyEntry?.created_at ?? current.updatedAt });
 });
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));

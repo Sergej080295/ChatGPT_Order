@@ -26,21 +26,44 @@
   };
 
   const updateFingerprint = ({ etag, hash }) => {
+    let applied = false;
     if (etag && typeof etag === 'string') {
       const parsed = parseEtagHash(etag);
       if (parsed) {
-        currentEtag = etag;
         currentHash = parsed;
-        return;
+        currentEtag = etag.startsWith('W/') ? etag : `W/"${parsed}"`;
+        applied = true;
       }
     }
     if (hash) {
       const normalized = String(hash).trim();
       if (normalized) {
         currentHash = normalized;
-        currentEtag = `W/"${normalized}"`;
+        if (!applied || !parseEtagHash(currentEtag || '')) {
+          currentEtag = `W/"${normalized}"`;
+        }
       }
     }
+  };
+
+  const extractBodyFingerprint = (text) => {
+    if (!text || typeof text !== 'string') return null;
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === 'object') {
+        const bodyEtag = typeof parsed.etag === 'string' ? parsed.etag : null;
+        const bodyHash = typeof parsed.hash === 'string' ? parsed.hash : null;
+        if (bodyEtag || bodyHash) {
+          updateFingerprint({ etag: bodyEtag, hash: bodyHash });
+        }
+        return { parsed, hash: bodyHash, etag: bodyEtag };
+      }
+    } catch (_err) {
+      /* ignore */
+    }
+    return null;
   };
 
   window.PLANNER_STATE_ENDPOINT = STATE_ENDPOINT;
@@ -100,11 +123,11 @@
       throw new Error(detail || `HTTP ${res.status}`);
     }
     const text = await res.text();
+    const bodyInfo = extractBodyFingerprint(text);
     const etag = res.headers.get('ETag');
-    updateFingerprint({ etag });
+    updateFingerprint({ etag, hash: bodyInfo?.hash });
     if (options && (options.withMeta || options.returnMeta)) {
-      const hash = parseEtagHash(etag) || currentHash || null;
-      return { state: text, etag, hash };
+      return { state: text, etag: currentEtag, hash: currentHash };
     }
     return text;
   };
@@ -118,89 +141,96 @@
         /* ignore */
       }
     }
-    let metaPayload = null;
+
     const metaIsObject = meta && typeof meta === 'object' && !Array.isArray(meta);
-    if (metaIsObject) {
-      metaPayload = { ...meta };
-    } else if (meta === null || meta === undefined) {
-      metaPayload = {};
-    }
-    let ifMatchHeader = null;
-    if (metaPayload && typeof metaPayload === 'object') {
-      if (Object.prototype.hasOwnProperty.call(metaPayload, 'ifMatch')) {
-        const explicit = metaPayload.ifMatch == null ? '' : String(metaPayload.ifMatch).trim();
-        if (explicit) {
-          ifMatchHeader = explicit;
+    const metaTemplate = metaIsObject ? { ...meta } : meta;
+
+    const buildRequestPayload = () => {
+      let metaPayload = null;
+      let ifMatchHeader = null;
+      if (metaIsObject) {
+        const working = { ...metaTemplate };
+        if (Object.prototype.hasOwnProperty.call(working, 'ifMatch')) {
+          const explicit = working.ifMatch == null ? '' : String(working.ifMatch).trim();
+          if (explicit) {
+            ifMatchHeader = explicit;
+          }
+          delete working.ifMatch;
         }
-        delete metaPayload.ifMatch;
-      }
-      const providedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
-      const providedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
-      if (currentHash && !providedBaseHash) metaPayload.baseHash = currentHash;
-      if (currentEtag && !providedBaseEtag) metaPayload.baseEtag = currentEtag;
-      const normalizedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
-      const normalizedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
-      if (!ifMatchHeader) {
-        if (normalizedBaseEtag) {
-          ifMatchHeader = normalizedBaseEtag;
-        } else if (normalizedBaseHash) {
-          ifMatchHeader = `W/"${normalizedBaseHash}"`;
+        const providedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
+        const providedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
+        if (currentHash && !providedBaseHash) working.baseHash = currentHash;
+        if (currentEtag && !providedBaseEtag) working.baseEtag = currentEtag;
+        const normalizedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
+        const normalizedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
+        if (!ifMatchHeader) {
+          if (normalizedBaseEtag) {
+            ifMatchHeader = normalizedBaseEtag;
+          } else if (normalizedBaseHash) {
+            ifMatchHeader = `W/"${normalizedBaseHash}"`;
+          }
         }
+        if (!normalizedBaseHash) delete working.baseHash;
+        if (!normalizedBaseEtag) delete working.baseEtag;
+        if (working.forceOverwrite !== true) delete working.forceOverwrite;
+        metaPayload = Object.keys(working).length > 0 ? working : null;
+      } else if (meta !== undefined) {
+        metaPayload = metaTemplate;
       }
-      if (!normalizedBaseHash) delete metaPayload.baseHash;
-      if (!normalizedBaseEtag) delete metaPayload.baseEtag;
-    }
-    let metaForBody = null;
-    if (metaPayload && typeof metaPayload === 'object') {
-      metaForBody = Object.keys(metaPayload).length > 0 ? metaPayload : null;
-    } else if (meta !== undefined) {
-      metaForBody = meta;
-    } else {
-      metaForBody = null;
-    }
-    const headers = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json,text/plain'
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json,text/plain'
+      };
+      const effectiveIfMatch = ifMatchHeader
+        || (currentEtag ? currentEtag : currentHash ? `W/"${currentHash}"` : '*');
+      headers['If-Match'] = effectiveIfMatch;
+      const body = JSON.stringify({ state: stateString, meta: metaPayload });
+      return { headers, body };
     };
-    if (ifMatchHeader) {
-      headers['If-Match'] = ifMatchHeader;
-    } else if (currentEtag) {
-      headers['If-Match'] = currentEtag;
-    } else if (currentHash) {
-      headers['If-Match'] = `W/"${currentHash}"`;
-    } else {
-      headers['If-Match'] = '*';
-    }
-    const body = JSON.stringify({ state: stateString, meta: metaForBody });
-    const res = await fetch(STATE_ENDPOINT, {
-      method: 'PUT',
-      headers,
-      body
-    });
-    const text = await res.text().catch(() => '') || '';
-    const trimmed = text.trim();
-    let parsed = null;
-    if (trimmed) {
-      try { parsed = JSON.parse(trimmed); }
-      catch (_err) { parsed = null; }
-    }
-    if (!res.ok) {
-      const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
-      err.status = res.status;
-      if (parsed !== null) {
-        err.detail = parsed;
-      } else if (trimmed) {
-        err.detail = trimmed;
+
+    const attemptSave = async (attempt = 0) => {
+      const { headers, body } = buildRequestPayload();
+      const res = await fetch(STATE_ENDPOINT, {
+        method: 'PUT',
+        headers,
+        body
+      });
+      const text = await res.text().catch(() => '') || '';
+      const trimmed = text.trim();
+      let parsed = null;
+      if (trimmed) {
+        try { parsed = JSON.parse(trimmed); }
+        catch (_err) { parsed = null; }
       }
-      err.body = text;
-      if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
-        err.name = 'PlannerConflictError';
+      if (!res.ok) {
+        const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
+        err.status = res.status;
+        if (parsed !== null) {
+          err.detail = parsed;
+        } else if (trimmed) {
+          err.detail = trimmed;
+        }
+        err.body = text;
+        if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+          err.name = 'PlannerConflictError';
+        }
+        if (attempt === 0 && (err.status === 409 || err.status === 412 || err.status === 428)) {
+          try {
+            await loadState({ withMeta: true });
+          } catch (_reloadErr) {
+            /* ignore and retry with existing fingerprint */
+          }
+          return attemptSave(attempt + 1);
+        }
+        throw err;
       }
-      throw err;
-    }
-    updateFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
-    if (!trimmed) return true;
-    return parsed ?? text;
+      updateFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
+      extractBodyFingerprint(text);
+      if (!trimmed) return true;
+      return parsed ?? text;
+    };
+
+    return attemptSave(0);
   };
 
   window.plannerRemote = {
@@ -691,6 +721,26 @@ body.overview-fs-active{overflow:hidden}
 .settings-extra-row label{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;min-width:160px;}
 .settings-extra-row input{padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
 
+.settings-admin-panel{display:flex;flex-direction:column;gap:16px;width:100%;}
+.admin-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+.admin-settings-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;}
+.admin-settings-grid input{padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;}
+.admin-force-toggle{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;}
+.admin-force-toggle input{width:18px;height:18px;}
+.admin-settings-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
+.admin-history-section{display:flex;flex-direction:column;gap:12px;width:100%;}
+.admin-history-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.admin-history-toolbar input{padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
+.admin-history-list{display:flex;flex-direction:column;gap:8px;}
+.admin-history-item{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);display:flex;flex-direction:column;gap:6px;}
+.admin-history-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted);}
+.admin-history-summary{font-size:12px;color:#0f172a;}
+.admin-history-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.admin-history-empty{font-size:12px;color:var(--muted);padding:12px 0;}
+.admin-history-footer{display:flex;justify-content:center;}
+#historyViewContent{width:100%;min-height:220px;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,Monaco,'Courier New',monospace;font-size:12px;resize:vertical;}
+.history-view-meta{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;margin-bottom:8px;}
+
 /* статистика под графиком */
 .ov-stats{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 .ov-stat{border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;background:#fff;display:flex;gap:10px;align-items:center}
@@ -1063,6 +1113,7 @@ body.overview-fs-active{overflow:hidden}
   <div class="settings-tab-bar">
     <button class="settings-tab active" data-settings-tab="personal" type="button">Персональные</button>
     <button class="settings-tab" data-settings-tab="shared" type="button">Общие</button>
+    <button class="settings-tab" data-settings-tab="admin" type="button">Администрирование</button>
   </div>
   <div class="settings-panels">
     <div class="settings-panel active" data-settings-panel="personal">
@@ -1147,9 +1198,54 @@ body.overview-fs-active{overflow:hidden}
         </div>
       </div>
     </div>
+    <div class="settings-panel" data-settings-panel="admin">
+      <div class="settings-admin-panel" id="adminSettingsPanel">
+        <div class="admin-settings-grid">
+          <label>Хранить последних N снимков
+            <input id="adminHistoryLimit" type="number" min="1" max="500" step="1" />
+          </label>
+          <label>Снимков на день (N)
+            <input id="adminHistoryDailyLimit" type="number" min="1" max="100" step="1" />
+          </label>
+          <label class="admin-force-toggle">
+            <span>Разрешить перезапись без проверки версий</span>
+            <input id="adminAllowForceOverwrite" type="checkbox" />
+          </label>
+        </div>
+        <div class="admin-settings-actions">
+          <button id="adminSnapshotBtn" class="btn ghost small" type="button">Создать снимок сейчас</button>
+          <button id="adminSaveBtn" class="btn primary small" type="button">Сохранить</button>
+        </div>
+      </div>
+      <div class="admin-history-section">
+        <div class="admin-history-toolbar">
+          <input id="historyFilterActor" type="text" placeholder="Пользователь" />
+          <input id="historyFilterSource" type="text" placeholder="Источник" />
+          <input id="historyFilterFrom" type="date" />
+          <input id="historyFilterTo" type="date" />
+          <button id="historyFilterApply" class="btn small" type="button">Обновить</button>
+          <button id="historyFilterReset" class="btn small ghost" type="button">Сброс</button>
+        </div>
+        <div class="admin-history-list" id="adminHistoryList">
+          <div class="admin-history-empty">История ещё не загружена.</div>
+        </div>
+        <div class="admin-history-footer">
+          <button id="historyLoadMore" class="btn ghost small" type="button">Загрузить ещё</button>
+        </div>
+      </div>
+    </div>
   </div>
   <div class="row" style="justify-content:flex-end;margin-top:12px">
     <button id="settingsClose" class="btn">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="historyViewDlg">
+  <h3 id="historyViewTitle" style="margin:0 0 8px">Снимок планировщика</h3>
+  <div class="history-view-meta" id="historyViewMeta"></div>
+  <textarea id="historyViewContent" readonly></textarea>
+  <div class="dialog-actions" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+    <button id="historyViewClose" class="btn" type="button">Закрыть</button>
   </div>
 </dialog>
 
@@ -2146,6 +2242,10 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
   if(payload && typeof payload === 'object'){
+    if(payload.type === 'history'){
+      handleAdminHistoryEvent(payload);
+      return;
+    }
     if(payload.type === 'delta'){
       const skip = skipRealtimeToastOnce;
       fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
@@ -2483,6 +2583,9 @@ const STAGE_KEYS = ['draw','proc','shear','laser','bend','weld','mech','coop','p
 const SETTINGS_STAGE_KEY = 'settings';
 const DEFAULT_CAP = { bend:15, laser:36, draw:8, weld:4, mech:8 };
 const DEFAULT_PARALLEL = { proc:5, shear:5, coop:3, pack:3, ship:5 };
+const ADMIN_HISTORY_LIMIT_DEFAULT = 50;
+const ADMIN_HISTORY_DAILY_LIMIT_DEFAULT = 3;
+const ADMIN_HISTORY_PAGE_SIZE = 20;
 const TABLE_COLUMN_DEFS = [
   { key:'index',   label:'№',              settingsLabel:'№',              defaultWidth:42 },
   { key:'lock',    label:'🔐',             settingsLabel:'Замок',          defaultWidth:34 },
@@ -2543,6 +2646,11 @@ let stateMeta = {
     extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
     crmStageMapping: {},
     logLimit: DEFAULT_LOG_LIMIT,
+    admin: {
+      historyLimit: ADMIN_HISTORY_LIMIT_DEFAULT,
+      historyDailyLimit: ADMIN_HISTORY_DAILY_LIMIT_DEFAULT,
+      allowForceOverwrite: false
+    },
     updatedAt: ''
   },
   ignoredStates: []
@@ -2556,6 +2664,15 @@ const COLUMN_WIDTH_EDIT_TTL = 30000;
 const pendingColumnWidthEdits = new Map();
 let extraTimeSettings = { ...stateMeta.settings.extraTime };
 let crmStageMapping = sanitizeCrmStageMapping(stateMeta.settings?.crmStageMapping);
+let adminSettingsState = { ...stateMeta.settings.admin };
+let adminHistoryState = {
+  items: [],
+  limit: ADMIN_HISTORY_PAGE_SIZE,
+  offset: 0,
+  filters: { actor:'', source:'', from:'', to:'' }
+};
+let adminHistoryLoading = false;
+const adminHistoryCache = new Map();
 const encounteredCrmStages = new Map();
 let pendingCrmMappingRender = false;
 let sharedSettingsSnapshot = null;
@@ -3003,6 +3120,19 @@ function sanitizeLogLimit(raw){
   if(!Number.isFinite(num)) return null;
   if(num <= 0) return 0;
   return Math.max(0, Math.round(num));
+}
+
+function sanitizeAdminSettings(raw, fallback = adminSettingsState){
+  const base = raw && typeof raw === 'object' ? raw : {};
+  const defaults = fallback && typeof fallback === 'object' ? fallback : {};
+  const limitRaw = Number(base.historyLimit ?? defaults.historyLimit ?? ADMIN_HISTORY_LIMIT_DEFAULT);
+  let historyLimit = Number.isFinite(limitRaw) ? Math.round(limitRaw) : ADMIN_HISTORY_LIMIT_DEFAULT;
+  historyLimit = Math.max(1, Math.min(500, historyLimit));
+  const dailyRaw = Number(base.historyDailyLimit ?? defaults.historyDailyLimit ?? ADMIN_HISTORY_DAILY_LIMIT_DEFAULT);
+  let historyDailyLimit = Number.isFinite(dailyRaw) ? Math.round(dailyRaw) : ADMIN_HISTORY_DAILY_LIMIT_DEFAULT;
+  historyDailyLimit = Math.max(1, Math.min(historyLimit, historyDailyLimit));
+  const allowForceOverwrite = base.allowForceOverwrite === true || base.allowForceOverwrite === 'true';
+  return { historyLimit, historyDailyLimit, allowForceOverwrite };
 }
 
 function getEffectiveLogLimit(){
@@ -6755,7 +6885,7 @@ function sanitizeExtraMinimum(value){
 }
 
 const KNOWN_SETTINGS_KEYS = new Set([
-  'capacity','parallel','plannerMode','notificationsMuted','tableColumns','extraTime','crmStageMapping','logLimit','updatedAt'
+  'capacity','parallel','plannerMode','notificationsMuted','tableColumns','extraTime','crmStageMapping','logLimit','updatedAt','admin'
 ]);
 
 function clonePlain(value){
@@ -6822,6 +6952,7 @@ function sanitizeSharedSettings(raw, context={}){
       const sanitizedLimit = sanitizeLogLimit(source.logLimit);
       return sanitizedLimit === null ? null : Number(sanitizedLimit);
     })(),
+    admin: sanitizeAdminSettings(source.admin, adminSettingsState),
     updatedAt: typeof source.updatedAt === 'string' ? source.updatedAt : ''
   };
 
@@ -6855,9 +6986,13 @@ function syncSharedSettingsToMeta(timestamp){
     },
     crmStageMapping: { ...crmStageMapping },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
+    admin: sanitizeAdminSettings(stateMeta.settings?.admin || adminSettingsState, adminSettingsState),
     updatedAt: typeof timestamp === 'string' ? timestamp : (stateMeta.settings?.updatedAt || '')
   };
   const sanitized = sanitizeSharedSettings(base, { fallbackMode });
+  const sanitizedAdmin = sanitizeAdminSettings(sanitized.admin, adminSettingsState);
+  adminSettingsState = { ...sanitizedAdmin };
+  sanitized.admin = { ...sanitizedAdmin };
   stateMeta.settings = sanitized;
   return sanitized;
 }
@@ -11618,6 +11753,10 @@ function restoreState(json, opts={}){
     ordersByStage = new Map(s.orders || []);
 
     const metaSettings = s.meta?.settings || {};
+    const sanitizedAdmin = sanitizeAdminSettings(metaSettings.admin, adminSettingsState);
+    adminSettingsState = { ...sanitizedAdmin };
+    if(!stateMeta.settings) stateMeta.settings = {};
+    stateMeta.settings.admin = { ...adminSettingsState };
     const savedCap = metaSettings.capacity || s.capByProc || {};
     capByProc = { ...DEFAULT_CAP, ...savedCap };
 
@@ -12799,7 +12938,8 @@ function cloneSharedSettingsBaseline(){
       minimum: sanitizeExtraMinimum(extraTimeSettings.minimum)
     },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
+    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping),
+    admin: { ...adminSettingsState }
   };
 }
 
@@ -12886,7 +13026,11 @@ function restoreSharedSettingsSnapshot(){
   }
   crmStageMapping = sanitizeCrmStageMapping(snap.crmStageMapping);
   stateMeta.settings.crmStageMapping = { ...crmStageMapping };
+  const adminSnapshot = sanitizeAdminSettings(snap.admin, adminSettingsState);
+  adminSettingsState = { ...adminSnapshot };
+  stateMeta.settings.admin = { ...adminSnapshot };
   renderSystemSettingsUI();
+  renderAdminSettingsUI();
   if(isCrmMode()){
     refreshCrmDerivedData({ recompute:true, rebuildOverview:true });
   }
@@ -12957,6 +13101,11 @@ function commitSharedSettingsChanges(){
   if(!stateMeta.settings) stateMeta.settings = {};
   const requestedKeys = new Set(sharedSettingsDirtyKeys);
 
+  const prevAdmin = sanitizeAdminSettings(adminSettingsState);
+  const draftAdminRaw = draft.admin || prevAdmin;
+  const nextAdmin = sanitizeAdminSettings(draftAdminRaw, prevAdmin);
+  sharedSettingsDraft.admin = { ...nextAdmin };
+
   const prevColumns = {};
   TABLE_COLUMN_DEFS.forEach(def=>{
     prevColumns[def.key] = sanitizeColumnWidth(tableColumnWidths?.[def.key], def.defaultWidth);
@@ -13007,12 +13156,16 @@ function commitSharedSettingsChanges(){
   sharedSettingsDraft.crmStageMapping = nextSnapshot;
   const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, nextSnapshot);
   const mappingChangeRequested = mappingChanged || crmMappingReplaceMode;
+  const adminChanged = nextAdmin.historyLimit !== prevAdmin.historyLimit
+    || nextAdmin.historyDailyLimit !== prevAdmin.historyDailyLimit
+    || nextAdmin.allowForceOverwrite !== prevAdmin.allowForceOverwrite;
 
   const changedKeys = new Set();
   if(changedColumnKeys.length) changedKeys.add('tableColumns');
   if(extraChanged) changedKeys.add('extraTime');
   if(logChanged) changedKeys.add('logLimit');
   if(mappingChangeRequested) changedKeys.add('crmStageMapping');
+  if(adminChanged || requestedKeys.has('admin')) changedKeys.add('admin');
 
   requestedKeys.forEach(key=>{
     if(!changedKeys.has(key)){
@@ -13036,20 +13189,26 @@ function commitSharedSettingsChanges(){
   extraTimeSettings = { ...nextExtra };
   logLimitSetting = nextLogComparable === null ? null : Number(nextLogComparable);
   crmStageMapping = { ...nextSnapshot };
+  adminSettingsState = { ...nextAdmin };
+  stateMeta.settings.admin = { ...adminSettingsState };
 
   const sanitizedSettings = syncSharedSettingsToMeta(timestamp);
   tableColumnWidths = { ...sanitizedSettings.tableColumns };
   extraTimeSettings = { ...sanitizedSettings.extraTime };
   logLimitSetting = sanitizedSettings.logLimit === null ? null : Number(sanitizedSettings.logLimit);
   crmStageMapping = { ...sanitizedSettings.crmStageMapping };
+  adminSettingsState = sanitizeAdminSettings(sanitizedSettings.admin, adminSettingsState);
+  stateMeta.settings.admin = { ...adminSettingsState };
 
   sharedSettingsDraft = {
     tableColumns: { ...sanitizedSettings.tableColumns },
     extraTime: { ...sanitizedSettings.extraTime },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
-    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping)
+    crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping),
+    admin: { ...adminSettingsState }
   };
   updateSharedSettingsButtons();
+  renderAdminSettingsUI();
 
   const entries = [];
   if(changedColumnKeys.length){
@@ -13292,6 +13451,471 @@ function renderSystemSettingsUI(){
   }else{
     updateSharedSettingsButtons();
   }
+}
+
+function getAdminSettingsDisplay(){
+  if(sharedSettingsEditing && sharedSettingsDraft && sharedSettingsDraft.admin){
+    return sanitizeAdminSettings(sharedSettingsDraft.admin, adminSettingsState);
+  }
+  return sanitizeAdminSettings(adminSettingsState, adminSettingsState);
+}
+
+function renderAdminSettingsUI(){
+  const source = getAdminSettingsDisplay();
+  const canEdit = userCanEdit();
+  const busy = sharedSettingsApplying;
+  const hasAdminDirty = sharedSettingsDirtyKeys.has('admin');
+  const limitInput = document.getElementById('adminHistoryLimit');
+  if(limitInput){
+    limitInput.value = String(source.historyLimit);
+    limitInput.disabled = !canEdit;
+  }
+  const dailyInput = document.getElementById('adminHistoryDailyLimit');
+  if(dailyInput){
+    dailyInput.value = String(source.historyDailyLimit);
+    dailyInput.disabled = !canEdit;
+  }
+  const forceInput = document.getElementById('adminAllowForceOverwrite');
+  if(forceInput){
+    forceInput.checked = !!source.allowForceOverwrite;
+    forceInput.disabled = !canEdit;
+  }
+  const saveBtn = document.getElementById('adminSaveBtn');
+  if(saveBtn){
+    saveBtn.disabled = !canEdit || busy || !hasAdminDirty;
+    saveBtn.textContent = busy ? 'Сохраняем…' : 'Сохранить';
+  }
+  const snapshotBtn = document.getElementById('adminSnapshotBtn');
+  if(snapshotBtn){
+    snapshotBtn.disabled = !canEdit;
+  }
+}
+
+function formatHistoryTimestamp(value){
+  if(!value) return '—';
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function shortenHash(hash){
+  if(typeof hash !== 'string') return '';
+  return hash.length > 12 ? `${hash.slice(0, 8)}…${hash.slice(-4)}` : hash;
+}
+
+function formatHistorySummary(summary){
+  if(summary == null) return '—';
+  if(typeof summary === 'string'){
+    const trimmed = summary.trim();
+    return trimmed ? trimmed : '—';
+  }
+  if(typeof summary !== 'object'){
+    const str = String(summary);
+    return str.trim() ? str : '—';
+  }
+  const parts = [];
+  if(Array.isArray(summary.settingsChanged) && summary.settingsChanged.length){
+    parts.push(`Настройки: ${summary.settingsChanged.join(', ')}`);
+  }
+  if(summary.stages && typeof summary.stages === 'object'){
+    const stageParts = Object.entries(summary.stages).map(([stage, stats])=>{
+      const added = stats?.added || 0;
+      const updated = stats?.updated || 0;
+      const removed = stats?.removed || 0;
+      return `${stage}: +${added}/Δ${updated}/-${removed}`;
+    });
+    if(stageParts.length) parts.push(`Стадии: ${stageParts.join(', ')}`);
+  }
+  if(summary.note){
+    parts.push(String(summary.note));
+  }
+  if(summary.message){
+    parts.push(String(summary.message));
+  }
+  if(summary.actor && !parts.some(part=>part.includes('Пользователь'))){
+    parts.push(`Пользователь: ${summary.actor}`);
+  }
+  return parts.length ? parts.join(' • ') : '—';
+}
+
+function applyAdminFiltersFromForm(){
+  const actorInput = document.getElementById('historyFilterActor');
+  const sourceInput = document.getElementById('historyFilterSource');
+  const fromInput = document.getElementById('historyFilterFrom');
+  const toInput = document.getElementById('historyFilterTo');
+  adminHistoryState.filters = {
+    actor: actorInput ? actorInput.value.trim() : '',
+    source: sourceInput ? sourceInput.value.trim() : '',
+    from: fromInput ? fromInput.value : '',
+    to: toInput ? toInput.value : ''
+  };
+}
+
+function resetAdminHistoryFilters(){
+  const actorInput = document.getElementById('historyFilterActor');
+  const sourceInput = document.getElementById('historyFilterSource');
+  const fromInput = document.getElementById('historyFilterFrom');
+  const toInput = document.getElementById('historyFilterTo');
+  if(actorInput) actorInput.value = '';
+  if(sourceInput) sourceInput.value = '';
+  if(fromInput) fromInput.value = '';
+  if(toInput) toInput.value = '';
+  adminHistoryState.filters = { actor:'', source:'', from:'', to:'' };
+}
+
+function renderAdminHistoryList(){
+  const list = document.getElementById('adminHistoryList');
+  if(!list) return;
+  list.innerHTML = '';
+  if(adminHistoryLoading && adminHistoryState.items.length === 0){
+    const loading = document.createElement('div');
+    loading.className = 'admin-history-empty';
+    loading.textContent = 'Загрузка…';
+    list.appendChild(loading);
+  }else if(adminHistoryState.items.length === 0){
+    const empty = document.createElement('div');
+    empty.className = 'admin-history-empty';
+    empty.textContent = 'По текущим условиям ничего не найдено.';
+    list.appendChild(empty);
+  }else{
+    const canEdit = userCanEdit();
+    adminHistoryState.items.forEach((item)=>{
+      const card = document.createElement('div');
+      card.className = 'admin-history-item';
+
+      const meta = document.createElement('div');
+      meta.className = 'admin-history-meta';
+      const when = document.createElement('span');
+      when.textContent = formatHistoryTimestamp(item.createdAt);
+      meta.appendChild(when);
+      const hashLabel = document.createElement('span');
+      hashLabel.textContent = `Хэш: ${shortenHash(item.hash || '')}`;
+      meta.appendChild(hashLabel);
+      const actorSpan = document.createElement('span');
+      actorSpan.textContent = `Пользователь: ${item.actor ? item.actor : '—'}`;
+      meta.appendChild(actorSpan);
+      const sourceSpan = document.createElement('span');
+      sourceSpan.textContent = `Источник: ${item.source ? item.source : '—'}`;
+      meta.appendChild(sourceSpan);
+      card.appendChild(meta);
+
+      const summary = document.createElement('div');
+      summary.className = 'admin-history-summary';
+      summary.textContent = formatHistorySummary(item.summary || item.note || null);
+      card.appendChild(summary);
+
+      const actions = document.createElement('div');
+      actions.className = 'admin-history-actions';
+
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'btn small ghost';
+      viewBtn.type = 'button';
+      viewBtn.textContent = 'Просмотр';
+      viewBtn.dataset.action = 'view';
+      viewBtn.dataset.hash = item.hash;
+      actions.appendChild(viewBtn);
+
+      const downloadBtn = document.createElement('button');
+      downloadBtn.className = 'btn small ghost';
+      downloadBtn.type = 'button';
+      downloadBtn.textContent = 'Скачать';
+      downloadBtn.dataset.action = 'download';
+      downloadBtn.dataset.hash = item.hash;
+      actions.appendChild(downloadBtn);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn small ghost';
+      copyBtn.type = 'button';
+      copyBtn.textContent = 'Копировать хэш';
+      copyBtn.dataset.action = 'copy';
+      copyBtn.dataset.hash = item.hash;
+      actions.appendChild(copyBtn);
+
+      const rollbackBtn = document.createElement('button');
+      rollbackBtn.className = 'btn small';
+      rollbackBtn.type = 'button';
+      rollbackBtn.textContent = 'Откатиться';
+      rollbackBtn.dataset.action = 'rollback';
+      rollbackBtn.dataset.hash = item.hash;
+      rollbackBtn.disabled = !canEdit;
+      actions.appendChild(rollbackBtn);
+
+      card.appendChild(actions);
+      list.appendChild(card);
+    });
+  }
+
+  const loadMoreBtn = document.getElementById('historyLoadMore');
+  if(loadMoreBtn){
+    loadMoreBtn.disabled = adminHistoryLoading || !adminHistoryState.hasMore;
+    loadMoreBtn.style.display = adminHistoryState.items.length === 0 ? 'none' : (adminHistoryState.hasMore ? '' : 'none');
+  }
+}
+
+function ensureAdminHistoryLoaded(){
+  if(adminHistoryState.items.length === 0 && !adminHistoryLoading){
+    fetchAdminHistory({ reset:true });
+  }
+}
+
+async function fetchAdminHistory({ reset = false } = {}){
+  if(adminHistoryLoading) return;
+  adminHistoryLoading = true;
+  const list = document.getElementById('adminHistoryList');
+  if(reset && list){
+    list.innerHTML = '<div class="admin-history-empty">Загрузка…</div>';
+  }
+  try{
+    if(reset){
+      adminHistoryState.offset = 0;
+      adminHistoryState.hasMore = true;
+    }
+    const params = new URLSearchParams();
+    params.set('limit', String(adminHistoryState.limit));
+    params.set('offset', String(reset ? 0 : adminHistoryState.offset));
+    const { actor, source, from, to } = adminHistoryState.filters;
+    if(actor) params.set('actor', actor);
+    if(source) params.set('source', source);
+    if(from) params.set('from', from);
+    if(to) params.set('to', to);
+    const res = await fetch(`/api/admin/history?${params.toString()}`, { headers:{ 'Accept':'application/json' } });
+    if(!res.ok){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json().catch(()=>({ items:[] }));
+    const items = Array.isArray(data.items) ? data.items : [];
+    if(reset){
+      adminHistoryState.items = [];
+    }
+    adminHistoryState.items = adminHistoryState.items.concat(items);
+    adminHistoryState.offset = (reset ? 0 : adminHistoryState.offset) + items.length;
+    adminHistoryState.hasMore = items.length >= adminHistoryState.limit;
+    renderAdminHistoryList();
+  }catch(err){
+    console.warn('history load failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Не удалось загрузить историю снимков.', tone:'error' });
+    }
+  }finally{
+    adminHistoryLoading = false;
+    const loadMoreBtn = document.getElementById('historyLoadMore');
+    if(loadMoreBtn){
+      loadMoreBtn.disabled = !adminHistoryState.hasMore;
+    }
+    renderAdminHistoryList();
+  }
+}
+
+function handleAdminSettingsChange(event){
+  if(!sharedSettingsEditing) return;
+  const target = event.target;
+  if(!target) return;
+  const draft = ensureSharedSettingsDraft();
+  const current = sanitizeAdminSettings(draft.admin || adminSettingsState, adminSettingsState);
+  if(target.id === 'adminHistoryLimit'){
+    current.historyLimit = Number(target.value);
+  }else if(target.id === 'adminHistoryDailyLimit'){
+    current.historyDailyLimit = Number(target.value);
+  }else if(target.id === 'adminAllowForceOverwrite'){
+    current.allowForceOverwrite = !!target.checked;
+  }
+  draft.admin = sanitizeAdminSettings(current, adminSettingsState);
+  markSharedSettingsDirty('admin');
+  renderAdminSettingsUI();
+}
+
+function handleHistoryListClick(event){
+  const button = event.target && event.target.closest('button[data-action]');
+  if(!button) return;
+  const hash = button.dataset.hash;
+  const action = button.dataset.action;
+  if(!hash) return;
+  if(action === 'view'){
+    openHistoryDetail(hash);
+  }else if(action === 'download'){
+    downloadHistorySnapshot(hash);
+  }else if(action === 'copy'){
+    copyHistoryHash(hash);
+  }else if(action === 'rollback'){
+    handleHistoryRollback(hash);
+  }
+}
+
+async function fetchHistoryDetail(hash){
+  if(adminHistoryCache.has(hash)){
+    return adminHistoryCache.get(hash);
+  }
+  const res = await fetch(`/api/admin/history/${encodeURIComponent(hash)}`, { headers:{ 'Accept':'application/json' } });
+  if(!res.ok){
+    throw new Error(`HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  adminHistoryCache.set(hash, data);
+  return data;
+}
+
+async function openHistoryDetail(hash){
+  try{
+    const detail = await fetchHistoryDetail(hash);
+    const dialog = document.getElementById('historyViewDlg');
+    if(!dialog) return;
+    const title = document.getElementById('historyViewTitle');
+    if(title){
+      title.textContent = `Снимок ${shortenHash(hash)}`;
+    }
+    const meta = document.getElementById('historyViewMeta');
+    if(meta){
+      const info = [
+        `Дата: ${formatHistoryTimestamp(detail.createdAt || detail.timestamp)}`,
+        `Пользователь: ${detail.actor || '—'}`,
+        `Источник: ${detail.source || '—'}`,
+        `ETag: ${detail.etag || '—'}`,
+        `Hash: ${detail.hash || hash}`
+      ];
+      meta.textContent = info.join(' • ');
+    }
+    const content = document.getElementById('historyViewContent');
+    if(content){
+      content.value = JSON.stringify(detail.state ?? null, null, 2);
+    }
+    dialog.showModal();
+  }catch(err){
+    console.warn('history view failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Не удалось открыть снимок.', tone:'error' });
+    }
+  }
+}
+
+async function downloadHistorySnapshot(hash){
+  try{
+    const detail = await fetchHistoryDetail(hash);
+    const payload = JSON.stringify(detail.state ?? null, null, 2);
+    const blob = new Blob([payload], { type:'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const safeHash = typeof hash === 'string' && hash ? hash : 'unknown';
+    link.download = `planner-snapshot-${safeHash}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }catch(err){
+    console.warn('history download failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Не удалось скачать снимок.', tone:'error' });
+    }
+  }
+}
+
+async function copyHistoryHash(hash){
+  try{
+    const value = typeof hash === 'string' ? hash : '';
+    if(!value){
+      throw new Error('empty-hash');
+    }
+    await navigator.clipboard.writeText(value);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Хэш скопирован в буфер обмена.', tone:'success' });
+    }
+  }catch(err){
+    console.warn('clipboard error', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'Буфер обмена', message:'Не удалось скопировать хэш.', tone:'error' });
+    }
+  }
+}
+
+async function handleHistoryRollback(hash){
+  if(!userCanEdit()){
+    notifyReadOnly();
+    return;
+  }
+  if(!window.confirm(`Откатиться к снимку ${hash}?`)){
+    return;
+  }
+  const note = window.prompt('Комментарий к откату (необязательно)', '') || '';
+  try{
+    const res = await fetch('/api/admin/rollback', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
+      body: JSON.stringify({ targetHash: hash, note: note.trim() ? note.trim() : undefined, actor: userAlias || 'admin' })
+    });
+    const text = await res.text().catch(()=> '');
+    let payload = {};
+    if(text){
+      try{ payload = JSON.parse(text); }
+      catch(_err){ payload = {}; }
+    }
+    if(!res.ok){
+      const message = payload?.error || payload?.message || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    if(typeof showToast === 'function'){
+      showToast({ title:'Откат выполнен', message:`Состояние восстановлено (${shortenHash(hash)})`, tone:'success' });
+    }
+    fetchAdminHistory({ reset:true });
+  }catch(err){
+    console.warn('rollback failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'Откат', message:`Не удалось выполнить откат: ${err.message || err}`, tone:'error' });
+    }
+  }
+}
+
+async function handleAdminSnapshotRequest(){
+  if(!userCanEdit()){
+    notifyReadOnly();
+    return;
+  }
+  const note = window.prompt('Комментарий к снимку (необязательно)', '') || '';
+  try{
+    const res = await fetch('/api/admin/snapshot', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
+      body: JSON.stringify({ note: note.trim() ? note.trim() : undefined, actor: userAlias || 'admin' })
+    });
+    if(!res.ok){
+      const detail = await res.text().catch(()=> '');
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    if(typeof showToast === 'function'){
+      showToast({ title:'Снимок создан', message:'Текущий снимок добавлен в историю.', tone:'success' });
+    }
+    fetchAdminHistory({ reset:true });
+  }catch(err){
+    console.warn('snapshot failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:`Не удалось создать снимок: ${err.message || err}`, tone:'error' });
+    }
+  }
+}
+
+function handleAdminHistoryEvent(payload){
+  if(!payload || typeof payload !== 'object') return;
+  const hash = typeof payload.hash === 'string' ? payload.hash : '';
+  if(!hash) return;
+  adminHistoryCache.delete(hash);
+  const hasFilters = !!(adminHistoryState.filters.actor || adminHistoryState.filters.source || adminHistoryState.filters.from || adminHistoryState.filters.to);
+  if(hasFilters){
+    fetchAdminHistory({ reset:true });
+    return;
+  }
+  const entry = {
+    hash,
+    etag: payload.etag,
+    summary: payload.summary || null,
+    actor: payload.actor || null,
+    source: payload.source || null,
+    note: payload.note || null,
+    createdAt: payload.createdAt || new Date().toISOString()
+  };
+  adminHistoryState.items = [entry, ...adminHistoryState.items.filter(item=>item.hash !== entry.hash)];
+  adminHistoryState.items = adminHistoryState.items.slice(0, adminHistoryState.limit * 3);
+  adminHistoryState.offset = adminHistoryState.items.length;
+  adminHistoryState.hasMore = true;
+  renderAdminHistoryList();
 }
 
 function renderCrmMappingSettingsUI(){
@@ -13563,6 +14187,7 @@ function refreshSystemSettingsAccess(){
   container.querySelectorAll('#crmMappingList select').forEach(select=>{
     select.disabled = disabled;
   });
+  renderAdminSettingsUI();
 }
 
 function handleSystemSettingChange(e){
@@ -13815,7 +14440,8 @@ function refreshNewOrderPrefUI(){
 }
 
 function activateSettingsTab(name){
-  const target = name === 'shared' ? 'shared' : 'personal';
+  const allowed = new Set(['personal','shared','admin']);
+  const target = allowed.has(name) ? name : 'personal';
   $$('.settings-tab').forEach(btn=>{
     const tab = btn.dataset.settingsTab;
     btn.classList.toggle('active', tab === target);
@@ -13824,6 +14450,10 @@ function activateSettingsTab(name){
     const tab = panel.dataset.settingsPanel;
     panel.classList.toggle('active', tab === target);
   });
+  if(target === 'admin'){
+    renderAdminSettingsUI();
+    ensureAdminHistoryLoaded();
+  }
 }
 
 function updateFreshnessUI(){
@@ -14137,6 +14767,61 @@ function wireHandlers(){
       applyStoragePrefs({ remote: !!e.target.checked });
     });
   }
+
+  const adminPanelEl = document.getElementById('adminSettingsPanel');
+  if(adminPanelEl){
+    adminPanelEl.addEventListener('change', handleAdminSettingsChange);
+    adminPanelEl.addEventListener('input', evt=>{
+      if(evt.target && evt.target.matches('input[type="number"]')){
+        handleAdminSettingsChange(evt);
+      }
+    });
+  }
+  const adminSaveBtn = document.getElementById('adminSaveBtn');
+  if(adminSaveBtn){
+    adminSaveBtn.addEventListener('click', ()=> commitSharedSettingsChanges());
+  }
+  const adminSnapshotBtn = document.getElementById('adminSnapshotBtn');
+  if(adminSnapshotBtn){
+    adminSnapshotBtn.addEventListener('click', ()=> handleAdminSnapshotRequest());
+  }
+  const historyApplyBtn = document.getElementById('historyFilterApply');
+  if(historyApplyBtn){
+    historyApplyBtn.addEventListener('click', ()=>{
+      applyAdminFiltersFromForm();
+      fetchAdminHistory({ reset:true });
+    });
+  }
+  const historyResetBtn = document.getElementById('historyFilterReset');
+  if(historyResetBtn){
+    historyResetBtn.addEventListener('click', ()=>{
+      resetAdminHistoryFilters();
+      fetchAdminHistory({ reset:true });
+    });
+  }
+  const historyLoadMoreBtn = document.getElementById('historyLoadMore');
+  if(historyLoadMoreBtn){
+    historyLoadMoreBtn.addEventListener('click', ()=> fetchAdminHistory());
+  }
+  const historyList = document.getElementById('adminHistoryList');
+  if(historyList){
+    historyList.addEventListener('click', handleHistoryListClick);
+  }
+  const historyCloseBtn = document.getElementById('historyViewClose');
+  if(historyCloseBtn){
+    historyCloseBtn.addEventListener('click', ()=> document.getElementById('historyViewDlg')?.close());
+  }
+  ['historyFilterActor','historyFilterSource','historyFilterFrom','historyFilterTo'].forEach(id=>{
+    const input = document.getElementById(id);
+    if(!input) return;
+    input.addEventListener('keydown', evt=>{
+      if(evt.key === 'Enter'){
+        evt.preventDefault();
+        applyAdminFiltersFromForm();
+        fetchAdminHistory({ reset:true });
+      }
+    });
+  });
 
   const startStageSelect = document.getElementById('startStagePreference');
   if(startStageSelect){
@@ -14676,6 +15361,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             sharedSettingsEditing = true;
             resetSharedSettingsDraft();
             renderSystemSettingsUI();
+            renderAdminSettingsUI();
             captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
             refreshNewOrderPrefUI();
@@ -14731,6 +15417,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
 
         $("#autosaveSetting").checked = autosaveOn;
         renderSystemSettingsUI();
+        renderAdminSettingsUI();
 }
 
 /* =========
