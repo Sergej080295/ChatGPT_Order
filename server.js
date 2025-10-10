@@ -122,7 +122,7 @@ const DEFAULT_STATE = {
 };
 
 const createInitialState = () => {
-  const stateString = JSON.stringify(DEFAULT_STATE);
+  const { stateString, hash } = serializeStateForStorage(DEFAULT_STATE);
   return {
     state: stateString,
     meta: {
@@ -133,7 +133,7 @@ const createInitialState = () => {
       diff: null
     },
     updatedAt: new Date().toISOString(),
-    hash: simpleHash(stateString)
+    hash
   };
 };
 
@@ -146,11 +146,18 @@ const loadLegacyStateFromDisk = async () => {
     const raw = await fsp.readFile(legacyPath, 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.state === 'string') {
+      let snapshot = {};
+      try {
+        snapshot = JSON.parse(parsed.state);
+      } catch (_err) {
+        snapshot = {};
+      }
+      const { stateString, hash } = serializeStateForStorage(snapshot);
       return {
-        state: parsed.state,
+        state: stateString,
         meta: parsed.meta ?? null,
         updatedAt: parsed.updatedAt ?? new Date().toISOString(),
-        hash: parsed.hash ?? simpleHash(parsed.state)
+        hash
       };
     }
   } catch (err) {
@@ -235,6 +242,82 @@ const clonePlainObject = (value) => {
     return {};
   }
   return JSON.parse(JSON.stringify(value));
+};
+
+const cloneDeepPlain = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeepPlain(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.keys(value).reduce((acc, key) => {
+      acc[key] = cloneDeepPlain(value[key]);
+      return acc;
+    }, {});
+  }
+  return value;
+};
+
+const deepMergePlain = (target, source) => {
+  const base = isPlainObject(target) ? cloneDeepPlain(target) : {};
+  if (!isPlainObject(source)) {
+    return base;
+  }
+  Object.keys(source).forEach((key) => {
+    const sourceValue = source[key];
+    if (isPlainObject(sourceValue) && isPlainObject(base[key])) {
+      base[key] = deepMergePlain(base[key], sourceValue);
+    } else {
+      base[key] = cloneDeepPlain(sourceValue);
+    }
+  });
+  return base;
+};
+
+const serializeStateForStorage = (stateObj) => {
+  const working = cloneDeepPlain(isPlainObject(stateObj) ? stateObj : {});
+  let previousHash = sanitizeHashCandidate(working.hash) || null;
+  let serialized = '';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (previousHash) {
+      working.hash = previousHash;
+    } else {
+      delete working.hash;
+    }
+    serialized = JSON.stringify(working);
+    const computed = simpleHash(serialized);
+    if (computed === previousHash) {
+      working.hash = computed;
+      return { stateObj: working, stateString: serialized, hash: computed };
+    }
+    previousHash = computed;
+  }
+  if (previousHash) {
+    working.hash = previousHash;
+  } else {
+    delete working.hash;
+  }
+  serialized = JSON.stringify(working);
+  let computed = simpleHash(serialized);
+  if (computed !== previousHash) {
+    working.hash = computed;
+    serialized = JSON.stringify(working);
+    computed = simpleHash(serialized);
+  }
+  working.hash = computed;
+  const finalString = JSON.stringify(working);
+  return { stateObj: working, stateString: finalString, hash: computed };
+};
+
+const embedHashInState = (stateObj, hash) => {
+  const working = cloneDeepPlain(isPlainObject(stateObj) ? stateObj : {});
+  const sanitized = sanitizeHashCandidate(hash);
+  if (sanitized) {
+    working.hash = sanitized;
+  } else {
+    delete working.hash;
+  }
+  const stateString = JSON.stringify(working);
+  return { stateObj: working, stateString, hash: sanitized };
 };
 
 const normaliseDate = (value) => {
@@ -394,6 +477,47 @@ const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
   }
 
   return { stateObj: nextStateObj, touched: true };
+};
+
+const ensureFullSettingsSnapshot = (currentStateObj, nextStateObj) => {
+  const currentSettings = isPlainObject(currentStateObj?.meta?.settings)
+    ? currentStateObj.meta.settings
+    : {};
+  const nextSettings = isPlainObject(nextStateObj?.meta?.settings)
+    ? nextStateObj.meta.settings
+    : {};
+  const mergedSettings = deepMergePlain(currentSettings, nextSettings);
+  if (!isPlainObject(nextStateObj.meta)) {
+    nextStateObj.meta = {};
+  }
+  nextStateObj.meta.settings = mergedSettings;
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autosave')) {
+    nextStateObj.autosaveOn = mergedSettings.autosave;
+  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'autosave') && nextStateObj.autosaveOn === undefined) {
+    nextStateObj.autosaveOn = currentSettings.autosave;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autoOptimize')) {
+    nextStateObj.autoOptimizeOn = mergedSettings.autoOptimize;
+  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'autoOptimize') && nextStateObj.autoOptimizeOn === undefined) {
+    nextStateObj.autoOptimizeOn = currentSettings.autoOptimize;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'shiftOnProgress')) {
+    nextStateObj.shiftOnProgress = mergedSettings.shiftOnProgress;
+  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'shiftOnProgress') && nextStateObj.shiftOnProgress === undefined) {
+    nextStateObj.shiftOnProgress = currentSettings.shiftOnProgress;
+  }
+
+  if (isPlainObject(mergedSettings.capacity)) {
+    nextStateObj.capByProc = { ...mergedSettings.capacity };
+  }
+  if (isPlainObject(mergedSettings.parallel)) {
+    nextStateObj.parallelByProc = { ...mergedSettings.parallel };
+  }
+
+  return mergedSettings;
 };
 
 const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt, options = {}) => {
@@ -807,18 +931,29 @@ const buildStateFromSql = async () => {
     });
     stateObj.orders = Array.from(ordersMap.entries());
 
-    const stateString = JSON.stringify(stateObj);
-    const hash = simpleHash(stateString);
+    const serialized = serializeStateForStorage(stateObj);
+    const persistedHashRaw = sanitizeHashCandidate(plannerRow?.hash);
+    let hash = serialized.hash;
+    let stateString = serialized.stateString;
+    let parsedState = serialized.stateObj;
+    if (persistedHashRaw) {
+      const embedded = embedHashInState(parsedState, persistedHashRaw);
+      hash = embedded.hash ?? persistedHashRaw;
+      stateString = embedded.stateString;
+      parsedState = embedded.stateObj;
+    }
     const updatedAt = plannerRow?.updatedAt ?? new Date().toISOString();
     const meta = plannerRow?.meta ?? null;
+    const etag = hash ? `W/"${hash}"` : null;
 
     return {
       state: stateString,
       meta,
       updatedAt,
       hash,
-      etag: `W/"${hash}"`,
-      parsed: stateObj
+      etag,
+      parsed: parsedState,
+      hashNormalized: normalizeHashValue(hash)
     };
   } finally {
     client.release();
@@ -893,8 +1028,15 @@ const bootstrapState = async () => {
       } catch (err) {
         stateObj = JSON.parse(JSON.stringify(DEFAULT_STATE));
       }
-      await persistSnapshotToSql(client, stateObj);
-      await upsertPlannerStateRow(client, JSON.stringify(stateObj), payload.meta ?? null, payload.hash ?? simpleHash(JSON.stringify(stateObj)), payload.updatedAt ?? new Date().toISOString());
+      const { stateObj: normalizedState, stateString, hash } = serializeStateForStorage(stateObj);
+      await persistSnapshotToSql(client, normalizedState);
+      await upsertPlannerStateRow(
+        client,
+        stateString,
+        payload.meta ?? null,
+        hash,
+        payload.updatedAt ?? new Date().toISOString()
+      );
       await client.query('COMMIT');
     } else {
       await client.query('COMMIT');
@@ -993,20 +1135,6 @@ app.put('/api/state', async (req, res) => {
     return;
   }
 
-  let current = cachedState || await refreshCachedState();
-  let currentHashRaw = sanitizeHashCandidate(current?.hash);
-  let currentHash = normalizeHashValue(currentHashRaw);
-  let currentStateObj = current?.parsed && typeof current.parsed === 'object'
-    ? current.parsed
-    : {};
-  if (!currentStateObj || typeof currentStateObj !== 'object') {
-    try {
-      currentStateObj = JSON.parse(current.state || '{}');
-    } catch (err) {
-      currentStateObj = {};
-    }
-  }
-
   let nextStateObj = {};
   try {
     nextStateObj = JSON.parse(state);
@@ -1017,20 +1145,6 @@ app.put('/api/state', async (req, res) => {
 
   const stage = meta?.stage ?? null;
   const incomingVersion = meta?.version ?? (nextStateObj?.meta?.versions?.[stage] ?? null);
-  const currentVersion = stage != null ? currentStateObj?.meta?.versions?.[stage] ?? null : null;
-
-  if (incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
-    const lastAuthor = currentStateObj?.meta?.lastAuthors?.[stage] ?? null;
-    res.status(409).json({
-      error: 'Conflict',
-      stage,
-      currentVersion,
-      incomingVersion,
-      lastAuthor,
-      updatedAt: current.updatedAt
-    });
-    return;
-  }
 
   const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
   let expectedHashRaw = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
@@ -1053,121 +1167,114 @@ app.put('/api/state', async (req, res) => {
   }
   const ifMatchAllowsAny = ifMatchHeader.any;
 
-  if (currentHash) {
-    if (ifMatchAllowsAny && !expectedHash) {
-      res.status(428).json({
-        error: 'Precondition Required',
-        message: 'Wildcard If-Match is not allowed once planner state exists',
+  const updatedAt = new Date().toISOString();
+  let nextMeta = meta || null;
+  if (nextMeta && typeof nextMeta === 'object' && !Array.isArray(nextMeta)) {
+    nextMeta = { ...nextMeta };
+  }
+
+  const previousState = cachedState ? cachedState.parsed : null;
+  const client = await pool.connect();
+  let existingRow = null;
+  let currentStateObj = {};
+  let dbHashRaw = null;
+  let dbHashNormalized = null;
+  try {
+    await client.query('BEGIN');
+    existingRow = await readPlannerStateRow(client, { forUpdate: true });
+    dbHashRaw = sanitizeHashCandidate(existingRow?.hash);
+    dbHashNormalized = normalizeHashValue(dbHashRaw);
+
+    if (existingRow?.state) {
+      try {
+        currentStateObj = JSON.parse(existingRow.state);
+      } catch (err) {
+        currentStateObj = cloneDeepPlain(previousState) || {};
+      }
+    } else if (previousState) {
+      currentStateObj = cloneDeepPlain(previousState);
+    }
+    if (!isPlainObject(currentStateObj)) {
+      currentStateObj = {};
+    }
+
+    if (existingRow) {
+      if (dbHashRaw) {
+        if (ifMatchAllowsAny && !expectedHash) {
+          await client.query('ROLLBACK');
+          res.status(428).json({
+            error: 'Precondition Required',
+            message: 'Wildcard If-Match is not allowed once planner state exists',
+            currentHash: dbHashRaw
+          });
+          return;
+        }
+        if (!expectedHash) {
+          await client.query('ROLLBACK');
+          res.status(428).json({
+            error: 'Precondition Required',
+            message: 'Planner state update requires an If-Match header',
+            currentHash: dbHashRaw
+          });
+          return;
+        }
+        if (expectedHash !== dbHashNormalized) {
+          await client.query('ROLLBACK');
+          res.status(412).json({
+            error: 'Precondition Failed',
+            expected: dbHashRaw
+          });
+          return;
+        }
+      } else if (ifMatchAllowsAny && !expectedHash) {
+        expectedHash = null;
+        expectedHashRaw = null;
+      }
+    }
+
+    const currentVersion = stage != null ? currentStateObj?.meta?.versions?.[stage] ?? null : null;
+    if (incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
+      const lastAuthor = currentStateObj?.meta?.lastAuthors?.[stage] ?? null;
+      await client.query('ROLLBACK');
+      res.status(409).json({
+        error: 'Conflict',
         stage,
-        updatedAt: current.updatedAt,
-        currentHash: currentHashRaw
+        currentVersion,
+        incomingVersion,
+        lastAuthor,
+        updatedAt: existingRow?.updatedAt ?? (cachedState?.updatedAt ?? updatedAt)
       });
       return;
     }
-    if (expectedHash && expectedHash !== currentHash) {
-      const refreshed = await refreshCachedState();
-      const refreshedHashRaw = sanitizeHashCandidate(refreshed?.hash);
-      const refreshedHash = normalizeHashValue(refreshedHashRaw);
-      if (refreshedHash && (!currentHash || refreshedHash !== currentHash)) {
-        current = refreshed;
-        currentHashRaw = refreshedHashRaw;
-        currentHash = refreshedHash;
-        currentStateObj = refreshed?.parsed && typeof refreshed.parsed === 'object'
-          ? refreshed.parsed
-          : {};
-        if (!currentStateObj || typeof currentStateObj !== 'object') {
-          try {
-            currentStateObj = JSON.parse(refreshed.state || '{}');
-          } catch (err) {
-            currentStateObj = {};
-          }
+
+    if (meta?.stage === 'settings') {
+      try {
+        const { stateObj, touched } = mergeSettingsSnapshot(currentStateObj, nextStateObj, meta);
+        if (touched) {
+          nextStateObj = stateObj;
         }
-      }
-      if (expectedHash && currentHash && expectedHash !== currentHash) {
-        const lastAuthor = stage ? currentStateObj?.meta?.lastAuthors?.[stage] ?? null : null;
-        res.status(409).json({
-          error: 'Conflict',
-          stage,
-          reason: 'hash_mismatch',
-          expectedHash: expectedHashRaw,
-          currentHash: currentHashRaw,
-          lastAuthor,
-          updatedAt: current.updatedAt
-        });
-        return;
+      } catch (err) {
+        console.error('Failed to merge settings snapshot, falling back to incoming state', err);
       }
     }
-  }
 
-  const updatedAt = new Date().toISOString();
-  let nextStateString = state;
-  if (meta?.stage === 'settings') {
-    try {
-      const { stateObj, touched } = mergeSettingsSnapshot(currentStateObj, nextStateObj, meta);
-      if (touched) {
-        nextStateObj = stateObj;
-        nextStateString = JSON.stringify(stateObj);
-      }
-    } catch (err) {
-      console.error('Failed to merge settings snapshot, falling back to incoming state', err);
-    }
-  }
+    ensureFullSettingsSnapshot(currentStateObj, nextStateObj);
 
-  const hash = simpleHash(nextStateString);
-  let nextMeta = meta || null;
-  if (nextMeta && typeof nextMeta === 'object' && !Array.isArray(nextMeta)) {
-    const cleaned = { ...nextMeta };
-    delete cleaned.baseHash;
-    delete cleaned.baseEtag;
-    delete cleaned.expectedHash;
-    delete cleaned.ifMatch;
-    if (Object.keys(cleaned).length > 0) {
-      nextMeta = cleaned;
-    } else {
-      nextMeta = null;
-    }
-  }
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const existingRow = await readPlannerStateRow(client, { forUpdate: true });
-    const dbHashRaw = sanitizeHashCandidate(existingRow?.hash);
-    const dbHash = normalizeHashValue(dbHashRaw);
-    if (dbHash) {
-      if (!expectedHash) {
-        await client.query('ROLLBACK');
-        res.status(428).json({
-          error: 'Precondition Required',
-          message: ifMatchAllowsAny
-            ? 'Wildcard If-Match is not allowed once planner state exists'
-            : 'Planner state update requires an If-Match header or base hash',
-          stage,
-          updatedAt: existingRow.updatedAt,
-          currentHash: dbHashRaw
-        });
-        return;
+    if (nextMeta && typeof nextMeta === 'object') {
+      delete nextMeta.baseHash;
+      delete nextMeta.baseEtag;
+      delete nextMeta.expectedHash;
+      delete nextMeta.ifMatch;
+      if (Object.keys(nextMeta).length === 0) {
+        nextMeta = null;
       }
-      if (expectedHash !== dbHash) {
-        await client.query('ROLLBACK');
-        res.status(409).json({
-          error: 'Conflict',
-          stage,
-          reason: 'hash_mismatch',
-          expectedHash: expectedHashRaw,
-          currentHash: dbHashRaw,
-          updatedAt: existingRow.updatedAt
-        });
-        return;
-      }
-    } else if (!dbHash && ifMatchAllowsAny) {
-      expectedHash = null;
-      expectedHashRaw = null;
     }
 
-    await persistSnapshotToSql(client, nextStateObj);
+    const { stateObj: normalizedStateObj, stateString: nextStateString, hash } = serializeStateForStorage(nextStateObj);
+
+    await persistSnapshotToSql(client, normalizedStateObj);
     const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
-      expectedHash: expectedHashRaw,
+      expectedHash: dbHashRaw,
       existing: existingRow
     });
     if (upsertResult?.conflict) {
@@ -1177,7 +1284,7 @@ app.put('/api/state', async (req, res) => {
         stage,
         reason: 'hash_mismatch',
         expectedHash: expectedHashRaw,
-        updatedAt: existingRow?.updatedAt ?? current.updatedAt
+        updatedAt: existingRow?.updatedAt ?? (cachedState?.updatedAt ?? updatedAt)
       });
       return;
     }
@@ -1191,7 +1298,6 @@ app.put('/api/state', async (req, res) => {
     client.release();
   }
 
-  const previousState = cachedState ? cachedState.parsed : null;
   const refreshed = await refreshCachedState();
   const delta = computeDelta(previousState, refreshed.parsed);
 

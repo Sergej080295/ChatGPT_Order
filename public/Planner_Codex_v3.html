@@ -25,7 +25,7 @@
     return stripped || null;
   };
 
-  const applyFingerprint = ({ etag, hash }) => {
+  const updateFingerprint = ({ etag, hash }) => {
     if (etag && typeof etag === 'string') {
       const parsed = parseEtagHash(etag);
       if (parsed) {
@@ -72,7 +72,7 @@
       try {
         const payload = JSON.parse(event.data);
         if (payload && typeof payload === 'object') {
-          applyFingerprint({ etag: payload.etag, hash: payload.hash });
+          updateFingerprint({ etag: payload.etag, hash: payload.hash });
         }
         notify(payload);
       } catch (err) {
@@ -101,7 +101,7 @@
     }
     const text = await res.text();
     const etag = res.headers.get('ETag');
-    applyFingerprint({ etag });
+    updateFingerprint({ etag });
     if (options && (options.withMeta || options.returnMeta)) {
       const hash = parseEtagHash(etag) || currentHash || null;
       return { state: text, etag, hash };
@@ -198,7 +198,7 @@
       }
       throw err;
     }
-    applyFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
+    updateFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
     if (!trimmed) return true;
     return parsed ?? text;
   };
@@ -210,6 +210,14 @@
       if (typeof callback !== 'function') return () => {};
       listeners.add(callback);
       return () => listeners.delete(callback);
+    },
+    applyFingerprint(payload) {
+      if (payload && typeof payload === 'object') {
+        updateFingerprint(payload);
+      }
+    },
+    getFingerprint() {
+      return { etag: currentEtag, hash: currentHash };
     }
   };
 })();
