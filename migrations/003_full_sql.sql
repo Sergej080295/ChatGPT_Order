@@ -3,6 +3,9 @@ BEGIN;
 -- Remove legacy snapshot tables if they still exist
 DROP TABLE IF EXISTS planner_state_history;
 DROP TABLE IF EXISTS planner_state;
+-- Ensure any earlier experimental activity log is removed so the new schema can create
+-- the required revision column without conflicts.
+DROP TABLE IF EXISTS activity_log;
 
 CREATE TABLE IF NOT EXISTS revisions (
   id INTEGER PRIMARY KEY CHECK (id = 1),
