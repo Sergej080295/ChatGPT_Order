@@ -2264,14 +2264,28 @@ function applyStateFromExternal(raw, opts={}){
           time: metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '')
         };
         const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
-        showToast({
-          title: `Обновление — ${stageLabel}`,
-          message: messageHtml,
-          actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
-            {label:'OK', handler:(el)=> el.remove()}
-          ]
-        });
+        const toastKeyParts = [
+          'remote',
+          stageLabel || '',
+          summaryText || '',
+          metaLine || '',
+          detailPayload.time || '',
+          parsed.meta?.settings?.updatedAt || '',
+          metaLastChange.time || '',
+          metaLastChange.stage || '',
+          metaLastChange.changeType || ''
+        ];
+        const toastKey = toastKeyParts.filter(Boolean).join('|');
+        if(shouldDisplayRemoteToast(toastKey)){
+          showToast({
+            title: `Обновление — ${stageLabel}`,
+            message: messageHtml,
+            actions:[
+              {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
+              {label:'OK', handler:(el)=> el.remove()}
+            ]
+          });
+        }
       }
     }
   }catch(err){ console.warn('applyStateFromExternal failed', err); }
@@ -2920,6 +2934,7 @@ let suppressIncoming = false;
 let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
+let lastRemoteToastKey = '';
 let skipRealtimeToastOnce = true;
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
@@ -10975,6 +10990,23 @@ function showToast({title, message, actions=[]}){
   setTimeout(()=>{ if(el.isConnected) el.remove(); }, 4500);
 }
 
+function shouldDisplayRemoteToast(key){
+  if(key == null) return true;
+  const normalized = typeof key === 'string' ? key.trim() : String(key);
+  if(!normalized){
+    return true;
+  }
+  if(normalized === lastRemoteToastKey){
+    return false;
+  }
+  lastRemoteToastKey = normalized;
+  return true;
+}
+
+function resetRemoteToastKey(){
+  lastRemoteToastKey = '';
+}
+
 function announceStateUpdate(payload){
   const computedType = payload && Object.prototype.hasOwnProperty.call(payload, 'changeType') && payload.changeType != null
     ? payload.changeType
@@ -11034,14 +11066,27 @@ function handleIncomingSyncMessage(msg){
         time: msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '')
       };
       const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
-      showToast({
-        title: `Изменения — ${stageLabel}`,
-        message: messageHtml,
-        actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
-          {label:'OK', handler:(el)=> el.remove()}
-        ]
-      });
+      const toastKeyParts = [
+        'remote',
+        stageLabel || '',
+        summaryText || '',
+        metaLine || '',
+        detailPayload.time || msg.time || '',
+        msg.hash || '',
+        msg.updatedAt || '',
+        msg.stage || ''
+      ];
+      const toastKey = toastKeyParts.filter(Boolean).join('|');
+      if(shouldDisplayRemoteToast(toastKey)){
+        showToast({
+          title: `Изменения — ${stageLabel}`,
+          message: messageHtml,
+          actions:[
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
+            {label:'OK', handler:(el)=> el.remove()}
+          ]
+        });
+      }
     }
   }
 }
@@ -12022,6 +12067,7 @@ function persistNow(stageOverride, opts={}){
         };
         const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
+        resetRemoteToastKey();
         skipRealtimeToastOnce = true;
         pushPromise = remoteBridge.push(payload, {
           stage:remoteStage,
