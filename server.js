@@ -1034,17 +1034,18 @@ app.put('/api/state', async (req, res) => {
   }
   const ifMatchAllowsAny = ifMatchHeader.any;
 
+  if (!expectedHash && !ifMatchAllowsAny) {
+    res.status(428).json({
+      error: 'Precondition Required',
+      message: 'Planner state update requires an If-Match header or base hash',
+      stage,
+      updatedAt: current.updatedAt,
+      currentHash
+    });
+    return;
+  }
+
   if (currentHash) {
-    if (!expectedHash && !ifMatchAllowsAny) {
-      res.status(428).json({
-        error: 'Precondition Required',
-        message: 'Planner state update requires an If-Match header or base hash',
-        stage,
-        updatedAt: current.updatedAt,
-        currentHash
-      });
-      return;
-    }
     if (ifMatchAllowsAny && !expectedHash) {
       res.status(428).json({
         error: 'Precondition Required',
@@ -1109,7 +1110,9 @@ app.put('/api/state', async (req, res) => {
         await client.query('ROLLBACK');
         res.status(428).json({
           error: 'Precondition Required',
-          message: 'Planner state update requires an If-Match header or base hash',
+          message: ifMatchAllowsAny
+            ? 'Wildcard If-Match is not allowed once planner state exists'
+            : 'Planner state update requires an If-Match header or base hash',
           stage,
           updatedAt: existingRow.updatedAt,
           currentHash: dbHash
