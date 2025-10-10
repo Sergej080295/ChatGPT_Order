@@ -93,14 +93,20 @@
     connect();
   }
 
-  const loadState = async () => {
+  const loadState = async (options = {}) => {
     const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(detail || `HTTP ${res.status}`);
     }
-    applyFingerprint({ etag: res.headers.get('ETag') });
-    return await res.text();
+    const text = await res.text();
+    const etag = res.headers.get('ETag');
+    applyFingerprint({ etag });
+    if (options && (options.withMeta || options.returnMeta)) {
+      const hash = parseEtagHash(etag) || currentHash || null;
+      return { state: text, etag, hash };
+    }
+    return text;
   };
 
   const saveState = async (payload, meta) => {
@@ -119,9 +125,30 @@
     } else if (meta === null || meta === undefined) {
       metaPayload = {};
     }
+    let ifMatchHeader = null;
     if (metaPayload && typeof metaPayload === 'object') {
-      if (currentHash && !metaPayload.baseHash) metaPayload.baseHash = currentHash;
-      if (currentEtag && !metaPayload.baseEtag) metaPayload.baseEtag = currentEtag;
+      if (Object.prototype.hasOwnProperty.call(metaPayload, 'ifMatch')) {
+        const explicit = metaPayload.ifMatch == null ? '' : String(metaPayload.ifMatch).trim();
+        if (explicit) {
+          ifMatchHeader = explicit;
+        }
+        delete metaPayload.ifMatch;
+      }
+      const providedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
+      const providedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
+      if (currentHash && !providedBaseHash) metaPayload.baseHash = currentHash;
+      if (currentEtag && !providedBaseEtag) metaPayload.baseEtag = currentEtag;
+      const normalizedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
+      const normalizedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
+      if (!ifMatchHeader) {
+        if (normalizedBaseEtag) {
+          ifMatchHeader = normalizedBaseEtag;
+        } else if (normalizedBaseHash) {
+          ifMatchHeader = `W/"${normalizedBaseHash}"`;
+        }
+      }
+      if (!normalizedBaseHash) delete metaPayload.baseHash;
+      if (!normalizedBaseEtag) delete metaPayload.baseEtag;
     }
     let metaForBody = null;
     if (metaPayload && typeof metaPayload === 'object') {
@@ -135,7 +162,9 @@
       'Content-Type': 'application/json',
       'Accept': 'application/json,text/plain'
     };
-    if (currentEtag) {
+    if (ifMatchHeader) {
+      headers['If-Match'] = ifMatchHeader;
+    } else if (currentEtag) {
       headers['If-Match'] = currentEtag;
     } else if (currentHash) {
       headers['If-Match'] = `W/"${currentHash}"`;
