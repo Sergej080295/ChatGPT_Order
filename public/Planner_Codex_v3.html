@@ -11901,10 +11901,15 @@ function persistNow(stageOverride, opts={}){
     }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
     const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
-    const prevVersion = Number((prevMeta.versions && prevMeta.versions[curStage]) || 0);
-    const knownVersion = lastKnownVersions.get(curStage) || 0;
+    const prevVersionRaw = (prevMeta.versions && prevMeta.versions[curStage]) || 0;
+    const prevVersion = Number(prevVersionRaw) || 0;
+    const knownVersionRaw = lastKnownVersions.get(curStage);
+    const knownVersionBefore = Number(knownVersionRaw) || 0;
+    if(prevVersion > knownVersionBefore){
+      lastKnownVersions.set(curStage, prevVersion);
+    }
 
-    if(prev && prevVersion > knownVersion){
+    if(prev && prevVersion > knownVersionBefore){
       const conflict = computeDiff(baseline, prevSnapshot);
       if(diffHasChanges(conflict)){
         lastKnownVersions.set(curStage, prevVersion);
