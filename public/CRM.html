@@ -413,6 +413,9 @@
   #stagesTable input[data-k="value"]{max-width:280px;width:100%;text-align:center;margin:auto}
   #stagesTable input.stg-name{padding:4px 6px}
   #stagesTable td.chk{padding:3px 8px}
+  .progress-expected-cell{display:flex;align-items:center;justify-content:center;gap:6px}
+  .progress-expected-cell .expected-indicator{font-size:12px;color:var(--muted)}
+  .progress-expected-cell .expected-indicator.behind{color:#dc2626;font-weight:600}
 
   #orderForm details{grid-column:1 / -1}
   #orderForm details textarea{width:100%;resize:vertical}
@@ -738,10 +741,10 @@ function openOrder(id=null){
     DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''})); window._editingOrigValues=null; syncAutoDates(); deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
   }
   addStageBtn.onclick=()=>appendStageRow({name:'Новый передел',done:false,progress:0,start:'',end:'',value:''});
-  presetStagesBtn.onclick=()=>{stagesTableBody.innerHTML='';DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''}));syncAutoProgress();syncAutoDates()};
+  presetStagesBtn.onclick=()=>{stagesTableBody.innerHTML='';DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''}));syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
   splitBtn.onclick=()=>openSplitDialog();
-  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates()};
-  orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress()};
+  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates();updateAllStageExpectations()};
+  orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress();updateAllStageExpectations()};
   orderDlg.showModal();
 }
 function closeOrder(){orderDlg.close()}
@@ -752,6 +755,67 @@ function fillOrderForm(o,b){
   orderForm.notes.value=o.notes||''; orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
   (o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}))).forEach(st=>appendStageRow(st));
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
+}
+
+function parseDateInputValue(value){
+  if(!value) return null;
+  const trimmed=String(value).trim();
+  if(!trimmed) return null;
+  const d=new Date(`${trimmed}T00:00:00`);
+  if(Number.isNaN(d.getTime())) return null;
+  d.setHours(0,0,0,0);
+  return d;
+}
+
+function crmExpectedReferenceDate(){
+  const ref=new Date();
+  ref.setHours(0,0,0,0);
+  ref.setDate(ref.getDate()-1);
+  ref.setHours(23,59,59,999);
+  return ref;
+}
+
+function computeExpectedPercentForInputs(startValue,endValue){
+  const start=parseDateInputValue(startValue);
+  const end=parseDateInputValue(endValue);
+  if(!start||!end) return null;
+  const startMs=start.getTime();
+  const endCopy=new Date(end);
+  endCopy.setHours(23,59,59,999);
+  const endMs=endCopy.getTime();
+  if(endMs<=startMs){
+    return crmExpectedReferenceDate().getTime()<startMs?0:100;
+  }
+  const ref=crmExpectedReferenceDate();
+  const refMs=ref.getTime();
+  if(refMs<=startMs) return 0;
+  if(refMs>=endMs) return 100;
+  const fraction=(refMs-startMs)/(endMs-startMs);
+  return Math.max(0,Math.min(100,fraction*100));
+}
+
+function updateStageRowExpectation(tr){
+  if(!tr) return;
+  const indicator=tr.querySelector('.expected-indicator');
+  if(!indicator){return;}
+  const progressEl=tr.querySelector('[data-k="progress"]');
+  if(!progressEl){indicator.textContent='';indicator.classList.remove('behind');return;}
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  const expected=computeExpectedPercentForInputs(startInput?.value||'',endInput?.value||'');
+  if(expected==null){
+    indicator.textContent='';
+    indicator.classList.remove('behind');
+    return;
+  }
+  const rounded=Math.round(expected);
+  indicator.textContent=`/${rounded}%`;
+  const actual=Math.max(0,Math.min(100,Number(progressEl.value||0)));
+  indicator.classList.toggle('behind',actual<rounded);
+}
+
+function updateAllStageExpectations(){
+  stagesTableBody.querySelectorAll('tr').forEach(tr=>updateStageRowExpectation(tr));
 }
 
 /* формат суммы */
@@ -765,7 +829,7 @@ function appendStageRow(st){
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nm)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td>${isBoolOnly?'<span class="muted">—</span>':`<input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" />`}</td>
+    <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
     <td>${isZakupka?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
@@ -773,15 +837,15 @@ function appendStageRow(st){
   const origMap=window._editingOrigValues||null;
   if(origMap&&!isZakupka){const nameNow=nm||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
 
-  const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates()};
+  const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
   const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
-  if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress()})}
-  if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress()})}
+  if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress();updateStageRowExpectation(tr);})}
+  if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress();updateStageRowExpectation(tr);})}
   const startInput=tr.querySelector('[data-k="start"]');
   const endInput=tr.querySelector('[data-k="end"]');
-  if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();});}
-  if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();});}
-  stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates();
+  if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();updateStageRowExpectation(tr);});}
+  if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();updateStageRowExpectation(tr);});}
+  stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr);
 }
 
 function readStages(){
@@ -798,7 +862,7 @@ function readStages(){
 }
 
 function calcAutoProgress(stages){const s=stages||[];if(!s.length)return 0;const avg=s.reduce((a,x)=>a+(Number(x.progress||0)),0)/s.length;return Math.round(avg)}
-function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages())}
+function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations()}
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
 
 orderForm.addEventListener('submit',e=>{

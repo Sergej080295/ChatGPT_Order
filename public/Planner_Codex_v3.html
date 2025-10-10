@@ -323,6 +323,11 @@ td[data-field="progress"]{background:#fffef3}
 .progress-remaining{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted)}
 .progress-bar{position:relative;height:18px;border-radius:999px;background:#e2e8f0;overflow:hidden;font-size:11px;font-weight:600;color:#0f172a}
 .progress-bar span{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none}
+.progress-label{display:flex;align-items:center;gap:4px;white-space:nowrap}
+.progress-label .progress-actual{font-weight:600}
+.progress-label .progress-hours{color:var(--muted);font-weight:400}
+.progress-label .progress-expected{color:var(--muted);font-weight:600}
+.progress-label .progress-expected.behind{color:#dc2626}
 .progress-fill{height:100%;background:#3b82f6}
 .progress-bar[data-state="done"]{background:#dcfce7;color:#14532d}
 .progress-bar[data-state="done"] .progress-fill{background:#22c55e}
@@ -509,6 +514,7 @@ body.overview-fs-active{overflow:hidden}
 .compact-legend{display:flex;gap:10px;font-size:12px;margin-top:8px;flex-wrap:wrap}
 .compact-legend .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:4px}
 
+#settingsDlg{width:min(90vw,960px);max-width:960px;}
 .settings-system-wrapper{width:100%;border:1px solid #e2e8f0;border-radius:10px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);}
 .settings-system-wrapper summary{cursor:pointer;font-weight:600;font-size:13px;list-style:none;margin:0;padding:10px 12px;display:flex;align-items:center;gap:6px;color:#1f2937;}
 .settings-system-wrapper summary::-webkit-details-marker{display:none;}
@@ -541,9 +547,9 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-section summary::-webkit-details-marker{display:none;}
 .settings-mapping-section summary::before{content:'▸';display:inline-block;transition:transform .15s ease;}
 .settings-mapping-section[open] summary::before{transform:rotate(90deg);}
-.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;}
+.settings-mapping-list{display:flex;flex-direction:column;gap:8px;margin-top:12px;max-height:50vh;overflow:auto;}
 .settings-mapping-rows{display:flex;flex-direction:column;gap:6px;}
-.settings-mapping-row{display:grid;grid-template-columns:minmax(160px,1.6fr) minmax(160px,2fr);align-items:center;gap:10px;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
+.settings-mapping-row{display:grid;grid-template-columns:1fr minmax(0,360px);column-gap:12px;row-gap:6px;align-items:center;padding:8px 12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;position:relative;width:100%;max-width:100%;}
 .settings-mapping-row[data-unmapped="1"]{border-color:#f97316;background:#fff7ed;}
 .settings-mapping-row[data-new="1"]::before{content:'Новое';position:absolute;top:-10px;left:12px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;box-shadow:0 2px 6px rgba(239,68,68,0.35);}
 .settings-mapping-row[data-ignored="1"]{border-color:#cbd5f5;background:#f1f5f9;opacity:0.85;}
@@ -554,6 +560,8 @@ body.overview-fs-active{overflow:hidden}
 .settings-mapping-row option[value=""]{color:#94a3b8;}
 .settings-mapping-alert{font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:6px;}
 .settings-mapping-note{font-size:12px;color:var(--muted);}
+.settings-mapping-replace{display:flex;align-items:center;gap:8px;font-size:12px;color:#0f172a;padding:4px 0;}
+.settings-mapping-replace input{width:16px;height:16px;}
 .settings-shared-actions{width:100%;display:flex;align-items:center;gap:10px;justify-content:flex-end;padding-top:10px;border-top:1px solid rgba(148,163,184,.35);margin-top:16px;flex-wrap:wrap;}
 .settings-shared-actions .grow{flex:1 1 auto;}
 .settings-dirty-hint{font-size:12px;color:#b45309;display:none;}
@@ -2027,6 +2035,29 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
 
 function handleRemoteBridgeEvent(evt){
   const payload = evt?.data ?? evt?.state ?? evt?.payload ?? evt;
+  if(payload && typeof payload === 'object'){
+    if(payload.type === 'delta'){
+      const skip = skipRealtimeToastOnce;
+      fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
+        .then(applied=>{
+          if(applied && skipRealtimeToastOnce){
+            skipRealtimeToastOnce = false;
+          }
+        });
+      return;
+    }
+    if(payload.type === 'state' && payload.state){
+      const skip = skipRealtimeToastOnce;
+      const rawState = typeof payload.state === 'string' ? payload.state : (()=>{ try{ return JSON.stringify(payload.state); }catch(_){ return null; } })();
+      if(rawState){
+        applyStateFromExternal(rawState, {preserveProcess:true, origin:'remote', skipToasts: skip, meta: payload.meta || null});
+        if(skipRealtimeToastOnce){
+          skipRealtimeToastOnce = false;
+        }
+        return;
+      }
+    }
+  }
   if(payload){
     const skip = skipRealtimeToastOnce;
     applyStateFromExternal(payload, {preserveProcess:true, origin:'remote', skipToasts: skip});
@@ -2165,7 +2196,10 @@ function applyStateFromExternal(raw, opts={}){
 
     const jsonText = typeof raw === 'string' ? raw : JSON.stringify(parsed);
     const fingerprint = simpleHash(jsonText);
-    const skipToasts = !!(opts.skipToasts || (fingerprint && fingerprint === lastPushedFingerprint));
+    const previousFingerprint = lastAppliedRemoteFingerprint || '';
+    const skipToasts = !!(opts.skipToasts
+      || (fingerprint && fingerprint === lastPushedFingerprint)
+      || (fingerprint && fingerprint === previousFingerprint));
     lastAppliedRemoteFingerprint = fingerprint;
     if(fingerprint && fingerprint === lastPushedFingerprint){
       lastPushedFingerprint = '';
@@ -2235,14 +2269,28 @@ function applyStateFromExternal(raw, opts={}){
           time: metaLastChange.time || opts.meta?.time || (opts.meta?.timestamp ? new Date(opts.meta.timestamp).toLocaleString() : '')
         };
         const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
-        showToast({
-          title: `Обновление — ${stageLabel}`,
-          message: messageHtml,
-          actions:[
-            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
-            {label:'OK', handler:(el)=> el.remove()}
-          ]
-        });
+        const toastKeyParts = [
+          'remote',
+          stageLabel || '',
+          summaryText || '',
+          metaLine || '',
+          detailPayload.time || '',
+          parsed.meta?.settings?.updatedAt || '',
+          metaLastChange.time || '',
+          metaLastChange.stage || '',
+          metaLastChange.changeType || ''
+        ];
+        const toastKey = toastKeyParts.filter(Boolean).join('|');
+        if(shouldDisplayRemoteToast(toastKey, fingerprint)){
+          showToast({
+            title: `Обновление — ${stageLabel}`,
+            message: messageHtml,
+            actions:[
+              {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
+              {label:'OK', handler:(el)=> el.remove()}
+            ]
+          });
+        }
       }
     }
   }catch(err){ console.warn('applyStateFromExternal failed', err); }
@@ -2406,6 +2454,7 @@ let sharedSettingsEditing = false;
 let sharedSettingsApplying = false;
 let sharedSettingsPendingStamp = null;
 const sharedSettingsDirtyKeys = new Set();
+let crmMappingReplaceMode = false;
 let tasks=[];                // [{uid, orderId(label), stage, childId, parentId, hours, extraHours, startDate, endDate, progress, state, status, useReserve, origStartDate, route:{bend,laser,draw,weld,mech}}]
 let schedule=null;           // результат allocate()
 let exceptions=new Map();    // { 'DD-MM-YYYY' => capacityHours }
@@ -2890,6 +2939,8 @@ let suppressIncoming = false;
 let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
+let lastRemoteToastKey = '';
+let lastRemoteToastFingerprint = '';
 let skipRealtimeToastOnce = true;
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
@@ -4728,6 +4779,107 @@ function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
   return { totalHours, percent, remaining };
 }
 
+function normalizeDateValue(value){
+  if(!value) return null;
+  if(value instanceof Date){
+    const copy = new Date(value);
+    if(Number.isNaN(copy.getTime())) return null;
+    copy.setHours(0,0,0,0);
+    return copy;
+  }
+  if(typeof value === 'number' && Number.isFinite(value)){
+    const d = new Date(value);
+    if(Number.isNaN(d.getTime())) return null;
+    d.setHours(0,0,0,0);
+    return d;
+  }
+  const str = String(value || '').trim();
+  if(!str) return null;
+  const parsed = parseDate(str);
+  if(parsed) return parsed;
+  const isoMatch = /^\d{4}-\d{2}-\d{2}$/.test(str);
+  if(isoMatch){
+    const iso = new Date(`${str}T00:00:00`);
+    if(!Number.isNaN(iso.getTime())){
+      iso.setHours(0,0,0,0);
+      return iso;
+    }
+  }
+  const fallback = new Date(str);
+  if(Number.isNaN(fallback.getTime())) return null;
+  fallback.setHours(0,0,0,0);
+  return fallback;
+}
+
+function expectedReferenceDate(){
+  const ref = today0();
+  ref.setDate(ref.getDate() - 1);
+  ref.setHours(23,59,59,999);
+  return ref;
+}
+
+function computeExpectedProgressPercent(startRaw, endRaw, referenceDate){
+  const start = normalizeDateValue(startRaw);
+  const end = normalizeDateValue(endRaw);
+  if(!start || !end) return null;
+  const startMs = start.getTime();
+  const endCopy = new Date(end);
+  endCopy.setHours(23,59,59,999);
+  const endMs = endCopy.getTime();
+  if(Number.isNaN(startMs) || Number.isNaN(endMs)) return null;
+  if(endMs <= startMs){
+    return referenceDate && referenceDate.getTime() < startMs ? 0 : 100;
+  }
+  const ref = referenceDate instanceof Date ? new Date(referenceDate) : expectedReferenceDate();
+  if(Number.isNaN(ref.getTime())) return null;
+  const refMs = ref.getTime();
+  if(refMs <= startMs) return 0;
+  if(refMs >= endMs) return 100;
+  const fraction = (refMs - startMs) / (endMs - startMs);
+  return Math.max(0, Math.min(100, fraction * 100));
+}
+
+function computeExpectedProgressForStage(orderEntry, stage, stageTasks){
+  if(NOHOUR_STAGES.has(stage)) return null;
+  if(!orderEntry || !orderEntry.order) return null;
+  const reference = expectedReferenceDate();
+  const seg = orderEntry.order.stages?.[stage] || null;
+  let startCandidate = seg?.start || null;
+  let endCandidate = seg && Object.prototype.hasOwnProperty.call(seg, 'end') ? seg.end : null;
+
+  if(!startCandidate || !endCandidate){
+    const tasks = stageTasks.get(orderEntry.key)?.get(stage) || [];
+    let currentStart = normalizeDateValue(startCandidate);
+    let currentEnd = normalizeDateValue(endCandidate);
+    tasks.forEach(task => {
+      if(!task) return;
+      const segInfo = task.route?.[stage] || {};
+      const taskStart = segInfo.start || task.startDate || null;
+      const taskEnd = Object.prototype.hasOwnProperty.call(segInfo, 'end')
+        ? segInfo.end
+        : (task.endDate || null);
+      const startVal = normalizeDateValue(taskStart);
+      const endVal = normalizeDateValue(taskEnd);
+      if(startVal){
+        if(!currentStart || startVal < currentStart){
+          startCandidate = startVal;
+          currentStart = startVal;
+        }
+      }
+      if(endVal){
+        if(!currentEnd || endVal > currentEnd){
+          endCandidate = endVal;
+          currentEnd = endVal;
+        }
+      }
+    });
+  }
+
+  const expected = computeExpectedProgressPercent(startCandidate, endCandidate, reference);
+  if(expected == null) return null;
+  return Math.max(0, Math.min(100, expected));
+}
+
 function partitionDoneTasks(list){
   const active = [];
   const done = [];
@@ -5390,7 +5542,6 @@ function applyStageProgress(identity, stage, value, options={}){
 
   const normalized = clampProgressValue(value);
   const markDone = normalized >= 100;
-  const today = today0();
   const defaultMoment = options.when instanceof Date ? new Date(options.when) : new Date();
   const source = options.source || 'ui';
   const interactive = options.interactive !== undefined
@@ -5440,48 +5591,6 @@ function applyStageProgress(identity, stage, value, options={}){
   }
 
   if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
-
-  const shiftTaskStart = (task, prevProgressValue) => {
-    const result = { startChanged:false, endAdjusted:false };
-    if(!shiftOnProgress || !task) return result;
-    const prev = clampProgressValue(prevProgressValue);
-    if(prev === normalized) return result;
-    const prevStart = task.startDate instanceof Date ? new Date(task.startDate) : null;
-    let origCandidate = null;
-    if(prevStart){
-      if(!task.origStartDate){
-        task.origStartDate = new Date(prevStart);
-      }else if(task.origStartDate instanceof Date && (+task.origStartDate === +prevStart)){
-        task.origStartDate = new Date(prevStart);
-      }
-      origCandidate = task.origStartDate instanceof Date ? new Date(task.origStartDate) : new Date(prevStart);
-    }else if(task.origStartDate instanceof Date){
-      origCandidate = new Date(task.origStartDate);
-    }
-    task.startDate = new Date(today);
-    task.startMissing = false;
-    result.startChanged = !prevStart || (+prevStart !== +task.startDate);
-    if(task.endDate instanceof Date && task.endDate < task.startDate){
-      task.endDate = new Date(task.startDate);
-      task.endMissing = false;
-      result.endAdjusted = true;
-    }
-    if(!task.route) task.route = {};
-    const seg = { ...(task.route[stage] || {}) };
-    if(origCandidate){
-      seg.origStart = new Date(origCandidate);
-    }
-    seg.start = new Date(task.startDate);
-    if(seg.end && seg.end < seg.start){
-      seg.end = new Date(seg.start);
-      result.endAdjusted = true;
-    }
-    if(seg.hours == null && Number.isFinite(task.hours)){
-      seg.hours = Number(task.hours) || 0;
-    }
-    task.route[stage] = seg;
-    return result;
-  };
 
   const uidSet = new Set();
   const storedByUid = new Map();
@@ -5541,7 +5650,6 @@ function applyStageProgress(identity, stage, value, options={}){
         const keyCandidate = orderKeyForRecord(target);
         if(keyCandidate) summaryOrderKey = keyCandidate;
       }
-      const shiftInfo = shiftTaskStart(target, prevProgress);
       if(prevProgress < 100) changed = true;
       target.progress = 100;
       target.isDone = true;
@@ -5603,7 +5711,6 @@ function applyStageProgress(identity, stage, value, options={}){
           if(keyCandidate) summaryOrderKey = keyCandidate;
         }
         if(prevProgress !== normalized) changed = true;
-        const shiftInfo = shiftTaskStart(stored, prevProgress);
         stored.progress = normalized;
         stored.isDone = false;
         clearCompletionMeta(stored, stage);
@@ -5625,7 +5732,6 @@ function applyStageProgress(identity, stage, value, options={}){
           if(keyCandidate) summaryOrderKey = keyCandidate;
         }
         if(prevProgress !== normalized) changed = true;
-        const shiftInfo = shiftTaskStart(copy, prevProgress);
         copy.progress = normalized;
         copy.isDone = false;
         clearCompletionMeta(copy, stage);
@@ -5648,7 +5754,6 @@ function applyStageProgress(identity, stage, value, options={}){
             const keyCandidate = orderKeyForRecord(restored);
             if(keyCandidate) summaryOrderKey = keyCandidate;
           }
-          const shiftInfo = shiftTaskStart(restored, prevProgress);
           restored.progress = normalized;
           restored.isDone = false;
           clearCompletionMeta(restored, stage);
@@ -5937,18 +6042,26 @@ function renderOrdersOverviewTable(){
         return '<span class="muted">—</span>';
       }
       const metrics = metricsCache[stage] || computeStageMetrics(entry, stage, stageTasks, doneStageSet);
-      const pct = Math.round(metrics.percent);
+      const actualValue = Math.max(0, Math.min(100, Number(metrics.percent) || 0));
+      const pct = Math.round(actualValue);
       const remainingText = formatHoursToHMS(metrics.remaining);
       const totalText = metrics.totalHours > 0 ? metrics.totalHours.toFixed(1).replace('.',',') : '0,0';
       const state = pct >= 100 ? 'done' : (metrics.totalHours <= 0 ? 'empty' : 'active');
       const width = Math.max(0, Math.min(100, pct));
       const slipAttr = slipFlags[stage] ? ' data-slip="true"' : '';
+      const expected = computeExpectedProgressForStage(entry, stage, stageTasks);
+      const expectedRounded = expected != null ? Math.round(expected) : null;
+      const behind = expected != null && actualValue < expected - 0.49;
+      const expectedMarkup = expectedRounded != null
+        ? `<span class="progress-expected${behind ? ' behind' : ''}">/${expectedRounded}%</span>`
+        : '';
+      const labelHtml = `<span class="progress-label"><span class="progress-actual">${pct}%</span>${expectedMarkup}<span class="progress-hours">(${totalText}ч)</span></span>`;
       return `
         <div class="progress-wrap">
           <div class="progress-remaining">${remainingText}</div>
           <div class="progress-bar" data-state="${state}"${slipAttr}>
             <div class="progress-fill" style="width:${width}%"></div>
-            <span>${pct}% (${totalText}ч)</span>
+            ${labelHtml}
           </div>
         </div>
       `;
@@ -7193,6 +7306,61 @@ function mapRows(rows, process='bend'){
 /* =========
    РАСПРЕДЕЛЕНИЕ (с «Бронь»/«Общая» секциями)
 ========= */
+function computeScheduleWindow(task){
+  if(!task) return { start: today0(), end: today0() };
+  const stage = task.stage || '';
+  const today = today0();
+  const key = `${task.parentId ? String(task.parentId).trim() : ''}::${stage}`;
+  const override = routeOverrides.get(key);
+  let startCandidate = null;
+  let endCandidate = null;
+
+  if(override){
+    if(override.start){
+      startCandidate = normalizeDateValue(override.start);
+    }
+    if(Object.prototype.hasOwnProperty.call(override, 'end')){
+      endCandidate = override.end ? normalizeDateValue(override.end) : null;
+    }
+  }
+
+  const seg = task.route?.[stage] || {};
+  if(!startCandidate){
+    if(seg.start){
+      startCandidate = normalizeDateValue(seg.start);
+    }else if(task.startDate){
+      startCandidate = normalizeDateValue(task.startDate);
+    }
+  }
+  if(!endCandidate){
+    if(Object.prototype.hasOwnProperty.call(seg, 'end')){
+      endCandidate = seg.end ? normalizeDateValue(seg.end) : null;
+    }else if(task.endDate){
+      endCandidate = normalizeDateValue(task.endDate);
+    }
+  }
+
+  let effectiveStart = startCandidate || today;
+  if(!(effectiveStart instanceof Date)){
+    const coerced = normalizeDateValue(effectiveStart);
+    effectiveStart = coerced || today;
+  }
+
+  if(shiftOnProgress && !override?.start){
+    if(effectiveStart < today) effectiveStart = today;
+  }
+
+  let effectiveEnd = endCandidate || null;
+  if(effectiveEnd && !(effectiveEnd instanceof Date)){
+    effectiveEnd = normalizeDateValue(effectiveEnd);
+  }
+  if(!effectiveEnd || effectiveEnd < effectiveStart){
+    effectiveEnd = new Date(effectiveStart);
+  }
+
+  return { start: effectiveStart, end: effectiveEnd };
+}
+
 function allocate(inputTasks, baseCapacity, excMap, resMap){
   if(!inputTasks.length){
     const t=today0();
@@ -7237,8 +7405,7 @@ function allocate(inputTasks, baseCapacity, excMap, resMap){
 
   for(const t of inputTasks){
     const total = remainingTotal(t);
-    const start=t.startDate||today0();
-    const end=t.endDate||new Date(start);
+    const { start, end } = computeScheduleWindow(t);
     let remain=total;
     const rec={segments:[],lateHours:0};
 
@@ -7561,30 +7728,6 @@ function applyEditImmediate(cell, task){
     if(safe !== task.progress){
       task.progress = safe;
       cell.textContent = String(safe).replace('.',',');
-      const prevStart = task.startDate instanceof Date ? new Date(task.startDate) : null;
-      if(shiftOnProgress){
-        if(prevStart){
-          if(!task.origStartDate){
-            task.origStartDate = new Date(prevStart);
-          }else if(task.origStartDate instanceof Date && (+task.origStartDate === +prevStart)){
-            task.origStartDate = new Date(prevStart);
-          }
-        }
-        task.startDate = today0();
-        task.startMissing = false;
-        if(task.endDate && task.endDate < task.startDate){
-          task.endDate = new Date(task.startDate);  // подтянем конец к старту
-          task.endMissing = false;
-        }
-        const seg = { ...(task.route[task.stage]||{}) };
-        if(task.origStartDate instanceof Date){
-          seg.origStart = new Date(task.origStartDate);
-        }else if(prevStart){
-          seg.origStart = new Date(prevStart);
-        }
-        seg.start = task.startDate instanceof Date ? new Date(task.startDate) : task.startDate;
-        task.route[task.stage] = seg;
-      }
       const identity = {
         orderKey: orderKeyForRecord(task),
         parentId: task.parentId ? String(task.parentId).trim() : '',
@@ -10945,6 +11088,79 @@ function showToast({title, message, actions=[]}){
   setTimeout(()=>{ if(el.isConnected) el.remove(); }, 4500);
 }
 
+const REMOTE_TOAST_TTL = 10 * 60 * 1000;
+const REMOTE_TOAST_REPLAY_WINDOW = 60 * 1000;
+const remoteToastHistory = new Map();
+let remoteToastReplayMark = 0;
+
+function pruneRemoteToastHistory(now){
+  const entries = remoteToastHistory.entries();
+  const staleKeys = [];
+  for(const [key, tokenMap] of entries){
+    for(const [token, ts] of Array.from(tokenMap.entries())){
+      if(now - ts > REMOTE_TOAST_TTL){
+        tokenMap.delete(token);
+      }
+    }
+    if(tokenMap.size === 0){
+      staleKeys.push(key);
+    }
+  }
+  staleKeys.forEach(key=> remoteToastHistory.delete(key));
+  if(remoteToastHistory.size > 256){
+    const sorted = Array.from(remoteToastHistory.entries()).sort((a,b)=>{
+      const aTs = typeof a[1].__ts === 'number' ? a[1].__ts : 0;
+      const bTs = typeof b[1].__ts === 'number' ? b[1].__ts : 0;
+      return aTs - bTs;
+    });
+    const excess = sorted.length - 256;
+    for(let i=0;i<excess;i+=1){
+      remoteToastHistory.delete(sorted[i][0]);
+    }
+  }
+  if(remoteToastReplayMark && (now - remoteToastReplayMark) > REMOTE_TOAST_REPLAY_WINDOW){
+    remoteToastReplayMark = 0;
+  }
+}
+
+function shouldDisplayRemoteToast(key, fingerprint){
+  const rawKey = key == null ? '' : key;
+  const normalizedKey = typeof rawKey === 'string' ? rawKey.trim() : String(rawKey).trim();
+  const rawFingerprint = fingerprint == null ? '' : fingerprint;
+  const fingerprintToken = (()=>{
+    const text = typeof rawFingerprint === 'string' ? rawFingerprint.trim() : String(rawFingerprint).trim();
+    return text || '__empty__';
+  })();
+  const effectiveKey = normalizedKey || fingerprintToken;
+  if(!effectiveKey){
+    return true;
+  }
+  const now = Date.now();
+  pruneRemoteToastHistory(now);
+  let tokenMap = remoteToastHistory.get(effectiveKey);
+  if(!tokenMap){
+    tokenMap = new Map();
+    remoteToastHistory.set(effectiveKey, tokenMap);
+  }
+  const lastTimestamp = tokenMap.get(fingerprintToken) || 0;
+  const replayAllowed = remoteToastReplayMark && lastTimestamp > 0 && lastTimestamp < remoteToastReplayMark;
+  if(lastTimestamp && !replayAllowed){
+    return false;
+  }
+  tokenMap.set(fingerprintToken, now);
+  tokenMap.__ts = now;
+  lastRemoteToastKey = effectiveKey;
+  lastRemoteToastFingerprint = fingerprintToken;
+  if(replayAllowed){
+    remoteToastReplayMark = 0;
+  }
+  return true;
+}
+
+function resetRemoteToastKey(){
+  remoteToastReplayMark = Date.now();
+}
+
 function announceStateUpdate(payload){
   const computedType = payload && Object.prototype.hasOwnProperty.call(payload, 'changeType') && payload.changeType != null
     ? payload.changeType
@@ -11004,14 +11220,28 @@ function handleIncomingSyncMessage(msg){
         time: msg.time || (msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '')
       };
       const messageHtml = metaLine ? `${summaryText}<div class="meta small">${metaLine}</div>` : summaryText;
-      showToast({
-        title: `Изменения — ${stageLabel}`,
-        message: messageHtml,
-        actions:[
-          {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
-          {label:'OK', handler:(el)=> el.remove()}
-        ]
-      });
+      const toastKeyParts = [
+        'remote',
+        stageLabel || '',
+        summaryText || '',
+        metaLine || '',
+        detailPayload.time || msg.time || '',
+        msg.hash || '',
+        msg.updatedAt || '',
+        msg.stage || ''
+      ];
+      const toastKey = toastKeyParts.filter(Boolean).join('|');
+      const toastFingerprint = msg.hash || msg.updatedAt || msg.timestamp || '';
+      if(shouldDisplayRemoteToast(toastKey, toastFingerprint)){
+        showToast({
+          title: `Изменения — ${stageLabel}`,
+          message: messageHtml,
+          actions:[
+            {label:'Подробнее', primary:true, handler:()=> showUpdateDetails(detailPayload)},
+            {label:'OK', handler:(el)=> el.remove()}
+          ]
+        });
+      }
     }
   }
 }
@@ -11221,6 +11451,7 @@ function restoreState(json, opts={}){
     const incomingMapping = sanitizeCrmStageMapping(savedMappingRaw);
     if(!(freezeShared && sharedSettingsDirtyKeys.has('crmStageMapping'))){
       crmStageMapping = incomingMapping;
+      crmMappingReplaceMode = false;
     }
     const incomingLogLimit = sanitizeLogLimit(metaSettings.logLimit);
     if(!(freezeShared && sharedSettingsDirtyKeys.has('logLimit'))){
@@ -11420,11 +11651,13 @@ function persistNow(stageOverride, opts={}){
     silentOnConflict=false,
     multiStage=null,
     settingsChange=null,
+    settingsMeta=null,
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
     sharedContext=null
   } = opts;
+  const normalizedSettingsMeta = settingsMeta && typeof settingsMeta === 'object' ? clonePlain(settingsMeta) : null;
   let pushPromise = Promise.resolve(true);
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
@@ -11633,7 +11866,7 @@ function persistNow(stageOverride, opts={}){
               try{
                 const latest = await remoteBridge.pull();
                 if(latest){
-                  applyStateFromExternal(latest, { origin:'remote' });
+                  applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
                 }
               }catch(pullErr){
                 console.warn('failed to refresh after conflict', pullErr);
@@ -11765,10 +11998,15 @@ function persistNow(stageOverride, opts={}){
     }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
     const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
-    const prevVersion = Number((prevMeta.versions && prevMeta.versions[curStage]) || 0);
-    const knownVersion = lastKnownVersions.get(curStage) || 0;
+    const prevVersionRaw = (prevMeta.versions && prevMeta.versions[curStage]) || 0;
+    const prevVersion = Number(prevVersionRaw) || 0;
+    const knownVersionRaw = lastKnownVersions.get(curStage);
+    const knownVersionBefore = Number(knownVersionRaw) || 0;
+    if(prevVersion > knownVersionBefore){
+      lastKnownVersions.set(curStage, prevVersion);
+    }
 
-    if(prev && prevVersion > knownVersion){
+    if(prev && prevVersion > knownVersionBefore){
       const conflict = computeDiff(baseline, prevSnapshot);
       if(diffHasChanges(conflict)){
         lastKnownVersions.set(curStage, prevVersion);
@@ -11805,6 +12043,7 @@ function persistNow(stageOverride, opts={}){
     const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
     let authorsMap = null;
     let settingsSummary = '';
+    let settingsPayloadForMeta = null;
     const nowStr = new Date().toLocaleString();
     const overrideSummaryText = typeof summaryOverrideOpt === 'string' ? summaryOverrideOpt.trim() : '';
     const overrideOrdersSummary = ordersSummaryOverrideOpt && typeof ordersSummaryOverrideOpt === 'object'
@@ -11840,7 +12079,12 @@ function persistNow(stageOverride, opts={}){
     if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
 
     const versions = { ...(stateMeta.versions || {}) };
-    const newVersion = (prevVersion || 0) + (diffChanged ? 1 : 0);
+    const baseVersion = Math.max(
+      Number.isFinite(prevVersion) ? prevVersion : 0,
+      Number.isFinite(knownVersion) ? knownVersion : 0
+    );
+    const shouldBumpStageVersion = diffChanged || (!isSettingsChange && (force || !rawPrev));
+    const newVersion = baseVersion + (shouldBumpStageVersion ? 1 : 0);
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
@@ -11884,6 +12128,18 @@ function persistNow(stageOverride, opts={}){
 
     if(isSettingsChange){
       settingsSummary = buildSettingsSummary(settingsChange.entries);
+      settingsPayloadForMeta = {
+        entries: settingsChange.entries,
+        summary: settingsSummary,
+        updatedAt: stateMeta.settings?.updatedAt || nowStr
+      };
+      if(normalizedSettingsMeta){
+        Object.entries(normalizedSettingsMeta).forEach(([key, value])=>{
+          if(value !== undefined){
+            settingsPayloadForMeta[key] = value;
+          }
+        });
+      }
       const entry = {
         id: `${Date.now()}-${Math.random().toString(16).slice(2,7)}`,
         time: nowStr,
@@ -11898,6 +12154,9 @@ function persistNow(stageOverride, opts={}){
           entries: settingsChange.entries
         }
       };
+      if(normalizedSettingsMeta){
+        entry.settings.meta = clonePlain(normalizedSettingsMeta);
+      }
       appendToActivityLog(entry);
       markLogAttention();
     }
@@ -11965,9 +12224,18 @@ function persistNow(stageOverride, opts={}){
         const remoteSummary = summaryForMeta || undefined;
         const remoteDiff = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
-        const remoteVersion = isSettingsChange && !diffChanged ? settingsVersionForRemote : newVersion;
-        const remoteExtras = isSettingsChange ? { settings: { entries: settingsChange.entries, summary: settingsSummary, updatedAt: stateMeta.settings?.updatedAt || nowStr } } : {};
+        const remoteVersion = isSettingsChange && !diffChanged
+          ? settingsVersionForRemote
+          : (shouldBumpStageVersion ? newVersion : baseVersion);
+        const remoteSettings = settingsPayloadForMeta || {
+          entries: settingsChange.entries,
+          summary: settingsSummary,
+          updatedAt: stateMeta.settings?.updatedAt || nowStr
+        };
+        const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
+        resetRemoteToastKey();
+        skipRealtimeToastOnce = true;
         pushPromise = remoteBridge.push(payload, {
           stage:remoteStage,
           diff:remoteDiff,
@@ -12065,7 +12333,7 @@ function persistNow(stageOverride, opts={}){
           version:settingsVersionForRemote,
           source:'settings',
           user:userAlias,
-          settings:{
+          settings: settingsPayloadForMeta || {
             entries: settingsChange.entries,
             summary: settingsSummary,
             updatedAt: stateMeta.settings?.updatedAt || nowStr
@@ -12185,6 +12453,9 @@ function persistSharedPreferencesChange(entries, options={}){
   const immediate = !!options.immediate;
   const context = typeof options.context === 'string' ? options.context : null;
   const timestampOverride = typeof options.timestamp === 'string' ? options.timestamp : null;
+  const settingsMetaOverride = options && typeof options.settingsMeta === 'object'
+    ? clonePlain(options.settingsMeta)
+    : null;
   const normalized = entries
     .map(entry=>{
       if(!entry || !entry.key) return null;
@@ -12214,12 +12485,16 @@ function persistSharedPreferencesChange(entries, options={}){
     const timestamp = timestampOverride || new Date().toLocaleString();
     syncSharedSettingsToMeta(timestamp);
     bumpSettingsVersion();
-    return persistNow(undefined, {
+    const persistOpts = {
       source:'settings',
       force:true,
       settingsChange:{ entries: merged, timestamp },
       sharedContext: context
-    });
+    };
+    if(settingsMetaOverride){
+      persistOpts.settingsMeta = clonePlain(settingsMetaOverride);
+    }
+    return persistNow(undefined, persistOpts);
   };
 
   if(immediate){
@@ -12297,6 +12572,7 @@ function ensureSharedSettingsDraft(){
 
 function resetSharedSettingsDraft(){
   sharedSettingsDraft = cloneSharedSettingsBaseline();
+  crmMappingReplaceMode = false;
 }
 
 function captureSharedSettingsSnapshot(force=false){
@@ -12393,6 +12669,7 @@ function handleSharedSettingsCommitSuccess(){
   sharedSettingsApplying = false;
   sharedSettingsPendingStamp = null;
   sharedSettingsDirtyKeys.clear();
+  crmMappingReplaceMode = false;
   resetSharedSettingsDraft();
   captureSharedSettingsSnapshot(true);
   renderSystemSettingsUI();
@@ -12489,12 +12766,13 @@ function commitSharedSettingsChanges(){
   const nextSnapshot = cloneCrmMappingForSnapshot(nextMappingRaw);
   sharedSettingsDraft.crmStageMapping = nextSnapshot;
   const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, nextSnapshot);
+  const mappingChangeRequested = mappingChanged || crmMappingReplaceMode;
 
   const changedKeys = new Set();
   if(changedColumnKeys.length) changedKeys.add('tableColumns');
   if(extraChanged) changedKeys.add('extraTime');
   if(logChanged) changedKeys.add('logLimit');
-  if(mappingChanged) changedKeys.add('crmStageMapping');
+  if(mappingChangeRequested) changedKeys.add('crmStageMapping');
 
   requestedKeys.forEach(key=>{
     if(!changedKeys.has(key)){
@@ -12563,7 +12841,7 @@ function commitSharedSettingsChanges(){
     entries.push({ key:'logLimit', label:'Лимит журнала', value: stateMeta.settings.logLimit });
   }
 
-  if(mappingChanged){
+  if(mappingChangeRequested){
     entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
   }
 
@@ -12579,7 +12857,20 @@ function commitSharedSettingsChanges(){
   }
   renderCrmMappingSettingsUI();
 
-  const flushResult = persistSharedPreferencesChange(entries, { immediate:true, context:'sharedSettings', timestamp });
+  const settingsMetaPayload = {};
+  const changedKeysList = Array.from(changedKeys);
+  if(changedKeysList.length){
+    settingsMetaPayload.keys = changedKeysList;
+  }
+  if(crmMappingReplaceMode){
+    settingsMetaPayload.replace = true;
+  }
+  const persistOptions = { immediate:true, context:'sharedSettings', timestamp };
+  if(Object.keys(settingsMetaPayload).length){
+    persistOptions.settingsMeta = settingsMetaPayload;
+  }
+
+  const flushResult = persistSharedPreferencesChange(entries, persistOptions);
   if(flushResult && typeof flushResult.then === 'function'){
     flushResult.then(()=>{
       if(!remoteSyncEnabled()){
@@ -12914,6 +13205,23 @@ function renderCrmMappingSettingsUI(){
 
   list.appendChild(rows);
 
+  const replaceToggle = document.createElement('label');
+  replaceToggle.className = 'settings-mapping-replace';
+  const replaceInput = document.createElement('input');
+  replaceInput.type = 'checkbox';
+  replaceInput.id = 'crmMappingReplaceToggle';
+  replaceInput.checked = !!crmMappingReplaceMode;
+  if(!userCanEdit() || sharedSettingsApplying){
+    replaceInput.disabled = true;
+  }else{
+    replaceInput.addEventListener('change', handleCrmMappingReplaceToggle);
+  }
+  replaceToggle.appendChild(replaceInput);
+  const replaceText = document.createElement('span');
+  replaceText.textContent = 'Сбросить прошлые сопоставления';
+  replaceToggle.appendChild(replaceText);
+  list.appendChild(replaceToggle);
+
   const unmappedEntries = entries.filter(entry => entry.unmapped);
   if(unmappedEntries.length){
     const alert = document.createElement('div');
@@ -12928,6 +13236,28 @@ function renderCrmMappingSettingsUI(){
     list.appendChild(note);
   }
   updateSettingsAttentionBadge(unmappedEntries.length);
+  updateSharedSettingsButtons();
+}
+
+function handleCrmMappingReplaceToggle(e){
+  const checkbox = e.target;
+  if(!(checkbox instanceof HTMLInputElement)) return;
+  if(!userCanEdit()){
+    checkbox.checked = !!crmMappingReplaceMode;
+    notifyReadOnly();
+    return;
+  }
+  ensureSharedSettingsDraft();
+  crmMappingReplaceMode = checkbox.checked;
+  if(crmMappingReplaceMode){
+    sharedSettingsDirtyKeys.add('crmStageMapping');
+  }else{
+    const currentSnapshot = cloneCrmMappingForSnapshot(crmStageMapping);
+    const draftSnapshot = cloneCrmMappingForSnapshot(sharedSettingsDraft?.crmStageMapping || crmStageMapping);
+    if(crmMappingsEqual(currentSnapshot, draftSnapshot)){
+      sharedSettingsDirtyKeys.delete('crmStageMapping');
+    }
+  }
   updateSharedSettingsButtons();
 }
 
