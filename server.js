@@ -1034,17 +1034,6 @@ app.put('/api/state', async (req, res) => {
   }
   const ifMatchAllowsAny = ifMatchHeader.any;
 
-  if (!expectedHash && !ifMatchAllowsAny) {
-    res.status(428).json({
-      error: 'Precondition Required',
-      message: 'Planner state update requires an If-Match header or base hash',
-      stage,
-      updatedAt: current.updatedAt,
-      currentHash
-    });
-    return;
-  }
-
   if (currentHash) {
     if (ifMatchAllowsAny && !expectedHash) {
       res.status(428).json({
