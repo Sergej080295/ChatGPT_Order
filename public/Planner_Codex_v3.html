@@ -2276,7 +2276,7 @@ function applyStateFromExternal(raw, opts={}){
           metaLastChange.changeType || ''
         ];
         const toastKey = toastKeyParts.filter(Boolean).join('|');
-        if(shouldDisplayRemoteToast(toastKey)){
+        if(shouldDisplayRemoteToast(toastKey, fingerprint)){
           showToast({
             title: `Обновление — ${stageLabel}`,
             message: messageHtml,
@@ -2935,6 +2935,7 @@ let remotePollTimer = null;
 let lastAppliedRemoteFingerprint = '';
 let lastPushedFingerprint = '';
 let lastRemoteToastKey = '';
+let lastRemoteToastFingerprint = '';
 let skipRealtimeToastOnce = true;
 const remoteBridge = createRemoteBridge();
 const storagePref = loadStoragePrefs();
@@ -10990,21 +10991,77 @@ function showToast({title, message, actions=[]}){
   setTimeout(()=>{ if(el.isConnected) el.remove(); }, 4500);
 }
 
-function shouldDisplayRemoteToast(key){
-  if(key == null) return true;
-  const normalized = typeof key === 'string' ? key.trim() : String(key);
-  if(!normalized){
+const REMOTE_TOAST_TTL = 10 * 60 * 1000;
+const REMOTE_TOAST_REPLAY_WINDOW = 60 * 1000;
+const remoteToastHistory = new Map();
+let remoteToastReplayMark = 0;
+
+function pruneRemoteToastHistory(now){
+  const entries = remoteToastHistory.entries();
+  const staleKeys = [];
+  for(const [key, tokenMap] of entries){
+    for(const [token, ts] of Array.from(tokenMap.entries())){
+      if(now - ts > REMOTE_TOAST_TTL){
+        tokenMap.delete(token);
+      }
+    }
+    if(tokenMap.size === 0){
+      staleKeys.push(key);
+    }
+  }
+  staleKeys.forEach(key=> remoteToastHistory.delete(key));
+  if(remoteToastHistory.size > 256){
+    const sorted = Array.from(remoteToastHistory.entries()).sort((a,b)=>{
+      const aTs = typeof a[1].__ts === 'number' ? a[1].__ts : 0;
+      const bTs = typeof b[1].__ts === 'number' ? b[1].__ts : 0;
+      return aTs - bTs;
+    });
+    const excess = sorted.length - 256;
+    for(let i=0;i<excess;i+=1){
+      remoteToastHistory.delete(sorted[i][0]);
+    }
+  }
+  if(remoteToastReplayMark && (now - remoteToastReplayMark) > REMOTE_TOAST_REPLAY_WINDOW){
+    remoteToastReplayMark = 0;
+  }
+}
+
+function shouldDisplayRemoteToast(key, fingerprint){
+  const rawKey = key == null ? '' : key;
+  const normalizedKey = typeof rawKey === 'string' ? rawKey.trim() : String(rawKey).trim();
+  const rawFingerprint = fingerprint == null ? '' : fingerprint;
+  const fingerprintToken = (()=>{
+    const text = typeof rawFingerprint === 'string' ? rawFingerprint.trim() : String(rawFingerprint).trim();
+    return text || '__empty__';
+  })();
+  const effectiveKey = normalizedKey || fingerprintToken;
+  if(!effectiveKey){
     return true;
   }
-  if(normalized === lastRemoteToastKey){
+  const now = Date.now();
+  pruneRemoteToastHistory(now);
+  let tokenMap = remoteToastHistory.get(effectiveKey);
+  if(!tokenMap){
+    tokenMap = new Map();
+    remoteToastHistory.set(effectiveKey, tokenMap);
+  }
+  const lastTimestamp = tokenMap.get(fingerprintToken) || 0;
+  const replayAllowed = remoteToastReplayMark && lastTimestamp > 0 && lastTimestamp < remoteToastReplayMark;
+  if(lastTimestamp && !replayAllowed){
     return false;
   }
-  lastRemoteToastKey = normalized;
+  tokenMap.set(fingerprintToken, now);
+  tokenMap.__ts = now;
+  lastRemoteToastKey = effectiveKey;
+  lastRemoteToastFingerprint = fingerprintToken;
+  if(replayAllowed){
+    remoteToastReplayMark = 0;
+  }
   return true;
 }
 
 function resetRemoteToastKey(){
-  lastRemoteToastKey = '';
+  remoteToastReplayMark = Date.now();
 }
 
 function announceStateUpdate(payload){
@@ -11077,7 +11134,8 @@ function handleIncomingSyncMessage(msg){
         msg.stage || ''
       ];
       const toastKey = toastKeyParts.filter(Boolean).join('|');
-      if(shouldDisplayRemoteToast(toastKey)){
+      const toastFingerprint = msg.hash || msg.updatedAt || msg.timestamp || '';
+      if(shouldDisplayRemoteToast(toastKey, toastFingerprint)){
         showToast({
           title: `Изменения — ${stageLabel}`,
           message: messageHtml,
@@ -11919,7 +11977,12 @@ function persistNow(stageOverride, opts={}){
     if(prev && prev.capByProc && !stateObj.capByProc) stateObj.capByProc = prev.capByProc;
 
     const versions = { ...(stateMeta.versions || {}) };
-    const newVersion = (prevVersion || 0) + (diffChanged ? 1 : 0);
+    const baseVersion = Math.max(
+      Number.isFinite(prevVersion) ? prevVersion : 0,
+      Number.isFinite(knownVersion) ? knownVersion : 0
+    );
+    const shouldBumpStageVersion = diffChanged || (!isSettingsChange && (force || !rawPrev));
+    const newVersion = baseVersion + (shouldBumpStageVersion ? 1 : 0);
     versions[curStage] = newVersion;
     lastKnownVersions.set(curStage, newVersion);
     stateMeta.versions = versions;
@@ -12059,7 +12122,9 @@ function persistNow(stageOverride, opts={}){
         const remoteSummary = summaryForMeta || undefined;
         const remoteDiff = isSettingsChange && !diffChanged ? null : (announcementChanged ? announcementDiff : null);
         const remoteAuthors = isSettingsChange && !diffChanged ? undefined : (authorsMap || undefined);
-        const remoteVersion = isSettingsChange && !diffChanged ? settingsVersionForRemote : newVersion;
+        const remoteVersion = isSettingsChange && !diffChanged
+          ? settingsVersionForRemote
+          : (shouldBumpStageVersion ? newVersion : baseVersion);
         const remoteSettings = settingsPayloadForMeta || {
           entries: settingsChange.entries,
           summary: settingsSummary,
