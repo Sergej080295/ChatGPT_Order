@@ -114,6 +114,7 @@ DECLARE
   copy_sql TEXT;
   constraint_name TEXT := hist_table || '_rev_fkey';
   revisions_has_current BOOLEAN := false;
+  revisions_has_id BOOLEAN := false;
 BEGIN
   SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
     INTO hist_exists;
@@ -126,6 +127,15 @@ BEGIN
               AND column_name = 'current_rev'
          )
     INTO revisions_has_current;
+
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'id'
+         )
+    INTO revisions_has_id;
 
   IF hist_exists THEN
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
@@ -218,17 +228,33 @@ BEGIN
     SELECT nextval('revisions_rev_seq') INTO backfill_rev;
 
     IF revisions_has_current THEN
-      EXECUTE '
-        INSERT INTO revisions (rev, current_rev, actor, source, note)
-        VALUES ($1, $1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      IF revisions_has_id THEN
+        EXECUTE '
+          INSERT INTO revisions (id, rev, current_rev, actor, source, note)
+          VALUES ($1, $1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      ELSE
+        EXECUTE '
+          INSERT INTO revisions (rev, current_rev, actor, source, note)
+          VALUES ($1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      END IF;
     ELSE
-      EXECUTE '
-        INSERT INTO revisions (rev, actor, source, note)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      IF revisions_has_id THEN
+        EXECUTE '
+          INSERT INTO revisions (id, rev, actor, source, note)
+          VALUES ($1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      ELSE
+        EXECUTE '
+          INSERT INTO revisions (rev, actor, source, note)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      END IF;
     END IF;
   END IF;
 
@@ -497,6 +523,8 @@ DO $$
 DECLARE
   new_rev BIGINT;
   has_current_rev BOOLEAN;
+  has_id_column BOOLEAN;
+  seq_name TEXT;
 BEGIN
   SELECT nextval('revisions_rev_seq') INTO new_rev;
 
@@ -509,16 +537,41 @@ BEGIN
          )
     INTO has_current_rev;
 
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'id'
+         )
+    INTO has_id_column;
+
   IF has_current_rev THEN
-    EXECUTE '
-      INSERT INTO revisions (rev, current_rev, actor, source, note)
-      VALUES ($1, $1, $2, $3, $4)
-      ON CONFLICT (rev) DO NOTHING
-    ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
+    IF has_id_column THEN
+      EXECUTE '
+        INSERT INTO revisions (id, rev, current_rev, actor, source, note)
+        VALUES ($1, $1, $1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
+    ELSE
+      EXECUTE '
+        INSERT INTO revisions (rev, current_rev, actor, source, note)
+        VALUES ($1, $1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
+    END IF;
   ELSE
-    INSERT INTO revisions (rev, actor, source, note)
-    VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
-    ON CONFLICT (rev) DO NOTHING;
+    IF has_id_column THEN
+      EXECUTE '
+        INSERT INTO revisions (id, rev, actor, source, note)
+        VALUES ($1, $1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
+    ELSE
+      INSERT INTO revisions (rev, actor, source, note)
+      VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
+      ON CONFLICT (rev) DO NOTHING;
+    END IF;
   END IF;
 
   PERFORM set_config('app.rev', new_rev::TEXT, true);
@@ -543,6 +596,17 @@ BEGIN
             updated_at = NOW();
 
   PERFORM set_config('app.rev', NULL, true);
+
+  IF has_id_column THEN
+    SELECT pg_get_serial_sequence('public.revisions', 'id') INTO seq_name;
+    IF seq_name IS NULL THEN
+      seq_name := 'public.revisions_id_seq';
+    END IF;
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %s', seq_name);
+    EXECUTE format('SELECT setval(%L, (SELECT COALESCE(MAX(id), 0) FROM public.revisions), true)', seq_name);
+    EXECUTE format('ALTER TABLE public.revisions ALTER COLUMN id SET DEFAULT nextval(%L)', seq_name);
+    EXECUTE format('ALTER SEQUENCE %s OWNED BY public.revisions.id', seq_name);
+  END IF;
 END;
 $$;
 

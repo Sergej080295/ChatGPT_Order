@@ -34,6 +34,7 @@ DECLARE
   copy_sql TEXT;
   constraint_name TEXT := hist_table || '_rev_fkey';
   revisions_has_current BOOLEAN := false;
+  revisions_has_id BOOLEAN := false;
 BEGIN
   SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
     INTO hist_exists;
@@ -46,6 +47,15 @@ BEGIN
               AND column_name = 'current_rev'
          )
     INTO revisions_has_current;
+
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'id'
+         )
+    INTO revisions_has_id;
 
   IF hist_exists THEN
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
@@ -138,17 +148,33 @@ BEGIN
     SELECT nextval('revisions_rev_seq') INTO backfill_rev;
 
     IF revisions_has_current THEN
-      EXECUTE '
-        INSERT INTO revisions (rev, current_rev, actor, source, note)
-        VALUES ($1, $1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      IF revisions_has_id THEN
+        EXECUTE '
+          INSERT INTO revisions (id, rev, current_rev, actor, source, note)
+          VALUES ($1, $1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      ELSE
+        EXECUTE '
+          INSERT INTO revisions (rev, current_rev, actor, source, note)
+          VALUES ($1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      END IF;
     ELSE
-      EXECUTE '
-        INSERT INTO revisions (rev, actor, source, note)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      IF revisions_has_id THEN
+        EXECUTE '
+          INSERT INTO revisions (id, rev, actor, source, note)
+          VALUES ($1, $1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      ELSE
+        EXECUTE '
+          INSERT INTO revisions (rev, actor, source, note)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (rev) DO NOTHING
+        ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+      END IF;
     END IF;
   END IF;
 
@@ -412,7 +438,35 @@ AFTER INSERT OR UPDATE OR DELETE ON excluded_statuses
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
--- 6. Дополнительно убеждаемся, что последовательность revisions_rev_seq существует и привязана к колонке rev.
+-- 6. Синхронизируем последовательность для revisions.id, если такая колонка присутствует.
+DO $$
+DECLARE
+  has_id BOOLEAN := false;
+  seq_name TEXT;
+BEGIN
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'id'
+         )
+    INTO has_id;
+
+  IF has_id THEN
+    SELECT pg_get_serial_sequence('public.revisions', 'id') INTO seq_name;
+    IF seq_name IS NULL THEN
+      seq_name := 'public.revisions_id_seq';
+    END IF;
+    EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %s', seq_name);
+    EXECUTE format('SELECT setval(%L, (SELECT COALESCE(MAX(id), 0) FROM public.revisions), true)', seq_name);
+    EXECUTE format('ALTER TABLE public.revisions ALTER COLUMN id SET DEFAULT nextval(%L)', seq_name);
+    EXECUTE format('ALTER SEQUENCE %s OWNED BY public.revisions.id', seq_name);
+  END IF;
+END;
+$$;
+
+-- 7. Дополнительно убеждаемся, что последовательность revisions_rev_seq существует и привязана к колонке rev.
 CREATE SEQUENCE IF NOT EXISTS revisions_rev_seq;
 ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
 ALTER TABLE revisions

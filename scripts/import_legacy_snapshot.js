@@ -48,7 +48,8 @@ async function loadRevisionColumnInfo(client) {
   `);
   const columnNames = rows.map((row) => row.column_name);
   revisionColumnInfo = {
-    hasCurrentRev: columnNames.includes('current_rev')
+    hasCurrentRev: columnNames.includes('current_rev'),
+    hasId: columnNames.includes('id')
   };
   return revisionColumnInfo;
 }
@@ -56,8 +57,20 @@ async function loadRevisionColumnInfo(client) {
 async function insertRevisionRow(client, rev, actor, source, note) {
   const info = await loadRevisionColumnInfo(client);
   if (info.hasCurrentRev) {
+    if (info.hasId) {
+      await client.query(
+        'INSERT INTO revisions (id, rev, current_rev, actor, source, note) VALUES ($1,$1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+        [rev, actor || null, source || null, note || null]
+      );
+    } else {
+      await client.query(
+        'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+        [rev, actor || null, source || null, note || null]
+      );
+    }
+  } else if (info.hasId) {
     await client.query(
-      'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+      'INSERT INTO revisions (id, rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
       [rev, actor || null, source || null, note || null]
     );
   } else {
