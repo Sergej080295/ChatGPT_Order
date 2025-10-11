@@ -2,9 +2,26 @@ BEGIN;
 
 DO $$
 DECLARE
-  base_table TEXT;
   trig RECORD;
+  base_table TEXT;
 BEGIN
+  -- Удаляем все кастомные history-триггеры, которые ссылаются на функции hist_%.
+  FOR trig IN
+    SELECT ns.nspname AS schema_name,
+           tbl.relname AS table_name,
+           tg.tgname AS trigger_name
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      JOIN pg_proc fn ON fn.oid = tg.tgfoid
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname = 'public'
+       AND fn.proname LIKE 'hist\_%'
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
+  END LOOP;
+
+  -- Удаляем также стандартные history-триггеры, чтобы в конце миграции пересоздать их.
   FOR base_table IN
     SELECT unnest(ARRAY[
       'settings_admin',
@@ -18,21 +35,6 @@ BEGIN
       'capacity_by_process'
     ])
   LOOP
-    FOR trig IN
-      SELECT tg.tgname
-        FROM pg_trigger tg
-        JOIN pg_class tbl ON tbl.oid = tg.tgrelid
-        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-        JOIN pg_proc fn ON fn.oid = tg.tgfoid
-       WHERE NOT tg.tgisinternal
-         AND ns.nspname = 'public'
-         AND tbl.relname = base_table
-         AND fn.proname LIKE 'hist\_%'
-    LOOP
-      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', trig.tgname, base_table);
-    END LOOP;
-
-    -- Удаляем также стандартный history-триггер, чтобы в конце миграции пересоздать его.
     EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', base_table || '_history_trg', base_table);
   END LOOP;
 END;
