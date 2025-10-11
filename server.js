@@ -160,7 +160,6 @@ function buildEmptySnapshot() {
     modeScoped: {}
   };
 }
-}
 
 async function ensureMigrationTable(client) {
   await client.query(`
