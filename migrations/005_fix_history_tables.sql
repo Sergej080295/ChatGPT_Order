@@ -250,6 +250,23 @@ $$ LANGUAGE plpgsql;
 -- при наличии унаследованной колонки id настроен корректный дефолт, чтобы временный
 -- бэкоф мог безопасно добавлять ревизии.
 DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM pg_constraint c
+      JOIN pg_class tbl ON tbl.oid = c.conrelid
+      JOIN pg_namespace nsp ON nsp.oid = tbl.relnamespace
+     WHERE nsp.nspname = 'public'
+       AND tbl.relname = 'revisions'
+       AND c.conname = 'revisions_id_check'
+       AND c.contype = 'c'
+  ) THEN
+    EXECUTE 'ALTER TABLE public.revisions DROP CONSTRAINT revisions_id_check';
+  END IF;
+END;
+$$;
+
+DO $$
 DECLARE
   has_id BOOLEAN := false;
   id_has_default BOOLEAN := false;
