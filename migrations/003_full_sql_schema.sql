@@ -83,6 +83,9 @@ CREATE TABLE IF NOT EXISTS orders (
   deleted_at TIMESTAMPTZ
 );
 
+ALTER TABLE orders
+  ADD COLUMN IF NOT EXISTS status TEXT;
+
 CREATE INDEX IF NOT EXISTS orders_status_idx ON orders(status);
 CREATE INDEX IF NOT EXISTS orders_active_idx ON orders(id) WHERE deleted_at IS NULL;
 
