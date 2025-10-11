@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://planner:planner@localhost:5432/planner';
@@ -17,6 +18,12 @@ let revisionColumnInfo = null;
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sanitizeString(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  return String(value).trim();
 }
 
 function parseDate(value) {
@@ -34,6 +41,24 @@ function normalizeStage(code) {
 function titleFromCode(code) {
   if (!code) return '';
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function computeSnapshotHash(snapshot) {
+  const stateString = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot);
+  return crypto.createHash('sha1').update(stateString, 'utf8').digest('hex');
+}
+
+function orderKeyFromTask(task) {
+  if (!task || typeof task !== 'object') return null;
+  const identity = sanitizeString(task.orderIdentity);
+  if (identity) return `identity:${identity}`;
+  const orderId = sanitizeString(task.orderId);
+  if (orderId) return `id:${orderId}`;
+  const number = sanitizeString(task.orderNumber);
+  if (number) return `number:${number}`;
+  const uid = sanitizeString(task.uid);
+  if (uid) return `uid:${uid}`;
+  return null;
 }
 
 async function loadRevisionColumnInfo(client) {
@@ -95,8 +120,45 @@ async function loadSnapshot() {
   return JSON.parse(parsed.state);
 }
 
+function sanitizeMetaForStorage(meta) {
+  if (!isPlainObject(meta)) return null;
+  const result = {};
+  for (const [key, value] of Object.entries(meta)) {
+    if (value === undefined) continue;
+    if (value === null) {
+      result[key] = null;
+      continue;
+    }
+    if (typeof value === 'string') {
+      result[key] = value.trim();
+      continue;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      result[key] = value;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      try {
+        result[key] = JSON.parse(JSON.stringify(value));
+      } catch (_err) {
+        /* ignore */
+      }
+      continue;
+    }
+    if (isPlainObject(value)) {
+      const nested = sanitizeMetaForStorage(value);
+      if (nested !== null) {
+        result[key] = nested;
+      }
+    }
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 (async () => {
   const snapshot = await loadSnapshot();
+  const stateString = JSON.stringify(snapshot);
+  const hash = computeSnapshotHash(stateString);
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -105,8 +167,49 @@ async function loadSnapshot() {
     await client.query(`SET LOCAL app.rev = ${rev}`);
     await insertRevisionRow(client, rev, 'import-script', 'legacy-import', 'Initial import');
 
-    await client.query('TRUNCATE order_process, orders, customers RESTART IDENTITY CASCADE');
-    await client.query('TRUNCATE processes RESTART IDENTITY CASCADE');
+    const tasks = Array.isArray(snapshot.t) ? snapshot.t : [];
+    const done = Array.isArray(snapshot.done) ? snapshot.done : [];
+    const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
+
+    const parallelSet = new Set();
+    if (isPlainObject(snapshot.parallelByProc)) {
+      Object.keys(snapshot.parallelByProc).forEach((key) => {
+        const normalized = normalizeStage(key);
+        if (normalized) parallelSet.add(normalized);
+      });
+    }
+
+    const stageMap = new Map();
+    const ensureStage = (code) => {
+      const normalized = normalizeStage(code);
+      if (!normalized) return null;
+      if (!stageMap.has(normalized)) {
+        stageMap.set(normalized, {
+          code: normalized,
+          name: titleFromCode(normalized),
+          isParallel: parallelSet.has(normalized),
+          id: null
+        });
+      }
+      return stageMap.get(normalized);
+    };
+
+    tasks.forEach((task) => ensureStage(task?.stage));
+    done.forEach((task) => ensureStage(task?.stage));
+    if (isPlainObject(snapshot.capByProc)) {
+      Object.keys(snapshot.capByProc).forEach((code) => ensureStage(code));
+    }
+    if (isPlainObject(snapshot.meta?.settings?.capacity)) {
+      Object.keys(snapshot.meta.settings.capacity).forEach((code) => ensureStage(code));
+    }
+    if (isPlainObject(snapshot.meta?.settings?.crmStageMapping)) {
+      Object.values(snapshot.meta.settings.crmStageMapping).forEach((code) => ensureStage(code));
+    }
+
+    await client.query('TRUNCATE order_process RESTART IDENTITY');
+    await client.query('TRUNCATE orders RESTART IDENTITY');
+    await client.query('TRUNCATE customers RESTART IDENTITY');
+    await client.query('TRUNCATE processes RESTART IDENTITY');
     await client.query('TRUNCATE capacity_by_process');
     await client.query('TRUNCATE settings_column_widths');
     await client.query('TRUNCATE settings_mapping');
@@ -115,161 +218,280 @@ async function loadSnapshot() {
     await client.query('DELETE FROM settings_journal');
     await client.query('DELETE FROM settings_admin');
 
-    const stageSet = new Map();
-    const parallelStages = new Set();
-
-    if (isPlainObject(snapshot.parallelByProc)) {
-      Object.keys(snapshot.parallelByProc).forEach((key) => {
-        const normalized = normalizeStage(key);
-        if (normalized) {
-          parallelStages.add(normalized);
-        }
-      });
-    }
-
-    const ensureStage = (code) => {
-      const normalized = normalizeStage(code);
-      if (!normalized) return;
-      if (!stageSet.has(normalized)) {
-        stageSet.set(normalized, {
-          code: normalized,
-          name: titleFromCode(normalized),
-          hasHours: true,
-          isParallel: parallelStages.has(normalized)
-        });
-      }
-    };
-
-    (snapshot.t || []).forEach((task) => ensureStage(task?.stage));
-    (snapshot.done || []).forEach((task) => ensureStage(task?.stage));
-    if (isPlainObject(snapshot.capByProc)) {
-      Object.keys(snapshot.capByProc).forEach((key) => ensureStage(key));
-    }
-
-    const stages = Array.from(stageSet.values());
-    stages.sort((a, b) => a.code.localeCompare(b.code));
-    const stageIdMap = new Map();
-    for (let index = 0; index < stages.length; index += 1) {
-      const stage = stages[index];
+    const processes = Array.from(stageMap.values());
+    processes.sort((a, b) => a.code.localeCompare(b.code));
+    for (let index = 0; index < processes.length; index += 1) {
+      const stage = processes[index];
       const { rows } = await client.query(
         `INSERT INTO processes (code, name, position, has_hours, is_parallel, is_active)
-         VALUES ($1,$2,$3,$4,$5,TRUE)
+         VALUES ($1,$2,$3,TRUE,$4,TRUE)
          RETURNING id`,
-        [stage.code, stage.name || stage.code, index, stage.hasHours, stage.isParallel]
+        [stage.code, stage.name || stage.code, index, stage.isParallel]
       );
-      stageIdMap.set(stage.code, rows[0].id);
+      stage.id = rows[0].id;
     }
 
-    const orderMap = new Map();
-    const orderSeqMap = new Map();
+    const customerNames = new Set();
+    const collectCustomer = (task) => {
+      if (!task) return;
+      const name = sanitizeString(task.orderCustomer);
+      if (name) customerNames.add(name);
+    };
+    tasks.forEach(collectCustomer);
+    done.forEach(collectCustomer);
+    trash.forEach(collectCustomer);
 
-    const ensureOrder = (orderId, status) => {
-      const key = String(orderId || '').trim();
-      if (!key) return null;
-      if (!orderMap.has(key)) {
-        const number = key;
-        orderMap.set(key, { number, status: status || null });
-        orderSeqMap.set(key, 0);
-      } else if (status && !orderMap.get(key).status) {
-        orderMap.get(key).status = status;
+    const customerIdMap = new Map();
+    const sortedCustomers = Array.from(customerNames.values()).sort();
+    for (const name of sortedCustomers) {
+      const { rows } = await client.query(
+        'INSERT INTO customers (name) VALUES ($1) RETURNING id',
+        [name]
+      );
+      customerIdMap.set(name, rows[0].id);
+    }
+
+    const orderData = new Map();
+    const collectOrderData = (task, options = {}) => {
+      if (!task || typeof task !== 'object') return;
+      const key = orderKeyFromTask(task);
+      if (!key) return;
+      const existing = orderData.get(key) || {
+        key,
+        crmOrderId: null,
+        number: null,
+        customerName: null,
+        status: null,
+        deleted: false,
+        deletedAt: null,
+        createdAt: null,
+        updatedAt: null
+      };
+      const crmOrderId = sanitizeString(task.orderId);
+      if (crmOrderId) existing.crmOrderId = existing.crmOrderId || crmOrderId;
+      const number = sanitizeString(task.orderNumber);
+      if (number) existing.number = existing.number || number;
+      const customerName = sanitizeString(task.orderCustomer);
+      if (customerName) existing.customerName = existing.customerName || customerName;
+      const status = sanitizeString(task.status) || sanitizeString(task.state);
+      if (status) existing.status = status;
+      const start = parseDate(task.startDate || task.start);
+      if (start && !existing.createdAt) existing.createdAt = start;
+      const end = parseDate(task.endDate || task.end);
+      if (end) existing.updatedAt = end;
+      if (options.isDone) {
+        existing.status = existing.status || 'done';
+        const doneAt = parseDate(task.doneMeta?.when || task.when || end || start);
+        if (doneAt) existing.updatedAt = doneAt;
       }
-      return key;
+      if (options.deleted) {
+        existing.deleted = true;
+        const deletedAt = parseDate(task.when || task.end || task.endDate || task.startDate);
+        if (deletedAt) existing.deletedAt = deletedAt;
+      }
+      orderData.set(key, existing);
     };
 
-    (snapshot.t || []).forEach((task) => {
-      ensureOrder(task?.orderId, task?.status || task?.state || null);
-    });
-    (snapshot.done || []).forEach((task) => {
-      ensureOrder(task?.orderId, task?.status || task?.state || null);
-    });
+    tasks.forEach((task) => collectOrderData(task));
+    done.forEach((task) => collectOrderData(task, { isDone: true }));
+    trash.forEach((task) => collectOrderData(task, { deleted: true }));
 
     const orderIdMap = new Map();
-    for (const [orderKey, value] of orderMap.entries()) {
+    for (const data of orderData.values()) {
+      const customerId = data.customerName ? customerIdMap.get(data.customerName) || null : null;
+      const createdAt = data.createdAt || new Date().toISOString();
+      const updatedAt = data.updatedAt || createdAt;
+      const number = data.number || data.crmOrderId || data.key;
       const { rows } = await client.query(
-        `INSERT INTO orders (number, status, created_at, updated_at)
-         VALUES ($1,$2,NOW(),NOW())
+        `INSERT INTO orders (crm_order_id, number, customer_id, status, created_at, updated_at, deleted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
          RETURNING id`,
-        [orderKey, value.status]
+        [
+          data.crmOrderId || null,
+          number,
+          customerId,
+          data.status || null,
+          createdAt,
+          updatedAt,
+          data.deleted ? (data.deletedAt || updatedAt) : null
+        ]
       );
-      orderIdMap.set(orderKey, rows[0].id);
+      orderIdMap.set(data.key, rows[0].id);
     }
 
-    const processPositionCounters = new Map();
-
-    const insertStage = async (task, overrides = {}) => {
-      if (!task || !task.stage || !task.orderId) return;
+    const seqByOrder = new Map();
+    const positionByProcess = new Map();
+    const insertTask = async (task, options = {}) => {
+      if (!task) return;
+      const key = orderKeyFromTask(task);
+      if (!key) return;
+      const orderId = orderIdMap.get(key);
+      if (!orderId) return;
       const processKey = normalizeStage(task.stage);
-      const processId = stageIdMap.get(processKey);
-      const orderKey = ensureOrder(task.orderId, task.status || task.state || null);
-      if (!processId || !orderKey) return;
-      const orderId = orderIdMap.get(orderKey);
-      const seq = orderSeqMap.get(orderKey) || 0;
-      orderSeqMap.set(orderKey, seq + 1);
-      const positionCounter = processPositionCounters.get(processKey) || 0;
-      processPositionCounters.set(processKey, positionCounter + 1);
-      const progressValue = Number(task.progress);
+      const process = stageMap.get(processKey);
+      if (!process || !process.id) return;
+      const seq = seqByOrder.get(key) || 0;
+      seqByOrder.set(key, seq + 1);
+      const position = positionByProcess.get(process.code) || 0;
+      positionByProcess.set(process.code, position + 1);
+      const routeSeg = task.route && task.stage ? task.route[task.stage] : null;
+      const plannedStart = parseDate(task.startDate || routeSeg?.start);
+      const plannedEnd = parseDate(task.endDate || routeSeg?.end);
+      const actualStart = parseDate(routeSeg?.start);
+      const actualEnd = parseDate(routeSeg?.doneAt || task.doneMeta?.when || routeSeg?.end || task.when);
+      const progressRaw = Number(task.progress);
+      const progress = Number.isFinite(progressRaw) ? progressRaw : 0;
+      const isDone = options.isDone || Boolean(task.doneMeta?.when) || progress >= 100;
       await client.query(
         `INSERT INTO order_process (
-          order_id, process_id, seq, planned_start, planned_end, actual_start, actual_end,
-          progress, is_done, position_index, hidden_by_state
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+           order_id, process_id, seq, planned_start, planned_end,
+           actual_start, actual_end, progress, is_done,
+           position_index, hidden_by_state
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
         [
           orderId,
-          processId,
+          process.id,
           seq,
-          parseDate(task.startDate),
-          parseDate(task.endDate),
-          parseDate(overrides.actualStart || task.actualStart),
-          parseDate(overrides.actualEnd || task.actualEnd),
-          Number.isFinite(progressValue) ? progressValue : 0,
-          overrides.isDone === true || (task.state && /готово|done/i.test(task.state)) || false,
-          positionCounter,
+          plannedStart,
+          plannedEnd,
+          actualStart,
+          actualEnd,
+          progress,
+          isDone,
+          position,
           false
         ]
       );
     };
 
-    for (const task of snapshot.t || []) {
-      await insertStage(task);
+    for (const task of tasks) {
+      // eslint-disable-next-line no-await-in-loop
+      await insertTask(task, { isDone: false });
     }
-    for (const task of snapshot.done || []) {
-      await insertStage(task, {
-        isDone: true,
-        actualEnd: task.when || task.end
-      });
+    for (const task of done) {
+      // eslint-disable-next-line no-await-in-loop
+      await insertTask(task, { isDone: true });
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const capacitySource = isPlainObject(snapshot.capByProc)
+      ? snapshot.capByProc
+      : snapshot.meta?.settings?.capacity || {};
+    for (const [code, value] of Object.entries(capacitySource || {})) {
+      const process = stageMap.get(normalizeStage(code));
+      if (!process || !process.id) continue;
+      const minutes = Number(value) * 60;
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO capacity_by_process (process_id, day, minutes)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (process_id, day) DO UPDATE SET minutes = EXCLUDED.minutes`,
+        [process.id, today, Number.isFinite(minutes) ? Math.round(minutes) : 0]
+      );
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    if (isPlainObject(snapshot.capByProc)) {
-      for (const [code, value] of Object.entries(snapshot.capByProc)) {
-        const processId = stageIdMap.get(normalizeStage(code));
-        if (!processId) continue;
-        const minutes = Number(value) * 60;
+    const settings = snapshot.meta?.settings || {};
+    const extra = settings.extraTime || {};
+    const percent = Number(extra.percent || 0);
+    const minimum = Number(extra.minimum || 0);
+    const extraEnabled = percent > 0 || minimum > 0;
+    await client.query(
+      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
+       VALUES (1,$1,$2,$3,NOW())
+       ON CONFLICT (id) DO UPDATE
+         SET enabled = EXCLUDED.enabled,
+             percent = EXCLUDED.percent,
+             minimum_hours = EXCLUDED.minimum_hours,
+             updated_at = NOW()` ,
+      [extraEnabled, Math.round(percent), Math.round(minimum)]
+    );
+
+    const logLimit = Number(settings.logLimit);
+    await client.query(
+      `INSERT INTO settings_journal (id, max_rows, updated_at)
+       VALUES (1,$1,NOW())
+       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
+      [Number.isFinite(logLimit) && logLimit > 0 ? Math.round(logLimit) : 50]
+    );
+
+    const adminSettings = settings.admin || {};
+    const allowForce = adminSettings.allowForceOverwrite === true;
+    const snapshotRetention = Number.isFinite(Number(adminSettings.snapshotRetention))
+      ? Number(adminSettings.snapshotRetention)
+      : 50;
+    await client.query(
+      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
+       VALUES (1,$1,$2,NOW())
+       ON CONFLICT (id) DO UPDATE
+         SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
+             snapshot_retention = EXCLUDED.snapshot_retention,
+             updated_at = NOW()` ,
+      [allowForce, snapshotRetention]
+    );
+
+    if (isPlainObject(settings.tableColumns)) {
+      for (const [key, width] of Object.entries(settings.tableColumns)) {
+        const columnKey = sanitizeString(key);
+        if (!columnKey) continue;
+        const widthValue = Number(width);
+        if (!Number.isFinite(widthValue)) continue;
+        // eslint-disable-next-line no-await-in-loop
         await client.query(
-          `INSERT INTO capacity_by_process (process_id, day, minutes)
-           VALUES ($1,$2,$3)
-           ON CONFLICT (process_id, day) DO UPDATE SET minutes = EXCLUDED.minutes`,
-          [processId, today, Number.isFinite(minutes) ? Math.round(minutes) : 0]
+          `INSERT INTO settings_column_widths (column_key, width_px, updated_at)
+           VALUES ($1,$2,NOW())
+           ON CONFLICT (column_key) DO UPDATE SET width_px = EXCLUDED.width_px, updated_at = NOW()` ,
+          [columnKey, Math.round(widthValue)]
         );
       }
     }
 
-    await client.query(
-      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
-       VALUES (1,FALSE,0,0,NOW())
-       ON CONFLICT (id) DO UPDATE SET enabled = FALSE, percent = 0, minimum_hours = 0, updated_at = NOW()`
-    );
+    if (isPlainObject(settings.crmStageMapping)) {
+      for (const [crmStage, mappedStage] of Object.entries(settings.crmStageMapping)) {
+        const stageKey = sanitizeString(crmStage);
+        if (!stageKey) continue;
+        const process = stageMap.get(normalizeStage(mappedStage));
+        const processId = process?.id || null;
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO settings_mapping (crm_stage, planner_process_id, is_ignored, updated_at)
+           VALUES ($1,$2,FALSE,NOW())
+           ON CONFLICT (crm_stage) DO UPDATE
+             SET planner_process_id = EXCLUDED.planner_process_id,
+                 is_ignored = EXCLUDED.is_ignored,
+                 updated_at = NOW()` ,
+          [stageKey, processId]
+        );
+      }
+    }
+
+    const ignoredStatuses = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates : [];
+    for (const status of ignoredStatuses) {
+      const statusKey = sanitizeString(status);
+      if (!statusKey) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO excluded_statuses (status_key, created_at)
+         VALUES ($1,NOW())
+         ON CONFLICT (status_key) DO NOTHING` ,
+        [statusKey]
+      );
+    }
+
+    const snapshotMeta = sanitizeMetaForStorage({
+      actor: 'import-script',
+      source: 'legacy-import',
+      summary: 'Initial import',
+      originalMeta: snapshot.meta?.lastChange || null
+    });
 
     await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,50,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = 50, updated_at = NOW()`
-    );
-
-    await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
-       VALUES (1,FALSE,50,NOW())
-       ON CONFLICT (id) DO UPDATE SET allow_force_overwrite = FALSE, snapshot_retention = 50, updated_at = NOW()`
+      `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (rev) DO UPDATE
+         SET snapshot = EXCLUDED.snapshot,
+             meta = EXCLUDED.meta,
+             hash = EXCLUDED.hash,
+             created_at = NOW()` ,
+      [rev, snapshot, snapshotMeta, hash]
     );
 
     await client.query('COMMIT');
