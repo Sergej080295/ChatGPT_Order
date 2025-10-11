@@ -10,6 +10,98 @@ CREATE TABLE IF NOT EXISTS revisions (
   note TEXT
 );
 
+ALTER TABLE revisions
+  ADD COLUMN IF NOT EXISTS rev BIGINT,
+  ADD COLUMN IF NOT EXISTS ts TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS actor TEXT,
+  ADD COLUMN IF NOT EXISTS source TEXT,
+  ADD COLUMN IF NOT EXISTS note TEXT;
+
+ALTER TABLE revisions
+  ALTER COLUMN ts SET DEFAULT NOW();
+
+ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
+
+ALTER TABLE revisions
+  ALTER COLUMN rev SET DEFAULT nextval('revisions_rev_seq');
+
+UPDATE revisions
+  SET ts = NOW()
+  WHERE ts IS NULL;
+
+DO $$
+DECLARE
+  missing_count BIGINT;
+BEGIN
+  SELECT COUNT(*)
+    INTO missing_count
+    FROM revisions
+   WHERE rev IS NULL;
+  IF missing_count > 0 THEN
+    UPDATE revisions
+       SET rev = nextval('revisions_rev_seq')
+     WHERE rev IS NULL;
+  END IF;
+END;
+$$;
+
+DO $$
+DECLARE
+  max_rev BIGINT;
+BEGIN
+  SELECT MAX(rev) INTO max_rev FROM revisions;
+  IF max_rev IS NULL THEN
+    PERFORM setval('revisions_rev_seq', 1, false);
+  ELSE
+    PERFORM setval('revisions_rev_seq', max_rev);
+  END IF;
+END;
+$$;
+
+DO $$
+DECLARE
+  pk_name TEXT;
+  has_rev_unique BOOLEAN;
+BEGIN
+  SELECT tc.constraint_name
+    INTO pk_name
+    FROM information_schema.table_constraints tc
+   WHERE tc.table_schema = 'public'
+     AND tc.table_name = 'revisions'
+     AND tc.constraint_type = 'PRIMARY KEY'
+   LIMIT 1;
+
+  IF pk_name IS NULL THEN
+    EXECUTE 'ALTER TABLE revisions ADD PRIMARY KEY (rev)';
+  ELSE
+    SELECT EXISTS (
+      SELECT 1
+        FROM information_schema.key_column_usage kcu
+       WHERE kcu.table_schema = 'public'
+         AND kcu.table_name = 'revisions'
+         AND kcu.constraint_name = pk_name
+         AND kcu.column_name = 'rev'
+    ) INTO has_rev_unique;
+
+    IF NOT has_rev_unique THEN
+      IF NOT EXISTS (
+        SELECT 1
+          FROM information_schema.table_constraints tc
+         WHERE tc.table_schema = 'public'
+           AND tc.table_name = 'revisions'
+           AND tc.constraint_type = 'UNIQUE'
+           AND tc.constraint_name = 'revisions_rev_key'
+      ) THEN
+        EXECUTE 'ALTER TABLE revisions ADD CONSTRAINT revisions_rev_key UNIQUE (rev)';
+      END IF;
+    END IF;
+  END IF;
+
+  EXECUTE 'ALTER TABLE revisions ALTER COLUMN rev SET NOT NULL';
+  EXECUTE 'ALTER TABLE revisions ALTER COLUMN ts SET NOT NULL';
+END;
+$$;
+
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   login TEXT UNIQUE NOT NULL,
