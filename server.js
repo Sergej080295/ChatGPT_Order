@@ -194,14 +194,71 @@ const loadMigrations = () => {
     }));
 };
 
+const BASELINE_TABLES = [
+  'planner_state',
+  'stage_type',
+  'customer_order',
+  'order_stage',
+  'stage_completion',
+  'stage_exception',
+  'capacity_by_stage',
+  'parallel_limits',
+  'planner_settings',
+  'planner_activity_log'
+];
+
+const detectMissingBaselineTables = async (client) => {
+  const missing = [];
+  for (const tableName of BASELINE_TABLES) {
+    try {
+      const { rows } = await client.query('SELECT to_regclass($1) AS present', [`public.${tableName}`]);
+      const exists = rows?.[0]?.present !== null;
+      if (!exists) {
+        missing.push(tableName);
+      }
+    } catch (err) {
+      if (err?.code === '42P01') {
+        missing.push(tableName);
+      } else {
+        throw err;
+      }
+    }
+  }
+  return missing;
+};
+
 const runMigrations = async () => {
   const client = await pool.connect();
   try {
     await ensureMigrationTable(client);
     const migrations = loadMigrations();
     for (const migration of migrations) {
-      const { rows } = await client.query('SELECT 1 FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
-      if (rows.length > 0) {
+      let alreadyApplied = false;
+      if (migration.filename === '001_init.sql') {
+        const { rows } = await client.query(
+          'SELECT 1 FROM planner_schema_migrations WHERE filename = $1',
+          [migration.filename]
+        );
+        alreadyApplied = rows.length > 0;
+        if (alreadyApplied) {
+          const missing = await detectMissingBaselineTables(client);
+          if (missing.length > 0) {
+            console.warn(
+              `Baseline tables missing (${missing.join(', ')}); reapplying migration ${migration.filename}`
+            );
+            await client.query('DELETE FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
+            alreadyApplied = false;
+          }
+        }
+      } else {
+        const { rows } = await client.query(
+          'SELECT 1 FROM planner_schema_migrations WHERE filename = $1',
+          [migration.filename]
+        );
+        alreadyApplied = rows.length > 0;
+      }
+
+      if (alreadyApplied) {
         continue;
       }
       await client.query('BEGIN');
