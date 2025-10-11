@@ -153,6 +153,31 @@ CREATE TABLE IF NOT EXISTS settings_admin (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE settings_admin
+  ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS snapshot_retention INTEGER NOT NULL DEFAULT 50,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+UPDATE settings_admin
+  SET allow_force_overwrite = FALSE
+  WHERE allow_force_overwrite IS NULL;
+
+UPDATE settings_admin
+  SET snapshot_retention = 50
+  WHERE snapshot_retention IS NULL;
+
+UPDATE settings_admin
+  SET updated_at = NOW()
+  WHERE updated_at IS NULL;
+
+ALTER TABLE settings_admin
+  ALTER COLUMN allow_force_overwrite SET NOT NULL,
+  ALTER COLUMN allow_force_overwrite SET DEFAULT FALSE,
+  ALTER COLUMN snapshot_retention SET NOT NULL,
+  ALTER COLUMN snapshot_retention SET DEFAULT 50,
+  ALTER COLUMN updated_at SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT NOW();
+
 CREATE TABLE IF NOT EXISTS excluded_statuses (
   status_key TEXT PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
