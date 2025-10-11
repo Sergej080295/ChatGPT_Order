@@ -1,302 +1,1352 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>CRM — управление состоянием планировщика</title>
-  <style>
-    :root {
-      color-scheme: light dark;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mini CRM v13c — Orders · Stages</title>
+<script>
+(() => {
+  const STATE_ENDPOINT = '/api/state';
+  const EVENTS_ENDPOINT = '/api/events';
+  const listeners = new Set();
+  let source = null;
+  let currentEtag = null;
+  let currentHash = null;
+
+  const parseEtagHash = (value) => {
+    if (!value || typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === '*') return null;
+    const withoutWeak = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+    const stripped = withoutWeak.replace(/^"|"$/g, '');
+    return stripped || null;
+  };
+
+  const applyFingerprint = ({ etag, hash }) => {
+    if (etag && typeof etag === 'string') {
+      const parsed = parseEtagHash(etag);
+      if (parsed) {
+        currentEtag = etag;
+        currentHash = parsed;
+        return;
+      }
     }
-    body { margin:0; background:#0f172a0d; color:#0f172a; }
-    header { background:#0ea5e9; color:#fff; padding:16px 24px; }
-    header h1 { margin:0; font-size:22px; font-weight:600; }
-    main { padding:24px; max-width:960px; margin:0 auto; }
-    section { background:#fff; border-radius:12px; padding:20px 24px; margin-bottom:24px; box-shadow:0 10px 25px -20px rgba(14,116,144,.5); }
-    h2 { margin:0 0 12px; font-size:18px; }
-    label { display:block; font-weight:600; margin-bottom:4px; }
-    input, select { width:100%; border-radius:8px; border:1px solid #bae6fd; padding:10px 12px; font-size:14px; }
-    textarea { width:100%; border-radius:8px; border:1px solid #bae6fd; padding:10px 12px; font-size:14px; min-height:120px; resize:vertical; }
-    button { appearance:none; border:none; border-radius:999px; padding:10px 20px; background:#0ea5e9; color:#fff; font-weight:600; font-size:14px; cursor:pointer; transition:transform .15s ease, box-shadow .15s ease; }
-    button:hover { transform:translateY(-1px); box-shadow:0 12px 20px -18px rgba(14,165,233,.8); }
-    .danger { background:#ef4444; }
-    .muted { background:#475569; }
-    .grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); }
-    .metric { background:#e0f2fe; padding:12px 16px; border-radius:10px; font-size:14px; }
-    pre { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:10px; font-size:13px; overflow:auto; max-height:320px; }
-    .log { background:#0f172a; color:#e2e8f0; border-radius:10px; padding:12px 16px; max-height:220px; overflow-y:auto; font-size:13px; font-family:ui-monospace, SFMono-Regular, SFMono, Menlo, monospace; }
-    .status-ok { color:#15803d; font-weight:600; }
-    .status-warn { color:#b45309; font-weight:600; }
-  </style>
+    if (hash) {
+      const normalized = String(hash).trim();
+      if (normalized) {
+        currentHash = normalized;
+        currentEtag = `W/"${normalized}"`;
+      }
+    }
+  };
+
+  window.PLANNER_STATE_ENDPOINT = STATE_ENDPOINT;
+  window.PLANNER_STATE_METHOD = 'PUT';
+  window.PLANNER_STATE_WRAP = true;
+
+  const notify = (data) => {
+    listeners.forEach(cb => {
+      try {
+        cb(data);
+      } catch (err) {
+        console.warn('plannerRemote listener failed', err);
+      }
+    });
+  };
+
+  const reconnectDelay = 3000;
+  const connect = () => {
+    if (!('EventSource' in window)) return;
+    if (source) {
+      try { source.close(); } catch (err) { /* ignore */ }
+    }
+    source = new EventSource(EVENTS_ENDPOINT);
+    source.onmessage = (event) => {
+      if (!event?.data) {
+        notify(null);
+        return;
+      }
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload && typeof payload === 'object') {
+          applyFingerprint({ etag: payload.etag, hash: payload.hash });
+        }
+        notify(payload);
+      } catch (err) {
+        console.warn('plannerRemote event parse failed', err);
+        notify(null);
+      }
+    };
+    source.onerror = () => {
+      if (source) {
+        try { source.close(); } catch (err) { /* ignore */ }
+      }
+      source = null;
+      setTimeout(connect, reconnectDelay);
+    };
+  };
+
+  if ('EventSource' in window) {
+    connect();
+  }
+
+  const loadState = async (options = {}) => {
+    const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    const text = await res.text();
+    const etag = res.headers.get('ETag');
+    applyFingerprint({ etag });
+    if (options && (options.withMeta || options.returnMeta)) {
+      const hash = parseEtagHash(etag) || currentHash || null;
+      return { state: text, etag, hash };
+    }
+    return text;
+  };
+
+  const saveState = async (payload, meta) => {
+    const stateString = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    if (!currentEtag && !currentHash) {
+      try {
+        await loadState();
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+    let metaPayload = null;
+    const metaIsObject = meta && typeof meta === 'object' && !Array.isArray(meta);
+    if (metaIsObject) {
+      metaPayload = { ...meta };
+    } else if (meta === null || meta === undefined) {
+      metaPayload = {};
+    }
+    let ifMatchHeader = null;
+    if (metaPayload && typeof metaPayload === 'object') {
+      if (Object.prototype.hasOwnProperty.call(metaPayload, 'ifMatch')) {
+        const explicit = metaPayload.ifMatch == null ? '' : String(metaPayload.ifMatch).trim();
+        if (explicit) {
+          ifMatchHeader = explicit;
+        }
+        delete metaPayload.ifMatch;
+      }
+      const providedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
+      const providedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
+      if (currentHash && !providedBaseHash) metaPayload.baseHash = currentHash;
+      if (currentEtag && !providedBaseEtag) metaPayload.baseEtag = currentEtag;
+      const normalizedBaseEtag = metaPayload.baseEtag == null ? '' : String(metaPayload.baseEtag).trim();
+      const normalizedBaseHash = metaPayload.baseHash == null ? '' : String(metaPayload.baseHash).trim();
+      if (!ifMatchHeader) {
+        if (normalizedBaseEtag) {
+          ifMatchHeader = normalizedBaseEtag;
+        } else if (normalizedBaseHash) {
+          ifMatchHeader = `W/"${normalizedBaseHash}"`;
+        }
+      }
+      if (!normalizedBaseHash) delete metaPayload.baseHash;
+      if (!normalizedBaseEtag) delete metaPayload.baseEtag;
+    }
+    let metaForBody = null;
+    if (metaPayload && typeof metaPayload === 'object') {
+      metaForBody = Object.keys(metaPayload).length > 0 ? metaPayload : null;
+    } else if (meta !== undefined) {
+      metaForBody = meta;
+    } else {
+      metaForBody = null;
+    }
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json,text/plain'
+    };
+    if (ifMatchHeader) {
+      headers['If-Match'] = ifMatchHeader;
+    } else if (currentEtag) {
+      headers['If-Match'] = currentEtag;
+    } else if (currentHash) {
+      headers['If-Match'] = `W/"${currentHash}"`;
+    } else {
+      headers['If-Match'] = '*';
+    }
+    const body = JSON.stringify({ state: stateString, meta: metaForBody });
+    const res = await fetch(STATE_ENDPOINT, {
+      method: 'PUT',
+      headers,
+      body
+    });
+    const text = await res.text().catch(() => '') || '';
+    const trimmed = text.trim();
+    let parsed = null;
+    if (trimmed) {
+      try { parsed = JSON.parse(trimmed); }
+      catch (_err) { parsed = null; }
+    }
+    if (!res.ok) {
+      const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
+      err.status = res.status;
+      if (parsed !== null) {
+        err.detail = parsed;
+      } else if (trimmed) {
+        err.detail = trimmed;
+      }
+      err.body = text;
+      if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+        err.name = 'PlannerConflictError';
+      }
+      throw err;
+    }
+    applyFingerprint({ etag: res.headers.get('ETag'), hash: parsed?.hash });
+    if (!trimmed) return true;
+    return parsed ?? text;
+  };
+
+  window.plannerRemote = {
+    loadState,
+    saveState,
+    onRemoteUpdate(callback) {
+      if (typeof callback !== 'function') return () => {};
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    }
+  };
+})();
+</script>
+<script>
+(function bootstrapCrmSnapshot(){
+  const KEY = 'mini_crm_v13c';
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/state', false);
+    xhr.setRequestHeader('Accept', 'application/json,text/plain');
+    xhr.send(null);
+    if (xhr.status >= 200 && xhr.status < 300) {
+      const raw = xhr.responseText || '';
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const muted = (() => {
+          if (typeof parsed.notificationsMuted === 'boolean') return parsed.notificationsMuted;
+          if (parsed.meta) {
+            if (typeof parsed.meta.notificationsMuted === 'boolean') return parsed.meta.notificationsMuted;
+            if (parsed.meta.settings && typeof parsed.meta.settings.notificationsMuted === 'boolean') {
+              return parsed.meta.settings.notificationsMuted;
+            }
+          }
+          if (parsed.settings && typeof parsed.settings.notificationsMuted === 'boolean') {
+            return parsed.settings.notificationsMuted;
+          }
+          return undefined;
+        })();
+        if (muted !== undefined) {
+          window.__CRM_NOTIFICATIONS_MUTED__ = !!muted;
+        }
+      }
+      if (parsed && typeof parsed === 'object' && parsed.crm) {
+        window.__CRM_INITIAL_STATE__ = parsed.crm;
+        try {
+          localStorage.setItem(KEY, JSON.stringify(parsed.crm));
+        } catch (_err) {
+          /* ignore */
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('CRM bootstrap failed', err);
+  }
+})();
+</script>
+<style>
+  :root{
+    --bg:#0f1115; --card:#161a22; --muted:#8b95a7; --text:#e7ecf3;
+    --primary:#4da3ff; --accent:#9bffd6; --warn:#ffce4d; --danger:#ff6b6b;
+    --ok:#24a148; --okGlow:rgba(36,161,72,.22);
+    --chip:#232a36; --border:#232936; --shadow:0 6px 24px rgba(0,0,0,.35);
+    --col-min:320px; --dlgBorder:#5ca0ff; --tooltipBg:#0c111a; --tooltipBd:#2a3548;
+    --readyOffBd:#3b4a63; --readyOffBg:#0e131b;
+    --inputBg:#0b0e13; --inputDisabled:#0a0f16; --placeholder:#77829a;
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f7fb; --card:#ffffff; --muted:#5a667a; --text:#0e1320;
+    --primary:#1b5cff; --accent:#00a884; --warn:#b57a00; --danger:#cc3a3a;
+    --ok:#1f8e41; --okGlow:rgba(31,142,65,.22);
+    --chip:#f0f3f9; --border:#d9deea; --shadow:0 8px 24px rgba(0,0,0,.08);
+    --tooltipBg:#fff; --tooltipBd:#e5eaf5;
+    --readyOffBd:#b9c3d6; --readyOffBg:#ffffff;
+    --inputBg:#ffffff; --inputDisabled:#f4f6fb; --placeholder:#9aa5b4;
+  }
+
+  body{margin:0;background:linear-gradient(180deg,#0e1117,#0b0d12);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}
+  body[data-theme="light"]{ background:linear-gradient(180deg,#f8faff,#eef2f8) }
+  header{position:sticky;top:0;z-index:10;background:rgba(15,17,21,.8);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  .bar{display:flex;gap:12px;align-items:center;padding:12px 14px;flex-wrap:wrap}
+  .bar h1{font-size:16px;margin:0 8px 0 0;font-weight:700;color:var(--text);opacity:1}
+  body[data-theme="light"] .bar h1{color:#0e1320}
+  .title-area{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .bar .search{flex:1 1 240px;min-width:220px}
+
+  /* Базовые элементы */
+  select, input[type="text"], input[type="number"], input[type="date"], textarea{
+    background:var(--inputBg); border:1px solid var(--border); color:var(--text);
+    border-radius:12px; padding:8px 10px; outline:none; box-sizing:border-box;
+    transition:border-color .15s, box-shadow .15s, background-color .15s;
+  }
+  input::placeholder, textarea::placeholder{ color:var(--placeholder) }
+  input:focus, select:focus, textarea:focus{ box-shadow:0 0 0 3px rgba(77,163,255,.22); border-color:#4da3ff }
+  input:disabled, select:disabled{ background:var(--inputDisabled); color:var(--muted); opacity:1 }
+
+  /* Кнопки */
+  button{
+    background:#111826;border:1px solid var(--border);color:var(--text);
+    padding:8px 12px;border-radius:10px;cursor:pointer;position:relative;overflow:hidden;
+    transition:transform .08s ease, box-shadow .2s ease, background .2s ease, border-color .2s ease
+  }
+  body[data-theme="light"] button{ background:#f6f7fb }
+  button.primary{background:linear-gradient(90deg,#1b3b68,#1e2340);border:1px solid #294a7a}
+  button.ghost{background:transparent;border-color:transparent}
+  button.danger{background:linear-gradient(90deg,#3b1415,#2b0e0f);border:1px solid #5c1e22}
+  body[data-theme="light"] .btn-circle.danger,
+  body[data-theme="light"] button.danger{ background:#ffe8e8; border-color:#f5b3b3; color:#cc3a3a }
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button:active{ transform: translateY(1px) scale(.98) }
+  button:focus-visible{ box-shadow:0 0 0 3px rgba(77,163,255,.35) }
+  .ripple{position:absolute;border-radius:50%;transform:scale(0);animation:ripple .6s linear;pointer-events:none;background:rgba(255,255,255,.28)}
+  @keyframes ripple{to{transform:scale(12);opacity:0}}
+
+  .grow{flex:1}
+  .boards{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#0b0e13}
+  body[data-theme="light"] .pill{ background:#fff }
+  main{padding:16px}
+  .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px}
+  .columns::-webkit-scrollbar{height:8px}
+  .columns::-webkit-scrollbar-thumb{background:#2a3342;border-radius:8px}
+  body[data-theme="light"] .columns::-webkit-scrollbar-thumb{background:#c4ccda}
+  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min)}
+  .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border)}
+  .col h2{font-size:13px;letter-spacing:.2px;margin:0;padding:10px 12px;color:var(--muted)}
+  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px}
+  .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative}
+  body[data-theme="light"] .card{ background:#fff; border-color:#e6eaf3 }
+  .card.dragging{opacity:.5}
+  .card .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .rowc{display:flex;align-items:center;gap:8px}
+  .title{font-weight:600;display:flex;align-items:center;gap:8px}
+  .sub{color:var(--muted);font-size:12px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{background:var(--chip);border:1px solid var(--border);color:#cfe5ff;padding:4px 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
+  .chip img{width:14px;height:14px;display:block}
+  .chip.warn{color:#ffd88a;border-color:#4a3a12}
+  .chip.danger{color:#ff9f9f;border-color:#4a1719}
+  .chip.ok{color:#b6ff8a;border-color:#173a15}
+  body[data-theme="light"] .chip{ color:#0e1320 }
+  .kebab{margin-left:auto}
+  .muted{color:var(--muted)}
+  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+  .progress{height:6px;background:#0b0e13;border:1px solid var(--border);border-radius:999px;overflow:hidden;flex:1}
+  body[data-theme="light"] .progress{ background:#eef2f9; border-color:#d9deea }
+  .progress>i{display:block;height:100%;background:linear-gradient(90deg,#4da3ff,#9bffd6);width:0%}
+  .empty{opacity:.6;font-style:italic;padding:10px}
+
+  /* Диалоги */
+  dialog{border:2px solid var(--dlgBorder);border-radius:16px;padding:0;max-width:980px;width:96%;background:#0e131b;color:var(--text);box-shadow:0 0 0 6px rgba(92,160,255,.15),0 24px 48px rgba(0,0,0,.6)}
+  body[data-theme="light"] dialog{background:#fff;color:#0e1320;box-shadow:0 0 0 6px rgba(27,92,255,.08),0 24px 48px rgba(0,0,0,.12)}
+  .dlg-head{padding:14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(180deg,#0f1520,#0a0f17)}
+  body[data-theme="light"] .dlg-head{background:linear-gradient(180deg,#f7f9fe,#eef2f8)}
+  .dlg-body{padding:14px;display:grid;gap:12px}
+
+  .surface{
+    border:1px solid var(--border);
+    border-radius:18px;
+    background:linear-gradient(180deg,rgba(27,40,61,.7),rgba(15,20,30,.72));
+    box-shadow:0 20px 42px rgba(0,0,0,.35);
+  }
+  body[data-theme="light"] .surface{
+    background:linear-gradient(180deg,#fff,#eef3fb);
+    box-shadow:0 18px 34px rgba(27,92,255,.08);
+  }
+
+  /* Шапка редактора: единый современный стиль полей */
+  .gridHead{
+    display:grid; gap:12px 16px;
+    grid-template-columns: 6fr 2fr 1fr 1fr;
+    grid-auto-rows:auto;
+    padding:16px 18px 18px;
+  }
+  .gridHead > div{
+    display:flex; flex-direction:column; gap:4px;
+    position:relative;
+  }
+  .gridHead > div label{
+    display:block; font-size:11px; letter-spacing:.04em;
+    text-transform:uppercase; color:var(--muted);
+    margin-left:2px; user-select:none;
+  }
+  .gridHead input{border-radius:16px;}
+  /* Все поля формы заказа — единый стиль */
+  #orderForm input[type="text"],
+  #orderForm input[type="number"],
+  #orderForm input[type="date"],
+  #orderForm select,
+  #orderForm textarea{
+    min-height:36px; padding:8px 12px;
+    border-radius:14px; border:1px solid rgba(116,136,170,.45);
+    background:linear-gradient(180deg,var(--inputBg),rgba(12,16,24,.96));
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.06);
+    font-size:14px;
+    transition:border-color .15s, box-shadow .15s, background-color .15s;
+  }
+  body[data-theme="light"] #orderForm input,
+  body[data-theme="light"] #orderForm select,
+  body[data-theme="light"] #orderForm textarea{
+    background:linear-gradient(180deg,#fff,#f4f6fb);
+    border-color:rgba(161,175,206,.6);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+  }
+  #orderForm textarea{min-height:60px; resize:vertical;}
+  #orderForm select{
+    appearance:none; padding-right:44px;
+    background:linear-gradient(180deg,var(--inputBg),rgba(12,16,24,.96));
+    background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M4.5 6.75 9 11.25l4.5-4.5" fill="none" stroke="%239ba7bc" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+    background-repeat:no-repeat;
+    background-position:right 16px center;
+    background-size:14px 14px;
+  }
+  body[data-theme="light"] #orderForm select{
+    background:linear-gradient(180deg,#fff,#f4f6fb);
+    background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"><path d="M4.5 6.75 9 11.25l4.5-4.5" fill="none" stroke="%23586a8a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+  }
+  #orderForm input[type="date"]{font-variant-numeric:tabular-nums;}
+  #orderForm :is(input,select,textarea):disabled{
+    background:var(--inputDisabled);
+    color:var(--muted);
+    border-color:rgba(104,122,152,.45);
+    box-shadow:none;
+  }
+  /* Выравнивание по сетке */
+  .gridHead .title{
+    grid-column: 1 / span 1;
+    grid-row: 1;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .gridHead .service{grid-column:3;grid-row:1;}
+  .gridHead .start{grid-column:4;grid-row:1;}
+  .gridHead .customer{grid-column:1;grid-row:2;}
+  .gridHead .orderNo{grid-column:2;grid-row:2;}
+  .gridHead .progressField{grid-column:3;grid-row:2;}
+  .gridHead .end{grid-column:4;grid-row:2;}
+
+  @media (max-width: 920px){
+    .gridHead{
+      grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    }
+    .gridHead > div{grid-column:auto!important;grid-row:auto!important;}
+    .gridHead .title{width:100%;}
+  }
+
+  /* Унифицированные панели внутри формы заказа */
+  .section-card{padding:20px 22px;}
+  details.section-card{padding:0;overflow:hidden;}
+  details.section-card > summary{
+    padding:18px 22px;
+    cursor:pointer;
+    font-weight:600;
+    letter-spacing:.02em;
+    display:flex;align-items:center;gap:10px;
+    list-style:none;
+  }
+  details.section-card > summary::-webkit-details-marker{display:none;}
+  details.section-card > summary::before{
+    content:"";
+    width:10px;height:10px;flex:0 0 10px;
+    border:2px solid var(--muted);
+    border-left-width:0;border-bottom-width:0;
+    transform:rotate(45deg);
+    transition:transform .2s ease;
+    margin-right:6px;
+  }
+  details.section-card[open] > summary::before{transform:rotate(135deg);}
+  details.section-card[open] > summary{border-bottom:1px solid var(--border);}
+  details.section-card .section-body{padding:20px 22px 24px;display:flex;flex-direction:column;gap:18px;}
+
+  .section-toolbar{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;}
+  .section-toolbar .left{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .section-toolbar .left label{gap:8px;}
+  .section-toolbar .right{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto;}
+  .section-toolbar .note{font-size:11px;color:var(--muted);}
+
+  .form-footer{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;padding:16px 18px;}
+  .form-footer .status-field{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:220px;}
+  .form-footer .status-field label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-left:2px;}
+  .form-footer .status-field select{width:100%;}
+  .form-footer .actions{display:flex;align-items:center;gap:10px;margin-left:auto;}
+
+  #orderForm textarea{width:100%;}
+  #stagesTable input,#stagesTable select{padding:4px 6px;min-height:0;border-radius:10px;box-shadow:none;background:var(--inputBg);}
+  #stagesTable select{background-image:none;padding-right:8px;}
+  body[data-theme="light"] #stagesTable input,
+  body[data-theme="light"] #stagesTable select{background:#fff;box-shadow:none;border-color:#d0d9ec;}
+  #stagesTable input.crm-date-changed{box-shadow:inset 0 -2px 0 rgba(37,99,235,.6)}
+
+  /* Таблица переделов */
+  table{width:100%;border-collapse:collapse;table-layout:fixed}
+  th,td{border:1px solid var(--border);padding:3px 8px;vertical-align:middle}
+  body[data-theme="light"] th,body[data-theme="light"] td{border-color:#e5eaf5}
+  th{color:var(--muted);font-weight:600}
+  #stagesTable th:first-child,#stagesTable td:first-child{text-align:left}
+  #stagesTable th:not(:first-child),#stagesTable td:not(:first-child){text-align:center}
+  #stagesTable td input,#stagesTable td select{width:100%}
+  #stagesTable thead th:nth-child(1){width:29%}
+  #stagesTable thead th:nth-child(2){width:7%}
+  #stagesTable thead th:nth-child(3){width:12%}
+  #stagesTable thead th:nth-child(4){width:18%}
+  #stagesTable thead th:nth-child(5){width:18%}
+  #stagesTable thead th:nth-child(6){width:12%}
+  #stagesTable thead th:nth-child(7){width:4%}
+  #stagesTable input[data-k="progress"]{max-width:76px;text-align:center;margin:auto}
+  #stagesTable input[data-k="start"],#stagesTable input[data-k="end"]{max-width:136px;text-align:center;margin:auto}
+  #stagesTable input[data-k="value"]{max-width:280px;width:100%;text-align:center;margin:auto}
+  #stagesTable input.stg-name{padding:4px 6px}
+  #stagesTable td.chk{padding:3px 8px}
+  .progress-expected-cell{display:flex;align-items:center;justify-content:center;gap:6px}
+  .progress-expected-cell .expected-indicator{font-size:12px;color:var(--muted)}
+  .progress-expected-cell .expected-indicator.behind{color:#dc2626;font-weight:600}
+
+  #orderForm details{grid-column:1 / -1}
+  #orderForm details textarea{width:100%;resize:vertical}
+
+  /* Кружки «Готово» (20px) */
+  .ready-switch{
+    appearance:none;aspect-ratio:1/1;width:20px!important;height:auto;
+    border:2px solid var(--readyOffBd)!important;border-radius:50%;
+    background:var(--readyOffBg);display:inline-grid;place-content:center;
+    cursor:pointer;transition:border-color .15s,box-shadow .15s,background-color .15s;
+    vertical-align:middle;box-sizing:content-box
+  }
+  .ready-switch:hover{box-shadow:0 0 0 3px rgba(77,163,255,.12) inset}
+  .ready-switch::after{content:"";width:12px;height:12px;background-repeat:no-repeat;background-position:center;background-size:12px 12px;opacity:0;transition:.15s}
+  .ready-switch:checked{border-color:var(--ok);background:radial-gradient(circle at 50% 50%,rgba(36,161,72,.16),rgba(36,161,72,.06));box-shadow:0 0 0 3px var(--okGlow) inset}
+  .ready-switch:checked::after{opacity:1;background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 14 14"><path d="M3 7l2.8 3L11 4.2" fill="none" stroke="%2324a148" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>')}
+  .card .ready-switch.card-ready{margin-right:8px}
+
+  .ready-btn{aspect-ratio:1/1;width:10px;height:auto;border:1.2px solid var(--readyOffBd);border-radius:50%;display:none}
+  .btn-circle{width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;padding:0}
+
+  .popup{position:fixed;z-index:9999;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:6px}
+  .popup h4{margin:6px 8px;font-size:12px;color:var(--muted)}
+  .popup .item{padding:6px 10px;border-radius:8px;cursor:pointer}
+  .popup .item:hover{background:rgba(77,163,255,.12)}
+
+  .toast-layer{position:fixed;top:20px;right:20px;z-index:11000;display:flex;flex-direction:column;gap:10px;align-items:flex-end;pointer-events:none}
+  .toast{min-width:220px;max-width:320px;background:rgba(17,24,38,.92);color:#f8fbff;border:1px solid rgba(92,160,255,.4);border-radius:14px;padding:12px 16px;box-shadow:0 18px 30px rgba(0,0,0,.35);font-size:13px;line-height:1.4;pointer-events:auto;display:grid;gap:6px}
+  body[data-theme="light"] .toast{background:#ffffff;color:#0f172a;border-color:#d0e1ff;box-shadow:0 18px 30px rgba(27,92,255,.16)}
+  .toast.success{border-color:rgba(52,199,89,.55);background:rgba(32,125,60,.92)}
+  body[data-theme="light"] .toast.success{background:#ecfdf3;border-color:#bbf7d0;color:#166534}
+  .toast.warn{border-color:rgba(250,204,21,.6);background:rgba(120,93,0,.9)}
+  body[data-theme="light"] .toast.warn{background:#fef9c3;border-color:#fde68a;color:#854d0e}
+  .toast.error{border-color:rgba(248,113,113,.6);background:rgba(127,29,29,.9)}
+  body[data-theme="light"] .toast.error{background:#fee2e2;border-color:#fecaca;color:#7f1d1d}
+  .toast strong{font-size:13px}
+  .toast button{justify-self:flex-end;margin-top:4px}
+
+  .planner-button{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:12px;border:1px solid rgba(92,160,255,.45);background:linear-gradient(135deg,rgba(77,163,255,.22),rgba(77,163,255,.08));color:#4da3ff;text-decoration:none;transition:transform .12s ease,box-shadow .2s ease,background .2s ease,border-color .2s ease}
+  .planner-button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(77,163,255,.28);background:linear-gradient(135deg,rgba(77,163,255,.32),rgba(77,163,255,.14))}
+  .planner-button:active{transform:translateY(0) scale(.98)}
+  .planner-button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(77,163,255,.45)}
+  .planner-button svg{width:18px;height:18px;fill:currentColor}
+  body[data-theme="light"] .planner-button{background:linear-gradient(135deg,rgba(27,92,255,.22),rgba(27,92,255,.08));border-color:rgba(27,92,255,.45);color:#1b5cff}
+  body[data-theme="light"] .planner-button:hover{box-shadow:0 8px 18px rgba(27,92,255,.18);background:linear-gradient(135deg,rgba(27,92,255,.3),rgba(27,92,255,.12))}
+
+  .tt{position:fixed;z-index:9998;background:var(--tooltipBg);color:var(--text);border:1px solid var(--tooltipBd);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;max-width:320px;pointer-events:none}
+  .tt h5{margin:0 0 6px 0;font-size:12px;color:var(--muted)}
+  .tt ul{margin:0;padding-left:16px}
+  .tt li{margin:2px 0}
+  
+  #orderForm input[name="title"] {
+    width: 100%;
+  }
+
+</style>
 </head>
 <body>
-  <header>
-    <h1>CRM — отправка изменений в планировщик</h1>
-  </header>
-  <main>
-    <section>
-      <h2>Сводка по состоянию</h2>
-      <div class="grid" style="margin-bottom:16px;">
-        <div class="metric"><div>Ревизия</div><strong id="rev">—</strong></div>
-        <div class="metric"><div>ETag</div><strong id="etag">—</strong></div>
-        <div class="metric"><div>Последний ответ</div><strong id="last-response">—</strong></div>
-      </div>
-      <div style="display:flex; gap:12px; flex-wrap:wrap;">
-        <button type="button" id="btn-full">Получить снимок</button>
-        <button type="button" id="btn-delta">Получить дельту</button>
-      </div>
-      <pre id="state-view">Загрузка…</pre>
-    </section>
+<header>
+  <div class="bar">
+    <div class="title-area">
+      <h1>Mini CRM</h1>
+      <a id="plannerLink" class="planner-button" href="/Planner_Codex_v3.html" title="Открыть планировщик" aria-label="Открыть планировщик">
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 4h2V2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm14 6H5v10h14V10zm0-2V6H5v2h14z"/></svg>
+      </a>
+    </div>
+    <div class="boards">
+      <select id="boardSelect"></select>
+      <span class="pill muted" id="stats">—</span>
+    </div>
+    <div class="actions">
+      <button id="newOrderBtn" class="primary">+ Заказ</button>
+      <button id="exportBtn" title="Экспорт JSON">⭳</button>
+      <button id="importBtn" title="Импорт JSON">⭱</button>
+      <input id="importInput" type="file" accept="application/json" hidden />
+      <button id="themeBtn" title="Переключить тему">🌙</button>
+    </div>
+    <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
+  </div>
+</header>
 
-    <section>
-      <h2>Обновить стадию заказа</h2>
-      <p>CRM обновляет прогресс конкретной стадии. При конфликте выполняется автоматическая повторная попытка.</p>
-      <form id="form-stage" class="grid">
-        <div>
-          <label for="stage-id">ID стадии *</label>
-          <input id="stage-id" name="id" type="number" min="1" required placeholder="например, 123" />
+<main><div class="columns" id="columns"></div></main>
+
+<div id="toastLayer" class="toast-layer" aria-live="polite"></div>
+
+<!-- Диалог заказа -->
+<dialog id="orderDlg">
+  <div class="dlg-head">
+    <strong id="dlgTitle">Редактировать заказ</strong>
+    <div class="rowc">
+      <label class="rowc"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
+      <button class="ghost" id="splitBtn" title="Разбить на подзаказ">➗ Подзаказ</button>
+      <button class="ghost" onclick="closeOrder()">✖</button>
+    </div>
+  </div>
+  <form id="orderForm" class="dlg-body" method="dialog">
+    <div class="gridHead surface">
+      <div class="title"><label>Название заказа</label><input name="title" required placeholder="ВЗПС-021612 АБХМ (Фортес Групп)" /></div>
+      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
+      <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
+
+      <div class="customer"><label>Клиент</label><input name="customer" placeholder="АБХМ" /></div>
+      <div class="orderNo"><label>№ заказа</label><input name="orderNo" required placeholder="ВЗПС-021612" /></div>
+      <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
+      <div class="end"><label>Конец (авто)</label><input name="end" type="date" disabled /></div>
+    </div>
+
+    <details class="section-card surface" open>
+      <summary>План переделов (статус, % выполнения, сроки, Руб/часов)</summary>
+      <div class="section-body">
+        <div class="list">
+          <table id="stagesTable">
+            <thead><tr><th>Передел</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+          <tbody></tbody></table>
+
+          <div class="section-toolbar">
+            <div class="left">
+              <label class="rowc"><input id="dateToday" type="checkbox" class="ready-switch" /> Даты=сегодня</label>
+              <span class="note">Галочка «Готово» = 100% по переделу.</span>
+            </div>
+            <div class="right">
+              <button type="button" id="addStageBtn">+ Передел</button>
+              <button type="button" id="presetStagesBtn">🔁 Базовые</button>
+            </div>
+          </div>
         </div>
-        <div>
-          <label for="stage-progress">Прогресс, %</label>
-          <input id="stage-progress" name="progress" type="number" min="0" max="100" placeholder="75" />
-        </div>
-        <div>
-          <label for="stage-status">Статус</label>
-          <input id="stage-status" name="status" placeholder="Выполняется" />
-        </div>
-        <div>
-          <label for="stage-done">Готово?</label>
-          <select id="stage-done" name="is_done">
-            <option value="">—</option>
-            <option value="true">Да</option>
-            <option value="false">Нет</option>
-          </select>
-        </div>
-      </form>
-      <div style="margin-top:16px; display:flex; gap:12px; flex-wrap:wrap;">
-        <button type="button" id="btn-save-stage">Сохранить стадию</button>
-        <button type="button" id="btn-clear-stage" class="muted">Очистить форму</button>
       </div>
-      <p id="stage-status-msg"></p>
-    </section>
+    </details>
+    <details class="section-card surface" open>
+      <summary>Описание/исключения</summary>
+      <div class="section-body">
+        <textarea name="notes" rows="2" placeholder="Краткое ТЗ, исключения, кооперация…"></textarea>
+      </div>
+    </details>
 
-    <section>
-      <h2>Удалить заказ</h2>
-      <div class="grid">
-        <div>
-          <label for="delete-order-id">ID заказа *</label>
-          <input id="delete-order-id" type="number" min="1" placeholder="42" />
+    <div class="section-card surface form-footer">
+      <div class="status-field">
+        <label for="statusSel">Состояние</label>
+        <select name="status" id="statusSel"></select>
+      </div>
+      <div class="actions">
+        <button type="button" class="danger" id="deleteOrderBtn" style="display:none">Удалить</button>
+        <button type="submit" class="primary">Сохранить</button>
+      </div>
+    </div>
+    <input type="hidden" name="id" />
+  </form>
+</dialog>
+
+<!-- Диалог настроек доски -->
+<dialog id="boardDlg">
+  <div class="dlg-head">
+    <strong>Настройки доски</strong>
+    <button class="ghost" onclick="closeBoard()">✖</button>
+  </div>
+  <form id="boardForm" class="dlg-body" method="dialog">
+    <div class="rowc" style="flex-direction:column;align-items:stretch;gap:10px">
+      <div><label>Название доски</label><input name="name" required /></div>
+      <div><label>Схема статусов (по столбцам)</label><input name="lanes" placeholder="Не запланированное, Клиент, …, Отгружено" /></div>
+    </div>
+    <div class="rowc" style="justify-content:flex-end;gap:8px;margin-top:8px">
+      <button type="button" class="danger" id="deleteBoardBtn">Удалить доску</button>
+      <button type="submit" class="primary">Сохранить</button>
+    </div>
+    <input type="hidden" name="id" />
+  </form>
+</dialog>
+
+<script>
+const KEY='mini_crm_v13c';
+const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
+const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtDate=d=>d.toISOString().slice(0,10);
+const formatDateHuman=iso=>{if(!iso)return'';const d=new Date(iso);return Number.isNaN(d.getTime())?iso:d.toLocaleDateString('ru-RU');};
+const applyStageDateHighlight=(input,orig,label)=>{if(!input)return;const original=(orig||'').trim();input.dataset.original=original;const current=input.value||'';if(original&&current&&original!==current){input.classList.add('crm-date-changed');input.title=`${label}: ${formatDateHuman(original)}`;}else{input.classList.remove('crm-date-changed');if(original){input.title=`${label}: ${formatDateHuman(original)}`;}else{input.removeAttribute('title');}}if(!original&&current){input.removeAttribute('title');}};
+const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1b3b68"/><path d="M32 4a28 28 0 0 1 0 56z" fill="#4da3ff"/></svg>`);
+const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#15341e"/><path d="M32 4a28 28 0 0 0 0 56z" fill="#70e000"/></svg>`);
+
+const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
+const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка'];
+const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const deepClone=value=>{
+  if(typeof structuredClone==='function'){
+    try{return structuredClone(value);}catch(_err){/* ignore */}
+  }
+  try{return JSON.parse(JSON.stringify(value));}
+  catch(_err){
+    if(!value||typeof value!=='object') return value;
+    return Array.isArray(value) ? value.slice() : { ...value };
+  }
+};
+
+let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard()],currentBoardId:null};
+if(!state.currentBoardId&&Array.isArray(state.boards)&&state.boards.length){state.currentBoardId=state.boards[0].id;}
+persistLocal();
+function load(){
+  if(window.__CRM_INITIAL_STATE__){
+    const initial=deepClone(window.__CRM_INITIAL_STATE__);
+    window.__CRM_INITIAL_STATE__=null;
+    return initial;
+  }
+  try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}
+}
+function persistLocal(){
+  try{localStorage.setItem(KEY,JSON.stringify(state));}
+  catch(err){console.warn('CRM local save failed',err);}
+}
+function save(summary){persistLocal();queueSync(summary);}
+function currentBoard(){return state.boards.find(b=>b.id===state.currentBoardId)}
+
+const THEME_KEY='mini_crm_theme';
+function applyTheme(t){document.documentElement.setAttribute('data-theme',t);document.body.setAttribute('data-theme',t);localStorage.setItem(THEME_KEY,t);const btn=$('#themeBtn');if(btn) btn.textContent=t==='light'?'🌙':'☀️'}
+applyTheme(localStorage.getItem(THEME_KEY)||'dark');
+$('#themeBtn').onclick=()=>{const now=(document.documentElement.getAttribute('data-theme')==='light')?'dark':'light';applyTheme(now)};
+
+function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
+function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
+
+const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+
+function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
+function renderColumns(){const b=currentBoard();columns.innerHTML='';b.lanes.forEach(l=>{const c=document.createElement('div');c.className='col';c.innerHTML=`<header><h2>${escapeHtml(l)}</h2></header><div class="drop" data-lane="${escapeHtml(l)}"></div>`;columns.appendChild(c)});enableDnd()}
+
+function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
+function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>x.done||Number(x.progress||0)>=100).length;return[d,s.length]}
+
+function renderCards(){
+  const b=currentBoard(); const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  b.orders.forEach(o=>{
+    computeOrderDatesFromStages(o);
+    const inSearch=!qv||(o.title.toLowerCase().includes(qv)||(o.orderNo||'').toLowerCase().includes(qv)||(o.customer||'').toLowerCase().includes(qv)||(o.stages||[]).some(s=>s.name.toLowerCase().includes(qv)));
+    if(!inSearch)return; const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
+  });
+  $$('.drop',columns).forEach(d=>d.innerHTML='');
+
+  Object.entries(map).forEach(([lane,arr])=>{
+    const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
+    if(!arr.length){const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p)}
+    arr.forEach(o=>{
+      const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
+      const progress=calcAutoProgress(o.stages); const [doneCnt,totalCnt]=stagesDoneCount(o);
+      const chips=document.createElement('div');chips.className='chips';
+      (o.stages||[]).forEach(st=>{if(st.value!==''&&st.value!==undefined&&st.value!==null){chips.appendChild(chip(`${escapeHtml(st.name)}: ${escapeHtml(st.value)}`))}});
+      if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
+      if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
+      if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
+      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,'warn'))}
+      const readyChecked=o.done?'checked':'';
+      card.innerHTML=`
+        <div class="row">
+          <div class="title">
+            <input type="checkbox" class="ready-switch card-ready" data-act="toggle-done" ${readyChecked} title="Отметить заказ готовым" />
+            ${escapeHtml(o.title)}
+          </div>
+          <div class="kebab grow"></div>
+          <button class="ghost" data-act="move" title="Переместить ↩">↩</button>
+          <button class="ghost" data-act="edit" title="Открыть">✏️</button>
         </div>
-      </div>
-      <div style="margin-top:16px; display:flex; gap:12px; flex-wrap:wrap;">
-        <button type="button" id="btn-delete-order" class="danger">Удалить</button>
-      </div>
-      <p id="delete-status"></p>
-    </section>
+        <div class="sub">№ ${escapeHtml(o.orderNo||'—')} · ${escapeHtml(o.customer||'Без клиента')}</div>`;
+      card.appendChild(chips);
+      const foot=document.createElement('div');foot.className='foot';
+      const prog=document.createElement('div');prog.className='progress';const bar=document.createElement('i');bar.style.width=`${Math.max(0,Math.min(100,progress))}%`;prog.appendChild(bar);
+      foot.appendChild(prog);foot.appendChild(spanMuted(`${doneCnt}/${totalCnt}`));card.appendChild(foot);
 
-    <section>
-      <h2>Журнал (SSE)</h2>
-      <div class="log" id="crm-log"></div>
-    </section>
-  </main>
-
-  <script>
-    (() => {
-      const view = document.getElementById('state-view');
-      const revEl = document.getElementById('rev');
-      const etagEl = document.getElementById('etag');
-      const lastResponseEl = document.getElementById('last-response');
-      const logEl = document.getElementById('crm-log');
-      const stageMsg = document.getElementById('stage-status-msg');
-      const deleteMsg = document.getElementById('delete-status');
-
-      let lastRev = 0;
-      let lastEtag = null;
-      let lastDeltaSince = 0;
-
-      const updateIndicators = () => {
-        revEl.textContent = lastRev;
-        etagEl.textContent = lastEtag || '—';
-      };
-
-      const log = (text, kind = 'info') => {
-        const line = document.createElement('div');
-        line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-        if (kind === 'ok') line.classList.add('status-ok');
-        if (kind === 'warn') line.classList.add('status-warn');
-        logEl.prepend(line);
-        while (logEl.children.length > 50) {
-          logEl.removeChild(logEl.lastChild);
-        }
-      };
-
-      const loadFull = async () => {
-        const res = await fetch('/api/state');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        lastRev = json.rev || 0;
-        lastEtag = json.etag || null;
-        lastDeltaSince = lastRev;
-        updateIndicators();
-        view.textContent = JSON.stringify(json.data, null, 2);
-        lastResponseEl.textContent = 'полный снимок';
-        log(`Получен полный снимок rev=${lastRev}`, 'ok');
-      };
-
-      const loadDelta = async () => {
-        const res = await fetch(`/api/state?since_rev=${encodeURIComponent(lastDeltaSince)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        lastRev = json.rev || lastRev;
-        lastEtag = json.etag || lastEtag;
-        updateIndicators();
-        view.textContent = JSON.stringify(json.delta, null, 2);
-        lastResponseEl.textContent = `дельта rev>${lastDeltaSince}`;
-        lastDeltaSince = lastRev;
-        log(`Получена дельта rev>${lastDeltaSince}`, 'ok');
-      };
-
-      const sendChanges = async (changes, meta = {}) => {
-        const payload = {
-          base_rev: lastRev,
-          actor: meta.actor || 'crm-ui',
-          source: meta.source || 'crm',
-          summary: meta.summary,
-          forceOverwrite: meta.forceOverwrite === true,
-          changes
-        };
-
-        const attempt = async (no) => {
-          const res = await fetch('/api/changes', {
-            method: 'PUT',
-            headers: {
-              'Content-Type': 'application/json',
-              'If-Match': lastEtag || `W/"r${lastRev}"`
-            },
-            body: JSON.stringify(payload)
-          });
-          if (res.status === 409 || res.status === 412) {
-            if (no === 0) {
-              log('Конфликт — перезагружаем и повторяем', 'warn');
-              await loadFull();
-              payload.base_rev = lastRev;
-              return attempt(1);
-            }
-            const detail = await res.json().catch(() => ({ error: 'Conflict' }));
-            throw new Error(detail.error || 'Conflict');
-          }
-          if (!res.ok) {
-            const detail = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-            throw new Error(detail.error || `HTTP ${res.status}`);
-          }
-          const json = await res.json();
-          lastRev = json.rev || lastRev;
-          lastEtag = json.etag || lastEtag;
-          updateIndicators();
-          if (json.delta) {
-            view.textContent = JSON.stringify(json.delta, null, 2);
-            lastResponseEl.textContent = 'ответ сервера';
-          }
-          log(`Изменения сохранены, rev=${lastRev}`, 'ok');
-          return json;
-        };
-        return attempt(0);
-      };
-
-      document.getElementById('btn-full').addEventListener('click', () => {
-        loadFull().catch((err) => log(`Ошибка загрузки: ${err.message}`, 'warn'));
+      card.addEventListener('click',e=>{
+        const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
+        if(act==='edit'){e.stopPropagation();openOrder(o.id);return}
+        if(act==='toggle-done'){e.stopPropagation();o.done=target.checked;if(o.done){(o.stages||[]).forEach(st=>{st.done=true;st.progress=100})}save('Изменение готовности заказа');renderCards();return}
+        if(act==='move'){e.stopPropagation();showMoveMenu(target.getBoundingClientRect(),o);return}
+        openOrder(o.id);
       });
-      document.getElementById('btn-delta').addEventListener('click', () => {
-        loadDelta().catch((err) => log(`Ошибка дельты: ${err.message}`, 'warn'));
-      });
+      card.addEventListener('mouseenter',()=>showTooltipForOrder(o,card));
+      card.addEventListener('mouseleave',hideTooltip);
+      drop.appendChild(card);
+    })
+  });
+  const total=b.orders.length; const active=b.orders.filter(x=>x.status!==b.lanes[b.lanes.length-1]).length;
+  stats.textContent=`Всего: ${total} • Активных: ${active}`;
+}
 
-      document.getElementById('btn-save-stage').addEventListener('click', async () => {
-        stageMsg.textContent = 'Отправка…';
-        stageMsg.className = '';
-        try {
-          const form = new FormData(document.getElementById('form-stage'));
-          const id = form.get('id');
-          if (!id) {
-            stageMsg.textContent = 'Укажите ID стадии';
-            stageMsg.className = 'status-warn';
-            return;
-          }
-          const payload = {
-            stages: {
-              upserts: [
-                {
-                  id: Number(id),
-                  progressPct: form.get('progress') ? Number(form.get('progress')) : undefined,
-                  status: form.get('status') || undefined,
-                  isDone: form.get('is_done') === '' ? undefined : form.get('is_done') === 'true'
-                }
-              ]
-            }
-          };
-          await sendChanges(payload, { summary: `stage ${id} from CRM` });
-          stageMsg.textContent = 'Изменения сохранены';
-          stageMsg.className = 'status-ok';
-        } catch (err) {
-          stageMsg.textContent = err.message;
-          stageMsg.className = 'status-warn';
-        }
-      });
+function enableDnd(){
+  let draggingId=null;
+  columns.addEventListener('dragstart',e=>{const card=e.target.closest('.card');if(!card)return;draggingId=card.dataset.id;card.classList.add('dragging')});
+  columns.addEventListener('dragend',e=>{const card=e.target.closest('.card');if(card)card.classList.remove('dragging');draggingId=null});
+  $$('.drop',columns).forEach(d=>{
+    d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
+    d.addEventListener('dragleave',()=>{d.style.outline='none'});
+    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);o.status=d.dataset.lane;save('Перемещение заказа между статусами');renderCards()});
+  });
+}
 
-      document.getElementById('btn-clear-stage').addEventListener('click', () => {
-        document.getElementById('form-stage').reset();
-        stageMsg.textContent = '';
-        stageMsg.className = '';
-      });
+/* Popup перемещения */
+let _popup;
+function showMoveMenu(rect,order){
+  closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save('Перемещение заказа между статусами');renderCards();closePopup()}};p.appendChild(it)});
+  document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
+  setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
+}
+function clickAwayPopup(e){if(!_popup)return;if(!e.target.closest('.popup'))closePopup()}
+function closePopup(){if(_popup){_popup.remove();_popup=null}}
 
-      document.getElementById('btn-delete-order').addEventListener('click', async () => {
-        deleteMsg.textContent = 'Удаляем…';
-        deleteMsg.className = '';
-        try {
-          const idInput = document.getElementById('delete-order-id');
-          const id = idInput.value ? Number(idInput.value) : null;
-          if (!id) {
-            deleteMsg.textContent = 'Укажите ID заказа';
-            deleteMsg.className = 'status-warn';
-            return;
-          }
-          await sendChanges({ orders: { deletes: [{ id }] } }, { summary: `delete order ${id}` });
-          deleteMsg.textContent = 'Заказ удалён';
-          deleteMsg.className = 'status-ok';
-        } catch (err) {
-          deleteMsg.textContent = err.message;
-          deleteMsg.className = 'status-warn';
-        }
-      });
+/* Tooltip */
+let _tt;
+function showTooltipForOrder(o,anchorEl){
+  hideTooltip(); const tt=document.createElement('div');tt.className='tt';tt.innerHTML=`<h5>План переделов</h5><ul></ul>`;
+  const ul=tt.querySelector('ul'); (o.stages||[]).forEach(st=>{const mark=(st.done||Number(st.progress||0)>=100)?'✓':'•';const li=document.createElement('li');li.textContent=`${mark} ${st.name}`;ul.appendChild(li)});
+  document.body.appendChild(tt); const r=anchorEl.getBoundingClientRect(); const x=Math.min(window.innerWidth-tt.offsetWidth-10,r.right+10); const y=Math.max(10,r.top); tt.style.left=x+'px'; tt.style.top=y+'px'; _tt=tt;
+}
+function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
-      const connectSse = () => {
-        if (!('EventSource' in window)) return;
-        const source = new EventSource('/api/events');
-        source.onmessage = (event) => {
-          if (!event.data) return;
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload.rev !== undefined) {
-              lastRev = payload.rev;
-              lastEtag = payload.etag || lastEtag;
-              updateIndicators();
-              log(`SSE rev=${payload.rev} ${payload.summary || ''}`);
-            }
-          } catch (err) {
-            log(`Ошибка SSE: ${err.message}`, 'warn');
-          }
-        };
-        source.onerror = () => {
-          source.close();
-          setTimeout(connectSse, 4000);
-        };
-      };
+/* ORDER DIALOG */
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),orderDone=$('#orderDone'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday');
 
-      loadFull().catch((err) => {
-        view.textContent = `Ошибка загрузки: ${err.message}`;
-      });
-      connectSse();
-    })();
-  </script>
+function openOrder(id=null){
+  const b=currentBoard(); statusSel.innerHTML=''; b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)}); stagesTableBody.innerHTML='';
+  if(id){
+    dlgTitle.textContent='Редактировать заказ'; const o=b.orders.find(x=>x.id===id); fillOrderForm(o,b);
+    window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
+    deleteOrderBtn.style.display=''; deleteOrderBtn.onclick=()=>{if(!confirm('Удалить этот заказ?'))return;b.orders=b.orders.filter(x=>x.id!==o.id);save('Удаление заказа');renderCards();orderDlg.close()};
+  }else{
+    dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
+    DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''})); window._editingOrigValues=null; syncAutoDates(); deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
+  }
+  addStageBtn.onclick=()=>appendStageRow({name:'Новый передел',done:false,progress:0,start:'',end:'',value:''});
+  presetStagesBtn.onclick=()=>{stagesTableBody.innerHTML='';DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''}));syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
+  splitBtn.onclick=()=>openSplitDialog();
+  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates();updateAllStageExpectations()};
+  orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress();updateAllStageExpectations()};
+  orderDlg.showModal();
+}
+function closeOrder(){orderDlg.close()}
+
+function fillOrderForm(o,b){
+  orderForm.title.value=o.title||''; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
+  orderForm.serviceTotal.value=(o.serviceTotal??'')===''?'':Number(o.serviceTotal).toLocaleString('ru-RU');
+  orderForm.notes.value=o.notes||''; orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
+  (o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}))).forEach(st=>appendStageRow(st));
+  computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
+}
+
+function parseDateInputValue(value){
+  if(!value) return null;
+  const trimmed=String(value).trim();
+  if(!trimmed) return null;
+  const d=new Date(`${trimmed}T00:00:00`);
+  if(Number.isNaN(d.getTime())) return null;
+  d.setHours(0,0,0,0);
+  return d;
+}
+
+function crmExpectedReferenceDate(){
+  const ref=new Date();
+  ref.setHours(0,0,0,0);
+  ref.setDate(ref.getDate()-1);
+  ref.setHours(23,59,59,999);
+  return ref;
+}
+
+function computeExpectedPercentForInputs(startValue,endValue){
+  const start=parseDateInputValue(startValue);
+  const end=parseDateInputValue(endValue);
+  if(!start||!end) return null;
+  const startMs=start.getTime();
+  const endCopy=new Date(end);
+  endCopy.setHours(23,59,59,999);
+  const endMs=endCopy.getTime();
+  if(endMs<=startMs){
+    return crmExpectedReferenceDate().getTime()<startMs?0:100;
+  }
+  const ref=crmExpectedReferenceDate();
+  const refMs=ref.getTime();
+  if(refMs<=startMs) return 0;
+  if(refMs>=endMs) return 100;
+  const fraction=(refMs-startMs)/(endMs-startMs);
+  return Math.max(0,Math.min(100,fraction*100));
+}
+
+function updateStageRowExpectation(tr){
+  if(!tr) return;
+  const indicator=tr.querySelector('.expected-indicator');
+  if(!indicator){return;}
+  const progressEl=tr.querySelector('[data-k="progress"]');
+  if(!progressEl){indicator.textContent='';indicator.classList.remove('behind');return;}
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  const expected=computeExpectedPercentForInputs(startInput?.value||'',endInput?.value||'');
+  if(expected==null){
+    indicator.textContent='';
+    indicator.classList.remove('behind');
+    return;
+  }
+  const rounded=Math.round(expected);
+  indicator.textContent=`/${rounded}%`;
+  const actual=Math.max(0,Math.min(100,Number(progressEl.value||0)));
+  indicator.classList.toggle('behind',actual<rounded);
+}
+
+function updateAllStageExpectations(){
+  stagesTableBody.querySelectorAll('tr').forEach(tr=>updateStageRowExpectation(tr));
+}
+
+/* формат суммы */
+(function(){const inp=$('#orderForm input[name="serviceTotal"]');function parseMoney(s){if(s==null)return'';s=String(s).replace(/\s+/g,'').replace(',', '.');const n=Number(s);return Number.isFinite(n)?n:''}function fmt(n){return(n===''?'':Number(n).toLocaleString('ru-RU'))}
+if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
+
+function appendStageRow(st){
+  const nm=(st.name||'').trim(); const isZakupka=nm.toLowerCase()==='закупка';
+  const isBoolOnly=['закупка','рубка','упаковка','отгрузка'].includes(nm.toLowerCase());
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nm)}" /></td>
+    <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
+    <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
+    <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
+    <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
+    <td>${isZakupka?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
+    <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
+  const origMap=window._editingOrigValues||null;
+  if(origMap&&!isZakupka){const nameNow=nm||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
+
+  const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
+  const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
+  if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress();updateStageRowExpectation(tr);})}
+  if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress();updateStageRowExpectation(tr);})}
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();updateStageRowExpectation(tr);});}
+  if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();updateStageRowExpectation(tr);});}
+  stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr);
+}
+
+function readStages(){
+  const rows=[...stagesTableBody.querySelectorAll('tr')];
+  return rows.map(r=>{const get=k=>r.querySelector(`[data-k="${k}"]`);
+    const name=(get('name').value.trim()||'Передел'); const isZak=name.toLowerCase()==='закупка';
+    const boolOnly=['закупка','рубка','упаковка','отгрузка'].includes(name.toLowerCase());
+    const done=get('done').checked; const progEl=get('progress');
+    const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
+    const startInput=get('start');
+    const endInput=get('end');
+    return {name,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:isZak?'':(get('value')?.value??'')}
+  })
+}
+
+function calcAutoProgress(stages){const s=stages||[];if(!s.length)return 0;const avg=s.reduce((a,x)=>a+(Number(x.progress||0)),0)/s.length;return Math.round(avg)}
+function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations()}
+function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
+
+orderForm.addEventListener('submit',e=>{
+  e.preventDefault(); const b=currentBoard();
+  const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const stages=readStages();
+  const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
+  const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
+  const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
+    start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
+    notes:orderForm.notes.value.trim(),status:orderForm.status.value,
+    serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
+    createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
+    parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
+  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)} save(exist?'Обновление заказа':'Создание заказа'); renderCards(); orderDlg.close();
+});
+
+/* Настройки доски */
+const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
+function openBoard(){const b=currentBoard();boardForm.name.value=b.name;boardForm.lanes.value=b.lanes.join(', ');boardForm.id.value=b.id;boardDlg.showModal()}
+function closeBoard(){boardDlg.close()}
+boardForm.addEventListener('submit',e=>{e.preventDefault();const id=boardForm.id.value;const b=state.boards.find(x=>x.id===id);b.name=boardForm.name.value.trim()||'Доска';b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);save('Настройка доски');renderAll();boardDlg.close()});
+deleteBoardBtn.onclick=()=>{const id=boardForm.id.value;if(state.boards.length<=1){alert('Нельзя удалить единственную доску');return}if(!confirm('Удалить эту доску и все её заказы?'))return;state.boards=state.boards.filter(b=>b.id!==id);if(!state.boards.find(b=>b.id===state.currentBoardId)){state.currentBoardId=state.boards[0].id}save('Удаление доски');renderAll();boardDlg.close()};
+
+/* Разбивка на подзаказ */
+const splitDlg=document.createElement('dialog'); splitDlg.id='splitDlg'; splitDlg.innerHTML=`
+  <div class="dlg-head"><strong>Разбивка на подзаказ</strong><button class="ghost" onclick="document.getElementById('splitDlg').close()">✖</button></div>
+  <form id="splitForm" class="dlg-body" method="dialog">
+    <div class="rowc" style="gap:10px;flex-wrap:wrap">
+      <div class="rowc" style="flex-direction:column;align-items:stretch"><label>Название подзаказа</label><input name="titlePart" placeholder="Напр.: Корпус Шкафа — часть 1"/></div>
+      <div class="rowc" style="flex-direction:column;align-items:stretch"><label>% от основного</label><input name="partPct" type="number" min="1" max="99" value="50"/></div>
+      <div class="rowc" style="flex-direction:column;align-items:stretch"><label>Суффикс №</label><input name="suffix" placeholder="-1"/></div>
+    </div>
+    <details open>
+      <summary>Доли по переделам (опционально)</summary>
+      <table id="splitStagesTable"><thead><tr><th>Передел</th><th style="width:22%">% доли</th></tr></thead><tbody></tbody></table>
+      <small class="muted">Если указана хотя бы одна доля — общий % игнорируется. Для пустых долей — всё остаётся в основном заказе.</small>
+    </details>
+    <div class="rowc" style="justify-content:flex-end;gap:8px">
+      <button type="button" onclick="document.getElementById('splitDlg').close()">Отмена</button>
+      <button type="submit" class="primary">Создать подзаказ</button>
+    </div>
+  </form>`; document.body.appendChild(splitDlg);
+const splitForm=splitDlg.querySelector('#splitForm'); const splitStagesTbody=splitDlg.querySelector('#splitStagesTable tbody'); let splitContextId=null;
+
+function openSplitDialog(){
+  const b=currentBoard(); const id=orderForm.id.value; const o=b.orders.find(x=>x.id===id)||null; splitContextId=id||null;
+  splitForm.reset(); splitStagesTbody.innerHTML=''; const stages=readStages();
+  stages.forEach(st=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td><input type="number" min="0" max="100" placeholder="" /></td>`;splitStagesTbody.appendChild(tr)});
+  const defTitle=(orderForm.title.value.trim()||'Заказ')+' — часть'; splitForm.titlePart.value=defTitle; splitForm.suffix.value='-1'; splitForm.partPct.value=50;
+  splitDlg.showModal();
+}
+splitForm.addEventListener('submit',e=>{
+  e.preventDefault(); const b=currentBoard(); const parent=b.orders.find(x=>x.id===splitContextId); if(!parent){alert('Не удалось найти исходный заказ');return}
+  const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0))); const stageRows=[...splitStagesTbody.querySelectorAll('tr')]; const stageShares={};
+  (parent.stages||[]).forEach((st,i)=>{const vRaw=stageRows[i]?.querySelector('input')?.value??'';const v=vRaw===''?NaN:Number(vRaw);if(!Number.isNaN(v)&&v>=0&&v<=100)stageShares[st.name]=v});
+  const hasAnyStageShare=Object.keys(stageShares).length>0;
+  if(!parent._origValues){parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>[s.name,Number(s.value)||0]))}
+  if(typeof parent._origPctUsed!=='number') parent._origPctUsed=0;
+
+  const child=deepClone(parent); child.id=crypto.randomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
+  child.orderNo=parent.orderNo+(splitForm.suffix.value||'-1'); child.createdAt=new Date().toISOString();
+  child.partOfPct=hasAnyStageShare?null:basePct; child.restOfPct=null; child.done=false; child.progress=0; child.progressManual=true;
+  child.parentId=parent.id; child.isPart=true; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
+
+  child.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); return {...st,value:childWant}});
+  parent.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); const parentVal=round(curr-childWant); return {...st,value:parentVal}});
+
+  if(!hasAnyStageShare){const allowed=Math.max(0,100-parent._origPctUsed);const used=Math.min(allowed,basePct);child.partOfPct=used;parent._origPctUsed+=used;parent.restOfPct=Math.max(0,100-parent._origPctUsed);if(parent.restOfPct===0)parent.restOfPct=null}else{child.partOfPct=null;parent.restOfPct=null}
+
+  computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
+  b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
+});
+function round(n){return Math.round((n+Number.EPSILON)*100)/100}
+
+/* TOP BAR & INIT */
+const addBoardBtn=$('#addBoardBtn');
+if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save('Создание доски');renderAll();openBoard();};}
+const editBoardBtn=$('#editBoardBtn');
+if(editBoardBtn){editBoardBtn.onclick=openBoard;}
+$('#newOrderBtn').onclick=()=>openOrder(null);
+boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
+q.oninput=()=>renderCards();
+
+$('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
+$('#importBtn').addEventListener('click',()=>$('#importInput').click());
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+
+$('#exportBtn').insertAdjacentHTML('afterend','<button id="demoBtn" title="Загрузить демо">☆</button>');
+$('#demoBtn').onclick=()=>{loadDemo();save('Загрузка демо-данных');renderAll();alert('Загружено 12 демо-заказов')};
+
+function loadDemo(){
+  const b=currentBoard(); b.orders=[]; const lanes=b.lanes; const today=new Date(); today.setHours(0,0,0,0);
+  const names=['Корпус шкафа','Панель фасадная','Кожух вентиляции','Стойка рамы','Лоток кабельный','Кронштейн опорный','Щит распределительный','Дверца ревизионная','Профиль С-образный','Балка связующая','Люк сервисный','Ступень лестничная'];
+  for(let i=0;i<12;i++){
+    const id=crypto.randomUUID(); const startShift=-10+Math.floor(Math.random()*15); const len=3+Math.floor(Math.random()*10);
+    const s=new Date(today); s.setDate(s.getDate()+startShift); const e=new Date(s); e.setDate(e.getDate()+len);
+    const st=DEFAULT_STAGES.map(n=>{const stS=new Date(s);stS.setDate(stS.getDate()+Math.floor(Math.random()*Math.max(1,len-1)));const stE=new Date(stS);stE.setDate(stE.getDate()+Math.floor(Math.random()*3));const done=Math.random()<0.4;const prog=done?100:Math.floor(Math.random()*80);const val=n.toLowerCase()==='закупка'?'':(Math.random()<0.5?(5+Math.floor(Math.random()*15)):'');return {name:n,done,progress:prog,start:fmtDate(stS),end:fmtDate(stE),value:val}});
+    const order={id,title:names[i],orderNo:`24-${100+i}`,customer:['ООО Ромашка','ЗАО Лист','ИП Металл'][i%3],
+      start:fmtDate(s),end:fmtDate(e),done:Math.random()<0.15,progress:Math.floor(Math.random()*100),progressManual:true,
+      notes:'',status:lanes[Math.floor(Math.random()*lanes.length)],
+      serviceTotal:Math.random()<0.6?(10000+Math.floor(Math.random()*90000)):'',stages:st,createdAt:new Date().toISOString()};
+    b.orders.push(order);
+  }
+}
+
+/* === CRM ↔ Planner Sync === */
+const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
+const toastLayer=document.getElementById('toastLayer');
+function positionToastLayer(){
+  if(!toastLayer) return;
+  let offset=20;
+  const header=document.querySelector('header');
+  if(header){
+    const rect=header.getBoundingClientRect();
+    if(rect && !Number.isNaN(rect.bottom)){
+      offset=Math.max(20, rect.bottom + 16);
+    }
+  }
+  toastLayer.style.top=`${offset}px`;
+}
+positionToastLayer();
+window.addEventListener('resize', positionToastLayer);
+let crmNotificationsMuted=window.__CRM_NOTIFICATIONS_MUTED__===true;
+function derivePlannerNotificationsMuted(state){
+  if(!state||typeof state!=='object') return undefined;
+  if(typeof state.notificationsMuted==='boolean') return state.notificationsMuted;
+  const meta=state.meta||{};
+  if(typeof meta.notificationsMuted==='boolean') return meta.notificationsMuted;
+  if(meta.settings&&typeof meta.settings.notificationsMuted==='boolean') return meta.settings.notificationsMuted;
+  if(state.settings&&typeof state.settings.notificationsMuted==='boolean') return state.settings.notificationsMuted;
+  return undefined;
+}
+function syncCrmNotificationsMutedFromPlanner(state){
+  const next=derivePlannerNotificationsMuted(state);
+  if(typeof next==='boolean'){
+    crmNotificationsMuted=next;
+    window.__CRM_NOTIFICATIONS_MUTED__=next;
+  }
+}
+let crmSyncTimer=null;
+let crmPendingSummary='Изменения CRM';
+let crmSuppressNext=false;
+let crmSyncInFlight=false;
+let crmAlias=(()=>{
+  try{const stored=localStorage.getItem(CRM_ALIAS_STORAGE_KEY); if(stored) return stored;}
+  catch(_err){/* ignore */}
+  return 'CRM оператор';
+})();
+
+function setCrmAlias(name){
+  crmAlias=(name||'CRM оператор').trim()||'CRM оператор';
+  try{localStorage.setItem(CRM_ALIAS_STORAGE_KEY,crmAlias);}catch(_err){/* ignore */}
+}
+
+function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
+  if(crmNotificationsMuted) return;
+  if(!toastLayer) return;
+  positionToastLayer();
+  const toast=document.createElement('div');
+  toast.className=`toast ${tone==='success'?'success':tone==='warn'?'warn':tone==='error'?'error':''}`.trim();
+  toast.innerHTML=`<strong>${escapeHtml(title)}</strong><span>${escapeHtml(message)}</span>`;
+  toastLayer.appendChild(toast);
+  const close=()=>{toast.remove();};
+  toast.addEventListener('click',close,{once:true});
+  if(autoClose>0){setTimeout(close,autoClose);}
+}
+
+function queueSync(summary){
+  crmPendingSummary=summary||'Изменения CRM';
+  if(crmSyncTimer) clearTimeout(crmSyncTimer);
+  crmSyncTimer=setTimeout(pushCrmToServer,450);
+}
+
+function buildCrmOrdersSummary(snapshot){
+  if(!snapshot||typeof snapshot!=='object'||!Array.isArray(snapshot.boards)||!snapshot.boards.length) return null;
+  const active=snapshot.boards.find(b=>b.id===snapshot.currentBoardId) || snapshot.boards[0];
+  if(!active) return null;
+  const totals={orders:Array.isArray(active.orders)?active.orders.length:0,lanes:{}};
+  (active.lanes||[]).forEach(lane=>{totals.lanes[lane]=0;});
+  (active.orders||[]).forEach(order=>{
+    const lane=(order?.status&&Object.prototype.hasOwnProperty.call(totals.lanes,order.status))?order.status:(active.lanes?.[0]||'');
+    if(lane && Object.prototype.hasOwnProperty.call(totals.lanes,lane)) totals.lanes[lane]+=1;
+  });
+  const sample=(active.orders||[]).slice(0,10).map(order=>({
+    orderId:order.orderNo||order.id||'',
+    title:order.title||'',
+    customer:order.customer||'',
+    lane:order.status||active.lanes?.[0]||'',
+    done:!!order.done,
+    total:order.serviceTotal??''
+  }));
+  return { stages:['crm'], totals, orders:sample };
+}
+
+async function pushCrmToServer(){
+  if(crmSyncInFlight) return;
+  crmSyncTimer=null;
+  crmSyncInFlight=true;
+  if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
+    crmSyncInFlight=false;
+    return;
+  }
+  const snapshot=deepClone(state);
+  if(!snapshot){
+    crmSyncInFlight=false;
+    return;
+  }
+  const summaryText = crmPendingSummary || 'Изменения CRM';
+
+  const buildPlannerSyncPayload = async () => {
+    let plannerSnapshot=null;
+    let baseEtag=null;
+    let baseHash=null;
+    try{
+      const loaded=await window.plannerRemote.loadState({ withMeta:true });
+      let raw=loaded;
+      if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
+        raw=loaded.state;
+        if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
+        if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
+      }
+      plannerSnapshot=raw?JSON.parse(raw):{};
+    }catch(err){
+      const loadError=new Error('CRM planner state load failed');
+      loadError.code='CRM_PLANNER_LOAD_FAILED';
+      loadError.originalError=err;
+      throw loadError;
+    }
+    if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
+    syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+    plannerSnapshot.crm=snapshot;
+    const nowIso=new Date().toISOString();
+    plannerSnapshot.crm.updatedAt=nowIso;
+    const now=new Date(nowIso);
+    const nowLabel=now.toLocaleString();
+    const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
+    const versions=meta.versions || (meta.versions={});
+    versions.crm=(Number(versions.crm)||0)+1;
+    meta.lastAuthors=meta.lastAuthors || {};
+    meta.lastAuthors.crm={ name:crmAlias, at:nowIso };
+    const summaryObj=buildCrmOrdersSummary(snapshot);
+    meta.lastChange={
+      stage:'crm',
+      stages:['crm'],
+      summary:summaryText,
+      user:crmAlias,
+      source:'crm',
+      time:nowLabel,
+      changeType:'CRM',
+      ordersSummary:summaryObj
+    };
+    meta.ordersSummary=summaryObj;
+    const history=Array.isArray(meta.history)?meta.history.slice(-199):[];
+    history.push({
+      id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
+      stage:'crm',
+      user:crmAlias,
+      summary:summaryText,
+      source:'crm',
+      time:nowLabel,
+      changeType:'CRM',
+      ordersSummary:summaryObj
+    });
+    meta.history=history;
+
+    const metaPayload={
+      stage:'crm',
+      source:'crm',
+      summary:summaryText,
+      user:crmAlias,
+      time:nowLabel,
+      changeType:'CRM',
+      ordersSummary:summaryObj
+    };
+    if(baseHash) metaPayload.baseHash=baseHash;
+    if(baseEtag) metaPayload.baseEtag=baseEtag;
+    if(!metaPayload.ifMatch){
+      if(baseEtag) metaPayload.ifMatch=baseEtag;
+      else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
+    }
+    return {
+      stateString:JSON.stringify(plannerSnapshot),
+      metaPayload
+    };
+  };
+
+  let attempt=0;
+  let success=false;
+  let lastError=null;
+  while(attempt<2 && !success){
+    attempt+=1;
+    let payload;
+    try{
+      payload=await buildPlannerSyncPayload();
+    }catch(err){
+      lastError=err;
+      break;
+    }
+    try{
+      crmSuppressNext=true;
+      await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
+      success=true;
+    }catch(err){
+      crmSuppressNext=false;
+      lastError=err;
+      if(err && err.name==='PlannerConflictError' && attempt<2){
+        continue;
+      }
+      break;
+    }
+  }
+
+  if(success){
+    showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+  }else if(lastError){
+    crmSuppressNext=false;
+    if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
+      console.error('CRM: load planner state failed',lastError.originalError||lastError);
+      showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+    }else{
+      console.error('CRM sync failed',lastError);
+      const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
+      let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
+      if(lastError && lastError.name==='PlannerConflictError'){
+        message='Данные планировщика изменились. Обновите список и повторите попытку.';
+      }
+      showToast({title:'CRM',message,tone:'error',autoClose:5000});
+    }
+  }
+
+  crmSyncInFlight=false;
+}
+
+function applyRemoteCrm(crm){
+  if(!crm||typeof crm!=='object') return;
+  const cloned=deepClone(crm) || { boards:[defaultBoard()], currentBoardId:null };
+  if(!Array.isArray(cloned.boards) || !cloned.boards.length){
+    cloned.boards=[defaultBoard()];
+  }
+  if(!cloned.currentBoardId || !cloned.boards.some(b=>b.id===cloned.currentBoardId)){
+    cloned.currentBoardId=cloned.boards[0].id;
+  }
+  state=cloned;
+  persistLocal();
+  renderAll();
+}
+
+if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
+  window.plannerRemote.onRemoteUpdate(payload=>{
+    if(crmSuppressNext){ crmSuppressNext=false; return; }
+    if(!payload||!payload.state) return;
+    try{
+      const parsed=JSON.parse(payload.state);
+      syncCrmNotificationsMutedFromPlanner(parsed);
+      if(parsed&&parsed.crm){
+        applyRemoteCrm(parsed.crm);
+        showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
+      }
+    }catch(err){ console.warn('CRM remote update parse failed',err); }
+  });
+}
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden' && crmSyncTimer){
+    pushCrmToServer();
+  }
+});
+window.addEventListener('beforeunload',()=>{
+  if(crmSyncTimer){
+    pushCrmToServer();
+  }
+});
+
+/* Ripple на кнопках */
+document.addEventListener('click',e=>{
+  const btn=e.target.closest('button'); if(btn){const rect=btn.getBoundingClientRect();const span=document.createElement('span');span.className='ripple';const size=Math.max(rect.width,rect.height);span.style.width=span.style.height=size+'px';const x=e.clientX-rect.left-size/2;const y=e.clientY-rect.top-size/2;span.style.left=x+'px';span.style.top=y+'px';btn.appendChild(span);span.addEventListener('animationend',()=>span.remove(),{once:true})}
+});
+
+/* INIT */
+function renderAll(){renderBoardSelect();renderColumns();renderCards()}
+renderAll();
+
+/* hotkeys */
+document.addEventListener('keydown',e=>{
+  if(e.key==='n'&&(e.ctrlKey||e.metaKey)){e.preventDefault();openOrder(null)}
+  if(e.key==='f'&&(e.ctrlKey||e.metaKey)){e.preventDefault();q.focus()}
+});
+</script>
 </body>
 </html>

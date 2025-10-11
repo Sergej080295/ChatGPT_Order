@@ -1,19 +1,20 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
 
-const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const app = express();
+const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
 const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true';
-
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
@@ -21,15 +22,154 @@ const pool = new Pool({
   idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
 });
 
+const LEGACY_IMPORT_ENABLED = process.env.PLANNER_SKIP_LEGACY_IMPORT !== 'true';
+
 pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL error', err);
+  console.error('Unexpected PostgreSQL client error', err);
 });
 
-const app = express();
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
+app.use(express.text({ limit: '10mb', type: ['text/plain', 'text/*'] }));
 
 const sseClients = new Set();
+
+const simpleHash = (str) => {
+  if (!str) return '';
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(16);
+};
+
+const normalizeWeakEtag = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === '*') return '*';
+  const withoutWeak = trimmed.startsWith('W/') ? trimmed.slice(2) : trimmed;
+  const stripped = withoutWeak.replace(/^"|"$/g, '');
+  return stripped || null;
+};
+
+const parseIfMatchHeader = (value) => {
+  if (!value) {
+    return { hash: null, any: false };
+  }
+  const raw = Array.isArray(value) ? value.join(',') : String(value);
+  const tokens = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  for (const token of tokens) {
+    if (token === '*') {
+      return { hash: null, any: true };
+    }
+    const normalized = normalizeWeakEtag(token);
+    if (normalized && normalized !== '*') {
+      return { hash: normalized, any: false };
+    }
+  }
+  return { hash: null, any: false };
+};
+
+const sanitizeHashCandidate = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+  return sanitizeHashCandidate(String(value));
+};
+
+const DEFAULT_STATE = {
+  routeOverrides: [],
+  t: [],
+  done: [],
+  trash: [],
+  exc: [],
+  res: [],
+  process: null,
+  capByProc: {},
+  parallelByProc: {},
+  filter: 'all',
+  locked: [],
+  orders: [],
+  freshness: null,
+  freshnessCsv: null,
+  freshnessManual: null,
+  lastImportTime: null,
+  lastManualTime: null,
+  autosaveOn: true,
+  autoOptimizeOn: false,
+  shiftOnProgress: false,
+  meta: {
+    versions: {},
+    history: [],
+    lastAuthors: {},
+    csvTimestamp: '',
+    manualTimestamp: '',
+    ignoredStates: [],
+    storage: { local: true, remote: true, remotePreferred: true, mode: 'remote' },
+    settings: {}
+  }
+};
+
+const createInitialState = () => {
+  const stateString = JSON.stringify(DEFAULT_STATE);
+  return {
+    state: stateString,
+    meta: {
+      stage: null,
+      version: 0,
+      user: 'system',
+      session: null,
+      diff: null
+    },
+    updatedAt: new Date().toISOString(),
+    hash: simpleHash(stateString)
+  };
+};
+
+const loadLegacyStateFromDisk = async () => {
+  if (!LEGACY_IMPORT_ENABLED) {
+    return null;
+  }
+  const legacyPath = path.join(__dirname, 'planner-state.json');
+  try {
+    const raw = await fsp.readFile(legacyPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.state === 'string') {
+      return {
+        state: parsed.state,
+        meta: parsed.meta ?? null,
+        updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+        hash: parsed.hash ?? simpleHash(parsed.state)
+      };
+    }
+  } catch (err) {
+    // ignore legacy import failure
+  }
+  return null;
+};
+
+const readPlannerStateRow = async (client, options = {}) => {
+  const runner = client || pool;
+  const { forUpdate = false } = options;
+  const suffix = forUpdate ? ' FOR UPDATE' : '';
+  const { rows } = await runner.query(
+    `SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1${suffix}`
+  );
+  if (rows.length > 0) {
+    const row = rows[0];
+    return {
+      id: row.id,
+      state: row.state,
+      meta: row.meta ?? null,
+      hash: row.hash,
+      updatedAt: new Date(row.updated_at).toISOString()
+    };
+  }
+  return null;
+};
 
 const ensureMigrationTable = async (client) => {
   await client.query(`
@@ -60,10 +200,7 @@ const runMigrations = async () => {
     await ensureMigrationTable(client);
     const migrations = loadMigrations();
     for (const migration of migrations) {
-      const { rows } = await client.query(
-        'SELECT 1 FROM planner_schema_migrations WHERE filename = $1',
-        [migration.filename]
-      );
+      const { rows } = await client.query('SELECT 1 FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
       if (rows.length > 0) {
         continue;
       }
@@ -83,1240 +220,1010 @@ const runMigrations = async () => {
   }
 };
 
-const withClient = async (cb) => {
-  const client = await pool.connect();
-  try {
-    return await cb(client);
-  } finally {
-    client.release();
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+const clonePlainObject = (value) => {
+  if (!isPlainObject(value)) {
+    return {};
   }
+  return JSON.parse(JSON.stringify(value));
 };
 
-const formatEtag = (rev) => `W/"r${rev}"`;
-
-const parseRevision = (value) => {
-  if (value === null || value === undefined) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-  if (raw.startsWith('r')) {
-    const num = Number.parseInt(raw.slice(1), 10);
-    return Number.isFinite(num) && num >= 0 ? num : null;
-  }
-  const weak = raw.startsWith('W/') ? raw.slice(2) : raw;
-  const stripped = weak.replace(/^"|"$/g, '');
-  if (!stripped) return null;
-  if (stripped.startsWith('r')) {
-    const num = Number.parseInt(stripped.slice(1), 10);
-    return Number.isFinite(num) && num >= 0 ? num : null;
-  }
-  const direct = Number.parseInt(stripped, 10);
-  return Number.isFinite(direct) && direct >= 0 ? direct : null;
+const normaliseDate = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 };
 
-const parseIfMatchRevision = (header) => {
-  if (!header) return null;
-  const items = Array.isArray(header) ? header : [header];
-  for (const item of items) {
-    if (!item) continue;
-    for (const part of String(item).split(',').map((token) => token.trim())) {
-      if (!part || part === '*') continue;
-      const rev = parseRevision(part);
-      if (rev !== null) return rev;
+const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
+  if (!isPlainObject(nextStateObj)) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const metaSettings = meta?.settings;
+  if (!metaSettings || (!Array.isArray(metaSettings.entries) && metaSettings.replace !== true)) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const currentSettings = clonePlainObject(currentStateObj?.meta?.settings);
+  const incomingSettings = clonePlainObject(nextStateObj?.meta?.settings);
+  if (!Object.keys(incomingSettings).length && !Object.keys(currentSettings).length) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const plan = new Map();
+  const ensurePlan = (key, defaults = {}) => {
+    if (!plan.has(key)) {
+      plan.set(key, { type: 'value', values: new Map(), whole: undefined, allowReplace: false, ...defaults });
     }
-  }
-  return null;
-};
-
-const fetchCurrentRevision = async (client) => {
-  const { rows } = await client.query('SELECT current_rev FROM revisions WHERE id = 1');
-  if (!rows.length) {
-    return 0;
-  }
-  return Number.parseInt(rows[0].current_rev, 10) || 0;
-};
-
-const fetchAdminSettings = async (client) => {
-  const { rows } = await client.query(
-    'SELECT allow_force_overwrite, history_retention_count, checkpoint_interval_days FROM settings_admin WHERE id = 1'
-  );
-  if (!rows.length) {
-    return {
-      allow_force_overwrite: false,
-      history_retention_count: 50,
-      checkpoint_interval_days: 1
-    };
-  }
-  const row = rows[0];
-  return {
-    allow_force_overwrite: row.allow_force_overwrite === true,
-    history_retention_count: Number.parseInt(row.history_retention_count, 10) || 50,
-    checkpoint_interval_days: Number.parseInt(row.checkpoint_interval_days, 10) || 1
-  };
-};
-
-const readOrders = async (client) => {
-  const { rows } = await client.query(
-    'SELECT id, order_no, client, name, deleted_at, created_at, updated_at FROM orders ORDER BY id'
-  );
-  return rows.map((row) => ({
-    id: Number(row.id),
-    orderNo: row.order_no,
-    client: row.client,
-    name: row.name,
-    deletedAt: row.deleted_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  }));
-};
-
-const readStages = async (client) => {
-  const { rows } = await client.query(
-    `SELECT id, order_id, stage_code, start_at, end_at, progress_pct, status, is_done, trash_at, created_at, updated_at
-       FROM order_stages
-       ORDER BY id`
-  );
-  return rows.map((row) => ({
-    id: Number(row.id),
-    orderId: Number(row.order_id),
-    stageCode: row.stage_code,
-    startAt: row.start_at,
-    endAt: row.end_at,
-    progressPct: row.progress_pct == null ? null : Number(row.progress_pct),
-    status: row.status,
-    isDone: row.is_done === true,
-    trashAt: row.trash_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  }));
-};
-
-const readDependencies = async (client) => {
-  const { rows } = await client.query(
-    'SELECT order_id, from_stage, to_stage FROM stage_dependencies ORDER BY order_id, from_stage, to_stage'
-  );
-  return rows.map((row) => ({
-    orderId: Number(row.order_id),
-    fromStage: row.from_stage,
-    toStage: row.to_stage
-  }));
-};
-
-const readCapacity = async (client) => {
-  const { rows } = await client.query(
-    'SELECT stage_code, capacity_per_day, parallel_limit, updated_at FROM stage_capacity ORDER BY stage_code'
-  );
-  return rows.map((row) => ({
-    stageCode: row.stage_code,
-    capacityPerDay: row.capacity_per_day == null ? null : Number(row.capacity_per_day),
-    parallelLimit: row.parallel_limit == null ? null : Number(row.parallel_limit),
-    updatedAt: row.updated_at
-  }));
-};
-
-const readExcludedStatuses = async (client) => {
-  const { rows } = await client.query(
-    'SELECT status_code, created_at FROM excluded_statuses ORDER BY status_code'
-  );
-  return rows.map((row) => ({ statusCode: row.status_code, createdAt: row.created_at }));
-};
-
-const readSettings = async (client) => {
-  const autoweightRow = await client.query(
-    'SELECT enabled, percent, minimum_hours, updated_at FROM settings_autoweight WHERE id = 1'
-  );
-  const journalRow = await client.query(
-    'SELECT max_rows, updated_at FROM settings_journal WHERE id = 1'
-  );
-  const columnsRows = await client.query(
-    'SELECT column_key, width_px, updated_at FROM settings_columns ORDER BY column_key'
-  );
-  const mappingRows = await client.query(
-    'SELECT crm_stage_name, planner_stage_code, is_ignored, updated_at FROM settings_crm_mapping ORDER BY LOWER(crm_stage_name)'
-  );
-  const adminRow = await client.query(
-    'SELECT allow_force_overwrite, history_retention_count, checkpoint_interval_days, updated_at FROM settings_admin WHERE id = 1'
-  );
-  return {
-    autoweight: autoweightRow.rows.length
-      ? {
-          enabled: autoweightRow.rows[0].enabled === true,
-          percent: autoweightRow.rows[0].percent == null ? 0 : Number(autoweightRow.rows[0].percent),
-          minimumHours: autoweightRow.rows[0].minimum_hours == null
-            ? 0
-            : Number(autoweightRow.rows[0].minimum_hours),
-          updatedAt: autoweightRow.rows[0].updated_at
-        }
-      : { enabled: false, percent: 0, minimumHours: 0, updatedAt: null },
-    journal: journalRow.rows.length
-      ? {
-          maxRows: Number(journalRow.rows[0].max_rows),
-          updatedAt: journalRow.rows[0].updated_at
-        }
-      : { maxRows: 200, updatedAt: null },
-    columns: columnsRows.rows.map((row) => ({
-      columnKey: row.column_key,
-      widthPx: row.width_px == null ? null : Number(row.width_px),
-      updatedAt: row.updated_at
-    })),
-    crmMapping: mappingRows.rows.map((row) => ({
-      crmStageName: row.crm_stage_name,
-      plannerStageCode: row.planner_stage_code,
-      isIgnored: row.is_ignored === true,
-      updatedAt: row.updated_at
-    })),
-    admin: adminRow.rows.length
-      ? {
-          allowForceOverwrite: adminRow.rows[0].allow_force_overwrite === true,
-          historyRetentionCount: Number(adminRow.rows[0].history_retention_count || 50),
-          checkpointIntervalDays: Number(adminRow.rows[0].checkpoint_interval_days || 1),
-          updatedAt: adminRow.rows[0].updated_at
-        }
-      : {
-          allowForceOverwrite: false,
-          historyRetentionCount: 50,
-          checkpointIntervalDays: 1,
-          updatedAt: null
-        }
-  };
-};
-
-const buildFullState = async (client, currentRev) => {
-  const [orders, stages, dependencies, capacity, excluded, settings] = await Promise.all([
-    readOrders(client),
-    readStages(client),
-    readDependencies(client),
-    readCapacity(client),
-    readExcludedStatuses(client),
-    readSettings(client)
-  ]);
-  return {
-    rev: currentRev,
-    etag: formatEtag(currentRev),
-    data: {
-      orders,
-      stages,
-      stageDependencies: dependencies,
-      stageCapacity: capacity,
-      excludedStatuses: excluded,
-      settings
-    }
-  };
-};
-const selectUpserts = async (client, table, sinceRev, columns) => {
-  const colList = columns.join(', ');
-  const { rows } = await client.query(
-    `SELECT ${colList}, rev_from
-       FROM ${table}
-      WHERE rev_from > $1
-      ORDER BY rev_from, ${columns[0]}`,
-    [sinceRev]
-  );
-  return rows;
-};
-
-const selectDeletes = async (client, table, sinceRev, keyColumns) => {
-  const keySelect = keyColumns.join(', ');
-  const keyConditions = keyColumns
-    .map((col) => `t.${col} = newer.${col}`)
-    .join(' AND ');
-  const { rows } = await client.query(
-    `SELECT DISTINCT ON (${keySelect}) ${keySelect}, rev_to
-       FROM ${table} t
-      WHERE t.rev_to IS NOT NULL
-        AND t.rev_to > $1
-        AND NOT EXISTS (
-          SELECT 1 FROM ${table} newer
-           WHERE newer.rev_from > $1
-             AND ${keyConditions}
-        )
-      ORDER BY ${keySelect}, rev_to DESC`,
-    [sinceRev]
-  );
-  return rows;
-};
-
-const buildDelta = async (client, sinceRev, currentRev) => {
-  if (sinceRev >= currentRev) {
-    return {
-      rev: currentRev,
-      etag: formatEtag(currentRev),
-      delta: {
-        orders: { upserts: [], deletes: [] },
-        stages: { upserts: [], deletes: [] },
-        stageDependencies: { upserts: [], deletes: [] },
-        stageCapacity: { upserts: [], deletes: [] },
-        excludedStatuses: { upserts: [], deletes: [] },
-        settings: {
-          autoweight: null,
-          journal: null,
-          columns: { upserts: [], deletes: [] },
-          crmMapping: { upserts: [], deletes: [] },
-          admin: null
-        }
-      }
-    };
-  }
-
-  const [orderUpserts, orderDeletes, stageUpserts, stageDeletes, depUpserts, depDeletes, capUpserts, capDeletes, excUpserts, excDeletes] = await Promise.all([
-    selectUpserts(client, 'orders_hist', sinceRev, ['id', 'order_no', 'client', 'name', 'deleted_at', 'created_at', 'updated_at']),
-    selectDeletes(client, 'orders_hist', sinceRev, ['id']),
-    selectUpserts(client, 'order_stages_hist', sinceRev, [
-      'id',
-      'order_id',
-      'stage_code',
-      'start_at',
-      'end_at',
-      'progress_pct',
-      'status',
-      'is_done',
-      'trash_at',
-      'created_at',
-      'updated_at'
-    ]),
-    selectDeletes(client, 'order_stages_hist', sinceRev, ['id']),
-    selectUpserts(client, 'stage_dependencies_hist', sinceRev, ['order_id', 'from_stage', 'to_stage']),
-    selectDeletes(client, 'stage_dependencies_hist', sinceRev, ['order_id', 'from_stage', 'to_stage']),
-    selectUpserts(client, 'stage_capacity_hist', sinceRev, ['stage_code', 'capacity_per_day', 'parallel_limit', 'updated_at']),
-    selectDeletes(client, 'stage_capacity_hist', sinceRev, ['stage_code']),
-    selectUpserts(client, 'excluded_statuses_hist', sinceRev, ['status_code', 'created_at']),
-    selectDeletes(client, 'excluded_statuses_hist', sinceRev, ['status_code'])
-  ]);
-
-  const [autoweightHist, journalHist, columnsUpserts, columnsDeletes, mappingUpserts, mappingDeletes, adminHist] = await Promise.all([
-    client.query(
-      `SELECT id, enabled, percent, minimum_hours, updated_at, rev_from
-         FROM settings_autoweight_hist
-        WHERE rev_from > $1
-        ORDER BY rev_from DESC
-        LIMIT 1`,
-      [sinceRev]
-    ),
-    client.query(
-      `SELECT id, max_rows, updated_at, rev_from
-         FROM settings_journal_hist
-        WHERE rev_from > $1
-        ORDER BY rev_from DESC
-        LIMIT 1`,
-      [sinceRev]
-    ),
-    selectUpserts(client, 'settings_columns_hist', sinceRev, ['column_key', 'width_px', 'updated_at']),
-    selectDeletes(client, 'settings_columns_hist', sinceRev, ['column_key']),
-    selectUpserts(client, 'settings_crm_mapping_hist', sinceRev, ['crm_stage_name', 'planner_stage_code', 'is_ignored', 'updated_at']),
-    selectDeletes(client, 'settings_crm_mapping_hist', sinceRev, ['crm_stage_name']),
-    client.query(
-      `SELECT id, allow_force_overwrite, history_retention_count, checkpoint_interval_days, updated_at, rev_from
-         FROM settings_admin_hist
-        WHERE rev_from > $1
-        ORDER BY rev_from DESC
-        LIMIT 1`,
-      [sinceRev]
-    )
-  ]);
-
-  return {
-    rev: currentRev,
-    etag: formatEtag(currentRev),
-    delta: {
-      orders: {
-        upserts: orderUpserts.map((row) => ({
-          id: Number(row.id),
-          orderNo: row.order_no,
-          client: row.client,
-          name: row.name,
-          deletedAt: row.deleted_at,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          revFrom: Number(row.rev_from)
-        })),
-        deletes: orderDeletes.map((row) => ({ id: Number(row.id), revTo: Number(row.rev_to) }))
-      },
-      stages: {
-        upserts: stageUpserts.map((row) => ({
-          id: Number(row.id),
-          orderId: Number(row.order_id),
-          stageCode: row.stage_code,
-          startAt: row.start_at,
-          endAt: row.end_at,
-          progressPct: row.progress_pct == null ? null : Number(row.progress_pct),
-          status: row.status,
-          isDone: row.is_done === true,
-          trashAt: row.trash_at,
-          createdAt: row.created_at,
-          updatedAt: row.updated_at,
-          revFrom: Number(row.rev_from)
-        })),
-        deletes: stageDeletes.map((row) => ({ id: Number(row.id), revTo: Number(row.rev_to) }))
-      },
-      stageDependencies: {
-        upserts: depUpserts.map((row) => ({
-          orderId: Number(row.order_id),
-          fromStage: row.from_stage,
-          toStage: row.to_stage,
-          revFrom: Number(row.rev_from)
-        })),
-        deletes: depDeletes.map((row) => ({
-          orderId: Number(row.order_id),
-          fromStage: row.from_stage,
-          toStage: row.to_stage,
-          revTo: Number(row.rev_to)
-        }))
-      },
-      stageCapacity: {
-        upserts: capUpserts.map((row) => ({
-          stageCode: row.stage_code,
-          capacityPerDay: row.capacity_per_day == null ? null : Number(row.capacity_per_day),
-          parallelLimit: row.parallel_limit == null ? null : Number(row.parallel_limit),
-          updatedAt: row.updated_at,
-          revFrom: Number(row.rev_from)
-        })),
-        deletes: capDeletes.map((row) => ({ stageCode: row.stage_code, revTo: Number(row.rev_to) }))
-      },
-      excludedStatuses: {
-        upserts: excUpserts.map((row) => ({
-          statusCode: row.status_code,
-          createdAt: row.created_at,
-          revFrom: Number(row.rev_from)
-        })),
-        deletes: excDeletes.map((row) => ({ statusCode: row.status_code, revTo: Number(row.rev_to) }))
-      },
-      settings: {
-        autoweight: autoweightHist.rows.length
-          ? {
-              enabled: autoweightHist.rows[0].enabled === true,
-              percent: autoweightHist.rows[0].percent == null ? 0 : Number(autoweightHist.rows[0].percent),
-              minimumHours: autoweightHist.rows[0].minimum_hours == null
-                ? 0
-                : Number(autoweightHist.rows[0].minimum_hours),
-              updatedAt: autoweightHist.rows[0].updated_at,
-              revFrom: Number(autoweightHist.rows[0].rev_from)
-            }
-          : null,
-        journal: journalHist.rows.length
-          ? {
-              maxRows: Number(journalHist.rows[0].max_rows),
-              updatedAt: journalHist.rows[0].updated_at,
-              revFrom: Number(journalHist.rows[0].rev_from)
-            }
-          : null,
-        columns: {
-          upserts: columnsUpserts.map((row) => ({
-            columnKey: row.column_key,
-            widthPx: row.width_px == null ? null : Number(row.width_px),
-            updatedAt: row.updated_at,
-            revFrom: Number(row.rev_from)
-          })),
-          deletes: columnsDeletes.map((row) => ({ columnKey: row.column_key, revTo: Number(row.rev_to) }))
-        },
-        crmMapping: {
-          upserts: mappingUpserts.map((row) => ({
-            crmStageName: row.crm_stage_name,
-            plannerStageCode: row.planner_stage_code,
-            isIgnored: row.is_ignored === true,
-            updatedAt: row.updated_at,
-            revFrom: Number(row.rev_from)
-          })),
-          deletes: mappingDeletes.map((row) => ({ crmStageName: row.crm_stage_name, revTo: Number(row.rev_to) }))
-        },
-        admin: adminHist.rows.length
-          ? {
-              allowForceOverwrite: adminHist.rows[0].allow_force_overwrite === true,
-              historyRetentionCount: Number(adminHist.rows[0].history_retention_count || 50),
-              checkpointIntervalDays: Number(adminHist.rows[0].checkpoint_interval_days || 1),
-              updatedAt: adminHist.rows[0].updated_at,
-              revFrom: Number(adminHist.rows[0].rev_from)
-            }
-          : null
-      }
-    }
-  };
-};
-const applyOrderChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (Array.isArray(changes.upserts)) {
-    for (const item of changes.upserts) {
-      if (!item || typeof item !== 'object') continue;
-      if (item.id) {
-        const id = Number(item.id);
-        await client.query(
-          `UPDATE orders
-              SET order_no = $1,
-                  client = $2,
-                  name = $3,
-                  deleted_at = $4,
-                  updated_at = NOW()
-            WHERE id = $5`,
-          [item.orderNo || item.order_no, item.client ?? null, item.name ?? null, item.deletedAt ?? item.deleted_at ?? null, id]
-        );
-        stats.ordersUpdated += 1;
-      } else {
-        await client.query(
-          `INSERT INTO orders (order_no, client, name, deleted_at)
-           VALUES ($1, $2, $3, $4)`,
-          [item.orderNo || item.order_no, item.client ?? null, item.name ?? null, item.deletedAt ?? item.deleted_at ?? null]
-        );
-        stats.ordersInserted += 1;
-      }
-    }
-  }
-  if (Array.isArray(changes.deletes)) {
-    for (const item of changes.deletes) {
-      const id = Number(item && (item.id ?? item));
-      if (!Number.isFinite(id)) continue;
-      await client.query('DELETE FROM orders WHERE id = $1', [id]);
-      stats.ordersDeleted += 1;
-    }
-  }
-};
-
-const applyStageChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (Array.isArray(changes.upserts)) {
-    for (const item of changes.upserts) {
-      if (!item || typeof item !== 'object') continue;
-      const orderId = Number(item.orderId ?? item.order_id);
-      if (!Number.isFinite(orderId)) continue;
-      if (item.id) {
-        const id = Number(item.id);
-        await client.query(
-          `UPDATE order_stages
-              SET order_id = $1,
-                  stage_code = $2,
-                  start_at = $3,
-                  end_at = $4,
-                  progress_pct = $5,
-                  status = $6,
-                  is_done = $7,
-                  trash_at = $8,
-                  updated_at = NOW()
-            WHERE id = $9`,
-          [
-            orderId,
-            item.stageCode || item.stage_code,
-            item.startAt ?? item.start_at ?? null,
-            item.endAt ?? item.end_at ?? null,
-            item.progressPct ?? item.progress_pct ?? null,
-            item.status ?? null,
-            item.isDone ?? item.is_done ?? false,
-            item.trashAt ?? item.trash_at ?? null,
-            id
-          ]
-        );
-        stats.stagesUpdated += 1;
-      } else {
-        await client.query(
-          `INSERT INTO order_stages (
-              order_id, stage_code, start_at, end_at, progress_pct, status, is_done, trash_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [
-            orderId,
-            item.stageCode || item.stage_code,
-            item.startAt ?? item.start_at ?? null,
-            item.endAt ?? item.end_at ?? null,
-            item.progressPct ?? item.progress_pct ?? null,
-            item.status ?? null,
-            item.isDone ?? item.is_done ?? false,
-            item.trashAt ?? item.trash_at ?? null
-          ]
-        );
-        stats.stagesInserted += 1;
-      }
-    }
-  }
-  if (Array.isArray(changes.deletes)) {
-    for (const item of changes.deletes) {
-      const id = Number(item && (item.id ?? item));
-      if (!Number.isFinite(id)) continue;
-      await client.query('DELETE FROM order_stages WHERE id = $1', [id]);
-      stats.stagesDeleted += 1;
-    }
-  }
-};
-
-const applyDependencyChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (Array.isArray(changes.upserts)) {
-    for (const item of changes.upserts) {
-      if (!item || typeof item !== 'object') continue;
-      const orderId = Number(item.orderId ?? item.order_id);
-      if (!Number.isFinite(orderId)) continue;
-      await client.query(
-        `INSERT INTO stage_dependencies (order_id, from_stage, to_stage)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (order_id, from_stage, to_stage)
-         DO UPDATE SET from_stage = EXCLUDED.from_stage`,
-        [orderId, item.fromStage || item.from_stage, item.toStage || item.to_stage]
-      );
-      stats.dependenciesUpserted += 1;
-    }
-  }
-  if (Array.isArray(changes.deletes)) {
-    for (const item of changes.deletes) {
-      if (!item || typeof item !== 'object') continue;
-      const orderId = Number(item.orderId ?? item.order_id);
-      if (!Number.isFinite(orderId)) continue;
-      await client.query(
-        'DELETE FROM stage_dependencies WHERE order_id = $1 AND from_stage = $2 AND to_stage = $3',
-        [orderId, item.fromStage || item.from_stage, item.toStage || item.to_stage]
-      );
-      stats.dependenciesDeleted += 1;
-    }
-  }
-};
-
-const applyCapacityChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (Array.isArray(changes.upserts)) {
-    for (const item of changes.upserts) {
-      if (!item || typeof item !== 'object') continue;
-      await client.query(
-        `INSERT INTO stage_capacity (stage_code, capacity_per_day, parallel_limit)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (stage_code)
-         DO UPDATE SET capacity_per_day = EXCLUDED.capacity_per_day,
-                       parallel_limit = EXCLUDED.parallel_limit,
-                       updated_at = NOW()`,
-        [
-          item.stageCode || item.stage_code,
-          item.capacityPerDay ?? item.capacity_per_day ?? null,
-          item.parallelLimit ?? item.parallel_limit ?? null
-        ]
-      );
-      stats.capacityUpserted += 1;
-    }
-  }
-  if (Array.isArray(changes.deletes)) {
-    for (const item of changes.deletes) {
-      const code = item && (item.stageCode || item.stage_code || item);
-      if (!code) continue;
-      await client.query('DELETE FROM stage_capacity WHERE stage_code = $1', [code]);
-      stats.capacityDeleted += 1;
-    }
-  }
-};
-
-const applyExcludedChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (Array.isArray(changes.upserts)) {
-    for (const item of changes.upserts) {
-      const code = item && (item.statusCode || item.status_code || item);
-      if (!code) continue;
-      await client.query(
-        `INSERT INTO excluded_statuses (status_code)
-         VALUES ($1)
-         ON CONFLICT (status_code) DO NOTHING`,
-        [code]
-      );
-      stats.excludedUpserted += 1;
-    }
-  }
-  if (Array.isArray(changes.deletes)) {
-    for (const item of changes.deletes) {
-      const code = item && (item.statusCode || item.status_code || item);
-      if (!code) continue;
-      await client.query('DELETE FROM excluded_statuses WHERE status_code = $1', [code]);
-      stats.excludedDeleted += 1;
-    }
-  }
-};
-
-const applySettingsChanges = async (client, changes, stats) => {
-  if (!changes) return;
-  if (changes.autoweight && typeof changes.autoweight === 'object') {
-    const payload = changes.autoweight;
-    await client.query(
-      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours)
-       VALUES (1, $1, $2, $3)
-       ON CONFLICT (id)
-       DO UPDATE SET enabled = EXCLUDED.enabled,
-                     percent = EXCLUDED.percent,
-                     minimum_hours = EXCLUDED.minimum_hours,
-                     updated_at = NOW()`,
-      [payload.enabled === true, payload.percent ?? null, payload.minimumHours ?? payload.minimum_hours ?? null]
-    );
-    stats.settingsChanged += 1;
-  }
-  if (changes.journal && typeof changes.journal === 'object') {
-    const payload = changes.journal;
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows)
-       VALUES (1, $1)
-       ON CONFLICT (id)
-       DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()`,
-      [payload.maxRows ?? payload.max_rows ?? 200]
-    );
-    stats.settingsChanged += 1;
-  }
-  if (changes.columns) {
-    const payload = changes.columns;
-    if (Array.isArray(payload.upserts)) {
-      for (const item of payload.upserts) {
-        if (!item || typeof item !== 'object') continue;
-        await client.query(
-          `INSERT INTO settings_columns (column_key, width_px)
-           VALUES ($1, $2)
-           ON CONFLICT (column_key)
-           DO UPDATE SET width_px = EXCLUDED.width_px, updated_at = NOW()`,
-          [item.columnKey || item.column_key, item.widthPx ?? item.width_px ?? null]
-        );
-        stats.settingsChanged += 1;
-      }
-    }
-    if (Array.isArray(payload.deletes)) {
-      for (const item of payload.deletes) {
-        const key = item && (item.columnKey || item.column_key || item);
-        if (!key) continue;
-        await client.query('DELETE FROM settings_columns WHERE column_key = $1', [key]);
-        stats.settingsChanged += 1;
-      }
-    }
-  }
-  if (changes.crmMapping) {
-    const payload = changes.crmMapping;
-    if (Array.isArray(payload.upserts)) {
-      for (const item of payload.upserts) {
-        if (!item || typeof item !== 'object') continue;
-        await client.query(
-          `INSERT INTO settings_crm_mapping (crm_stage_name, planner_stage_code, is_ignored)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (crm_stage_name)
-           DO UPDATE SET planner_stage_code = EXCLUDED.planner_stage_code,
-                         is_ignored = EXCLUDED.is_ignored,
-                         updated_at = NOW()`,
-          [
-            item.crmStageName || item.crm_stage_name,
-            item.plannerStageCode ?? item.planner_stage_code ?? null,
-            item.isIgnored === true
-          ]
-        );
-        stats.settingsChanged += 1;
-      }
-    }
-    if (Array.isArray(payload.deletes)) {
-      for (const item of payload.deletes) {
-        const key = item && (item.crmStageName || item.crm_stage_name || item);
-        if (!key) continue;
-        await client.query('DELETE FROM settings_crm_mapping WHERE crm_stage_name = $1', [key]);
-        stats.settingsChanged += 1;
-      }
-    }
-  }
-  if (changes.admin && typeof changes.admin === 'object') {
-    const payload = changes.admin;
-    await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, history_retention_count, checkpoint_interval_days)
-       VALUES (1, $1, $2, $3)
-       ON CONFLICT (id)
-       DO UPDATE SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-                     history_retention_count = EXCLUDED.history_retention_count,
-                     checkpoint_interval_days = EXCLUDED.checkpoint_interval_days,
-                     updated_at = NOW()`,
-      [
-        payload.allowForceOverwrite === true,
-        payload.historyRetentionCount ?? payload.history_retention_count ?? 50,
-        payload.checkpointIntervalDays ?? payload.checkpoint_interval_days ?? 1
-      ]
-    );
-    stats.settingsChanged += 1;
-  }
-};
-
-const applyChanges = async (client, changes) => {
-  const stats = {
-    ordersInserted: 0,
-    ordersUpdated: 0,
-    ordersDeleted: 0,
-    stagesInserted: 0,
-    stagesUpdated: 0,
-    stagesDeleted: 0,
-    dependenciesUpserted: 0,
-    dependenciesDeleted: 0,
-    capacityUpserted: 0,
-    capacityDeleted: 0,
-    excludedUpserted: 0,
-    excludedDeleted: 0,
-    settingsChanged: 0
+    return plan.get(key);
   };
 
-  if (changes && typeof changes === 'object') {
-    await applyOrderChanges(client, changes.orders, stats);
-    await applyStageChanges(client, changes.stages, stats);
-    await applyDependencyChanges(client, changes.stageDependencies, stats);
-    await applyCapacityChanges(client, changes.stageCapacity, stats);
-    await applyExcludedChanges(client, changes.excludedStatuses, stats);
-    await applySettingsChanges(client, changes.settings, stats);
-  }
-
-  return stats;
-};
-
-const formatStatsSummary = (stats) => {
-  const parts = [];
-  if (stats.ordersInserted || stats.ordersUpdated || stats.ordersDeleted) {
-    parts.push(`orders +${stats.ordersInserted} upd:${stats.ordersUpdated} del:${stats.ordersDeleted}`);
-  }
-  if (stats.stagesInserted || stats.stagesUpdated || stats.stagesDeleted) {
-    parts.push(`stages +${stats.stagesInserted} upd:${stats.stagesUpdated} del:${stats.stagesDeleted}`);
-  }
-  if (stats.dependenciesUpserted || stats.dependenciesDeleted) {
-    parts.push(`deps ${stats.dependenciesUpserted}/${stats.dependenciesDeleted}`);
-  }
-  if (stats.capacityUpserted || stats.capacityDeleted) {
-    parts.push(`capacity ${stats.capacityUpserted}/${stats.capacityDeleted}`);
-  }
-  if (stats.excludedUpserted || stats.excludedDeleted) {
-    parts.push(`excluded ${stats.excludedUpserted}/${stats.excludedDeleted}`);
-  }
-  if (stats.settingsChanged) {
-    parts.push(`settings ${stats.settingsChanged}`);
-  }
-  return parts.join(', ');
-};
-
-const sendSse = (payload) => {
-  const text = `data: ${JSON.stringify(payload)}\n\n`;
-  for (const res of sseClients) {
-    try {
-      res.write(text);
-    } catch (err) {
-      console.warn('Failed to deliver SSE payload', err);
+  const readIncoming = (rootKey, fallback) => {
+    const value = incomingSettings[rootKey];
+    if (value === undefined) {
+      return fallback;
     }
-  }
-};
-app.get('/api/events', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders?.();
-  res.write('\n');
-  sseClients.add(res);
-  req.on('close', () => {
-    sseClients.delete(res);
-    try {
-      res.end();
-    } catch (_err) {
-      /* ignore */
+    return isPlainObject(value) ? clonePlainObject(value) : value;
+  };
+
+  const entries = Array.isArray(metaSettings.entries) ? metaSettings.entries : [];
+  entries.forEach((entry) => {
+    if (!entry) return;
+    const entryKind = entry.kind;
+    if ((entryKind === 'capacity' || entryKind === 'parallel') && entry.stage) {
+      const rootKey = entry.kind === 'parallel' ? 'parallel' : 'capacity';
+      const stageKey = String(entry.stage || '').trim();
+      if (!stageKey) return;
+      const targetPlan = ensurePlan(rootKey, { type: 'object' });
+      const nextValue = entry.to ?? readIncoming(rootKey, {})?.[stageKey];
+      if (nextValue === undefined) return;
+      targetPlan.values.set(stageKey, Number.isFinite(nextValue) ? nextValue : nextValue);
+      return;
+    }
+    if (typeof entry.key !== 'string') {
+      return;
+    }
+    const keyPath = entry.key.split('.');
+    const rootKey = keyPath.shift();
+    if (!rootKey) {
+      return;
+    }
+    if (rootKey === 'tableColumn') {
+      const columnKey = keyPath[0];
+      if (!columnKey) return;
+      const targetPlan = ensurePlan('tableColumns', { type: 'object' });
+      const tableColumnsIncoming = readIncoming('tableColumns', {});
+      const value = entry.value ?? tableColumnsIncoming?.[columnKey];
+      if (value === undefined) return;
+      targetPlan.values.set(columnKey, value);
+      return;
+    }
+    if (rootKey === 'extraTime') {
+      const extraKey = keyPath[0];
+      if (!extraKey) return;
+      const targetPlan = ensurePlan('extraTime', { type: 'object' });
+      const extraIncoming = readIncoming('extraTime', {});
+      const value = entry.value ?? extraIncoming?.[extraKey];
+      if (value === undefined) return;
+      targetPlan.values.set(extraKey, value);
+      return;
+    }
+    if (rootKey === 'crmStageMapping') {
+      const targetPlan = ensurePlan('crmStageMapping', { type: 'object', allowReplace: true });
+      const mappingValue = entry.value ?? readIncoming('crmStageMapping', {});
+      if (isPlainObject(mappingValue)) {
+        targetPlan.whole = clonePlainObject(mappingValue);
+      }
+      return;
+    }
+    const targetPlan = ensurePlan(rootKey, { type: 'value' });
+    const value = entry.value ?? readIncoming(rootKey, undefined);
+    if (value !== undefined) {
+      targetPlan.value = value;
     }
   });
+
+  if (plan.size === 0) {
+    return { stateObj: nextStateObj, touched: false };
+  }
+
+  const mergedSettings = clonePlainObject(currentSettings);
+  const allowGlobalReplace = metaSettings.replace === true;
+
+  plan.forEach((targetPlan, key) => {
+    if (targetPlan.type === 'object') {
+      const replaceMode = allowGlobalReplace && (targetPlan.allowReplace || targetPlan.whole);
+      const base = replaceMode ? {} : clonePlainObject(mergedSettings[key]);
+      const nextObject = { ...base };
+      if (isPlainObject(targetPlan.whole)) {
+        Object.entries(targetPlan.whole).forEach(([childKey, childValue]) => {
+          nextObject[childKey] = childValue;
+        });
+      }
+      targetPlan.values.forEach((value, childKey) => {
+        if (value === undefined && replaceMode) {
+          delete nextObject[childKey];
+        } else if (value !== undefined) {
+          nextObject[childKey] = value;
+        }
+      });
+      mergedSettings[key] = nextObject;
+    } else if (Object.prototype.hasOwnProperty.call(targetPlan, 'value')) {
+      const value = targetPlan.value;
+      mergedSettings[key] = isPlainObject(value) ? clonePlainObject(value) : value;
+    }
+  });
+
+  if (incomingSettings.updatedAt) {
+    mergedSettings.updatedAt = incomingSettings.updatedAt;
+  }
+
+  if (!isPlainObject(nextStateObj.meta)) {
+    nextStateObj.meta = {};
+  }
+  nextStateObj.meta.settings = mergedSettings;
+
+  if (isPlainObject(mergedSettings.capacity)) {
+    nextStateObj.capByProc = { ...mergedSettings.capacity };
+  }
+
+  if (isPlainObject(mergedSettings.parallel)) {
+    nextStateObj.parallelByProc = { ...mergedSettings.parallel };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autosave')) {
+    nextStateObj.autosaveOn = mergedSettings.autosave;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autoOptimize')) {
+    nextStateObj.autoOptimizeOn = mergedSettings.autoOptimize;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'shiftOnProgress')) {
+    nextStateObj.shiftOnProgress = mergedSettings.shiftOnProgress;
+  }
+
+  return { stateObj: nextStateObj, touched: true };
+};
+
+const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt, options = {}) => {
+  const { expectedHash = null, existing = null } = options;
+  const existingRow = existing || await readPlannerStateRow(client);
+  if (existingRow) {
+    const params = [stateString, meta, hash, updatedAt, existingRow.id];
+    let sql = 'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5';
+    if (expectedHash && existingRow.hash) {
+      params.push(expectedHash);
+      sql += ' AND hash = $6';
+    }
+    const result = await client.query(sql, params);
+    if (expectedHash && result.rowCount === 0) {
+      return { conflict: true, id: existingRow.id };
+    }
+    return { conflict: false, id: existingRow.id };
+  }
+  const { rows } = await client.query(
+    'INSERT INTO planner_state (state, meta, hash, updated_at) VALUES ($1,$2,$3,$4) RETURNING id',
+    [stateString, meta, hash, updatedAt]
+  );
+  return { conflict: false, id: rows[0].id };
+};
+
+const persistSnapshotToSql = async (client, stateObj) => {
+  const stageEntries = Array.isArray(stateObj?.t) ? stateObj.t : [];
+  const doneEntries = Array.isArray(stateObj?.done) ? stateObj.done : [];
+  const excEntries = Array.isArray(stateObj?.exc) ? stateObj.exc : [];
+  const settings = isPlainObject(stateObj?.meta?.settings) ? stateObj.meta.settings : {};
+  const capacityEntries = isPlainObject(settings.capacity)
+    ? settings.capacity
+    : (isPlainObject(stateObj?.capByProc) ? stateObj.capByProc : {});
+  const parallelEntries = isPlainObject(settings.parallel)
+    ? settings.parallel
+    : (isPlainObject(stateObj?.parallelByProc) ? stateObj.parallelByProc : {});
+
+  const stageCodeSet = new Set();
+  stageEntries.forEach((entry) => {
+    if (!entry?.stage) return;
+    const code = String(entry.stage).trim();
+    if (code) stageCodeSet.add(code);
+  });
+  doneEntries.forEach((entry) => {
+    if (!entry?.stage) return;
+    const code = String(entry.stage).trim();
+    if (code) stageCodeSet.add(code);
+  });
+  Object.keys(capacityEntries).forEach((code) => {
+    const normalized = String(code || '').trim();
+    if (normalized) stageCodeSet.add(normalized);
+  });
+
+  const stageTypeMap = new Map();
+  let sort = 0;
+  for (const code of Array.from(stageCodeSet)) {
+    const { rows } = await client.query(
+      `INSERT INTO stage_type (code, name, sort_order, is_active)
+       VALUES ($1,$2,$3,TRUE)
+       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, is_active = TRUE, updated_at = NOW()
+       RETURNING id`,
+      [code, code, sort]
+    );
+    stageTypeMap.set(code, rows[0].id);
+    sort += 1;
+  }
+
+  if (stageCodeSet.size > 0) {
+    await client.query(
+      `UPDATE stage_type SET is_active = FALSE, updated_at = NOW()
+       WHERE NOT (code = ANY($1::text[]))`,
+      [Array.from(stageCodeSet)]
+    );
+  } else {
+    await client.query('UPDATE stage_type SET is_active = FALSE, updated_at = NOW()');
+  }
+
+  const orderNumbers = new Set();
+  stageEntries.forEach((entry) => {
+    if (!entry?.orderId) return;
+    const orderNo = String(entry.orderId).trim();
+    if (orderNo) orderNumbers.add(orderNo);
+  });
+
+  const orderIdMap = new Map();
+  for (const orderNo of Array.from(orderNumbers)) {
+    const { rows } = await client.query(
+      `INSERT INTO customer_order (order_no, title, is_deleted)
+       VALUES ($1,$2,FALSE)
+       ON CONFLICT (order_no, is_deleted) DO UPDATE SET title = EXCLUDED.title, updated_at = NOW()
+       RETURNING id`,
+      [orderNo, orderNo]
+    );
+    orderIdMap.set(orderNo, rows[0].id);
+  }
+
+  if (orderNumbers.size > 0) {
+    await client.query(
+      `UPDATE customer_order SET is_deleted = TRUE, updated_at = NOW()
+       WHERE is_deleted = FALSE AND NOT (order_no = ANY($1::text[]))`,
+      [Array.from(orderNumbers)]
+    );
+  } else {
+    await client.query('UPDATE customer_order SET is_deleted = TRUE, updated_at = NOW() WHERE is_deleted = FALSE');
+  }
+
+  const stageUidSet = new Set();
+  const stageUidToId = new Map();
+
+  for (const stage of stageEntries) {
+    if (!stage || !stage.orderId || !stage.stage) continue;
+    const orderKey = String(stage.orderId).trim();
+    const stageCode = String(stage.stage).trim();
+    if (!orderKey || !stageCode) continue;
+    const orderId = orderIdMap.get(orderKey);
+    const stageTypeId = stageTypeMap.get(stageCode);
+    if (!orderId || !stageTypeId) continue;
+    const uid = stage.uid || `${orderKey}::${stageCode}`;
+    const stageVersionRaw = stateObj?.meta?.versions && stateObj.meta.versions[stageCode];
+    const stageVersion = Number.isFinite(Number(stageVersionRaw)) ? Number(stageVersionRaw) : 1;
+    const { rows } = await client.query(
+      `INSERT INTO order_stage (
+        order_id, stage_type_id, external_uid, hours, extra_hours, start_at, end_at,
+        start_missing, end_missing, state, status, progress, use_reserve, orig_start_at, version, payload, is_deleted
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE)
+      ON CONFLICT (external_uid) DO UPDATE SET
+        order_id = EXCLUDED.order_id,
+        stage_type_id = EXCLUDED.stage_type_id,
+        hours = EXCLUDED.hours,
+        extra_hours = EXCLUDED.extra_hours,
+        start_at = EXCLUDED.start_at,
+        end_at = EXCLUDED.end_at,
+        start_missing = EXCLUDED.start_missing,
+        end_missing = EXCLUDED.end_missing,
+        state = EXCLUDED.state,
+        status = EXCLUDED.status,
+        progress = EXCLUDED.progress,
+        use_reserve = EXCLUDED.use_reserve,
+        orig_start_at = EXCLUDED.orig_start_at,
+        version = EXCLUDED.version,
+        payload = EXCLUDED.payload,
+        is_deleted = FALSE,
+        updated_at = NOW()
+      RETURNING id`,
+      [
+        orderId,
+        stageTypeId,
+        uid,
+        stage.hours ?? null,
+        stage.extraHours ?? null,
+        normaliseDate(stage.startDate),
+        normaliseDate(stage.endDate),
+        Boolean(stage.startMissing),
+        Boolean(stage.endMissing),
+        stage.state ?? null,
+        stage.status ?? null,
+        stage.progress ?? null,
+        Boolean(stage.useReserve),
+        normaliseDate(stage.origStartDate),
+        stageVersion,
+        stage ?? null
+      ]
+    );
+    stageUidSet.add(uid);
+    stageUidToId.set(uid, rows[0].id);
+  }
+
+  if (stageUidSet.size > 0) {
+    await client.query(
+      `UPDATE order_stage SET is_deleted = TRUE, updated_at = NOW()
+       WHERE is_deleted = FALSE AND external_uid IS NOT NULL AND NOT (external_uid = ANY($1::text[]))`,
+      [Array.from(stageUidSet)]
+    );
+  } else {
+    await client.query('UPDATE order_stage SET is_deleted = TRUE, updated_at = NOW() WHERE is_deleted = FALSE');
+  }
+
+  await client.query('DELETE FROM stage_completion');
+  for (const done of doneEntries) {
+    const orderKey = done?.orderId ? String(done.orderId).trim() : '';
+    const stageCode = done?.stage ? String(done.stage).trim() : '';
+    const uid = done?.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : null);
+    const stageId = uid ? stageUidToId.get(uid) ?? null : null;
+    await client.query(
+      `INSERT INTO stage_completion (order_stage_id, completed_at, source, note)
+       VALUES ($1,$2,$3,$4)`,
+      [stageId, normaliseDate(done?.when) || normaliseDate(done?.end), done?.source ?? null, done?.note ?? null]
+    );
+  }
+
+  await client.query('DELETE FROM stage_exception');
+  for (const exc of excEntries) {
+    const orderKey = exc?.orderId ? String(exc.orderId).trim() : '';
+    const stageCode = exc?.stage ? String(exc.stage).trim() : '';
+    const uid = exc?.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : null);
+    const stageId = uid ? stageUidToId.get(uid) ?? null : null;
+    await client.query(
+      `INSERT INTO stage_exception (order_stage_id, kind, details, created_at, resolved_at)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [stageId, exc?.kind || exc?.type || 'unknown', exc?.details ?? null, normaliseDate(exc?.createdAt) || normaliseDate(exc?.start), normaliseDate(exc?.resolvedAt) || normaliseDate(exc?.end)]
+    );
+  }
+
+  await client.query('DELETE FROM capacity_by_stage');
+  for (const [code, value] of Object.entries(capacityEntries)) {
+    const stageTypeId = stageTypeMap.get(code);
+    if (!stageTypeId) continue;
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) continue;
+    await client.query(
+      `INSERT INTO capacity_by_stage (stage_type_id, capacity_per_day, updated_at)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (stage_type_id) DO UPDATE SET capacity_per_day = EXCLUDED.capacity_per_day, updated_at = NOW()`,
+      [stageTypeId, numericValue]
+    );
+  }
+
+  await client.query('DELETE FROM parallel_limits');
+  for (const [code, value] of Object.entries(parallelEntries)) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) continue;
+    await client.query(
+      `INSERT INTO parallel_limits (code, max_parallel, updated_at)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (code) DO UPDATE SET max_parallel = EXCLUDED.max_parallel, updated_at = NOW()`,
+      [code, numericValue]
+    );
+  }
+
+  await client.query(
+    `INSERT INTO planner_settings (id, autosave_on, auto_optimize_on, shift_on_progress, storage_mode, extra, updated_at)
+     VALUES (1,$1,$2,$3,$4,$5,NOW())
+     ON CONFLICT (id) DO UPDATE SET
+       autosave_on = EXCLUDED.autosave_on,
+       auto_optimize_on = EXCLUDED.auto_optimize_on,
+       shift_on_progress = EXCLUDED.shift_on_progress,
+       storage_mode = EXCLUDED.storage_mode,
+       extra = EXCLUDED.extra,
+       updated_at = NOW()`,
+    [
+      settings.autosave ?? stateObj?.autosaveOn ?? null,
+      settings.autoOptimize ?? stateObj?.autoOptimizeOn ?? null,
+      settings.shiftOnProgress ?? stateObj?.shiftOnProgress ?? null,
+      stateObj?.meta?.storage?.mode ?? null,
+      settings
+    ]
+  );
+};
+
+const buildStateFromSql = async () => {
   const client = await pool.connect();
   try {
-    const currentRev = await fetchCurrentRevision(client);
-    res.write(`data: ${JSON.stringify({ rev: currentRev, etag: formatEtag(currentRev) })}\n\n`);
+    const plannerRow = await readPlannerStateRow(client);
+    let baseObj;
+    try {
+      baseObj = plannerRow?.state ? JSON.parse(plannerRow.state) : JSON.parse(JSON.stringify(DEFAULT_STATE));
+    } catch (err) {
+      baseObj = JSON.parse(JSON.stringify(DEFAULT_STATE));
+    }
+
+    const { rows: stageRows } = await client.query(
+      `SELECT os.external_uid, os.payload, os.state, os.status, os.hours, os.extra_hours, os.start_at, os.end_at,
+              os.start_missing, os.end_missing, os.progress, os.use_reserve, os.orig_start_at,
+              os.version, co.order_no, st.code AS stage_code
+         FROM order_stage os
+         JOIN customer_order co ON co.id = os.order_id
+         JOIN stage_type st ON st.id = os.stage_type_id
+        WHERE os.is_deleted = FALSE AND co.is_deleted = FALSE
+        ORDER BY st.sort_order, os.start_at NULLS LAST, os.id`
+    );
+
+    const { rows: doneRows } = await client.query(
+      `SELECT sc.order_stage_id, sc.completed_at, sc.source, sc.note, os.external_uid, co.order_no, st.code AS stage_code
+         FROM stage_completion sc
+         LEFT JOIN order_stage os ON os.id = sc.order_stage_id
+         LEFT JOIN customer_order co ON co.id = os.order_id
+         LEFT JOIN stage_type st ON st.id = os.stage_type_id
+        ORDER BY sc.completed_at DESC`
+    );
+
+    const { rows: excRows } = await client.query(
+      `SELECT se.order_stage_id, se.kind, se.details, se.created_at, se.resolved_at, os.external_uid, co.order_no, st.code AS stage_code
+         FROM stage_exception se
+         LEFT JOIN order_stage os ON os.id = se.order_stage_id
+         LEFT JOIN customer_order co ON co.id = os.order_id
+         LEFT JOIN stage_type st ON st.id = os.stage_type_id
+        ORDER BY se.created_at DESC`
+    );
+
+    const { rows: capacityRows } = await client.query(
+      `SELECT st.code, cb.capacity_per_day
+         FROM capacity_by_stage cb
+         JOIN stage_type st ON st.id = cb.stage_type_id`
+    );
+
+    const { rows: parallelRows } = await client.query('SELECT code, max_parallel FROM parallel_limits');
+
+    const { rows: settingsRows } = await client.query('SELECT autosave_on, auto_optimize_on, shift_on_progress, storage_mode, extra FROM planner_settings WHERE id = 1');
+
+    const stateObj = baseObj && typeof baseObj === 'object' ? baseObj : JSON.parse(JSON.stringify(DEFAULT_STATE));
+
+    stateObj.t = stageRows.map((row) => {
+      if (isPlainObject(row.payload)) {
+        return row.payload;
+      }
+      const uid = row.external_uid || `${row.order_no}::${row.stage_code}`;
+      return {
+        uid,
+        orderId: row.order_no,
+        stage: row.stage_code,
+        parentId: row.order_no,
+        childId: uid,
+        hours: row.hours ?? 0,
+        extraHours: row.extra_hours ?? 0,
+        startDate: row.start_at,
+        endDate: row.end_at,
+        startMissing: !!row.start_missing,
+        endMissing: !!row.end_missing,
+        state: row.state,
+        status: row.status,
+        useReserve: !!row.use_reserve,
+        progress: row.progress ?? 0,
+        origStartDate: row.orig_start_at
+      };
+    });
+
+    stateObj.done = doneRows.map((row) => ({
+      uid: row.external_uid || (row.order_no && row.stage_code ? `${row.order_no}::${row.stage_code}` : null),
+      orderId: row.order_no,
+      stage: row.stage_code,
+      when: row.completed_at,
+      source: row.source,
+      note: row.note
+    })).filter((item) => item.uid);
+
+    stateObj.exc = excRows.map((row) => ({
+      uid: row.external_uid || (row.order_no && row.stage_code ? `${row.order_no}::${row.stage_code}` : null),
+      orderId: row.order_no,
+      stage: row.stage_code,
+      kind: row.kind,
+      details: row.details ?? null,
+      createdAt: row.created_at,
+      resolvedAt: row.resolved_at
+    })).filter((item) => item.uid);
+
+    stateObj.capByProc = capacityRows.reduce((acc, row) => {
+      if (row.code) {
+        acc[row.code] = Number(row.capacity_per_day);
+      }
+      return acc;
+    }, {});
+
+    stateObj.parallelByProc = parallelRows.reduce((acc, row) => {
+      if (row.code) {
+        acc[row.code] = Number(row.max_parallel);
+      }
+      return acc;
+    }, {});
+
+    if (!isPlainObject(stateObj.meta)) {
+      stateObj.meta = clonePlainObject(DEFAULT_STATE.meta);
+    }
+
+    if (settingsRows.length > 0) {
+      const dbSettings = settingsRows[0];
+      const extraSettings = isPlainObject(dbSettings.extra) ? dbSettings.extra : {};
+      stateObj.meta.settings = { ...extraSettings };
+      if (dbSettings.autosave_on !== null) {
+        stateObj.meta.settings.autosave = dbSettings.autosave_on;
+        stateObj.autosaveOn = dbSettings.autosave_on;
+      }
+      if (dbSettings.auto_optimize_on !== null) {
+        stateObj.meta.settings.autoOptimize = dbSettings.auto_optimize_on;
+        stateObj.autoOptimizeOn = dbSettings.auto_optimize_on;
+      }
+      if (dbSettings.shift_on_progress !== null) {
+        stateObj.meta.settings.shiftOnProgress = dbSettings.shift_on_progress;
+        stateObj.shiftOnProgress = dbSettings.shift_on_progress;
+      }
+      if (!isPlainObject(stateObj.meta.storage)) {
+        stateObj.meta.storage = { local: true, remote: true, remotePreferred: true, mode: 'remote' };
+      }
+      if (dbSettings.storage_mode) {
+        stateObj.meta.storage.mode = dbSettings.storage_mode;
+      }
+    }
+
+    if (!isPlainObject(stateObj.meta.settings)) {
+      stateObj.meta.settings = {};
+    }
+    stateObj.meta.settings.capacity = { ...stateObj.capByProc };
+    stateObj.meta.settings.parallel = { ...stateObj.parallelByProc };
+
+    const versions = {};
+    stageRows.forEach((row) => {
+      if (!row.stage_code) return;
+      const current = versions[row.stage_code] ?? 0;
+      versions[row.stage_code] = Math.max(current, row.version ?? 0);
+    });
+    stateObj.meta.versions = versions;
+
+    const ordersMap = new Map();
+    stageRows.forEach((row) => {
+      const code = row.stage_code;
+      if (!code) return;
+      if (!ordersMap.has(code)) {
+        ordersMap.set(code, []);
+      }
+      const uid = row.external_uid || `${row.order_no}::${row.stage_code}`;
+      ordersMap.get(code).push(uid);
+    });
+    stateObj.orders = Array.from(ordersMap.entries());
+
+    const stateString = JSON.stringify(stateObj);
+    const hash = simpleHash(stateString);
+    const updatedAt = plannerRow?.updatedAt ?? new Date().toISOString();
+    const meta = plannerRow?.meta ?? null;
+
+    return {
+      state: stateString,
+      meta,
+      updatedAt,
+      hash,
+      etag: `W/"${hash}"`,
+      parsed: stateObj
+    };
   } finally {
     client.release();
   }
+};
+
+const refreshCachedState = async () => {
+  cachedState = await buildStateFromSql();
+  return cachedState;
+};
+
+const computeDelta = (prevState, nextState) => {
+  const prevStages = new Map();
+  const nextStages = new Map();
+
+  if (Array.isArray(prevState?.t)) {
+    prevState.t.forEach((stage) => {
+      if (stage && stage.uid) {
+        prevStages.set(stage.uid, JSON.stringify(stage));
+      }
+    });
+  }
+
+  if (Array.isArray(nextState?.t)) {
+    nextState.t.forEach((stage) => {
+      if (stage && stage.uid) {
+        nextStages.set(stage.uid, JSON.stringify(stage));
+      }
+    });
+  }
+
+  const added = [];
+  const updated = [];
+  const removed = [];
+
+  nextStages.forEach((value, uid) => {
+    if (!prevStages.has(uid)) {
+      added.push(uid);
+    } else if (prevStages.get(uid) !== value) {
+      updated.push(uid);
+    }
+  });
+
+  prevStages.forEach((_value, uid) => {
+    if (!nextStages.has(uid)) {
+      removed.push(uid);
+    }
+  });
+
+  const settingsChanged = JSON.stringify(prevState?.meta?.settings ?? null) !== JSON.stringify(nextState?.meta?.settings ?? null);
+
+  return {
+    stages: { added, updated, removed },
+    settingsChanged
+  };
+};
+
+let cachedState = null;
+
+const bootstrapState = async () => {
+  await runMigrations();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    let existing = await readPlannerStateRow(client);
+    if (!existing) {
+      const legacy = await loadLegacyStateFromDisk();
+      const payload = legacy || createInitialState();
+      let stateObj;
+      try {
+        stateObj = payload.state ? JSON.parse(payload.state) : JSON.parse(JSON.stringify(DEFAULT_STATE));
+      } catch (err) {
+        stateObj = JSON.parse(JSON.stringify(DEFAULT_STATE));
+      }
+      await persistSnapshotToSql(client, stateObj);
+      await upsertPlannerStateRow(client, JSON.stringify(stateObj), payload.meta ?? null, payload.hash ?? simpleHash(JSON.stringify(stateObj)), payload.updatedAt ?? new Date().toISOString());
+      await client.query('COMMIT');
+    } else {
+      await client.query('COMMIT');
+    }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+  await refreshCachedState();
+};
+
+const appendLog = async (entry) => {
+  await pool.query(
+    `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      entry.timestamp,
+      entry.stage,
+      entry.version,
+      entry.user,
+      entry.session,
+      entry.source,
+      entry.summary,
+      entry.diff ?? null,
+      entry.ordersSummary ?? null,
+      entry.ip
+    ]
+  );
+};
+
+const broadcast = (payload) => {
+  const data = `data: ${JSON.stringify(payload)}\n\n`;
+  sseClients.forEach((res) => {
+    res.write(data);
+  });
+};
+
+app.get('/api/events', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders?.();
+
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+
+  const current = cachedState || await refreshCachedState();
+  res.write(`data: ${JSON.stringify({ type: 'state', state: current.state, meta: current.meta, updatedAt: current.updatedAt, hash: current.hash, etag: current.etag })}\n\n`);
 });
 
 app.get('/api/state', async (req, res) => {
-  const sinceRevRaw = req.query.since_rev ?? req.query.sinceRev ?? null;
-  const sinceRev = sinceRevRaw == null ? null : Number.parseInt(String(sinceRevRaw), 10);
-  await withClient(async (client) => {
-    const currentRev = await fetchCurrentRevision(client);
-    res.setHeader('ETag', formatEtag(currentRev));
-    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    if (sinceRev === null || Number.isNaN(sinceRev)) {
-      const payload = await buildFullState(client, currentRev);
-      res.json(payload);
+  const current = cachedState || await refreshCachedState();
+  if (req.headers['if-none-match'] && req.headers['if-none-match'] === current.etag) {
+    res.status(304).end();
+    return;
+  }
+  res.setHeader('ETag', current.etag);
+  res.type('application/json').send(current.state);
+});
+
+const extractStateFromBody = (body) => {
+  if (!body) return { state: null, meta: null };
+  if (typeof body === 'string') {
+    return { state: body, meta: null };
+  }
+  if (typeof body === 'object') {
+    if (typeof body.state === 'string') {
+      return { state: body.state, meta: body.meta ?? null };
+    }
+    if (body.state && typeof body.state === 'object') {
+      try {
+        return { state: JSON.stringify(body.state), meta: body.meta ?? null };
+      } catch (err) {
+        console.error('state stringify failed', err);
+        return { state: null, meta: null };
+      }
+    }
+    try {
+      return { state: JSON.stringify(body), meta: null };
+    } catch (err) {
+      return { state: null, meta: null };
+    }
+  }
+  return { state: null, meta: null };
+};
+
+app.put('/api/state', async (req, res) => {
+  const { state, meta } = extractStateFromBody(req.body);
+  if (!state) {
+    res.status(400).send('Invalid state payload');
+    return;
+  }
+
+  const current = cachedState || await refreshCachedState();
+  const currentHash = sanitizeHashCandidate(current?.hash);
+  let currentStateObj = {};
+  try {
+    currentStateObj = JSON.parse(current.state || '{}');
+  } catch (err) {
+    currentStateObj = {};
+  }
+
+  let nextStateObj = {};
+  try {
+    nextStateObj = JSON.parse(state);
+  } catch (err) {
+    res.status(400).send('State must be valid JSON');
+    return;
+  }
+
+  const stage = meta?.stage ?? null;
+  const incomingVersion = meta?.version ?? (nextStateObj?.meta?.versions?.[stage] ?? null);
+  const currentVersion = stage != null ? currentStateObj?.meta?.versions?.[stage] ?? null : null;
+
+  if (incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
+    const lastAuthor = currentStateObj?.meta?.lastAuthors?.[stage] ?? null;
+    res.status(409).json({
+      error: 'Conflict',
+      stage,
+      currentVersion,
+      incomingVersion,
+      lastAuthor,
+      updatedAt: current.updatedAt
+    });
+    return;
+  }
+
+  const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
+  let expectedHash = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
+  if (!expectedHash && meta && typeof meta === 'object' && !Array.isArray(meta)) {
+    const metaExpected = sanitizeHashCandidate(meta.expectedHash) || sanitizeHashCandidate(meta.baseHash);
+    if (metaExpected) {
+      expectedHash = metaExpected;
+    } else if (meta.baseEtag) {
+      const parsed = normalizeWeakEtag(meta.baseEtag);
+      if (parsed && parsed !== '*') {
+        expectedHash = sanitizeHashCandidate(parsed);
+      }
+    }
+  }
+  const ifMatchAllowsAny = ifMatchHeader.any;
+
+  if (currentHash) {
+    if (!expectedHash && !ifMatchAllowsAny) {
+      res.status(428).json({
+        error: 'Precondition Required',
+        message: 'Planner state update requires an If-Match header or base hash',
+        stage,
+        updatedAt: current.updatedAt,
+        currentHash
+      });
       return;
     }
-    const payload = await buildDelta(client, sinceRev, currentRev);
-    res.json(payload);
-  });
-});
-
-app.get('/api/settings', async (_req, res) => {
-  await withClient(async (client) => {
-    const currentRev = await fetchCurrentRevision(client);
-    const settings = await readSettings(client);
-    res.setHeader('ETag', formatEtag(currentRev));
-    res.json({ rev: currentRev, etag: formatEtag(currentRev), settings });
-  });
-});
-
-const validateChangesPayload = (body) => {
-  if (!body || typeof body !== 'object') {
-    return { error: 'Invalid payload' };
-  }
-  const baseRev = Number.parseInt(body.base_rev ?? body.baseRev, 10);
-  if (!Number.isFinite(baseRev) || baseRev < 0) {
-    return { error: 'base_rev is required' };
-  }
-  const changes = body.changes;
-  if (!changes || typeof changes !== 'object') {
-    return { error: 'changes object is required' };
-  }
-  const actor = typeof body.actor === 'string' ? body.actor : null;
-  const source = typeof body.source === 'string' ? body.source : null;
-  const summary = typeof body.summary === 'string' ? body.summary : null;
-  const forceOverwrite = body.forceOverwrite === true || body.force_overwrite === true
-    || (body.meta && body.meta.forceOverwrite === true);
-  return { baseRev, changes, actor, source, summary, forceOverwrite };
-};
-
-const setSequenceToMax = async (client, table, column) => {
-  const seqRes = await client.query(
-    `SELECT pg_get_serial_sequence($1, $2) AS seq`,
-    [table, column]
-  );
-  const seqName = seqRes.rows[0]?.seq;
-  if (!seqName) return;
-  await client.query(
-    `SELECT setval($1, COALESCE((SELECT MAX(${column}) FROM ${table}), 0))`,
-    [seqName]
-  );
-};
-
-const snapshotAtRevision = async (client, table, columns, targetRev) => {
-  const colList = columns.join(', ');
-  const rows = await client.query(
-    `SELECT ${colList}
-       FROM ${table}_hist
-      WHERE rev_from <= $1
-        AND (rev_to IS NULL OR rev_to >= $1)
-      ORDER BY ${columns[0]}`,
-    [targetRev]
-  );
-  return rows.rows;
-};
-
-const rebuildFromRevision = async (client, targetRev) => {
-  await client.query('DELETE FROM stage_dependencies');
-  await client.query('DELETE FROM order_stages');
-  await client.query('DELETE FROM orders');
-  await client.query('DELETE FROM stage_capacity');
-  await client.query('DELETE FROM excluded_statuses');
-  await client.query('DELETE FROM settings_columns');
-  await client.query('DELETE FROM settings_crm_mapping');
-  await client.query('DELETE FROM settings_autoweight');
-  await client.query('DELETE FROM settings_journal');
-  await client.query('DELETE FROM settings_admin');
-
-  const orders = await snapshotAtRevision(client, 'orders', ['id', 'order_no', 'client', 'name', 'deleted_at', 'created_at', 'updated_at'], targetRev);
-  for (const row of orders) {
-    await client.query(
-      `INSERT INTO orders (id, order_no, client, name, deleted_at, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)` ,
-      [row.id, row.order_no, row.client, row.name, row.deleted_at, row.created_at, row.updated_at]
-    );
-  }
-  await setSequenceToMax(client, 'orders', 'id');
-
-  const stages = await snapshotAtRevision(
-    client,
-    'order_stages',
-    ['id', 'order_id', 'stage_code', 'start_at', 'end_at', 'progress_pct', 'status', 'is_done', 'trash_at', 'created_at', 'updated_at'],
-    targetRev
-  );
-  for (const row of stages) {
-    await client.query(
-      `INSERT INTO order_stages (
-        id, order_id, stage_code, start_at, end_at, progress_pct, status, is_done, trash_at, created_at, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
-      [
-        row.id,
-        row.order_id,
-        row.stage_code,
-        row.start_at,
-        row.end_at,
-        row.progress_pct,
-        row.status,
-        row.is_done,
-        row.trash_at,
-        row.created_at,
-        row.updated_at
-      ]
-    );
-  }
-  await setSequenceToMax(client, 'order_stages', 'id');
-
-  const dependencies = await snapshotAtRevision(client, 'stage_dependencies', ['order_id', 'from_stage', 'to_stage'], targetRev);
-  for (const row of dependencies) {
-    await client.query(
-      `INSERT INTO stage_dependencies (order_id, from_stage, to_stage) VALUES ($1,$2,$3)` ,
-      [row.order_id, row.from_stage, row.to_stage]
-    );
+    if (ifMatchAllowsAny && !expectedHash) {
+      res.status(428).json({
+        error: 'Precondition Required',
+        message: 'Wildcard If-Match is not allowed once planner state exists',
+        stage,
+        updatedAt: current.updatedAt,
+        currentHash
+      });
+      return;
+    }
+    if (expectedHash && expectedHash !== currentHash) {
+      const lastAuthor = stage ? currentStateObj?.meta?.lastAuthors?.[stage] ?? null : null;
+      res.status(409).json({
+        error: 'Conflict',
+        stage,
+        reason: 'hash_mismatch',
+        expectedHash,
+        currentHash,
+        lastAuthor,
+        updatedAt: current.updatedAt
+      });
+      return;
+    }
   }
 
-  const capacity = await snapshotAtRevision(client, 'stage_capacity', ['stage_code', 'capacity_per_day', 'parallel_limit', 'updated_at'], targetRev);
-  for (const row of capacity) {
-    await client.query(
-      `INSERT INTO stage_capacity (stage_code, capacity_per_day, parallel_limit, updated_at)
-       VALUES ($1,$2,$3,$4)` ,
-      [row.stage_code, row.capacity_per_day, row.parallel_limit, row.updated_at]
-    );
+  const updatedAt = new Date().toISOString();
+  let nextStateString = state;
+  if (meta?.stage === 'settings') {
+    try {
+      const { stateObj, touched } = mergeSettingsSnapshot(currentStateObj, nextStateObj, meta);
+      if (touched) {
+        nextStateObj = stateObj;
+        nextStateString = JSON.stringify(stateObj);
+      }
+    } catch (err) {
+      console.error('Failed to merge settings snapshot, falling back to incoming state', err);
+    }
   }
 
-  const excluded = await snapshotAtRevision(client, 'excluded_statuses', ['status_code', 'created_at'], targetRev);
-  for (const row of excluded) {
-    await client.query(
-      `INSERT INTO excluded_statuses (status_code, created_at) VALUES ($1,$2)` ,
-      [row.status_code, row.created_at]
-    );
+  const hash = simpleHash(nextStateString);
+  let nextMeta = meta || null;
+  if (nextMeta && typeof nextMeta === 'object' && !Array.isArray(nextMeta)) {
+    const cleaned = { ...nextMeta };
+    delete cleaned.baseHash;
+    delete cleaned.baseEtag;
+    delete cleaned.expectedHash;
+    delete cleaned.ifMatch;
+    if (Object.keys(cleaned).length > 0) {
+      nextMeta = cleaned;
+    } else {
+      nextMeta = null;
+    }
   }
 
-  const columns = await snapshotAtRevision(client, 'settings_columns', ['column_key', 'width_px', 'updated_at'], targetRev);
-  for (const row of columns) {
-    await client.query(
-      `INSERT INTO settings_columns (column_key, width_px, updated_at) VALUES ($1,$2,$3)` ,
-      [row.column_key, row.width_px, row.updated_at]
-    );
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existingRow = await readPlannerStateRow(client, { forUpdate: true });
+    const dbHash = sanitizeHashCandidate(existingRow?.hash);
+    if (dbHash) {
+      if (!expectedHash) {
+        await client.query('ROLLBACK');
+        res.status(428).json({
+          error: 'Precondition Required',
+          message: 'Planner state update requires an If-Match header or base hash',
+          stage,
+          updatedAt: existingRow.updatedAt,
+          currentHash: dbHash
+        });
+        return;
+      }
+      if (expectedHash !== dbHash) {
+        await client.query('ROLLBACK');
+        res.status(409).json({
+          error: 'Conflict',
+          stage,
+          reason: 'hash_mismatch',
+          expectedHash,
+          currentHash: dbHash,
+          updatedAt: existingRow.updatedAt
+        });
+        return;
+      }
+    } else if (!dbHash && ifMatchAllowsAny) {
+      expectedHash = null;
+    }
+
+    await persistSnapshotToSql(client, nextStateObj);
+    const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
+      expectedHash,
+      existing: existingRow
+    });
+    if (upsertResult?.conflict) {
+      await client.query('ROLLBACK');
+      res.status(409).json({
+        error: 'Conflict',
+        stage,
+        reason: 'hash_mismatch',
+        expectedHash,
+        updatedAt: existingRow?.updatedAt ?? current.updatedAt
+      });
+      return;
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Failed to persist snapshot', err);
+    res.status(500).send('Failed to persist snapshot');
+    return;
+  } finally {
+    client.release();
   }
 
-  const crmMapping = await snapshotAtRevision(client, 'settings_crm_mapping', ['crm_stage_name', 'planner_stage_code', 'is_ignored', 'updated_at'], targetRev);
-  for (const row of crmMapping) {
-    await client.query(
-      `INSERT INTO settings_crm_mapping (crm_stage_name, planner_stage_code, is_ignored, updated_at)
-       VALUES ($1,$2,$3,$4)` ,
-      [row.crm_stage_name, row.planner_stage_code, row.is_ignored, row.updated_at]
-    );
-  }
+  const previousState = cachedState ? cachedState.parsed : null;
+  const refreshed = await refreshCachedState();
+  const delta = computeDelta(previousState, refreshed.parsed);
 
-  const autoweight = await snapshotAtRevision(client, 'settings_autoweight', ['id', 'enabled', 'percent', 'minimum_hours', 'updated_at'], targetRev);
-  if (autoweight.length) {
-    const row = autoweight[0];
-    await client.query(
-      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
-       VALUES ($1,$2,$3,$4,$5)` ,
-      [row.id, row.enabled, row.percent, row.minimum_hours, row.updated_at]
-    );
-  }
-
-  const journal = await snapshotAtRevision(client, 'settings_journal', ['id', 'max_rows', 'updated_at'], targetRev);
-  if (journal.length) {
-    const row = journal[0];
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at) VALUES ($1,$2,$3)` ,
-      [row.id, row.max_rows, row.updated_at]
-    );
-  }
-
-  const admin = await snapshotAtRevision(
-    client,
-    'settings_admin',
-    ['id', 'allow_force_overwrite', 'history_retention_count', 'checkpoint_interval_days', 'updated_at'],
-    targetRev
-  );
-  if (admin.length) {
-    const row = admin[0];
-    await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, history_retention_count, checkpoint_interval_days, updated_at)
-       VALUES ($1,$2,$3,$4,$5)` ,
-      [row.id, row.allow_force_overwrite, row.history_retention_count, row.checkpoint_interval_days, row.updated_at]
-    );
-  }
-};
-
-const logActivity = async (client, rev, actor, source, action, summary) => {
-  await client.query(
-    `INSERT INTO activity_log (rev, actor, source, action, summary)
-     VALUES ($1,$2,$3,$4,$5)` ,
-    [rev, actor, source, action, summary]
-  );
-};
-
-const buildHistoryList = async (client, limit, offset) => {
-  const { rows } = await client.query(
-    `SELECT rev, ts, actor, source, action, summary
-       FROM activity_log
-      ORDER BY rev DESC
-      LIMIT $1 OFFSET $2`,
-    [limit, offset]
-  );
-  return rows.map((row) => ({
-    rev: Number(row.rev),
-    timestamp: row.ts,
-    actor: row.actor,
-    source: row.source,
-    action: row.action,
-    summary: row.summary
-  }));
-};
-
-const buildSnapshot = async (client, targetRev) => {
-  const [orders, stages, stageDependencies, stageCapacity, excludedStatuses, settings] = await Promise.all([
-    snapshotAtRevision(client, 'orders', ['id', 'order_no', 'client', 'name', 'deleted_at', 'created_at', 'updated_at'], targetRev),
-    snapshotAtRevision(
-      client,
-      'order_stages',
-      ['id', 'order_id', 'stage_code', 'start_at', 'end_at', 'progress_pct', 'status', 'is_done', 'trash_at', 'created_at', 'updated_at'],
-      targetRev
-    ),
-    snapshotAtRevision(client, 'stage_dependencies', ['order_id', 'from_stage', 'to_stage'], targetRev),
-    snapshotAtRevision(client, 'stage_capacity', ['stage_code', 'capacity_per_day', 'parallel_limit', 'updated_at'], targetRev),
-    snapshotAtRevision(client, 'excluded_statuses', ['status_code', 'created_at'], targetRev),
-    (async () => {
-      const autoweight = await snapshotAtRevision(client, 'settings_autoweight', ['id', 'enabled', 'percent', 'minimum_hours', 'updated_at'], targetRev);
-      const journal = await snapshotAtRevision(client, 'settings_journal', ['id', 'max_rows', 'updated_at'], targetRev);
-      const columns = await snapshotAtRevision(client, 'settings_columns', ['column_key', 'width_px', 'updated_at'], targetRev);
-      const mapping = await snapshotAtRevision(client, 'settings_crm_mapping', ['crm_stage_name', 'planner_stage_code', 'is_ignored', 'updated_at'], targetRev);
-      const admin = await snapshotAtRevision(client, 'settings_admin', ['id', 'allow_force_overwrite', 'history_retention_count', 'checkpoint_interval_days', 'updated_at'], targetRev);
-      return {
-        autoweight,
-        journal,
-        columns,
-        crmMapping: mapping,
-        admin
-      };
-    })()
-  ]);
-  return {
-    orders,
-    stages,
-    stageDependencies,
-    stageCapacity,
-    excludedStatuses,
-    settings
+  const logEntry = {
+    timestamp: updatedAt,
+    stage,
+    version: incomingVersion ?? null,
+    user: meta?.user ?? null,
+    session: meta?.session ?? null,
+    source: meta?.source ?? null,
+    summary: meta?.summary ?? null,
+    ip: req.ip
   };
-};
-app.put('/api/changes', async (req, res) => {
-  const validation = validateChangesPayload(req.body);
-  if (validation.error) {
-    res.status(400).json({ error: validation.error });
-    return;
+  if (meta?.diff) {
+    logEntry.diff = meta.diff;
   }
-  const { baseRev, changes, actor, source, summary, forceOverwrite } = validation;
-  const ifMatchRev = parseIfMatchRevision(req.headers['if-match'] ?? req.headers['If-Match']);
-  if (ifMatchRev !== null && ifMatchRev !== baseRev) {
-    res.status(412).json({ error: 'Precondition Failed', expected: ifMatchRev });
-    return;
+  if (meta?.ordersSummary) {
+    logEntry.ordersSummary = meta.ordersSummary;
   }
+  await appendLog(logEntry);
 
-  await withClient(async (client) => {
-    await client.query('BEGIN');
-    try {
-      const { rows } = await client.query('SELECT current_rev FROM revisions WHERE id = 1 FOR UPDATE');
-      const currentRev = rows.length ? Number(rows[0].current_rev) : 0;
-      const adminSettings = await fetchAdminSettings(client);
-      const allowForce = adminSettings.allow_force_overwrite === true;
-      if (currentRev !== baseRev && !(allowForce && forceOverwrite)) {
-        await client.query('ROLLBACK');
-        res.status(409).json({ error: 'Conflict', currentRev, allowForceOverwrite: allowForce });
-        return;
-      }
-      const nextRev = currentRev + 1;
-      await client.query('UPDATE revisions SET current_rev = $1 WHERE id = 1', [nextRev]);
-      await client.query("SELECT set_config('planner.current_rev', $1::text, true)", [String(nextRev)]);
-      const stats = await applyChanges(client, changes);
-      const finalSummary = summary || formatStatsSummary(stats) || 'no changes';
-      await logActivity(client, nextRev, actor, source, 'apply-changes', finalSummary);
-      await client.query('COMMIT');
-
-      const delta = await buildDelta(client, currentRev, nextRev);
-      res.setHeader('ETag', formatEtag(nextRev));
-      res.json({ rev: nextRev, etag: formatEtag(nextRev), delta, summary: finalSummary });
-      sendSse({ rev: nextRev, etag: formatEtag(nextRev), summary: finalSummary });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Failed to apply changes', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
+  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
+  res.setHeader('ETag', refreshed.etag);
+  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag });
 });
 
-app.get('/api/admin/history', async (req, res) => {
-  const limit = Number.parseInt(req.query.limit, 10);
-  const offset = Number.parseInt(req.query.offset, 10);
-  const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.min(limit, 200) : 50;
-  const safeOffset = Number.isFinite(offset) && offset >= 0 ? offset : 0;
-  await withClient(async (client) => {
-    const currentRev = await fetchCurrentRevision(client);
-    const items = await buildHistoryList(client, safeLimit, safeOffset);
-    res.json({ rev: currentRev, etag: formatEtag(currentRev), items });
-  });
-});
+app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
 
-app.get('/api/admin/history/:rev', async (req, res) => {
-  const targetRev = Number.parseInt(req.params.rev, 10);
-  if (!Number.isFinite(targetRev) || targetRev < 0) {
-    res.status(400).json({ error: 'Invalid revision' });
-    return;
-  }
-  await withClient(async (client) => {
-    const currentRev = await fetchCurrentRevision(client);
-    if (targetRev > currentRev) {
-      res.status(404).json({ error: 'Revision not found' });
-      return;
-    }
-    const snapshot = await buildSnapshot(client, targetRev);
-    res.json({ rev: targetRev, data: snapshot });
-  });
-});
-
-app.post('/api/admin/rollback', async (req, res) => {
-  const targetRev = Number.parseInt(req.body?.target_rev ?? req.body?.targetRev ?? req.body?.targetHash ?? req.body?.target, 10);
-  if (!Number.isFinite(targetRev) || targetRev < 0) {
-    res.status(400).json({ error: 'Invalid target revision' });
-    return;
-  }
-  const note = typeof req.body?.note === 'string' ? req.body.note : null;
-  const actor = typeof req.body?.actor === 'string' ? req.body.actor : 'admin';
-  await withClient(async (client) => {
-    await client.query('BEGIN');
-    try {
-      const { rows } = await client.query('SELECT current_rev FROM revisions WHERE id = 1 FOR UPDATE');
-      const currentRev = rows.length ? Number(rows[0].current_rev) : 0;
-      if (targetRev > currentRev) {
-        await client.query('ROLLBACK');
-        res.status(404).json({ error: 'Revision not found' });
-        return;
-      }
-      const nextRev = currentRev + 1;
-      await client.query('UPDATE revisions SET current_rev = $1 WHERE id = 1', [nextRev]);
-      await client.query("SELECT set_config('planner.current_rev', $1::text, true)", [String(nextRev)]);
-      await rebuildFromRevision(client, targetRev);
-      await logActivity(
-        client,
-        nextRev,
-        actor,
-        'rollback',
-        'rollback',
-        note ? `rollback to ${targetRev}: ${note}` : `rollback to ${targetRev}`
-      );
-      await client.query(
-        `INSERT INTO checkpoints (rev, note) VALUES ($1, $2)
-         ON CONFLICT (rev) DO UPDATE SET note = EXCLUDED.note`,
-        [nextRev, note]
-      );
-      await client.query('COMMIT');
-      const delta = await buildDelta(client, currentRev, nextRev);
-      res.setHeader('ETag', formatEtag(nextRev));
-      res.json({ rev: nextRev, etag: formatEtag(nextRev), delta });
-      sendSse({ rev: nextRev, etag: formatEtag(nextRev), summary: `rollback to ${targetRev}` });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Failed to rollback', err);
-      res.status(500).json({ error: 'Internal Server Error' });
-    }
-  });
-});
-
-app.post('/api/admin/checkpoint', async (req, res) => {
-  await withClient(async (client) => {
-    const currentRev = await fetchCurrentRevision(client);
-    const note = typeof req.body?.note === 'string' ? req.body.note : null;
-    await client.query(
-      `INSERT INTO checkpoints (rev, note)
-       VALUES ($1,$2)
-       ON CONFLICT (rev) DO UPDATE SET note = EXCLUDED.note`,
-      [currentRev, note]
-    );
-    res.json({ rev: currentRev, etag: formatEtag(currentRev) });
-  });
-});
-
-app.use(express.static(PUBLIC_DIR));
-
-app.get('*', (_req, res) => {
+app.get('/', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
 });
 
-const start = async () => {
-  await runMigrations();
-  app.listen(PORT, () => {
-    console.log(`Planner server listening on port ${PORT}`);
-  });
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  res.status(500).send('Internal Server Error');
+});
+
+let serverInstance = null;
+let shuttingDown = false;
+
+const shutdown = async (signal = 'SIGTERM') => {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+  console.log(`Received ${signal}, shutting down...`);
+  if (serverInstance) {
+    serverInstance.close();
+  }
+  try {
+    await pool.end();
+  } catch (err) {
+    console.error('Error while closing PostgreSQL pool', err);
+  }
+  process.exit(0);
 };
 
-start().catch((err) => {
-  console.error('Failed to start server', err);
-  process.exitCode = 1;
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+bootstrapState().then(() => {
+  serverInstance = app.listen(PORT, () => {
+    console.log(`Planner server running on http://localhost:${PORT}`);
+  });
+}).catch((err) => {
+  console.error('Failed to bootstrap state', err);
+  process.exit(1);
 });
