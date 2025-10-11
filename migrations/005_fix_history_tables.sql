@@ -11,7 +11,198 @@ DROP TRIGGER IF EXISTS settings_mapping_history_trg ON settings_mapping;
 DROP TRIGGER IF EXISTS settings_admin_history_trg ON settings_admin;
 DROP TRIGGER IF EXISTS excluded_statuses_history_trg ON excluded_statuses;
 
--- 2. Гарантируем выравнивание всех history-таблиц с базовыми структурами.
+-- 2. Гарантируем наличие вспомогательной функции выравнивания history-таблиц
+--    даже на базах, где обновлённая версия миграции 004 ещё не применялась.
+CREATE OR REPLACE FUNCTION rebuild_history_table(base_table TEXT) RETURNS VOID AS $$
+DECLARE
+  base_schema TEXT := 'public';
+  hist_table TEXT := base_table || '_hist';
+  hist_exists BOOLEAN;
+  has_rows BOOLEAN := false;
+  base_col RECORD;
+  column_defs TEXT := '';
+  insert_columns TEXT := '';
+  select_columns TEXT := '';
+  hist_has_column BOOLEAN;
+  hist_has_rev BOOLEAN := false;
+  hist_has_op BOOLEAN := false;
+  hist_has_changed_at BOOLEAN := false;
+  backfill_rev BIGINT;
+  rev_expr TEXT;
+  op_expr TEXT;
+  changed_expr TEXT;
+  copy_sql TEXT;
+  constraint_name TEXT := hist_table || '_rev_fkey';
+BEGIN
+  SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
+    INTO hist_exists;
+
+  IF hist_exists THEN
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
+      INTO has_rows;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'rev'
+           )
+      INTO hist_has_rev;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'op'
+           )
+      INTO hist_has_op;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'changed_at'
+           )
+      INTO hist_has_changed_at;
+  END IF;
+
+  FOR base_col IN
+    SELECT a.attname AS column_name,
+           format_type(a.atttypid, a.atttypmod) AS data_type,
+           pg_get_expr(ad.adbin, ad.adrelid) AS column_default
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+     WHERE n.nspname = base_schema
+       AND c.relname = base_table
+       AND a.attnum > 0
+       AND NOT a.attisdropped
+     ORDER BY a.attnum
+  LOOP
+    column_defs := column_defs ||
+      CASE WHEN column_defs = '' THEN '' ELSE ', ' END ||
+      format('%I %s', base_col.column_name, base_col.data_type);
+
+    insert_columns := insert_columns ||
+      CASE WHEN insert_columns = '' THEN '' ELSE ', ' END ||
+      format('%I', base_col.column_name);
+
+    IF hist_exists THEN
+      SELECT EXISTS (
+               SELECT 1
+                 FROM information_schema.columns
+                WHERE table_schema = base_schema
+                  AND table_name = hist_table
+                  AND column_name = base_col.column_name
+             )
+        INTO hist_has_column;
+    ELSE
+      hist_has_column := false;
+    END IF;
+
+    IF hist_has_column THEN
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('src.%I', base_col.column_name);
+    ELSIF base_col.column_default IS NOT NULL
+       AND POSITION('nextval' IN lower(base_col.column_default)) = 0 THEN
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('(%s)::%s', base_col.column_default, base_col.data_type);
+    ELSE
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('NULL::%s', base_col.data_type);
+    END IF;
+  END LOOP;
+
+  IF column_defs = '' THEN
+    RAISE EXCEPTION 'Base table %.% has no columns', base_schema, base_table;
+  END IF;
+
+  IF has_rows AND NOT hist_has_rev THEN
+    SELECT nextval('revisions_rev_seq') INTO backfill_rev;
+
+    EXECUTE '
+      INSERT INTO revisions (rev, actor, source, note)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (rev) DO NOTHING
+    ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+  END IF;
+
+  EXECUTE format('DROP TABLE IF EXISTS %I.%I_rebuild', base_schema, hist_table);
+  EXECUTE format(
+    'CREATE TABLE %I.%I_rebuild (%s, rev BIGINT NOT NULL, op CHAR(1) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+    base_schema,
+    hist_table,
+    column_defs
+  );
+
+  IF hist_exists AND has_rows THEN
+    rev_expr := CASE
+      WHEN hist_has_rev THEN 'src.rev'
+      ELSE format('%L::bigint', backfill_rev)
+    END;
+
+    op_expr := CASE
+      WHEN hist_has_op THEN 'COALESCE(src.op, ''U'')'
+      ELSE '''U'''
+    END;
+
+    changed_expr := CASE
+      WHEN hist_has_changed_at THEN 'COALESCE(src.changed_at, NOW())'
+      ELSE 'NOW()'
+    END;
+
+    copy_sql := format(
+      'INSERT INTO %I.%I_rebuild (%s, rev, op, changed_at)
+         SELECT %s, %s, %s, %s
+           FROM %I.%I AS src%s',
+      base_schema,
+      hist_table,
+      insert_columns,
+      select_columns,
+      rev_expr,
+      op_expr,
+      changed_expr,
+      base_schema,
+      hist_table,
+      CASE WHEN hist_has_rev THEN ' WHERE src.rev IS NOT NULL' ELSE '' END
+    );
+
+    EXECUTE copy_sql;
+
+    EXECUTE format('DROP TABLE %I.%I', base_schema, hist_table);
+  ELSIF hist_exists THEN
+    EXECUTE format('DROP TABLE %I.%I', base_schema, hist_table);
+  END IF;
+
+  EXECUTE format('ALTER TABLE %I.%I_rebuild RENAME TO %I', base_schema, hist_table, hist_table);
+
+  BEGIN
+    EXECUTE format(
+      'ALTER TABLE %I.%I ADD CONSTRAINT %I FOREIGN KEY (rev) REFERENCES revisions(rev)',
+      base_schema,
+      hist_table,
+      constraint_name
+    );
+  EXCEPTION
+    WHEN duplicate_object THEN
+      NULL;
+  END;
+
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN rev SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN op SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN changed_at SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN changed_at SET DEFAULT NOW()', base_schema, hist_table);
+END;
+$$ LANGUAGE plpgsql;
+
+-- 3. Гарантируем выравнивание всех history-таблиц с базовыми структурами.
 SELECT rebuild_history_table('settings_admin');
 SELECT rebuild_history_table('settings_autoweight');
 SELECT rebuild_history_table('settings_journal');
@@ -25,7 +216,7 @@ SELECT rebuild_history_table('capacity_by_process');
 -- После использования вспомогательной функции можно удалить её, чтобы не засорять схему.
 DROP FUNCTION IF EXISTS rebuild_history_table(TEXT);
 
--- 3. На всякий случай переопределяем универсальный history-триггер актуальной версией.
+-- 4. На всякий случай переопределяем универсальный history-триггер актуальной версией.
 CREATE OR REPLACE FUNCTION generic_history_trigger() RETURNS trigger AS $$
 DECLARE
   hist_table TEXT := TG_TABLE_NAME || '_hist';
@@ -81,7 +272,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 4. Возвращаем history-триггеры на места.
+-- 5. Возвращаем history-триггеры на места.
 CREATE TRIGGER orders_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON orders
 FOR EACH ROW
@@ -127,7 +318,7 @@ AFTER INSERT OR UPDATE OR DELETE ON excluded_statuses
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
--- 5. Дополнительно убеждаемся, что последовательность revisions_rev_seq существует и привязана к колонке rev.
+-- 6. Дополнительно убеждаемся, что последовательность revisions_rev_seq существует и привязана к колонке rev.
 CREATE SEQUENCE IF NOT EXISTS revisions_rev_seq;
 ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
 ALTER TABLE revisions

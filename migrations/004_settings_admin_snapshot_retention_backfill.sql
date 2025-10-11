@@ -57,15 +57,56 @@ DECLARE
   base_schema TEXT := 'public';
   hist_table TEXT := base_table || '_hist';
   hist_exists BOOLEAN;
+  has_rows BOOLEAN := false;
   base_col RECORD;
   column_defs TEXT := '';
   insert_columns TEXT := '';
   select_columns TEXT := '';
   hist_has_column BOOLEAN;
+  hist_has_rev BOOLEAN := false;
+  hist_has_op BOOLEAN := false;
+  hist_has_changed_at BOOLEAN := false;
+  backfill_rev BIGINT;
+  rev_expr TEXT;
+  op_expr TEXT;
+  changed_expr TEXT;
+  copy_sql TEXT;
   constraint_name TEXT := hist_table || '_rev_fkey';
 BEGIN
   SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
     INTO hist_exists;
+
+  IF hist_exists THEN
+    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
+      INTO has_rows;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'rev'
+           )
+      INTO hist_has_rev;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'op'
+           )
+      INTO hist_has_op;
+
+    SELECT EXISTS (
+             SELECT 1
+               FROM information_schema.columns
+              WHERE table_schema = base_schema
+                AND table_name = hist_table
+                AND column_name = 'changed_at'
+           )
+      INTO hist_has_changed_at;
+  END IF;
 
   FOR base_col IN
     SELECT a.attname AS column_name,
@@ -122,6 +163,16 @@ BEGIN
     RAISE EXCEPTION 'Base table %.% has no columns', base_schema, base_table;
   END IF;
 
+  IF has_rows AND NOT hist_has_rev THEN
+    SELECT nextval('revisions_rev_seq') INTO backfill_rev;
+
+    EXECUTE '
+      INSERT INTO revisions (rev, actor, source, note)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (rev) DO NOTHING
+    ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+  END IF;
+
   EXECUTE format('DROP TABLE IF EXISTS %I.%I_rebuild', base_schema, hist_table);
   EXECUTE format(
     'CREATE TABLE %I.%I_rebuild (%s, rev BIGINT NOT NULL, op CHAR(1) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
@@ -130,20 +181,42 @@ BEGIN
     column_defs
   );
 
-  IF hist_exists THEN
-    EXECUTE format(
+  IF hist_exists AND has_rows THEN
+    rev_expr := CASE
+      WHEN hist_has_rev THEN 'src.rev'
+      ELSE format('%L::bigint', backfill_rev)
+    END;
+
+    op_expr := CASE
+      WHEN hist_has_op THEN 'COALESCE(src.op, ''U'')'
+      ELSE '''U'''
+    END;
+
+    changed_expr := CASE
+      WHEN hist_has_changed_at THEN 'COALESCE(src.changed_at, NOW())'
+      ELSE 'NOW()'
+    END;
+
+    copy_sql := format(
       'INSERT INTO %I.%I_rebuild (%s, rev, op, changed_at)
-         SELECT %s, src.rev, src.op, COALESCE(src.changed_at, NOW())
-           FROM %I.%I AS src
-          WHERE src.rev IS NOT NULL',
+         SELECT %s, %s, %s, %s
+           FROM %I.%I AS src%s',
       base_schema,
       hist_table,
       insert_columns,
       select_columns,
+      rev_expr,
+      op_expr,
+      changed_expr,
       base_schema,
-      hist_table
+      hist_table,
+      CASE WHEN hist_has_rev THEN ' WHERE src.rev IS NOT NULL' ELSE '' END
     );
 
+    EXECUTE copy_sql;
+
+    EXECUTE format('DROP TABLE %I.%I', base_schema, hist_table);
+  ELSIF hist_exists THEN
     EXECUTE format('DROP TABLE %I.%I', base_schema, hist_table);
   END IF;
 
