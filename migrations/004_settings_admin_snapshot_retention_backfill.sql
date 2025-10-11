@@ -76,6 +76,27 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION generic_history_trigger() RETURNS trigger AS $$
+DECLARE
+  hist_table TEXT;
+  rev BIGINT;
+  op CHAR(1);
+  sql TEXT;
+BEGIN
+  hist_table := TG_TABLE_NAME || '_hist';
+  rev := ensure_current_revision();
+  op := SUBSTRING(TG_OP, 1, 1);
+  sql := format('INSERT INTO %I SELECT ($1).*, $2::bigint, $3::char, NOW()', hist_table);
+  IF TG_OP = 'DELETE' THEN
+    EXECUTE sql USING OLD, rev, op;
+    RETURN OLD;
+  ELSE
+    EXECUTE sql USING NEW, rev, op;
+    RETURN NEW;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
 ALTER TABLE settings_admin
   ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN,
   ADD COLUMN IF NOT EXISTS snapshot_retention INTEGER,
