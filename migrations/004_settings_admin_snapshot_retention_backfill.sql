@@ -2,6 +2,27 @@ BEGIN;
 
 DO $$
 DECLARE
+  trig RECORD;
+BEGIN
+  FOR trig IN
+    SELECT ns.nspname AS schema_name,
+           tbl.relname AS table_name,
+           tg.tgname AS trigger_name
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      JOIN pg_proc fn ON fn.oid = tg.tgfoid
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+       AND fn.proname LIKE 'hist\\_%'
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
+  END LOOP;
+END;
+$$;
+
+DO $$
+DECLARE
   base_table TEXT;
   trig RECORD;
 BEGIN
