@@ -1,43 +1,39 @@
 BEGIN;
 
+-- 1. Удаляем пользовательские триггеры, которые все ещё ссылаются на устаревшие hist_* функции.
 DO $$
 DECLARE
-  base_table TEXT;
   trig RECORD;
 BEGIN
-  FOR base_table IN
-    SELECT unnest(ARRAY[
-      'settings_admin',
-      'settings_autoweight',
-      'settings_journal',
-      'settings_column_widths',
-      'settings_mapping',
-      'excluded_statuses',
-      'orders',
-      'order_process',
-      'capacity_by_process'
-    ])
+  FOR trig IN
+    SELECT ns.nspname AS schema_name,
+           tbl.relname AS table_name,
+           tg.tgname AS trigger_name
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      JOIN pg_proc fn ON fn.oid = tg.tgfoid
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
+       AND fn.proname LIKE 'hist\\_%'
   LOOP
-    FOR trig IN
-      SELECT tg.tgname
-        FROM pg_trigger tg
-        JOIN pg_class tbl ON tbl.oid = tg.tgrelid
-        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-        JOIN pg_proc fn ON fn.oid = tg.tgfoid
-       WHERE NOT tg.tgisinternal
-         AND ns.nspname = 'public'
-         AND tbl.relname = base_table
-         AND fn.proname LIKE 'hist\_%'
-    LOOP
-      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', trig.tgname, base_table);
-    END LOOP;
-
-    -- Удаляем также стандартный history-триггер, чтобы в конце миграции пересоздать его.
-    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', base_table || '_history_trg', base_table);
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
   END LOOP;
 END;
 $$;
 
+-- 2. Снимаем стандартные history-триггеры, чтобы безопасно пересоздать схему.
+DROP TRIGGER IF EXISTS orders_history_trg ON orders;
+DROP TRIGGER IF EXISTS order_process_history_trg ON order_process;
+DROP TRIGGER IF EXISTS capacity_by_process_history_trg ON capacity_by_process;
+DROP TRIGGER IF EXISTS settings_autoweight_history_trg ON settings_autoweight;
+DROP TRIGGER IF EXISTS settings_journal_history_trg ON settings_journal;
+DROP TRIGGER IF EXISTS settings_column_widths_history_trg ON settings_column_widths;
+DROP TRIGGER IF EXISTS settings_mapping_history_trg ON settings_mapping;
+DROP TRIGGER IF EXISTS settings_admin_history_trg ON settings_admin;
+DROP TRIGGER IF EXISTS excluded_statuses_history_trg ON excluded_statuses;
+
+-- 3. Удаляем устаревшие функции hist_*.
 DO $$
 DECLARE
   fn RECORD;
@@ -48,13 +44,131 @@ BEGIN
       FROM pg_proc p
       JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
-       AND p.proname LIKE 'hist\_%'
+       AND p.proname LIKE 'hist\\_%'
   LOOP
-    EXECUTE format('DROP FUNCTION IF EXISTS public.%I(%s);', fn.proname, fn.args);
+    EXECUTE format('DROP FUNCTION IF EXISTS public.%I(%s) CASCADE;', fn.proname, fn.args);
   END LOOP;
 END;
 $$;
 
+-- 4. Вспомогательная функция выравнивания структуры history-таблицы под базовую.
+CREATE OR REPLACE FUNCTION rebuild_history_table(base_table TEXT) RETURNS VOID AS $$
+DECLARE
+  base_schema TEXT := 'public';
+  hist_table TEXT := base_table || '_hist';
+  hist_exists BOOLEAN;
+  base_col RECORD;
+  column_defs TEXT := '';
+  insert_columns TEXT := '';
+  select_columns TEXT := '';
+  hist_has_column BOOLEAN;
+  constraint_name TEXT := hist_table || '_rev_fkey';
+BEGIN
+  SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
+    INTO hist_exists;
+
+  FOR base_col IN
+    SELECT a.attname AS column_name,
+           format_type(a.atttypid, a.atttypmod) AS data_type,
+           pg_get_expr(ad.adbin, ad.adrelid) AS column_default
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+     WHERE n.nspname = base_schema
+       AND c.relname = base_table
+       AND a.attnum > 0
+       AND NOT a.attisdropped
+     ORDER BY a.attnum
+  LOOP
+    column_defs := column_defs ||
+      CASE WHEN column_defs = '' THEN '' ELSE ', ' END ||
+      format('%I %s', base_col.column_name, base_col.data_type);
+
+    insert_columns := insert_columns ||
+      CASE WHEN insert_columns = '' THEN '' ELSE ', ' END ||
+      format('%I', base_col.column_name);
+
+    IF hist_exists THEN
+      SELECT EXISTS (
+               SELECT 1
+                 FROM information_schema.columns
+                WHERE table_schema = base_schema
+                  AND table_name = hist_table
+                  AND column_name = base_col.column_name
+             )
+        INTO hist_has_column;
+    ELSE
+      hist_has_column := false;
+    END IF;
+
+    IF hist_has_column THEN
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('src.%I', base_col.column_name);
+    ELSIF base_col.column_default IS NOT NULL
+       AND POSITION('nextval' IN lower(base_col.column_default)) = 0 THEN
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('(%s)::%s', base_col.column_default, base_col.data_type);
+    ELSE
+      select_columns := select_columns ||
+        CASE WHEN select_columns = '' THEN '' ELSE ', ' END ||
+        format('NULL::%s', base_col.data_type);
+    END IF;
+  END LOOP;
+
+  IF column_defs = '' THEN
+    RAISE EXCEPTION 'Base table %.% has no columns', base_schema, base_table;
+  END IF;
+
+  EXECUTE format('DROP TABLE IF EXISTS %I.%I_rebuild', base_schema, hist_table);
+  EXECUTE format(
+    'CREATE TABLE %I.%I_rebuild (%s, rev BIGINT NOT NULL, op CHAR(1) NOT NULL, changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+    base_schema,
+    hist_table,
+    column_defs
+  );
+
+  IF hist_exists THEN
+    EXECUTE format(
+      'INSERT INTO %I.%I_rebuild (%s, rev, op, changed_at)
+         SELECT %s, src.rev, src.op, COALESCE(src.changed_at, NOW())
+           FROM %I.%I AS src
+          WHERE src.rev IS NOT NULL',
+      base_schema,
+      hist_table,
+      insert_columns,
+      select_columns,
+      base_schema,
+      hist_table
+    );
+
+    EXECUTE format('DROP TABLE %I.%I', base_schema, hist_table);
+  END IF;
+
+  EXECUTE format('ALTER TABLE %I.%I_rebuild RENAME TO %I', base_schema, hist_table, hist_table);
+
+  BEGIN
+    EXECUTE format(
+      'ALTER TABLE %I.%I ADD CONSTRAINT %I FOREIGN KEY (rev) REFERENCES revisions(rev)',
+      base_schema,
+      hist_table,
+      constraint_name
+    );
+  EXCEPTION
+    WHEN duplicate_object THEN
+      NULL;
+  END;
+
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN rev SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN op SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN changed_at SET NOT NULL', base_schema, hist_table);
+  EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN changed_at SET DEFAULT NOW()', base_schema, hist_table);
+END;
+$$ LANGUAGE plpgsql;
+
+-- 5. Гарантируем наличие всех необходимых колонок и дефолтов в settings_admin.
 ALTER TABLE settings_admin
   ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN,
   ADD COLUMN IF NOT EXISTS snapshot_retention INTEGER,
@@ -65,221 +179,112 @@ ALTER TABLE settings_admin
   ALTER COLUMN snapshot_retention SET DEFAULT 50,
   ALTER COLUMN updated_at SET DEFAULT NOW();
 
-DO $$
+-- 6. Выравниваем структуру settings_admin_hist.
+SELECT rebuild_history_table('settings_admin');
+
+-- 7. Актуализируем универсальный history-триггер.
+CREATE OR REPLACE FUNCTION generic_history_trigger() RETURNS trigger AS $$
 DECLARE
-  select_parts TEXT[] := ARRAY[]::TEXT[];
-  column_expr TEXT;
-  has_hist BOOLEAN;
+  hist_table TEXT := TG_TABLE_NAME || '_hist';
+  rev BIGINT;
+  op CHAR(1);
+  base_columns TEXT[];
+  insert_columns TEXT;
+  select_columns TEXT;
+  sql TEXT;
 BEGIN
-  SELECT EXISTS (
-           SELECT 1
-             FROM information_schema.tables
-            WHERE table_schema = 'public'
-              AND table_name = 'settings_admin_hist'
-         )
-    INTO has_hist;
+  SELECT ARRAY_AGG(att.attname ORDER BY att.attnum)
+    INTO base_columns
+    FROM pg_attribute att
+    JOIN pg_class cls ON cls.oid = att.attrelid
+    JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+   WHERE ns.nspname = TG_TABLE_SCHEMA
+     AND cls.relname = TG_TABLE_NAME
+     AND att.attnum > 0
+     AND NOT att.attisdropped;
 
-  IF NOT has_hist THEN
-    EXECUTE 'CREATE TABLE IF NOT EXISTS settings_admin_hist (
-               id SMALLINT,
-               allow_force_overwrite BOOLEAN,
-               snapshot_retention INTEGER,
-               updated_at TIMESTAMPTZ,
-               rev BIGINT NOT NULL REFERENCES revisions(rev),
-               op CHAR(1) NOT NULL,
-               changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )';
-  ELSE
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'id'
-             ) THEN 'id'
-        ELSE 'NULL::SMALLINT'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'allow_force_overwrite'
-             ) THEN 'allow_force_overwrite'
-        ELSE 'NULL::BOOLEAN'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'snapshot_retention'
-             ) THEN 'snapshot_retention'
-        ELSE '50::INTEGER'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'updated_at'
-             ) THEN 'updated_at'
-        ELSE 'NOW()'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'rev'
-             ) THEN 'rev'
-        ELSE 'NULL::BIGINT'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'op'
-             ) THEN 'COALESCE(op, ''U'')'
-        ELSE quote_literal('U') || '::CHAR(1)'
-      END;
-
-    select_parts := select_parts ||
-      CASE
-        WHEN EXISTS (
-               SELECT 1
-                 FROM information_schema.columns
-                WHERE table_schema = 'public'
-                  AND table_name = 'settings_admin_hist'
-                  AND column_name = 'changed_at'
-             ) THEN 'changed_at'
-        ELSE 'NOW()'
-      END;
-
-    column_expr := array_to_string(select_parts, ', ');
-
-    EXECUTE 'DROP TABLE IF EXISTS settings_admin_hist_rebuild';
-
-    EXECUTE 'CREATE TABLE settings_admin_hist_rebuild (
-               id SMALLINT,
-               allow_force_overwrite BOOLEAN,
-               snapshot_retention INTEGER,
-               updated_at TIMESTAMPTZ,
-               rev BIGINT NOT NULL REFERENCES revisions(rev),
-               op CHAR(1) NOT NULL,
-               changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )';
-
-    EXECUTE format(
-      'INSERT INTO settings_admin_hist_rebuild (
-         id,
-         allow_force_overwrite,
-         snapshot_retention,
-         updated_at,
-         rev,
-         op,
-         changed_at
-       )
-       SELECT %s FROM settings_admin_hist',
-      column_expr
-    );
-
-    EXECUTE 'DROP TABLE settings_admin_hist';
-    EXECUTE 'ALTER TABLE settings_admin_hist_rebuild RENAME TO settings_admin_hist';
+  IF base_columns IS NULL OR array_length(base_columns, 1) IS NULL THEN
+    RAISE EXCEPTION 'Base table %.% has no columns for history trigger', TG_TABLE_SCHEMA, TG_TABLE_NAME;
   END IF;
 
-  EXECUTE 'DELETE FROM settings_admin_hist WHERE rev IS NULL';
-  EXECUTE 'ALTER TABLE settings_admin_hist ALTER COLUMN changed_at SET DEFAULT NOW()';
-  EXECUTE 'ALTER TABLE settings_admin_hist ALTER COLUMN rev SET NOT NULL';
-  EXECUTE 'ALTER TABLE settings_admin_hist ALTER COLUMN op SET NOT NULL';
+  insert_columns := array_to_string(
+    ARRAY(SELECT format('%I', col) FROM unnest(base_columns) AS col),
+    ', '
+  );
 
-  IF NOT EXISTS (
-       SELECT 1
-         FROM information_schema.table_constraints tc
-        WHERE tc.table_schema = 'public'
-          AND tc.table_name = 'settings_admin_hist'
-          AND tc.constraint_type = 'FOREIGN KEY'
-          AND tc.constraint_name = 'settings_admin_hist_rev_fkey'
-     ) THEN
-    EXECUTE 'ALTER TABLE settings_admin_hist
-               ADD CONSTRAINT settings_admin_hist_rev_fkey
-               FOREIGN KEY (rev) REFERENCES revisions(rev)';
+  select_columns := array_to_string(
+    ARRAY(SELECT format('($1).%I', col) FROM unnest(base_columns) AS col),
+    ', '
+  );
+
+  rev := ensure_current_revision();
+  op := SUBSTRING(TG_OP, 1, 1);
+
+  sql := format(
+    'INSERT INTO %I.%I (%s, rev, op, changed_at) VALUES (%s, $2::bigint, $3::char, NOW())',
+    TG_TABLE_SCHEMA,
+    hist_table,
+    insert_columns,
+    select_columns
+  );
+
+  IF TG_OP = 'DELETE' THEN
+    EXECUTE sql USING OLD, rev, op;
+    RETURN OLD;
+  ELSE
+    EXECUTE sql USING NEW, rev, op;
+    RETURN NEW;
   END IF;
 END;
-$$;
+$$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS orders_history_trg ON orders;
+-- 8. Возвращаем history-триггеры.
 CREATE TRIGGER orders_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON orders
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS order_process_history_trg ON order_process;
 CREATE TRIGGER order_process_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON order_process
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS capacity_by_process_history_trg ON capacity_by_process;
 CREATE TRIGGER capacity_by_process_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON capacity_by_process
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS settings_autoweight_history_trg ON settings_autoweight;
 CREATE TRIGGER settings_autoweight_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON settings_autoweight
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS settings_journal_history_trg ON settings_journal;
 CREATE TRIGGER settings_journal_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON settings_journal
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS settings_column_widths_history_trg ON settings_column_widths;
 CREATE TRIGGER settings_column_widths_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON settings_column_widths
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS settings_mapping_history_trg ON settings_mapping;
 CREATE TRIGGER settings_mapping_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON settings_mapping
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS settings_admin_history_trg ON settings_admin;
 CREATE TRIGGER settings_admin_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON settings_admin
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
-DROP TRIGGER IF EXISTS excluded_statuses_history_trg ON excluded_statuses;
 CREATE TRIGGER excluded_statuses_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON excluded_statuses
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
+-- 9. Backfill данных и история в рамках новой ревизии.
 DO $$
 DECLARE
   new_rev BIGINT;
