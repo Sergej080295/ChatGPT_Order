@@ -2,38 +2,44 @@ BEGIN;
 
 DO $$
 DECLARE
-  base_table TEXT;
   trig RECORD;
 BEGIN
-  FOR base_table IN
-    SELECT unnest(ARRAY[
-      'settings_admin',
-      'settings_autoweight',
-      'settings_journal',
-      'settings_column_widths',
-      'settings_mapping',
-      'excluded_statuses',
-      'orders',
-      'order_process',
-      'capacity_by_process'
-    ])
+  -- Удаляем все старые history-триггеры, которые вызывают функции hist_*.
+  FOR trig IN
+    SELECT tg.tgname, tbl.relname
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      JOIN pg_proc fn ON fn.oid = tg.tgfoid
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname = 'public'
+       AND fn.proname LIKE 'hist\_%'
   LOOP
-    FOR trig IN
-      SELECT tg.tgname
-        FROM pg_trigger tg
-        JOIN pg_class tbl ON tbl.oid = tg.tgrelid
-        JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-        JOIN pg_proc fn ON fn.oid = tg.tgfoid
-       WHERE NOT tg.tgisinternal
-         AND ns.nspname = 'public'
-         AND tbl.relname = base_table
-         AND fn.proname LIKE 'hist\_%'
-    LOOP
-      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', trig.tgname, base_table);
-    END LOOP;
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', trig.tgname, trig.relname);
+  END LOOP;
 
-    -- Удаляем также стандартный history-триггер, чтобы в конце миграции пересоздать его.
-    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', base_table || '_history_trg', base_table);
+  -- Сбрасываем стандартные *_history_trg для таблиц, которые будут пересозданы позже.
+  FOR trig IN
+    SELECT tg.tgname, tbl.relname
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname = 'public'
+       AND tg.tgname LIKE '%\_history_trg' ESCAPE '\\'
+       AND tbl.relname IN (
+         'settings_admin',
+         'settings_autoweight',
+         'settings_journal',
+         'settings_column_widths',
+         'settings_mapping',
+         'excluded_statuses',
+         'orders',
+         'order_process',
+         'capacity_by_process'
+       )
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', trig.tgname, trig.relname);
   END LOOP;
 END;
 $$;
