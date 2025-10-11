@@ -293,6 +293,63 @@ ALTER TABLE settings_admin
   ALTER COLUMN snapshot_retention SET DEFAULT 50,
   ALTER COLUMN updated_at SET DEFAULT NOW();
 
+-- Перед выравниванием истории убеждаемся, что при наличии наследованной колонки id
+-- у таблицы revisions настроен дефолт, чтобы вспомогательный бэкоф мог без ошибок
+-- записывать новые ревизии.
+DO $$
+DECLARE
+  has_id BOOLEAN := false;
+  id_has_default BOOLEAN := false;
+  seq_name TEXT;
+  max_id BIGINT;
+BEGIN
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'id'
+         )
+    INTO has_id;
+
+  IF has_id THEN
+    SELECT (column_default IS NOT NULL)
+      INTO id_has_default
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'revisions'
+       AND column_name = 'id'
+     LIMIT 1;
+
+    IF id_has_default IS NULL THEN
+      id_has_default := false;
+    END IF;
+
+    IF NOT id_has_default THEN
+      SELECT pg_get_serial_sequence('public.revisions', 'id') INTO seq_name;
+
+      IF seq_name IS NULL THEN
+        seq_name := 'public.revisions_id_seq';
+        EXECUTE 'CREATE SEQUENCE IF NOT EXISTS public.revisions_id_seq';
+      ELSE
+        EXECUTE format('CREATE SEQUENCE IF NOT EXISTS %s', seq_name);
+      END IF;
+
+      EXECUTE 'SELECT MAX(id) FROM public.revisions' INTO max_id;
+
+      IF max_id IS NULL THEN
+        EXECUTE format('SELECT setval(%L, 1, false)', seq_name);
+      ELSE
+        EXECUTE format('SELECT setval(%L, %s, true)', seq_name, max_id);
+      END IF;
+
+      EXECUTE format('ALTER TABLE public.revisions ALTER COLUMN id SET DEFAULT nextval(%L)', seq_name);
+      EXECUTE format('ALTER SEQUENCE %s OWNED BY public.revisions.id', seq_name);
+    END IF;
+  END IF;
+END;
+$$;
+
 -- 6. Выравниваем структуру settings_admin_hist.
 SELECT rebuild_history_table('settings_admin');
 
