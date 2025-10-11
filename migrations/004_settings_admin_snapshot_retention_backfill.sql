@@ -33,6 +33,43 @@ DROP TRIGGER IF EXISTS settings_mapping_history_trg ON settings_mapping;
 DROP TRIGGER IF EXISTS settings_admin_history_trg ON settings_admin;
 DROP TRIGGER IF EXISTS excluded_statuses_history_trg ON excluded_statuses;
 
+-- Дополнительно удаляем все пользовательские триггеры на целевых таблицах,
+-- чтобы исключить зависание устаревших hist_* обработчиков.
+DO $$
+DECLARE
+  trig RECORD;
+BEGIN
+  FOR trig IN
+    SELECT ns.nspname AS schema_name,
+           tbl.relname AS table_name,
+           tg.tgname AS trigger_name
+      FROM pg_trigger tg
+      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
+      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+      LEFT JOIN pg_proc fn ON fn.oid = tg.tgfoid
+     WHERE NOT tg.tgisinternal
+       AND ns.nspname = 'public'
+       AND tbl.relname IN (
+         'orders',
+         'order_process',
+         'capacity_by_process',
+         'settings_autoweight',
+         'settings_journal',
+         'settings_column_widths',
+         'settings_mapping',
+         'settings_admin',
+         'excluded_statuses'
+       )
+       AND (
+         (fn.proname IS NOT NULL AND fn.proname LIKE 'hist\_%') OR
+         tg.tgname LIKE '%hist%'
+       )
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
+  END LOOP;
+END;
+$$;
+
 -- 3. Удаляем устаревшие функции hist_*.
 DO $$
 DECLARE
@@ -50,6 +87,10 @@ BEGIN
   END LOOP;
 END;
 $$;
+
+-- На некоторых установках могла сохраниться старая версия hist_apply_settings_admin без зависимостей,
+-- поэтому удаляем её напрямую, чтобы исключить обращения к колонке rev_to.
+DROP FUNCTION IF EXISTS public.hist_apply_settings_admin() CASCADE;
 
 -- 4. Вспомогательная функция выравнивания структуры history-таблицы под базовую.
 CREATE OR REPLACE FUNCTION rebuild_history_table(base_table TEXT) RETURNS VOID AS $$
