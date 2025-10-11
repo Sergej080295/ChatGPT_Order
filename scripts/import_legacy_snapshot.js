@@ -34,6 +34,40 @@ function titleFromCode(code) {
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+let revisionColumnInfo = null;
+
+async function loadRevisionColumnInfo(client) {
+  if (revisionColumnInfo) {
+    return revisionColumnInfo;
+  }
+  const { rows } = await client.query(`
+    SELECT column_name
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'revisions'
+  `);
+  const columnNames = rows.map((row) => row.column_name);
+  revisionColumnInfo = {
+    hasCurrentRev: columnNames.includes('current_rev')
+  };
+  return revisionColumnInfo;
+}
+
+async function insertRevisionRow(client, rev, actor, source, note) {
+  const info = await loadRevisionColumnInfo(client);
+  if (info.hasCurrentRev) {
+    await client.query(
+      'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+      [rev, actor || null, source || null, note || null]
+    );
+  } else {
+    await client.query(
+      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+      [rev, actor || null, source || null, note || null]
+    );
+  }
+}
+
 async function loadSnapshot() {
   const legacyPath = path.resolve(__dirname, '..', 'planner-state.json');
   if (!fs.existsSync(legacyPath)) {
@@ -223,10 +257,7 @@ async function loadSnapshot() {
        ON CONFLICT (id) DO UPDATE SET allow_force_overwrite = FALSE, snapshot_retention = 50, updated_at = NOW()`
     );
 
-    await client.query(
-      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
-      [rev, 'import-script', 'legacy-import', 'Initial import']
-    );
+    await insertRevisionRow(client, rev, 'import-script', 'legacy-import', 'Initial import');
 
     await client.query('COMMIT');
     console.log('Legacy snapshot imported into SQL schema');

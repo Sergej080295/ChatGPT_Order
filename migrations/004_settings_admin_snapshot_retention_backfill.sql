@@ -113,9 +113,19 @@ DECLARE
   changed_expr TEXT;
   copy_sql TEXT;
   constraint_name TEXT := hist_table || '_rev_fkey';
+  revisions_has_current BOOLEAN := false;
 BEGIN
   SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
     INTO hist_exists;
+
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'current_rev'
+         )
+    INTO revisions_has_current;
 
   IF hist_exists THEN
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
@@ -207,11 +217,19 @@ BEGIN
   IF has_rows AND NOT hist_has_rev THEN
     SELECT nextval('revisions_rev_seq') INTO backfill_rev;
 
-    EXECUTE '
-      INSERT INTO revisions (rev, actor, source, note)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (rev) DO NOTHING
-    ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    IF revisions_has_current THEN
+      EXECUTE '
+        INSERT INTO revisions (rev, current_rev, actor, source, note)
+        VALUES ($1, $1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    ELSE
+      EXECUTE '
+        INSERT INTO revisions (rev, actor, source, note)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    END IF;
   END IF;
 
   EXECUTE format('DROP TABLE IF EXISTS %I.%I_rebuild', base_schema, hist_table);
@@ -351,6 +369,25 @@ END;
 $$;
 
 -- 6. Выравниваем структуру settings_admin_hist.
+DO $$
+DECLARE
+  has_current BOOLEAN := false;
+BEGIN
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'current_rev'
+         )
+    INTO has_current;
+
+  IF has_current THEN
+    EXECUTE 'UPDATE public.revisions SET current_rev = rev WHERE current_rev IS NULL';
+  END IF;
+END;
+$$;
+
 SELECT rebuild_history_table('settings_admin');
 
 -- 7. Актуализируем универсальный history-триггер.
@@ -459,12 +496,30 @@ EXECUTE FUNCTION generic_history_trigger();
 DO $$
 DECLARE
   new_rev BIGINT;
+  has_current_rev BOOLEAN;
 BEGIN
   SELECT nextval('revisions_rev_seq') INTO new_rev;
 
-  INSERT INTO revisions (rev, actor, source, note)
-  VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
-  ON CONFLICT (rev) DO NOTHING;
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'current_rev'
+         )
+    INTO has_current_rev;
+
+  IF has_current_rev THEN
+    EXECUTE '
+      INSERT INTO revisions (rev, current_rev, actor, source, note)
+      VALUES ($1, $1, $2, $3, $4)
+      ON CONFLICT (rev) DO NOTHING
+    ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
+  ELSE
+    INSERT INTO revisions (rev, actor, source, note)
+    VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
+    ON CONFLICT (rev) DO NOTHING;
+  END IF;
 
   PERFORM set_config('app.rev', new_rev::TEXT, true);
 

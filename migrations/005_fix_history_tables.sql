@@ -33,9 +33,19 @@ DECLARE
   changed_expr TEXT;
   copy_sql TEXT;
   constraint_name TEXT := hist_table || '_rev_fkey';
+  revisions_has_current BOOLEAN := false;
 BEGIN
   SELECT to_regclass(format('%I.%I', base_schema, hist_table)) IS NOT NULL
     INTO hist_exists;
+
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'current_rev'
+         )
+    INTO revisions_has_current;
 
   IF hist_exists THEN
     EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I)', base_schema, hist_table)
@@ -127,11 +137,19 @@ BEGIN
   IF has_rows AND NOT hist_has_rev THEN
     SELECT nextval('revisions_rev_seq') INTO backfill_rev;
 
-    EXECUTE '
-      INSERT INTO revisions (rev, actor, source, note)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (rev) DO NOTHING
-    ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    IF revisions_has_current THEN
+      EXECUTE '
+        INSERT INTO revisions (rev, current_rev, actor, source, note)
+        VALUES ($1, $1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    ELSE
+      EXECUTE '
+        INSERT INTO revisions (rev, actor, source, note)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (rev) DO NOTHING
+      ' USING backfill_rev, 'system', 'migration', format('legacy history backfill for %s_hist', base_table);
+    END IF;
   END IF;
 
   EXECUTE format('DROP TABLE IF EXISTS %I.%I_rebuild', base_schema, hist_table);
@@ -260,6 +278,25 @@ END;
 $$;
 
 -- 3. Гарантируем выравнивание всех history-таблиц с базовыми структурами.
+DO $$
+DECLARE
+  has_current BOOLEAN := false;
+BEGIN
+  SELECT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'revisions'
+              AND column_name = 'current_rev'
+         )
+    INTO has_current;
+
+  IF has_current THEN
+    EXECUTE 'UPDATE public.revisions SET current_rev = rev WHERE current_rev IS NULL';
+  END IF;
+END;
+$$;
+
 SELECT rebuild_history_table('settings_admin');
 SELECT rebuild_history_table('settings_autoweight');
 SELECT rebuild_history_table('settings_journal');

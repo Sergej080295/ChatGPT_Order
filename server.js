@@ -35,6 +35,41 @@ const sseClients = new Set();
 let cachedState = null;
 let cachedStateRev = null;
 let lastRevision = 0;
+let revisionColumnInfo = null;
+
+async function loadRevisionColumnInfo(runner) {
+  if (revisionColumnInfo) {
+    return revisionColumnInfo;
+  }
+  const client = runner || pool;
+  const { rows } = await client.query(`
+    SELECT column_name
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'revisions'
+  `);
+  const columnNames = rows.map((row) => row.column_name);
+  revisionColumnInfo = {
+    hasCurrentRev: columnNames.includes('current_rev')
+  };
+  return revisionColumnInfo;
+}
+
+async function insertRevisionRow(client, rev, actor, source, note) {
+  const info = await loadRevisionColumnInfo(client);
+  if (info.hasCurrentRev) {
+    await client.query(
+      'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4)',
+      [rev, actor || null, source || null, note || null]
+    );
+  } else {
+    await client.query(
+      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4)',
+      [rev, actor || null, source || null, note || null]
+    );
+  }
+}
+
 function normalizeWeakEtag(value) {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -393,10 +428,7 @@ async function runWithRevision(client, actor, source, note, handler) {
   const rev = Number(rows[0].rev);
   await client.query('SET LOCAL app.rev = $1', [rev]);
   await handler(rev);
-  await client.query(
-    'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4)',
-    [rev, actor || null, source || null, note || null]
-  );
+  await insertRevisionRow(client, rev, actor, source, note);
   lastRevision = Math.max(lastRevision, rev);
   return rev;
 }
