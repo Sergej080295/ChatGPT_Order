@@ -71,7 +71,7 @@ BEGIN
      WHERE n.nspname = 'public'
        AND p.proname LIKE 'hist\_%'
   LOOP
-    EXECUTE format('DROP FUNCTION IF EXISTS public.%I(%s);', fn.proname, fn.args);
+    EXECUTE format('DROP FUNCTION IF EXISTS public.%I(%s) CASCADE;', fn.proname, fn.args);
   END LOOP;
 END;
 $$;
