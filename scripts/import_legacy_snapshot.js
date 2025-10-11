@@ -13,7 +13,28 @@ const pool = new Pool({
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined
 });
 
-const loadSnapshot = async () => {
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function normalizeStage(code) {
+  if (!code) return null;
+  return String(code).trim().toLowerCase();
+}
+
+function titleFromCode(code) {
+  if (!code) return '';
+  return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function loadSnapshot() {
   const legacyPath = path.resolve(__dirname, '..', 'planner-state.json');
   if (!fs.existsSync(legacyPath)) {
     throw new Error('planner-state.json not found');
@@ -24,222 +45,199 @@ const loadSnapshot = async () => {
     throw new Error('planner-state.json missing { state }');
   }
   return JSON.parse(parsed.state);
-};
-
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-const normaliseDate = (value) => {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-};
-
-async function importSnapshot(snapshot) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('TRUNCATE stage_completion, stage_exception, order_stage, capacity_by_stage, parallel_limits, customer_order RESTART IDENTITY CASCADE');
-
-    const stageCodes = new Map();
-    const allStages = new Set();
-
-    const addStage = (code) => {
-      if (!code) return;
-      const key = String(code).trim();
-      if (!key) return;
-      allStages.add(key);
-    };
-
-    (snapshot.t || []).forEach((item) => addStage(item?.stage));
-    (snapshot.done || []).forEach((item) => addStage(item?.stage));
-    if (isPlainObject(snapshot.capByProc)) {
-      Object.keys(snapshot.capByProc).forEach(addStage);
-    }
-    if (Array.isArray(snapshot.orders)) {
-      snapshot.orders.forEach((pair) => {
-        if (Array.isArray(pair) && pair.length > 0) addStage(pair[0]);
-      });
-    }
-
-    let sort = 0;
-    for (const code of Array.from(allStages)) {
-      const name = code;
-      const { rows } = await client.query(
-        `INSERT INTO stage_type (code, name, sort_order, is_active)
-         VALUES ($1, $2, $3, TRUE)
-         ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, updated_at = NOW()
-         RETURNING id`,
-        [code, name, sort]
-      );
-      stageCodes.set(code, rows[0].id);
-      sort += 1;
-    }
-
-    const orderIdMap = new Map();
-    const orders = new Map();
-
-    (snapshot.t || []).forEach((stage) => {
-      if (!stage || !stage.orderId) return;
-      const orderNo = String(stage.orderId).trim();
-      if (!orderNo) return;
-      if (!orders.has(orderNo)) {
-        orders.set(orderNo, { title: orderNo });
-      }
-    });
-
-    for (const [orderNo, value] of orders.entries()) {
-      const { rows } = await client.query(
-        `INSERT INTO customer_order (order_no, title, is_deleted)
-         VALUES ($1, $2, FALSE)
-         ON CONFLICT (order_no, is_deleted) DO UPDATE SET title = EXCLUDED.title, updated_at = NOW()
-         RETURNING id`,
-        [orderNo, value.title]
-      );
-      orderIdMap.set(orderNo, rows[0].id);
-    }
-
-    const stageByUid = new Map();
-    for (const stage of snapshot.t || []) {
-      if (!stage || !stage.orderId || !stage.stage) continue;
-      const orderKey = String(stage.orderId).trim();
-      const stageCode = String(stage.stage).trim();
-      if (!orderKey || !stageCode) continue;
-      const orderId = orderIdMap.get(orderKey);
-      const stageTypeId = stageCodes.get(stageCode);
-      if (!orderId || !stageTypeId) continue;
-      const { rows } = await client.query(
-        `INSERT INTO order_stage (
-          order_id, stage_type_id, external_uid, hours, extra_hours, start_at, end_at,
-          start_missing, end_missing, state, status, progress, use_reserve, orig_start_at, version, payload, is_deleted
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE)
-        ON CONFLICT (external_uid) DO UPDATE SET
-          order_id = EXCLUDED.order_id,
-          stage_type_id = EXCLUDED.stage_type_id,
-          hours = EXCLUDED.hours,
-          extra_hours = EXCLUDED.extra_hours,
-          start_at = EXCLUDED.start_at,
-          end_at = EXCLUDED.end_at,
-          start_missing = EXCLUDED.start_missing,
-          end_missing = EXCLUDED.end_missing,
-          state = EXCLUDED.state,
-          status = EXCLUDED.status,
-          progress = EXCLUDED.progress,
-          use_reserve = EXCLUDED.use_reserve,
-          orig_start_at = EXCLUDED.orig_start_at,
-          version = EXCLUDED.version,
-          payload = EXCLUDED.payload,
-          is_deleted = FALSE,
-          updated_at = NOW()
-        RETURNING id`,
-        [
-          orderId,
-          stageTypeId,
-          stage.uid || `${orderKey}::${stageCode}`,
-          stage.hours ?? null,
-          stage.extraHours ?? null,
-          normaliseDate(stage.startDate),
-          normaliseDate(stage.endDate),
-          Boolean(stage.startMissing),
-          Boolean(stage.endMissing),
-          stage.state ?? null,
-          stage.status ?? null,
-          stage.progress ?? null,
-          Boolean(stage.useReserve),
-          normaliseDate(stage.origStartDate),
-          Number.isFinite(Number(snapshot.meta?.versions?.[stageCode])) ? Number(snapshot.meta.versions[stageCode]) : 1,
-          stage ? stage : null
-        ]
-      );
-      stageByUid.set(stage.uid || `${orderKey}::${stageCode}`, rows[0].id);
-    }
-
-    if (isPlainObject(snapshot.capByProc)) {
-      for (const [code, value] of Object.entries(snapshot.capByProc)) {
-        const stageTypeId = stageCodes.get(code);
-        if (!stageTypeId) continue;
-        await client.query(
-          `INSERT INTO capacity_by_stage (stage_type_id, capacity_per_day, updated_at)
-           VALUES ($1,$2,NOW())
-           ON CONFLICT (stage_type_id) DO UPDATE SET capacity_per_day = EXCLUDED.capacity_per_day, updated_at = NOW()`,
-          [stageTypeId, value]
-        );
-      }
-    }
-
-    if (isPlainObject(snapshot.parallelByProc)) {
-      for (const [code, value] of Object.entries(snapshot.parallelByProc)) {
-        await client.query(
-          `INSERT INTO parallel_limits (code, max_parallel, updated_at)
-           VALUES ($1,$2,NOW())
-           ON CONFLICT (code) DO UPDATE SET max_parallel = EXCLUDED.max_parallel, updated_at = NOW()`,
-          [code, value]
-        );
-      }
-    }
-
-    if (Array.isArray(snapshot.done)) {
-      for (const done of snapshot.done) {
-        const orderKey = done?.orderId ? String(done.orderId).trim() : '';
-        const stageCode = done?.stage ? String(done.stage).trim() : '';
-        const stageId = stageByUid.get(done.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : ''));
-        await client.query(
-          `INSERT INTO stage_completion (order_stage_id, completed_at, source, note)
-           VALUES ($1,$2,$3,$4)
-           ON CONFLICT DO NOTHING`,
-          [stageId ?? null, normaliseDate(done.when) || normaliseDate(done.end), done.source || null, done.note || null]
-        );
-      }
-    }
-
-    if (Array.isArray(snapshot.exc)) {
-      for (const exc of snapshot.exc) {
-        const orderKey = exc?.orderId ? String(exc.orderId).trim() : '';
-        const stageCode = exc?.stage ? String(exc.stage).trim() : '';
-        const stageId = stageByUid.get(exc.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : ''));
-        await client.query(
-          `INSERT INTO stage_exception (order_stage_id, kind, details, created_at, resolved_at)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [stageId ?? null, exc.kind || exc.type || 'unknown', exc.details ?? null, normaliseDate(exc.createdAt) || normaliseDate(exc.start), normaliseDate(exc.resolvedAt) || normaliseDate(exc.end)]
-        );
-      }
-    }
-
-    if (isPlainObject(snapshot.meta) && isPlainObject(snapshot.meta.settings)) {
-      await client.query(
-        `INSERT INTO planner_settings (id, autosave_on, auto_optimize_on, shift_on_progress, storage_mode, extra, updated_at)
-         VALUES (1,$1,$2,$3,$4,$5,NOW())
-         ON CONFLICT (id) DO UPDATE SET
-           autosave_on = EXCLUDED.autosave_on,
-           auto_optimize_on = EXCLUDED.auto_optimize_on,
-           shift_on_progress = EXCLUDED.shift_on_progress,
-           storage_mode = EXCLUDED.storage_mode,
-           extra = EXCLUDED.extra,
-           updated_at = NOW()`,
-        [
-          snapshot.meta.settings.autosave ?? null,
-          snapshot.meta.settings.autoOptimize ?? null,
-          snapshot.meta.settings.shiftOnProgress ?? null,
-          snapshot.meta.storage?.mode ?? null,
-          snapshot.meta.settings ? snapshot.meta.settings : null
-        ]
-      );
-    }
-
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
 }
 
 (async () => {
   const snapshot = await loadSnapshot();
-  await importSnapshot(snapshot);
-  console.log('Legacy snapshot imported');
-  await pool.end();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows: revRows } = await client.query("SELECT nextval('revisions_rev_seq') AS rev");
+    const rev = Number(revRows[0].rev);
+    await client.query('SET LOCAL app.rev = $1', [rev]);
+
+    await client.query('TRUNCATE order_process, orders, customers RESTART IDENTITY CASCADE');
+    await client.query('TRUNCATE processes RESTART IDENTITY CASCADE');
+    await client.query('TRUNCATE capacity_by_process');
+    await client.query('TRUNCATE settings_column_widths');
+    await client.query('TRUNCATE settings_mapping');
+    await client.query('TRUNCATE excluded_statuses');
+    await client.query('DELETE FROM settings_autoweight');
+    await client.query('DELETE FROM settings_journal');
+    await client.query('DELETE FROM settings_admin');
+
+    const stageSet = new Map();
+    const parallelStages = new Set();
+
+    if (isPlainObject(snapshot.parallelByProc)) {
+      Object.keys(snapshot.parallelByProc).forEach((key) => {
+        const normalized = normalizeStage(key);
+        if (normalized) {
+          parallelStages.add(normalized);
+        }
+      });
+    }
+
+    const ensureStage = (code) => {
+      const normalized = normalizeStage(code);
+      if (!normalized) return;
+      if (!stageSet.has(normalized)) {
+        stageSet.set(normalized, {
+          code: normalized,
+          name: titleFromCode(normalized),
+          hasHours: true,
+          isParallel: parallelStages.has(normalized)
+        });
+      }
+    };
+
+    (snapshot.t || []).forEach((task) => ensureStage(task?.stage));
+    (snapshot.done || []).forEach((task) => ensureStage(task?.stage));
+    if (isPlainObject(snapshot.capByProc)) {
+      Object.keys(snapshot.capByProc).forEach((key) => ensureStage(key));
+    }
+
+    const stages = Array.from(stageSet.values());
+    stages.sort((a, b) => a.code.localeCompare(b.code));
+    const stageIdMap = new Map();
+    for (let index = 0; index < stages.length; index += 1) {
+      const stage = stages[index];
+      const { rows } = await client.query(
+        `INSERT INTO processes (code, name, position, has_hours, is_parallel, is_active)
+         VALUES ($1,$2,$3,$4,$5,TRUE)
+         RETURNING id`,
+        [stage.code, stage.name || stage.code, index, stage.hasHours, stage.isParallel]
+      );
+      stageIdMap.set(stage.code, rows[0].id);
+    }
+
+    const orderMap = new Map();
+    const orderSeqMap = new Map();
+
+    const ensureOrder = (orderId, status) => {
+      const key = String(orderId || '').trim();
+      if (!key) return null;
+      if (!orderMap.has(key)) {
+        const number = key;
+        orderMap.set(key, { number, status: status || null });
+        orderSeqMap.set(key, 0);
+      } else if (status && !orderMap.get(key).status) {
+        orderMap.get(key).status = status;
+      }
+      return key;
+    };
+
+    (snapshot.t || []).forEach((task) => {
+      ensureOrder(task?.orderId, task?.status || task?.state || null);
+    });
+    (snapshot.done || []).forEach((task) => {
+      ensureOrder(task?.orderId, task?.status || task?.state || null);
+    });
+
+    const orderIdMap = new Map();
+    for (const [orderKey, value] of orderMap.entries()) {
+      const { rows } = await client.query(
+        `INSERT INTO orders (number, status, created_at, updated_at)
+         VALUES ($1,$2,NOW(),NOW())
+         RETURNING id`,
+        [orderKey, value.status]
+      );
+      orderIdMap.set(orderKey, rows[0].id);
+    }
+
+    const processPositionCounters = new Map();
+
+    const insertStage = async (task, overrides = {}) => {
+      if (!task || !task.stage || !task.orderId) return;
+      const processKey = normalizeStage(task.stage);
+      const processId = stageIdMap.get(processKey);
+      const orderKey = ensureOrder(task.orderId, task.status || task.state || null);
+      if (!processId || !orderKey) return;
+      const orderId = orderIdMap.get(orderKey);
+      const seq = orderSeqMap.get(orderKey) || 0;
+      orderSeqMap.set(orderKey, seq + 1);
+      const positionCounter = processPositionCounters.get(processKey) || 0;
+      processPositionCounters.set(processKey, positionCounter + 1);
+      const progressValue = Number(task.progress);
+      await client.query(
+        `INSERT INTO order_process (
+          order_id, process_id, seq, planned_start, planned_end, actual_start, actual_end,
+          progress, is_done, position_index, hidden_by_state
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          orderId,
+          processId,
+          seq,
+          parseDate(task.startDate),
+          parseDate(task.endDate),
+          parseDate(overrides.actualStart || task.actualStart),
+          parseDate(overrides.actualEnd || task.actualEnd),
+          Number.isFinite(progressValue) ? progressValue : 0,
+          overrides.isDone === true || (task.state && /готово|done/i.test(task.state)) || false,
+          positionCounter,
+          false
+        ]
+      );
+    };
+
+    for (const task of snapshot.t || []) {
+      await insertStage(task);
+    }
+    for (const task of snapshot.done || []) {
+      await insertStage(task, {
+        isDone: true,
+        actualEnd: task.when || task.end
+      });
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (isPlainObject(snapshot.capByProc)) {
+      for (const [code, value] of Object.entries(snapshot.capByProc)) {
+        const processId = stageIdMap.get(normalizeStage(code));
+        if (!processId) continue;
+        const minutes = Number(value) * 60;
+        await client.query(
+          `INSERT INTO capacity_by_process (process_id, day, minutes)
+           VALUES ($1,$2,$3)
+           ON CONFLICT (process_id, day) DO UPDATE SET minutes = EXCLUDED.minutes`,
+          [processId, today, Number.isFinite(minutes) ? Math.round(minutes) : 0]
+        );
+      }
+    }
+
+    await client.query(
+      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
+       VALUES (1,FALSE,0,0,NOW())
+       ON CONFLICT (id) DO UPDATE SET enabled = FALSE, percent = 0, minimum_hours = 0, updated_at = NOW()`
+    );
+
+    await client.query(
+      `INSERT INTO settings_journal (id, max_rows, updated_at)
+       VALUES (1,50,NOW())
+       ON CONFLICT (id) DO UPDATE SET max_rows = 50, updated_at = NOW()`
+    );
+
+    await client.query(
+      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
+       VALUES (1,FALSE,50,NOW())
+       ON CONFLICT (id) DO UPDATE SET allow_force_overwrite = FALSE, snapshot_retention = 50, updated_at = NOW()`
+    );
+
+    await client.query(
+      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
+      [rev, 'import-script', 'legacy-import', 'Initial import']
+    );
+
+    await client.query('COMMIT');
+    console.log('Legacy snapshot imported into SQL schema');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Import failed', err);
+    process.exitCode = 1;
+  } finally {
+    client.release();
+    await pool.end();
+  }
 })().catch((err) => {
   console.error(err);
   process.exit(1);
