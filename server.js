@@ -138,10 +138,73 @@ async function getLatestRevision(client) {
   return rev;
 }
 
-async function ensureSettingsDefaults(client) {
-  await client.query('INSERT INTO settings_autoweight (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
-  await client.query('INSERT INTO settings_journal (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
-  await client.query('INSERT INTO settings_admin (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+async function ensureSettingsDefaults(runner) {
+  let client = runner;
+  let ownedClient = false;
+  let startedTransaction = false;
+  if (typeof client.release !== 'function') {
+    client = await pool.connect();
+    ownedClient = true;
+  }
+
+  const insertDefaults = async () => {
+    await client.query('INSERT INTO settings_autoweight (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+    await client.query('INSERT INTO settings_journal (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+    await client.query('INSERT INTO settings_admin (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+  };
+
+  try {
+    const { rows } = await client.query(`
+      SELECT
+        EXISTS (SELECT 1 FROM settings_autoweight WHERE id = 1) AS has_autoweight,
+        EXISTS (SELECT 1 FROM settings_journal WHERE id = 1) AS has_journal,
+        EXISTS (SELECT 1 FROM settings_admin WHERE id = 1) AS has_admin
+    `);
+    const status = rows[0] || { has_autoweight: false, has_journal: false, has_admin: false };
+    if (status.has_autoweight && status.has_journal && status.has_admin) {
+      return;
+    }
+
+    const { rows: revRows } = await client.query("SELECT current_setting('app.rev', true) AS rev");
+    const hasRevisionContext = Boolean(revRows.length > 0 && revRows[0].rev);
+    if (hasRevisionContext) {
+      await insertDefaults();
+      return;
+    }
+
+    if (ownedClient) {
+      await client.query('BEGIN');
+      startedTransaction = true;
+    }
+
+    await runWithRevision(
+      client,
+      'system',
+      'bootstrap',
+      'ensure settings defaults',
+      async () => {
+        await insertDefaults();
+      }
+    );
+
+    if (startedTransaction) {
+      await client.query('COMMIT');
+      startedTransaction = false;
+    }
+  } catch (err) {
+    if (startedTransaction) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        console.error('Failed to rollback defaults bootstrap transaction', rollbackErr);
+      }
+    }
+    throw err;
+  } finally {
+    if (ownedClient) {
+      client.release();
+    }
+  }
 }
 function mapSettingsRows(rows) {
   return rows.map((row) => ({
