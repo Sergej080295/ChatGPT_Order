@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
@@ -34,6 +35,8 @@ app.use(express.json({ limit: '10mb' }));
 const sseClients = new Set();
 let cachedState = null;
 let cachedStateRev = null;
+let cachedStateHash = null;
+let cachedStateMeta = null;
 let lastRevision = 0;
 let revisionColumnInfo = null;
 
@@ -81,6 +84,111 @@ async function insertRevisionRow(client, rev, actor, source, note) {
       [rev, actor || null, source || null, note || null]
     );
   }
+}
+
+function buildEmptyLegacyState() {
+  return {
+    routeOverrides: [],
+    t: [],
+    done: [],
+    trash: [],
+    exc: [],
+    res: [],
+    process: 'bend',
+    capByProc: {},
+    parallelByProc: {},
+    filter: 'all',
+    locked: [],
+    orders: [],
+    freshness: '',
+    freshnessCsv: '',
+    freshnessManual: '',
+    lastImportTime: '',
+    lastManualTime: '',
+    autosaveOn: false,
+    autoOptimizeOn: false,
+    cascadeReadyOn: false,
+    priorityChangeLoggingOn: false,
+    routeDateChangeLoggingOn: false,
+    notificationsMuted: false,
+    crm: null,
+    shiftOnProgress: false,
+    ignoredStates: [],
+    meta: {
+      versions: {},
+      lastAuthors: {},
+      csvTimestamp: '',
+      manualTimestamp: '',
+      history: [],
+      settings: {
+        capacity: {},
+        parallel: {},
+        autosave: false,
+        shiftOnProgress: false,
+        autoOptimize: false,
+        notificationsMuted: false,
+        tableColumns: {},
+        extraTime: {},
+        crmStageMapping: {},
+        logLimit: 0,
+        updatedAt: ''
+      },
+      ignoredStates: [],
+      storage: {
+        local: false,
+        remote: true,
+        remotePreferred: true,
+        mode: 'remote'
+      }
+    },
+    modeScoped: {}
+  };
+}
+
+function computeSnapshotHash(snapshot) {
+  try {
+    const text = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot);
+    return crypto.createHash('sha1').update(text).digest('hex');
+  } catch (err) {
+    console.warn('Failed to compute snapshot hash', err);
+    return null;
+  }
+}
+
+async function loadLatestSnapshot(client) {
+  const runner = client || pool;
+  const { rows } = await runner.query(
+    `SELECT rev, snapshot, meta, hash
+       FROM planner_state_snapshots
+      ORDER BY rev DESC, id DESC
+      LIMIT 1`
+  );
+  if (rows.length === 0) {
+    return { rev: 0, snapshot: buildEmptyLegacyState(), meta: null, hash: null };
+  }
+  const row = rows[0];
+  return {
+    rev: Number(row.rev || 0),
+    snapshot: row.snapshot && typeof row.snapshot === 'object' ? row.snapshot : buildEmptyLegacyState(),
+    meta: row.meta && typeof row.meta === 'object' ? row.meta : null,
+    hash: row.hash || computeSnapshotHash(row.snapshot)
+  };
+}
+
+async function persistSnapshot(client, rev, snapshot, meta, hash) {
+  const normalizedSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : buildEmptyLegacyState();
+  const normalizedMeta = meta && typeof meta === 'object' ? meta : null;
+  const effectiveHash = hash || computeSnapshotHash(normalizedSnapshot);
+  await client.query(
+    `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (rev) DO UPDATE
+       SET snapshot = EXCLUDED.snapshot,
+           meta = EXCLUDED.meta,
+           hash = EXCLUDED.hash`,
+    [rev, normalizedSnapshot, normalizedMeta, effectiveHash]
+  );
+  return { snapshot: normalizedSnapshot, meta: normalizedMeta, hash: effectiveHash };
 }
 
 function normalizeWeakEtag(value) {
@@ -334,99 +442,35 @@ function mapCapacity(rows) {
 }
 
 async function loadStateFromSql(client) {
-  const runner = client || pool;
-  await ensureSettingsDefaults(runner);
-  const rev = await getLatestRevision(runner);
-
-  const [processesRes, autoweightRes, journalRes, columnWidthsRes, mappingRes, adminRes, excludedRes, customersRes, ordersRes, orderProcessesRes, capacityRes] = await Promise.all([
-    runner.query('SELECT id, code, name, position, has_hours, is_parallel, is_active FROM processes ORDER BY position, id'),
-    runner.query('SELECT enabled, percent, minimum_hours, updated_at FROM settings_autoweight WHERE id = 1'),
-    runner.query('SELECT max_rows, updated_at FROM settings_journal WHERE id = 1'),
-    runner.query('SELECT column_key, width_px, updated_at FROM settings_column_widths'),
-    runner.query('SELECT crm_stage, planner_process_id, is_ignored, updated_at FROM settings_mapping ORDER BY crm_stage'),
-    runner.query('SELECT allow_force_overwrite, snapshot_retention, updated_at FROM settings_admin WHERE id = 1'),
-    runner.query('SELECT status_key, created_at FROM excluded_statuses ORDER BY status_key'),
-    runner.query('SELECT id, name, crm_id FROM customers ORDER BY name, id'),
-    runner.query(`
-      SELECT o.id, o.crm_order_id, o.number, o.customer_id, o.status, o.created_at, o.updated_at, o.deleted_at,
-             c.name AS customer_name, c.crm_id AS customer_crm_id
-        FROM orders o
-        LEFT JOIN customers c ON c.id = o.customer_id
-        ORDER BY o.created_at, o.id
-    `),
-    runner.query(`
-      SELECT op.id, op.order_id, op.process_id, op.seq, op.planned_start, op.planned_end,
-             op.actual_start, op.actual_end, op.progress, op.is_done, op.position_index,
-             op.hidden_by_state, op.updated_at,
-             p.code AS process_code, p.name AS process_name
-        FROM order_process op
-        JOIN processes p ON p.id = op.process_id
-        ORDER BY p.position, op.position_index NULLS LAST, op.seq, op.id
-    `),
-    runner.query('SELECT process_id, day, minutes FROM capacity_by_process ORDER BY process_id, day')
-  ]);
-
-  const processes = processesRes.rows.map((row) => ({
-    id: Number(row.id),
-    code: row.code,
-    name: row.name,
-    position: Number(row.position),
-    hasHours: row.has_hours === true,
-    isParallel: row.is_parallel === true,
-    isActive: row.is_active === true
-  }));
-
-  const autoweightRow = autoweightRes.rows[0] || null;
-  const journalRow = journalRes.rows[0] || null;
-  const adminRow = adminRes.rows[0] || null;
-
-  const state = {
-    rev,
-    processes,
-    customers: mapCustomers(customersRes.rows),
-    orders: mapOrders(ordersRes.rows),
-    orderProcesses: mapOrderProcesses(orderProcessesRes.rows),
-    capacityByProcess: mapCapacity(capacityRes.rows),
-    settings: {
-      autoweight: autoweightRow ? {
-        enabled: autoweightRow.enabled === true,
-        percent: Number(autoweightRow.percent || 0),
-        minimumHours: Number(autoweightRow.minimum_hours || 0),
-        updatedAt: autoweightRow.updated_at ? new Date(autoweightRow.updated_at).toISOString() : null
-      } : { enabled: false, percent: 0, minimumHours: 0, updatedAt: null },
-      journal: journalRow ? {
-        maxRows: Number(journalRow.max_rows || 0),
-        updatedAt: journalRow.updated_at ? new Date(journalRow.updated_at).toISOString() : null
-      } : { maxRows: 0, updatedAt: null },
-      columnWidths: mapColumnWidths(columnWidthsRes.rows),
-      mapping: mapSettingsRows(mappingRes.rows),
-      admin: adminRow ? {
-        allowForceOverwrite: adminRow.allow_force_overwrite === true,
-        snapshotRetention: Number(adminRow.snapshot_retention || 0),
-        updatedAt: adminRow.updated_at ? new Date(adminRow.updated_at).toISOString() : null
-      } : { allowForceOverwrite: false, snapshotRetention: 0, updatedAt: null }
-    },
-    excludedStatuses: mapExcludedStatuses(excludedRes.rows)
-  };
-
-  return state;
+  const latest = await loadLatestSnapshot(client);
+  lastRevision = Math.max(lastRevision, latest.rev || 0);
+  return latest;
 }
 
 async function getCachedState() {
   if (cachedState && cachedStateRev === lastRevision) {
     return cachedState;
   }
-  const state = await loadStateFromSql();
-  cachedState = state;
-  cachedStateRev = state.rev;
-  return state;
+  const latest = await loadStateFromSql();
+  cachedState = latest;
+  cachedStateRev = latest.rev || 0;
+  cachedStateHash = latest.hash || null;
+  cachedStateMeta = latest.meta || null;
+  return latest;
 }
 
 function invalidateCache() {
   cachedState = null;
+  cachedStateRev = null;
+  cachedStateHash = null;
+  cachedStateMeta = null;
 }
 function broadcastRevision(event) {
-  const payload = JSON.stringify({ type: 'revision', ...event });
+  const payloadObj = { type: 'revision', ...event };
+  if (!Object.prototype.hasOwnProperty.call(payloadObj, 'hash') && cachedStateHash) {
+    payloadObj.hash = cachedStateHash;
+  }
+  const payload = JSON.stringify(payloadObj);
   sseClients.forEach((client) => {
     try {
       client.write(`data: ${payload}\n\n`);
@@ -1135,7 +1179,15 @@ app.get('/api/state', async (req, res) => {
     if (etag) {
       res.setHeader('ETag', etag);
     }
-    res.json(state);
+    if (cachedStateHash) {
+      if (state.snapshot && typeof state.snapshot === 'object' && !Array.isArray(state.snapshot)) {
+        res.json({ ...state.snapshot, hash: cachedStateHash });
+      } else {
+        res.json(state.snapshot);
+      }
+    } else {
+      res.json(state.snapshot);
+    }
   } catch (err) {
     console.error('GET /api/state failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1153,62 +1205,108 @@ app.get('/api/events', async (req, res) => {
   });
   try {
     const state = await getCachedState();
-    res.write(`data: ${JSON.stringify({ type: 'revision', rev: state.rev, source: 'bootstrap' })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'revision', rev: state.rev, source: 'bootstrap', hash: cachedStateHash })}\n\n`);
   } catch (err) {
     console.error('Initial SSE push failed', err);
   }
 });
 
 app.put('/api/state', async (req, res) => {
-  if (!isPlainObject(req.body)) {
+  if (!req.body || typeof req.body !== 'object') {
     res.status(400).json({ error: 'Invalid payload' });
     return;
   }
-  const stage = typeof req.body.stage === 'string' ? req.body.stage.trim().toLowerCase() : null;
-  if (!stage || !['crm', 'planner', 'settings', 'admin'].includes(stage)) {
-    res.status(400).json({ error: 'Invalid stage' });
+
+  const rawState = req.body.state;
+  if (rawState === undefined) {
+    res.status(400).json({ error: 'Missing state payload' });
     return;
   }
-  const baseRevFromBody = parseBaseRev(req.body.baseRev ?? req.body.base_rev ?? null);
-  const baseRevFromHeader = parseIfMatchRevision(req.headers['if-match']);
-  const baseRev = baseRevFromBody !== null ? baseRevFromBody : baseRevFromHeader;
-  const forceOverwriteRequested = req.body.forceOverwrite === true || req.body.force_overwrite === true;
-  const actor = typeof req.body.actor === 'string' ? req.body.actor : null;
-  const source = typeof req.body.source === 'string' ? req.body.source : stage;
-  const note = typeof req.body.note === 'string' ? req.body.note : null;
-  const changes = req.body.changes || {};
+
+  let stateObject = null;
+  let stateString = null;
+  if (typeof rawState === 'string') {
+    stateString = rawState;
+    try {
+      stateObject = JSON.parse(rawState);
+    } catch (err) {
+      res.status(400).json({ error: 'State payload is not valid JSON' });
+      return;
+    }
+  } else if (isPlainObject(rawState)) {
+    stateObject = rawState;
+    stateString = JSON.stringify(rawState);
+  } else {
+    res.status(400).json({ error: 'Unsupported state payload type' });
+    return;
+  }
+
+  if (!isPlainObject(stateObject)) {
+    res.status(400).json({ error: 'State payload must be an object' });
+    return;
+  }
+
+  const meta = isPlainObject(req.body.meta) ? req.body.meta : null;
+  const providedHash = typeof req.body.hash === 'string' && req.body.hash.trim() ? req.body.hash.trim() : null;
+  const snapshotHash = providedHash || computeSnapshotHash(stateString || stateObject);
+
+  const headerMatch = parseIfMatchRevision(req.headers['if-match']);
+  const metaBaseRev = meta && Number.isFinite(Number(meta.baseRev)) ? Number(meta.baseRev) : null;
+  const baseRev = headerMatch !== null ? headerMatch : metaBaseRev;
+  const forceOverwrite = req.body.forceOverwrite === true
+    || req.body.force_overwrite === true
+    || (meta && (meta.forceOverwrite === true || meta.force_overwrite === true));
+
+  const actorCandidate = typeof req.body.actor === 'string' ? req.body.actor : null;
+  const actor = meta && typeof meta.user === 'string' && meta.user.trim() ? meta.user.trim()
+    : actorCandidate && actorCandidate.trim() ? actorCandidate.trim()
+      : null;
+  const sourceCandidate = typeof req.body.source === 'string' ? req.body.source : null;
+  const source = meta && typeof meta.source === 'string' && meta.source.trim() ? meta.source.trim()
+    : sourceCandidate && sourceCandidate.trim() ? sourceCandidate.trim()
+      : 'planner';
+  const note = typeof req.body.note === 'string' && req.body.note.trim()
+    ? req.body.note.trim()
+    : (meta && typeof meta.summary === 'string' && meta.summary.trim() ? meta.summary.trim() : null);
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const currentRev = await getLatestRevision(client);
-    const allowForceOverwrite = await fetchAdminSettings(client);
-    const expectedRev = baseRev !== null ? baseRev : currentRev;
-    if (!forceOverwriteRequested || !allowForceOverwrite) {
-      if (expectedRev !== currentRev) {
-        await client.query('ROLLBACK');
-        res.status(412).json({ error: 'Precondition Failed', currentRev });
-        return;
-      }
+    if (!forceOverwrite && baseRev !== null && baseRev !== currentRev) {
+      await client.query('ROLLBACK');
+      res.status(412).json({ error: 'Precondition Failed', currentRev });
+      return;
     }
 
+    let persisted = null;
     const rev = await runWithRevision(client, actor, source, note, async (newRev) => {
-      const details = await applyChangesByStage(client, stage, changes);
-      if (details.length > 0) {
-        await insertActivity(client, newRev, actor, source, stage, details.join('; '));
-      } else {
-        await insertActivity(client, newRev, actor, source, stage, 'no-op');
-      }
+      persisted = await persistSnapshot(client, newRev, stateObject, meta, snapshotHash);
+      const detail = meta && typeof meta.summary === 'string' && meta.summary.trim()
+        ? meta.summary.trim()
+        : meta && typeof meta.changeType === 'string' && meta.changeType.trim()
+          ? meta.changeType.trim()
+          : 'state update';
+      const activityStage = meta && typeof meta.stage === 'string' && meta.stage.trim() ? meta.stage.trim() : null;
+      await insertActivity(client, newRev, actor, source, activityStage ? `state:${activityStage}` : 'snapshot', detail);
     });
 
     await client.query('COMMIT');
-    invalidateCache();
+    lastRevision = Math.max(lastRevision, rev);
+    if (persisted) {
+      cachedState = { rev, snapshot: persisted.snapshot, meta: persisted.meta, hash: persisted.hash };
+      cachedStateRev = rev;
+      cachedStateHash = persisted.hash || snapshotHash;
+      cachedStateMeta = persisted.meta || meta || null;
+    } else {
+      invalidateCache();
+    }
     const etag = weakEtagForRevision(rev);
     if (etag) {
       res.setHeader('ETag', etag);
     }
-    broadcastRevision({ rev, actor, source, note });
-    res.json({ rev });
+    broadcastRevision({ rev, actor, source, note, hash: cachedStateHash });
+    res.json({ rev, hash: cachedStateHash });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('PUT /api/state failed', err);
@@ -1217,6 +1315,7 @@ app.put('/api/state', async (req, res) => {
     client.release();
   }
 });
+
 app.get('/api/admin/history', async (req, res) => {
   const limit = Math.min(200, Math.max(1, parseInteger(req.query.limit, 50)));
   const offset = Math.max(0, parseInteger(req.query.offset, 0));

@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://planner:planner@localhost:5432/planner';
@@ -27,6 +28,16 @@ function parseDate(value) {
 function normalizeStage(code) {
   if (!code) return null;
   return String(code).trim().toLowerCase();
+}
+
+function computeSnapshotHash(snapshot) {
+  try {
+    const text = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot);
+    return crypto.createHash('sha1').update(text).digest('hex');
+  } catch (err) {
+    console.warn('Failed to compute snapshot hash', err);
+    return null;
+  }
 }
 
 function titleFromCode(code) {
@@ -271,6 +282,16 @@ async function loadSnapshot() {
     );
 
     await insertRevisionRow(client, rev, 'import-script', 'legacy-import', 'Initial import');
+    const snapshotHash = computeSnapshotHash(snapshot);
+    await client.query(
+      `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (rev) DO UPDATE
+         SET snapshot = EXCLUDED.snapshot,
+             meta = EXCLUDED.meta,
+             hash = EXCLUDED.hash`,
+      [rev, snapshot, null, snapshotHash]
+    );
 
     await client.query('COMMIT');
     console.log('Legacy snapshot imported into SQL schema');
