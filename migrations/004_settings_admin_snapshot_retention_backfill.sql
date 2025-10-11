@@ -404,6 +404,11 @@ DECLARE
   new_rev BIGINT;
 BEGIN
   SELECT nextval('revisions_rev_seq') INTO new_rev;
+
+  INSERT INTO revisions (rev, actor, source, note)
+  VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
+  ON CONFLICT (rev) DO NOTHING;
+
   PERFORM set_config('app.rev', new_rev::TEXT, true);
 
   UPDATE settings_admin
@@ -425,11 +430,7 @@ BEGIN
             snapshot_retention = EXCLUDED.snapshot_retention,
             updated_at = NOW();
 
-  INSERT INTO revisions (rev, actor, source, note)
-  VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
-  ON CONFLICT (rev) DO NOTHING;
-
-  PERFORM set_config('app.rev', '', true);
+  PERFORM set_config('app.rev', NULL, true);
 END;
 $$;
 
