@@ -3,7 +3,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || 'postgresql://planner:planner@localhost:5432/planner';
@@ -13,6 +12,8 @@ const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined
 });
+
+let revisionColumnInfo = null;
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -30,22 +31,10 @@ function normalizeStage(code) {
   return String(code).trim().toLowerCase();
 }
 
-function computeSnapshotHash(snapshot) {
-  try {
-    const text = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot);
-    return crypto.createHash('sha1').update(text).digest('hex');
-  } catch (err) {
-    console.warn('Failed to compute snapshot hash', err);
-    return null;
-  }
-}
-
 function titleFromCode(code) {
   if (!code) return '';
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
-let revisionColumnInfo = null;
 
 async function loadRevisionColumnInfo(client) {
   if (revisionColumnInfo) {
@@ -67,27 +56,28 @@ async function loadRevisionColumnInfo(client) {
 
 async function insertRevisionRow(client, rev, actor, source, note) {
   const info = await loadRevisionColumnInfo(client);
+  const payload = [rev, actor || null, source || null, note || null];
   if (info.hasCurrentRev) {
     if (info.hasId) {
       await client.query(
-        'INSERT INTO revisions (id, rev, current_rev, actor, source, note) VALUES ($1,$1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
-        [rev, actor || null, source || null, note || null]
+        'INSERT INTO revisions (id, rev, current_rev, actor, source, note) VALUES ($1,$1,$1,$2,$3,$4)',
+        payload
       );
     } else {
       await client.query(
-        'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
-        [rev, actor || null, source || null, note || null]
+        'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4)',
+        payload
       );
     }
   } else if (info.hasId) {
     await client.query(
-      'INSERT INTO revisions (id, rev, actor, source, note) VALUES ($1,$1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
-      [rev, actor || null, source || null, note || null]
+      'INSERT INTO revisions (id, rev, actor, source, note) VALUES ($1,$1,$2,$3,$4)',
+      payload
     );
   } else {
     await client.query(
-      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4) ON CONFLICT (rev) DO NOTHING',
-      [rev, actor || null, source || null, note || null]
+      'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4)',
+      payload
     );
   }
 }
@@ -112,7 +102,8 @@ async function loadSnapshot() {
     await client.query('BEGIN');
     const { rows: revRows } = await client.query("SELECT nextval('revisions_rev_seq') AS rev");
     const rev = Number(revRows[0].rev);
-    await client.query('SET LOCAL app.rev = $1', [rev]);
+    await client.query(`SET LOCAL app.rev = ${rev}`);
+    await insertRevisionRow(client, rev, 'import-script', 'legacy-import', 'Initial import');
 
     await client.query('TRUNCATE order_process, orders, customers RESTART IDENTITY CASCADE');
     await client.query('TRUNCATE processes RESTART IDENTITY CASCADE');
@@ -279,18 +270,6 @@ async function loadSnapshot() {
       `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
        VALUES (1,FALSE,50,NOW())
        ON CONFLICT (id) DO UPDATE SET allow_force_overwrite = FALSE, snapshot_retention = 50, updated_at = NOW()`
-    );
-
-    await insertRevisionRow(client, rev, 'import-script', 'legacy-import', 'Initial import');
-    const snapshotHash = computeSnapshotHash(snapshot);
-    await client.query(
-      `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (rev) DO UPDATE
-         SET snapshot = EXCLUDED.snapshot,
-             meta = EXCLUDED.meta,
-             hash = EXCLUDED.hash`,
-      [rev, snapshot, null, snapshotHash]
     );
 
     await client.query('COMMIT');
