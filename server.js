@@ -1,197 +1,87 @@
 'use strict';
 
 const fs = require('fs');
-const fsp = require('fs/promises');
 const path = require('path');
 const express = require('express');
 const compression = require('compression');
 const { Pool } = require('pg');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
 
 const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
 const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
 const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true';
+const PGPOOL_MAX = Number.parseInt(process.env.PGPOOL_MAX || '10', 10);
+const PGPOOL_IDLE = Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10);
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
-  max: Number.parseInt(process.env.PGPOOL_MAX || '10', 10),
-  idleTimeoutMillis: Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10)
+  max: Number.isFinite(PGPOOL_MAX) && PGPOOL_MAX > 0 ? PGPOOL_MAX : 10,
+  idleTimeoutMillis: Number.isFinite(PGPOOL_IDLE) && PGPOOL_IDLE >= 0 ? PGPOOL_IDLE : 30000
 });
-
-const LEGACY_IMPORT_ENABLED = process.env.PLANNER_SKIP_LEGACY_IMPORT !== 'true';
 
 pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL client error', err);
+  console.error('Unexpected PostgreSQL error', err);
 });
 
+const app = express();
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.text({ limit: '10mb', type: ['text/plain', 'text/*'] }));
 
 const sseClients = new Set();
-
-const DEFAULT_HISTORY_LIMIT = Number.parseInt(process.env.PLANNER_HISTORY_LIMIT || '50', 10);
-const DEFAULT_HISTORY_DAILY_LIMIT = Number.parseInt(process.env.PLANNER_HISTORY_DAILY_LIMIT || '3', 10);
-
-const simpleHash = (str) => {
-  if (!str) return '';
-  let hash = 0;
-  for (let i = 0; i < str.length; i += 1) {
-    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
-  }
-  return hash.toString(16);
-};
-
-const normalizeWeakEtag = (value) => {
+let cachedState = null;
+let cachedStateRev = null;
+let lastRevision = 0;
+function normalizeWeakEtag(value) {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   if (trimmed === '*') return '*';
-  const hasWeakPrefix = trimmed.length >= 2
-    && (trimmed[0] === 'W' || trimmed[0] === 'w')
-    && trimmed[1] === '/';
-  const withoutWeak = hasWeakPrefix ? trimmed.slice(2) : trimmed;
+  const hasWeak = trimmed.length >= 2 && (trimmed[0] === 'W' || trimmed[0] === 'w') && trimmed[1] === '/';
+  const withoutWeak = hasWeak ? trimmed.slice(2) : trimmed;
   const stripped = withoutWeak.replace(/^"|"$/g, '');
   return stripped || null;
-};
+}
 
-const parseIfMatchHeader = (value) => {
+function parseIfMatchHeader(value) {
   if (!value) {
-    return { hash: null, any: false };
+    return { any: false, hash: null };
   }
   const raw = Array.isArray(value) ? value.join(',') : String(value);
-  const tokens = raw.split(',').map((part) => part.trim()).filter(Boolean);
+  const tokens = raw.split(',').map((token) => token.trim()).filter(Boolean);
   for (const token of tokens) {
     if (token === '*') {
-      return { hash: null, any: true };
+      return { any: true, hash: null };
     }
     const normalized = normalizeWeakEtag(token);
     if (normalized && normalized !== '*') {
-      return { hash: normalized, any: false };
+      return { any: false, hash: normalized };
     }
   }
-  return { hash: null, any: false };
-};
+  return { any: false, hash: null };
+}
 
-const sanitizeHashCandidate = (value) => {
-  if (value === null || value === undefined) return null;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-  return sanitizeHashCandidate(String(value));
-};
+function parseIfMatchRevision(value) {
+  const parsed = parseIfMatchHeader(value);
+  if (!parsed.hash) return null;
+  const match = /^rev-(\d+)$/.exec(parsed.hash);
+  if (!match) return null;
+  return Number.parseInt(match[1], 10);
+}
 
-const normalizeHashValue = (value) => {
-  const sanitized = sanitizeHashCandidate(value);
-  return sanitized ? sanitized.toLowerCase() : null;
-};
+function weakEtagForRevision(rev) {
+  if (!Number.isFinite(rev) || rev <= 0) return null;
+  return `W/"rev-${rev}"`;
+}
 
-const isNonEmptyString = (value) => typeof value === 'string' && value.trim().length > 0;
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
-const DEFAULT_STATE = {
-  routeOverrides: [],
-  t: [],
-  done: [],
-  trash: [],
-  exc: [],
-  res: [],
-  process: null,
-  capByProc: {},
-  parallelByProc: {},
-  filter: 'all',
-  locked: [],
-  orders: [],
-  freshness: null,
-  freshnessCsv: null,
-  freshnessManual: null,
-  lastImportTime: null,
-  lastManualTime: null,
-  autosaveOn: true,
-  autoOptimizeOn: false,
-  shiftOnProgress: false,
-  meta: {
-    versions: {},
-    history: [],
-    lastAuthors: {},
-    csvTimestamp: '',
-    manualTimestamp: '',
-    ignoredStates: [],
-    storage: { local: true, remote: true, remotePreferred: true, mode: 'remote' },
-    settings: {}
-  }
-};
-
-const createInitialState = () => {
-  const { stateString, hash } = serializeStateForStorage(DEFAULT_STATE);
-  return {
-    state: stateString,
-    meta: {
-      stage: null,
-      version: 0,
-      user: 'system',
-      session: null,
-      diff: null
-    },
-    updatedAt: new Date().toISOString(),
-    hash
-  };
-};
-
-const loadLegacyStateFromDisk = async () => {
-  if (!LEGACY_IMPORT_ENABLED) {
-    return null;
-  }
-  const legacyPath = path.join(__dirname, 'planner-state.json');
-  try {
-    const raw = await fsp.readFile(legacyPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.state === 'string') {
-      let snapshot = {};
-      try {
-        snapshot = JSON.parse(parsed.state);
-      } catch (_err) {
-        snapshot = {};
-      }
-      const { stateString, hash } = serializeStateForStorage(snapshot);
-      return {
-        state: stateString,
-        meta: parsed.meta ?? null,
-        updatedAt: parsed.updatedAt ?? new Date().toISOString(),
-        hash
-      };
-    }
-  } catch (err) {
-    // ignore legacy import failure
-  }
-  return null;
-};
-
-const readPlannerStateRow = async (client, options = {}) => {
-  const runner = client || pool;
-  const { forUpdate = false } = options;
-  const suffix = forUpdate ? ' FOR UPDATE' : '';
-  const { rows } = await runner.query(
-    `SELECT id, state, meta, hash, updated_at FROM planner_state ORDER BY id LIMIT 1${suffix}`
-  );
-  if (rows.length > 0) {
-    const row = rows[0];
-    return {
-      id: row.id,
-      state: row.state,
-      meta: row.meta ?? null,
-      hash: row.hash,
-      updatedAt: new Date(row.updated_at).toISOString()
-    };
-  }
-  return null;
-};
-
-const ensureMigrationTable = async (client) => {
+async function ensureMigrationTable(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS planner_schema_migrations (
       id SERIAL PRIMARY KEY,
@@ -199,9 +89,9 @@ const ensureMigrationTable = async (client) => {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-};
+}
 
-const loadMigrations = () => {
+function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) {
     return [];
   }
@@ -212,13 +102,13 @@ const loadMigrations = () => {
       filename,
       sql: fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf8')
     }));
-};
+}
 
-const runMigrations = async () => {
+async function runMigrations() {
   const client = await pool.connect();
   try {
     await ensureMigrationTable(client);
-    const migrations = loadMigrations();
+    const migrations = readMigrations();
     for (const migration of migrations) {
       const { rows } = await client.query('SELECT 1 FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
       if (rows.length > 0) {
@@ -238,1672 +128,1130 @@ const runMigrations = async () => {
   } finally {
     client.release();
   }
-};
+}
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+async function getLatestRevision(client) {
+  const runner = client || pool;
+  const { rows } = await runner.query('SELECT COALESCE(MAX(rev), 0) AS rev FROM revisions');
+  const rev = rows.length > 0 ? Number(rows[0].rev || 0) : 0;
+  lastRevision = Math.max(lastRevision, rev);
+  return rev;
+}
 
-const clonePlainObject = (value) => {
-  if (!isPlainObject(value)) {
-    return {};
-  }
-  return JSON.parse(JSON.stringify(value));
-};
+async function ensureSettingsDefaults(client) {
+  await client.query('INSERT INTO settings_autoweight (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+  await client.query('INSERT INTO settings_journal (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+  await client.query('INSERT INTO settings_admin (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
+}
+function mapSettingsRows(rows) {
+  return rows.map((row) => ({
+    crmStage: row.crm_stage,
+    plannerProcessId: row.planner_process_id,
+    isIgnored: row.is_ignored,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
+  }));
+}
 
-const cloneDeepPlain = (value) => {
-  if (Array.isArray(value)) {
-    return value.map((item) => cloneDeepPlain(item));
-  }
-  if (isPlainObject(value)) {
-    return Object.keys(value).reduce((acc, key) => {
-      acc[key] = cloneDeepPlain(value[key]);
-      return acc;
-    }, {});
-  }
-  return value;
-};
-
-const deepMergePlain = (target, source) => {
-  const base = isPlainObject(target) ? cloneDeepPlain(target) : {};
-  if (!isPlainObject(source)) {
-    return base;
-  }
-  Object.keys(source).forEach((key) => {
-    const sourceValue = source[key];
-    if (isPlainObject(sourceValue) && isPlainObject(base[key])) {
-      base[key] = deepMergePlain(base[key], sourceValue);
-    } else {
-      base[key] = cloneDeepPlain(sourceValue);
-    }
+function mapColumnWidths(rows) {
+  const result = {};
+  rows.forEach((row) => {
+    if (!row.column_key) return;
+    result[row.column_key] = {
+      widthPx: row.width_px,
+      updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
+    };
   });
-  return base;
-};
+  return result;
+}
 
-const readAdminSettings = (stateObj) => {
-  const adminSettings = stateObj?.meta?.settings?.admin;
-  const limit = Number.parseInt(adminSettings?.historyLimit ?? adminSettings?.historyRetentionLimit ?? DEFAULT_HISTORY_LIMIT, 10);
-  const dailyLimitRaw = Number.parseInt(adminSettings?.historyDailyLimit ?? DEFAULT_HISTORY_DAILY_LIMIT, 10);
-  return {
-    allowForceOverwrite: adminSettings?.allowForceOverwrite === true,
-    historyLimit: Number.isFinite(limit) && limit > 0 ? limit : DEFAULT_HISTORY_LIMIT,
-    historyDailyLimit: Number.isFinite(dailyLimitRaw) && dailyLimitRaw > 0
-      ? dailyLimitRaw
-      : Math.max(1, Math.min(DEFAULT_HISTORY_DAILY_LIMIT, DEFAULT_HISTORY_LIMIT))
-  };
-};
+function mapExcludedStatuses(rows) {
+  return rows.map((row) => ({
+    statusKey: row.status_key,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null
+  }));
+}
 
-const normalizeSummaryObject = (value) => {
-  if (!isPlainObject(value)) return null;
-  return Object.entries(value).reduce((acc, [key, val]) => {
-    if (val === undefined) return acc;
-    if (isPlainObject(val)) {
-      const nested = normalizeSummaryObject(val);
-      if (nested && Object.keys(nested).length > 0) {
-        acc[key] = nested;
-      }
-      return acc;
-    }
-    if (Array.isArray(val)) {
-      acc[key] = val.slice(0);
-      return acc;
-    }
-    acc[key] = val;
-    return acc;
-  }, {});
-};
+function mapCustomers(rows) {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    crmId: row.crm_id
+  }));
+}
 
-const resolveActorFromMeta = (meta) => {
-  if (!isPlainObject(meta)) return null;
-  return meta.actor
-    || meta.user
-    || meta.userName
-    || meta.username
-    || meta.operator
-    || meta.author
-    || null;
-};
+function mapOrders(rows) {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    crmOrderId: row.crm_order_id,
+    number: row.number,
+    customerId: row.customer_id ? Number(row.customer_id) : null,
+    customerName: row.customer_name || null,
+    customerCrmId: row.customer_crm_id || null,
+    status: row.status,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+    deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : null
+  }));
+}
 
-const resolveSourceFromMeta = (meta) => {
-  if (!isPlainObject(meta)) return null;
-  return meta.source || meta.stage || meta.channel || null;
-};
+function mapOrderProcesses(rows) {
+  return rows.map((row) => ({
+    id: Number(row.id),
+    orderId: Number(row.order_id),
+    processId: Number(row.process_id),
+    processCode: row.process_code,
+    processName: row.process_name,
+    seq: Number(row.seq),
+    plannedStart: row.planned_start ? new Date(row.planned_start).toISOString() : null,
+    plannedEnd: row.planned_end ? new Date(row.planned_end).toISOString() : null,
+    actualStart: row.actual_start ? new Date(row.actual_start).toISOString() : null,
+    actualEnd: row.actual_end ? new Date(row.actual_end).toISOString() : null,
+    progress: Number(row.progress),
+    isDone: row.is_done === true,
+    positionIndex: row.position_index !== null ? Number(row.position_index) : null,
+    hiddenByState: row.hidden_by_state === true,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
+  }));
+}
 
-const serializeStateForStorage = (stateObj) => {
-  const working = cloneDeepPlain(isPlainObject(stateObj) ? stateObj : {});
-  let previousHash = sanitizeHashCandidate(working.hash) || null;
-  let serialized = '';
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (previousHash) {
-      working.hash = previousHash;
-    } else {
-      delete working.hash;
-    }
-    serialized = JSON.stringify(working);
-    const computed = simpleHash(serialized);
-    if (computed === previousHash) {
-      working.hash = computed;
-      return { stateObj: working, stateString: serialized, hash: computed };
-    }
-    previousHash = computed;
-  }
-  if (previousHash) {
-    working.hash = previousHash;
-  } else {
-    delete working.hash;
-  }
-  serialized = JSON.stringify(working);
-  let computed = simpleHash(serialized);
-  if (computed !== previousHash) {
-    working.hash = computed;
-    serialized = JSON.stringify(working);
-    computed = simpleHash(serialized);
-  }
-  working.hash = computed;
-  const finalString = JSON.stringify(working);
-  return { stateObj: working, stateString: finalString, hash: computed };
-};
+function mapCapacity(rows) {
+  return rows.map((row) => ({
+    processId: Number(row.process_id),
+    day: row.day ? new Date(row.day).toISOString().slice(0, 10) : null,
+    minutes: Number(row.minutes)
+  }));
+}
 
-const embedHashInState = (stateObj, hash) => {
-  const working = cloneDeepPlain(isPlainObject(stateObj) ? stateObj : {});
-  const sanitized = sanitizeHashCandidate(hash);
-  if (sanitized) {
-    working.hash = sanitized;
-  } else {
-    delete working.hash;
-  }
-  const stateString = JSON.stringify(working);
-  return { stateObj: working, stateString, hash: sanitized };
-};
+async function loadStateFromSql(client) {
+  const runner = client || pool;
+  await ensureSettingsDefaults(runner);
+  const rev = await getLatestRevision(runner);
 
-const normaliseDate = (value) => {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-};
+  const [processesRes, autoweightRes, journalRes, columnWidthsRes, mappingRes, adminRes, excludedRes, customersRes, ordersRes, orderProcessesRes, capacityRes] = await Promise.all([
+    runner.query('SELECT id, code, name, position, has_hours, is_parallel, is_active FROM processes ORDER BY position, id'),
+    runner.query('SELECT enabled, percent, minimum_hours, updated_at FROM settings_autoweight WHERE id = 1'),
+    runner.query('SELECT max_rows, updated_at FROM settings_journal WHERE id = 1'),
+    runner.query('SELECT column_key, width_px, updated_at FROM settings_column_widths'),
+    runner.query('SELECT crm_stage, planner_process_id, is_ignored, updated_at FROM settings_mapping ORDER BY crm_stage'),
+    runner.query('SELECT allow_force_overwrite, snapshot_retention, updated_at FROM settings_admin WHERE id = 1'),
+    runner.query('SELECT status_key, created_at FROM excluded_statuses ORDER BY status_key'),
+    runner.query('SELECT id, name, crm_id FROM customers ORDER BY name, id'),
+    runner.query(`
+      SELECT o.id, o.crm_order_id, o.number, o.customer_id, o.status, o.created_at, o.updated_at, o.deleted_at,
+             c.name AS customer_name, c.crm_id AS customer_crm_id
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        ORDER BY o.created_at, o.id
+    `),
+    runner.query(`
+      SELECT op.id, op.order_id, op.process_id, op.seq, op.planned_start, op.planned_end,
+             op.actual_start, op.actual_end, op.progress, op.is_done, op.position_index,
+             op.hidden_by_state, op.updated_at,
+             p.code AS process_code, p.name AS process_name
+        FROM order_process op
+        JOIN processes p ON p.id = op.process_id
+        ORDER BY p.position, op.position_index NULLS LAST, op.seq, op.id
+    `),
+    runner.query('SELECT process_id, day, minutes FROM capacity_by_process ORDER BY process_id, day')
+  ]);
 
-const mergeSettingsSnapshot = (currentStateObj, nextStateObj, meta) => {
-  if (!isPlainObject(nextStateObj)) {
-    return { stateObj: nextStateObj, touched: false };
-  }
+  const processes = processesRes.rows.map((row) => ({
+    id: Number(row.id),
+    code: row.code,
+    name: row.name,
+    position: Number(row.position),
+    hasHours: row.has_hours === true,
+    isParallel: row.is_parallel === true,
+    isActive: row.is_active === true
+  }));
 
-  const metaSettings = meta?.settings;
-  if (!metaSettings || (!Array.isArray(metaSettings.entries) && metaSettings.replace !== true)) {
-    return { stateObj: nextStateObj, touched: false };
-  }
+  const autoweightRow = autoweightRes.rows[0] || null;
+  const journalRow = journalRes.rows[0] || null;
+  const adminRow = adminRes.rows[0] || null;
 
-  const currentSettings = clonePlainObject(currentStateObj?.meta?.settings);
-  const incomingSettings = clonePlainObject(nextStateObj?.meta?.settings);
-  if (!Object.keys(incomingSettings).length && !Object.keys(currentSettings).length) {
-    return { stateObj: nextStateObj, touched: false };
-  }
-
-  const plan = new Map();
-  const ensurePlan = (key, defaults = {}) => {
-    if (!plan.has(key)) {
-      plan.set(key, { type: 'value', values: new Map(), whole: undefined, allowReplace: false, ...defaults });
-    }
-    return plan.get(key);
-  };
-
-  const readIncoming = (rootKey, fallback) => {
-    const value = incomingSettings[rootKey];
-    if (value === undefined) {
-      return fallback;
-    }
-    return isPlainObject(value) ? clonePlainObject(value) : value;
+  const state = {
+    rev,
+    processes,
+    customers: mapCustomers(customersRes.rows),
+    orders: mapOrders(ordersRes.rows),
+    orderProcesses: mapOrderProcesses(orderProcessesRes.rows),
+    capacityByProcess: mapCapacity(capacityRes.rows),
+    settings: {
+      autoweight: autoweightRow ? {
+        enabled: autoweightRow.enabled === true,
+        percent: Number(autoweightRow.percent || 0),
+        minimumHours: Number(autoweightRow.minimum_hours || 0),
+        updatedAt: autoweightRow.updated_at ? new Date(autoweightRow.updated_at).toISOString() : null
+      } : { enabled: false, percent: 0, minimumHours: 0, updatedAt: null },
+      journal: journalRow ? {
+        maxRows: Number(journalRow.max_rows || 0),
+        updatedAt: journalRow.updated_at ? new Date(journalRow.updated_at).toISOString() : null
+      } : { maxRows: 0, updatedAt: null },
+      columnWidths: mapColumnWidths(columnWidthsRes.rows),
+      mapping: mapSettingsRows(mappingRes.rows),
+      admin: adminRow ? {
+        allowForceOverwrite: adminRow.allow_force_overwrite === true,
+        snapshotRetention: Number(adminRow.snapshot_retention || 0),
+        updatedAt: adminRow.updated_at ? new Date(adminRow.updated_at).toISOString() : null
+      } : { allowForceOverwrite: false, snapshotRetention: 0, updatedAt: null }
+    },
+    excludedStatuses: mapExcludedStatuses(excludedRes.rows)
   };
 
-  const entries = Array.isArray(metaSettings.entries) ? metaSettings.entries : [];
-  entries.forEach((entry) => {
-    if (!entry) return;
-    const entryKind = entry.kind;
-    if ((entryKind === 'capacity' || entryKind === 'parallel') && entry.stage) {
-      const rootKey = entry.kind === 'parallel' ? 'parallel' : 'capacity';
-      const stageKey = String(entry.stage || '').trim();
-      if (!stageKey) return;
-      const targetPlan = ensurePlan(rootKey, { type: 'object' });
-      const nextValue = entry.to ?? readIncoming(rootKey, {})?.[stageKey];
-      if (nextValue === undefined) return;
-      targetPlan.values.set(stageKey, Number.isFinite(nextValue) ? nextValue : nextValue);
-      return;
-    }
-    if (typeof entry.key !== 'string') {
-      return;
-    }
-    const keyPath = entry.key.split('.');
-    const rootKey = keyPath.shift();
-    if (!rootKey) {
-      return;
-    }
-    if (rootKey === 'tableColumn') {
-      const columnKey = keyPath[0];
-      if (!columnKey) return;
-      const targetPlan = ensurePlan('tableColumns', { type: 'object' });
-      const tableColumnsIncoming = readIncoming('tableColumns', {});
-      const value = entry.value ?? tableColumnsIncoming?.[columnKey];
-      if (value === undefined) return;
-      targetPlan.values.set(columnKey, value);
-      return;
-    }
-    if (rootKey === 'extraTime') {
-      const extraKey = keyPath[0];
-      if (!extraKey) return;
-      const targetPlan = ensurePlan('extraTime', { type: 'object' });
-      const extraIncoming = readIncoming('extraTime', {});
-      const value = entry.value ?? extraIncoming?.[extraKey];
-      if (value === undefined) return;
-      targetPlan.values.set(extraKey, value);
-      return;
-    }
-    if (rootKey === 'crmStageMapping') {
-      const targetPlan = ensurePlan('crmStageMapping', { type: 'object', allowReplace: true });
-      const mappingValue = entry.value ?? readIncoming('crmStageMapping', {});
-      if (isPlainObject(mappingValue)) {
-        targetPlan.whole = clonePlainObject(mappingValue);
-      }
-      return;
-    }
-    const targetPlan = ensurePlan(rootKey, { type: 'value' });
-    const value = entry.value ?? readIncoming(rootKey, undefined);
-    if (value !== undefined) {
-      targetPlan.value = value;
+  return state;
+}
+
+async function getCachedState() {
+  if (cachedState && cachedStateRev === lastRevision) {
+    return cachedState;
+  }
+  const state = await loadStateFromSql();
+  cachedState = state;
+  cachedStateRev = state.rev;
+  return state;
+}
+
+function invalidateCache() {
+  cachedState = null;
+}
+function broadcastRevision(event) {
+  const payload = JSON.stringify({ type: 'revision', ...event });
+  sseClients.forEach((client) => {
+    try {
+      client.write(`data: ${payload}\n\n`);
+    } catch (err) {
+      console.warn('Failed to push SSE event', err);
     }
   });
+}
 
-  if (plan.size === 0) {
-    return { stateObj: nextStateObj, touched: false };
-  }
-
-  const mergedSettings = clonePlainObject(currentSettings);
-  const allowGlobalReplace = metaSettings.replace === true;
-
-  plan.forEach((targetPlan, key) => {
-    if (targetPlan.type === 'object') {
-      const replaceMode = allowGlobalReplace && (targetPlan.allowReplace || targetPlan.whole);
-      const base = replaceMode ? {} : clonePlainObject(mergedSettings[key]);
-      const nextObject = { ...base };
-      if (isPlainObject(targetPlan.whole)) {
-        Object.entries(targetPlan.whole).forEach(([childKey, childValue]) => {
-          nextObject[childKey] = childValue;
-        });
-      }
-      targetPlan.values.forEach((value, childKey) => {
-        if (value === undefined && replaceMode) {
-          delete nextObject[childKey];
-        } else if (value !== undefined) {
-          nextObject[childKey] = value;
-        }
-      });
-      mergedSettings[key] = nextObject;
-    } else if (Object.prototype.hasOwnProperty.call(targetPlan, 'value')) {
-      const value = targetPlan.value;
-      mergedSettings[key] = isPlainObject(value) ? clonePlainObject(value) : value;
-    }
-  });
-
-  if (incomingSettings.updatedAt) {
-    mergedSettings.updatedAt = incomingSettings.updatedAt;
-  }
-
-  if (!isPlainObject(nextStateObj.meta)) {
-    nextStateObj.meta = {};
-  }
-  nextStateObj.meta.settings = mergedSettings;
-
-  if (isPlainObject(mergedSettings.capacity)) {
-    nextStateObj.capByProc = { ...mergedSettings.capacity };
-  }
-
-  if (isPlainObject(mergedSettings.parallel)) {
-    nextStateObj.parallelByProc = { ...mergedSettings.parallel };
-  }
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autosave')) {
-    nextStateObj.autosaveOn = mergedSettings.autosave;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autoOptimize')) {
-    nextStateObj.autoOptimizeOn = mergedSettings.autoOptimize;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'shiftOnProgress')) {
-    nextStateObj.shiftOnProgress = mergedSettings.shiftOnProgress;
-  }
-
-  return { stateObj: nextStateObj, touched: true };
-};
-
-const ensureFullSettingsSnapshot = (currentStateObj, nextStateObj) => {
-  const currentSettings = isPlainObject(currentStateObj?.meta?.settings)
-    ? currentStateObj.meta.settings
-    : {};
-  const nextSettings = isPlainObject(nextStateObj?.meta?.settings)
-    ? nextStateObj.meta.settings
-    : {};
-  const mergedSettings = deepMergePlain(currentSettings, nextSettings);
-  if (!isPlainObject(nextStateObj.meta)) {
-    nextStateObj.meta = {};
-  }
-  nextStateObj.meta.settings = mergedSettings;
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autosave')) {
-    nextStateObj.autosaveOn = mergedSettings.autosave;
-  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'autosave') && nextStateObj.autosaveOn === undefined) {
-    nextStateObj.autosaveOn = currentSettings.autosave;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'autoOptimize')) {
-    nextStateObj.autoOptimizeOn = mergedSettings.autoOptimize;
-  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'autoOptimize') && nextStateObj.autoOptimizeOn === undefined) {
-    nextStateObj.autoOptimizeOn = currentSettings.autoOptimize;
-  }
-
-  if (Object.prototype.hasOwnProperty.call(mergedSettings, 'shiftOnProgress')) {
-    nextStateObj.shiftOnProgress = mergedSettings.shiftOnProgress;
-  } else if (Object.prototype.hasOwnProperty.call(currentSettings, 'shiftOnProgress') && nextStateObj.shiftOnProgress === undefined) {
-    nextStateObj.shiftOnProgress = currentSettings.shiftOnProgress;
-  }
-
-  if (isPlainObject(mergedSettings.capacity)) {
-    nextStateObj.capByProc = { ...mergedSettings.capacity };
-  }
-  if (isPlainObject(mergedSettings.parallel)) {
-    nextStateObj.parallelByProc = { ...mergedSettings.parallel };
-  }
-
-  return mergedSettings;
-};
-
-const upsertPlannerStateRow = async (client, stateString, meta, hash, updatedAt, options = {}) => {
-  const { expectedHash = null, existing = null } = options;
-  const existingRow = existing || await readPlannerStateRow(client);
-  if (existingRow) {
-    const params = [stateString, meta, hash, updatedAt, existingRow.id];
-    let sql = 'UPDATE planner_state SET state = $1, meta = $2, hash = $3, updated_at = $4 WHERE id = $5';
-    if (expectedHash && existingRow.hash) {
-      params.push(expectedHash);
-      sql += ' AND LOWER(hash) = LOWER($6)';
-    }
-    const result = await client.query(sql, params);
-    if (expectedHash && result.rowCount === 0) {
-      return { conflict: true, id: existingRow.id };
-    }
-    return { conflict: false, id: existingRow.id };
-  }
-  const { rows } = await client.query(
-    'INSERT INTO planner_state (state, meta, hash, updated_at) VALUES ($1,$2,$3,$4) RETURNING id',
-    [stateString, meta, hash, updatedAt]
-  );
-  return { conflict: false, id: rows[0].id };
-};
-
-const persistSnapshotToSql = async (client, stateObj) => {
-  const stageEntries = Array.isArray(stateObj?.t) ? stateObj.t : [];
-  const doneEntries = Array.isArray(stateObj?.done) ? stateObj.done : [];
-  const excEntries = Array.isArray(stateObj?.exc) ? stateObj.exc : [];
-  const settings = isPlainObject(stateObj?.meta?.settings) ? stateObj.meta.settings : {};
-  const capacityEntries = isPlainObject(settings.capacity)
-    ? settings.capacity
-    : (isPlainObject(stateObj?.capByProc) ? stateObj.capByProc : {});
-  const parallelEntries = isPlainObject(settings.parallel)
-    ? settings.parallel
-    : (isPlainObject(stateObj?.parallelByProc) ? stateObj.parallelByProc : {});
-
-  const stageCodeSet = new Set();
-  stageEntries.forEach((entry) => {
-    if (!entry?.stage) return;
-    const code = String(entry.stage).trim();
-    if (code) stageCodeSet.add(code);
-  });
-  doneEntries.forEach((entry) => {
-    if (!entry?.stage) return;
-    const code = String(entry.stage).trim();
-    if (code) stageCodeSet.add(code);
-  });
-  Object.keys(capacityEntries).forEach((code) => {
-    const normalized = String(code || '').trim();
-    if (normalized) stageCodeSet.add(normalized);
-  });
-
-  const stageTypeMap = new Map();
-  let sort = 0;
-  for (const code of Array.from(stageCodeSet)) {
-    const { rows } = await client.query(
-      `INSERT INTO stage_type (code, name, sort_order, is_active)
-       VALUES ($1,$2,$3,TRUE)
-       ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, is_active = TRUE, updated_at = NOW()
-       RETURNING id`,
-      [code, code, sort]
-    );
-    stageTypeMap.set(code, rows[0].id);
-    sort += 1;
-  }
-
-  if (stageCodeSet.size > 0) {
-    await client.query(
-      `UPDATE stage_type SET is_active = FALSE, updated_at = NOW()
-       WHERE NOT (code = ANY($1::text[]))`,
-      [Array.from(stageCodeSet)]
-    );
-  } else {
-    await client.query('UPDATE stage_type SET is_active = FALSE, updated_at = NOW()');
-  }
-
-  const orderNumbers = new Set();
-  stageEntries.forEach((entry) => {
-    if (!entry?.orderId) return;
-    const orderNo = String(entry.orderId).trim();
-    if (orderNo) orderNumbers.add(orderNo);
-  });
-
-  const orderIdMap = new Map();
-  for (const orderNo of Array.from(orderNumbers)) {
-    const { rows } = await client.query(
-      `INSERT INTO customer_order (order_no, title, is_deleted)
-       VALUES ($1,$2,FALSE)
-       ON CONFLICT (order_no, is_deleted) DO UPDATE SET title = EXCLUDED.title, updated_at = NOW()
-       RETURNING id`,
-      [orderNo, orderNo]
-    );
-    orderIdMap.set(orderNo, rows[0].id);
-  }
-
-  if (orderNumbers.size > 0) {
-    await client.query(
-      `UPDATE customer_order SET is_deleted = TRUE, updated_at = NOW()
-       WHERE is_deleted = FALSE AND NOT (order_no = ANY($1::text[]))`,
-      [Array.from(orderNumbers)]
-    );
-  } else {
-    await client.query('UPDATE customer_order SET is_deleted = TRUE, updated_at = NOW() WHERE is_deleted = FALSE');
-  }
-
-  const stageUidSet = new Set();
-  const stageUidToId = new Map();
-
-  for (const stage of stageEntries) {
-    if (!stage || !stage.orderId || !stage.stage) continue;
-    const orderKey = String(stage.orderId).trim();
-    const stageCode = String(stage.stage).trim();
-    if (!orderKey || !stageCode) continue;
-    const orderId = orderIdMap.get(orderKey);
-    const stageTypeId = stageTypeMap.get(stageCode);
-    if (!orderId || !stageTypeId) continue;
-    const uid = stage.uid || `${orderKey}::${stageCode}`;
-    const stageVersionRaw = stateObj?.meta?.versions && stateObj.meta.versions[stageCode];
-    const stageVersion = Number.isFinite(Number(stageVersionRaw)) ? Number(stageVersionRaw) : 1;
-    const { rows } = await client.query(
-      `INSERT INTO order_stage (
-        order_id, stage_type_id, external_uid, hours, extra_hours, start_at, end_at,
-        start_missing, end_missing, state, status, progress, use_reserve, orig_start_at, version, payload, is_deleted
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,FALSE)
-      ON CONFLICT (external_uid) DO UPDATE SET
-        order_id = EXCLUDED.order_id,
-        stage_type_id = EXCLUDED.stage_type_id,
-        hours = EXCLUDED.hours,
-        extra_hours = EXCLUDED.extra_hours,
-        start_at = EXCLUDED.start_at,
-        end_at = EXCLUDED.end_at,
-        start_missing = EXCLUDED.start_missing,
-        end_missing = EXCLUDED.end_missing,
-        state = EXCLUDED.state,
-        status = EXCLUDED.status,
-        progress = EXCLUDED.progress,
-        use_reserve = EXCLUDED.use_reserve,
-        orig_start_at = EXCLUDED.orig_start_at,
-        version = EXCLUDED.version,
-        payload = EXCLUDED.payload,
-        is_deleted = FALSE,
-        updated_at = NOW()
-      RETURNING id`,
-      [
-        orderId,
-        stageTypeId,
-        uid,
-        stage.hours ?? null,
-        stage.extraHours ?? null,
-        normaliseDate(stage.startDate),
-        normaliseDate(stage.endDate),
-        Boolean(stage.startMissing),
-        Boolean(stage.endMissing),
-        stage.state ?? null,
-        stage.status ?? null,
-        stage.progress ?? null,
-        Boolean(stage.useReserve),
-        normaliseDate(stage.origStartDate),
-        stageVersion,
-        stage ?? null
-      ]
-    );
-    stageUidSet.add(uid);
-    stageUidToId.set(uid, rows[0].id);
-  }
-
-  if (stageUidSet.size > 0) {
-    await client.query(
-      `UPDATE order_stage SET is_deleted = TRUE, updated_at = NOW()
-       WHERE is_deleted = FALSE AND external_uid IS NOT NULL AND NOT (external_uid = ANY($1::text[]))`,
-      [Array.from(stageUidSet)]
-    );
-  } else {
-    await client.query('UPDATE order_stage SET is_deleted = TRUE, updated_at = NOW() WHERE is_deleted = FALSE');
-  }
-
-  await client.query('DELETE FROM stage_completion');
-  for (const done of doneEntries) {
-    const orderKey = done?.orderId ? String(done.orderId).trim() : '';
-    const stageCode = done?.stage ? String(done.stage).trim() : '';
-    const uid = done?.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : null);
-    const stageId = uid ? stageUidToId.get(uid) ?? null : null;
-    await client.query(
-      `INSERT INTO stage_completion (order_stage_id, completed_at, source, note)
-       VALUES ($1,$2,$3,$4)`,
-      [stageId, normaliseDate(done?.when) || normaliseDate(done?.end), done?.source ?? null, done?.note ?? null]
-    );
-  }
-
-  await client.query('DELETE FROM stage_exception');
-  for (const exc of excEntries) {
-    const orderKey = exc?.orderId ? String(exc.orderId).trim() : '';
-    const stageCode = exc?.stage ? String(exc.stage).trim() : '';
-    const uid = exc?.uid || (orderKey && stageCode ? `${orderKey}::${stageCode}` : null);
-    const stageId = uid ? stageUidToId.get(uid) ?? null : null;
-    await client.query(
-      `INSERT INTO stage_exception (order_stage_id, kind, details, created_at, resolved_at)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [stageId, exc?.kind || exc?.type || 'unknown', exc?.details ?? null, normaliseDate(exc?.createdAt) || normaliseDate(exc?.start), normaliseDate(exc?.resolvedAt) || normaliseDate(exc?.end)]
-    );
-  }
-
-  await client.query('DELETE FROM capacity_by_stage');
-  for (const [code, value] of Object.entries(capacityEntries)) {
-    const stageTypeId = stageTypeMap.get(code);
-    if (!stageTypeId) continue;
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) continue;
-    await client.query(
-      `INSERT INTO capacity_by_stage (stage_type_id, capacity_per_day, updated_at)
-       VALUES ($1,$2,NOW())
-       ON CONFLICT (stage_type_id) DO UPDATE SET capacity_per_day = EXCLUDED.capacity_per_day, updated_at = NOW()`,
-      [stageTypeId, numericValue]
-    );
-  }
-
-  await client.query('DELETE FROM parallel_limits');
-  for (const [code, value] of Object.entries(parallelEntries)) {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) continue;
-    await client.query(
-      `INSERT INTO parallel_limits (code, max_parallel, updated_at)
-       VALUES ($1,$2,NOW())
-       ON CONFLICT (code) DO UPDATE SET max_parallel = EXCLUDED.max_parallel, updated_at = NOW()`,
-      [code, numericValue]
-    );
-  }
-
+async function runWithRevision(client, actor, source, note, handler) {
+  const { rows } = await client.query('SELECT nextval(\'revisions_rev_seq\') AS rev');
+  const rev = Number(rows[0].rev);
+  await client.query('SET LOCAL app.rev = $1', [rev]);
+  await handler(rev);
   await client.query(
-    `INSERT INTO planner_settings (id, autosave_on, auto_optimize_on, shift_on_progress, storage_mode, extra, updated_at)
-     VALUES (1,$1,$2,$3,$4,$5,NOW())
-     ON CONFLICT (id) DO UPDATE SET
-       autosave_on = EXCLUDED.autosave_on,
-       auto_optimize_on = EXCLUDED.auto_optimize_on,
-       shift_on_progress = EXCLUDED.shift_on_progress,
-       storage_mode = EXCLUDED.storage_mode,
-       extra = EXCLUDED.extra,
-       updated_at = NOW()`,
-    [
-      settings.autosave ?? stateObj?.autosaveOn ?? null,
-      settings.autoOptimize ?? stateObj?.autoOptimizeOn ?? null,
-      settings.shiftOnProgress ?? stateObj?.shiftOnProgress ?? null,
-      stateObj?.meta?.storage?.mode ?? null,
-      settings
-    ]
+    'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4)',
+    [rev, actor || null, source || null, note || null]
   );
-};
+  lastRevision = Math.max(lastRevision, rev);
+  return rev;
+}
 
-const pruneHistory = async (client, { historyLimit, historyDailyLimit }) => {
-  const limit = Number.isFinite(historyLimit) && historyLimit > 0 ? historyLimit : DEFAULT_HISTORY_LIMIT;
-  const dailyLimit = Number.isFinite(historyDailyLimit) && historyDailyLimit > 0
-    ? historyDailyLimit
-    : Math.max(1, Math.min(limit, DEFAULT_HISTORY_DAILY_LIMIT));
+async function insertActivity(client, rev, actor, source, action, details) {
   await client.query(
-    `DELETE FROM planner_state_history
-      WHERE id IN (
-        SELECT id FROM (
-          SELECT id,
-                 ROW_NUMBER() OVER (ORDER BY created_at DESC) AS rn,
-                 ROW_NUMBER() OVER (PARTITION BY DATE(created_at) ORDER BY created_at DESC) AS daily_rn
-            FROM planner_state_history
-        ) ranked
-        WHERE rn > $1 AND daily_rn > $2
-      )`,
-    [limit, dailyLimit]
+    'INSERT INTO activity_log (rev, ts, actor, source, action, entity_type, entity_id, details) VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7)',
+    [rev, actor || null, source || action, action, null, null, details || null]
   );
-};
+}
 
-const insertPlannerHistory = async (client, {
-  prevState,
-  nextState,
-  hash,
-  meta,
-  actor,
-  source,
-  note,
-  adminSettings
-}) => {
-  const sanitizedHash = sanitizeHashCandidate(hash);
-  if (!sanitizedHash) {
+function parseInteger(value, fallback = null) {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  const num = Number.parseInt(value, 10);
+  if (!Number.isFinite(num)) return fallback;
+  return num;
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  }
+  return fallback;
+}
+async function applySettingsChanges(client, changes) {
+  await ensureSettingsDefaults(client);
+  const details = [];
+  if (isPlainObject(changes.autoweight)) {
+    const enabled = parseBoolean(changes.autoweight.enabled, false);
+    const percent = parseInteger(changes.autoweight.percent, 0);
+    const minimumHours = parseInteger(changes.autoweight.minimumHours, 0);
+    await client.query(
+      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
+       VALUES (1,$1,$2,$3,NOW())
+       ON CONFLICT (id) DO UPDATE
+         SET enabled = EXCLUDED.enabled,
+             percent = EXCLUDED.percent,
+             minimum_hours = EXCLUDED.minimum_hours,
+             updated_at = NOW()`,
+      [enabled, percent, minimumHours]
+    );
+    details.push('settings.autoweight');
+  }
+
+  if (isPlainObject(changes.journal)) {
+    const maxRows = parseInteger(changes.journal.maxRows, null);
+    if (maxRows !== null) {
+      await client.query(
+        `INSERT INTO settings_journal (id, max_rows, updated_at)
+         VALUES (1,$1,NOW())
+         ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()`,
+        [maxRows]
+      );
+      details.push('settings.journal');
+    }
+  }
+
+  if (changes.columnWidths) {
+    const entries = Array.isArray(changes.columnWidths)
+      ? changes.columnWidths
+      : isPlainObject(changes.columnWidths)
+        ? Object.entries(changes.columnWidths).map(([columnKey, widthPx]) => ({ columnKey, widthPx }))
+        : [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const columnKey = typeof entry.columnKey === 'string' ? entry.columnKey.trim() : String(entry.key || '').trim();
+      if (!columnKey) continue;
+      const width = parseInteger(entry.widthPx ?? entry.width, null);
+      if (width === null) continue;
+      await client.query(
+        `INSERT INTO settings_column_widths (column_key, width_px, updated_at)
+         VALUES ($1,$2,NOW())
+         ON CONFLICT (column_key) DO UPDATE SET width_px = EXCLUDED.width_px, updated_at = NOW()`,
+        [columnKey, width]
+      );
+    }
+    if (entries.length > 0) {
+      details.push(`settings.columnWidths(${entries.length})`);
+    }
+    const removals = Array.isArray(changes.columnWidthsRemove) ? changes.columnWidthsRemove : [];
+    if (removals.length > 0) {
+      for (const key of removals) {
+        const normalized = typeof key === 'string' ? key.trim() : '';
+        if (!normalized) continue;
+        await client.query('DELETE FROM settings_column_widths WHERE column_key = $1', [normalized]);
+      }
+      details.push(`settings.columnWidthsRemoved(${removals.length})`);
+    }
+  }
+
+  if (changes.mapping) {
+    const entries = Array.isArray(changes.mapping.entries)
+      ? changes.mapping.entries
+      : Array.isArray(changes.mapping)
+        ? changes.mapping
+        : [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const crmStageRaw = entry.crmStage ?? entry.crm_stage ?? entry.stage;
+      const crmStage = typeof crmStageRaw === 'string' ? crmStageRaw.trim().toLowerCase() : '';
+      if (!crmStage) continue;
+      const plannerProcessId = entry.plannerProcessId ?? entry.processId ?? entry.planner_process_id ?? null;
+      const processId = plannerProcessId === null || plannerProcessId === undefined
+        ? null
+        : Number(plannerProcessId);
+      const isIgnored = parseBoolean(entry.isIgnored ?? entry.ignore, false);
+      await client.query(
+        `INSERT INTO settings_mapping (crm_stage, planner_process_id, is_ignored, updated_at)
+         VALUES ($1,$2,$3,NOW())
+         ON CONFLICT (crm_stage) DO UPDATE
+           SET planner_process_id = EXCLUDED.planner_process_id,
+               is_ignored = EXCLUDED.is_ignored,
+               updated_at = NOW()`,
+        [crmStage, isIgnored ? null : processId, isIgnored]
+      );
+    }
+    const removals = Array.isArray(changes.mapping.remove) ? changes.mapping.remove : [];
+    for (const key of removals) {
+      const normalized = typeof key === 'string' ? key.trim().toLowerCase() : '';
+      if (!normalized) continue;
+      await client.query('DELETE FROM settings_mapping WHERE crm_stage = $1', [normalized]);
+    }
+    if (entries.length > 0 || removals.length > 0) {
+      details.push(`settings.mapping(upserts=${entries.length}, removals=${removals.length})`);
+    }
+  }
+
+  if (isPlainObject(changes.admin)) {
+    const allowForce = parseBoolean(changes.admin.allowForceOverwrite, null);
+    const retention = parseInteger(changes.admin.snapshotRetention, null);
+    const setClauses = [];
+    const values = [];
+    if (allowForce !== null) {
+      setClauses.push(`allow_force_overwrite = $${values.length + 1}`);
+      values.push(allowForce);
+    }
+    if (retention !== null) {
+      setClauses.push(`snapshot_retention = $${values.length + 1}`);
+      values.push(retention);
+    }
+    if (setClauses.length > 0) {
+      setClauses.push('updated_at = NOW()');
+      await client.query(
+        `UPDATE settings_admin SET ${setClauses.join(', ')} WHERE id = 1`,
+        values
+      );
+      details.push('settings.admin');
+    }
+  }
+
+  if (changes.excludedStatuses) {
+    const additions = Array.isArray(changes.excludedStatuses.add) ? changes.excludedStatuses.add : [];
+    const removals = Array.isArray(changes.excludedStatuses.remove) ? changes.excludedStatuses.remove : [];
+    for (const status of additions) {
+      const normalized = typeof status === 'string' ? status.trim().toLowerCase() : '';
+      if (!normalized) continue;
+      await client.query(
+        `INSERT INTO excluded_statuses (status_key, created_at)
+         VALUES ($1, NOW())
+         ON CONFLICT (status_key) DO NOTHING`,
+        [normalized]
+      );
+    }
+    for (const status of removals) {
+      const normalized = typeof status === 'string' ? status.trim().toLowerCase() : '';
+      if (!normalized) continue;
+      await client.query('DELETE FROM excluded_statuses WHERE status_key = $1', [normalized]);
+    }
+    if (additions.length > 0 || removals.length > 0) {
+      details.push(`settings.excludedStatuses(+${additions.length}/-${removals.length})`);
+    }
+  }
+
+  if (changes.processes) {
+    const entries = Array.isArray(changes.processes.upsert)
+      ? changes.processes.upsert
+      : Array.isArray(changes.processes)
+        ? changes.processes
+        : [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const code = typeof entry.code === 'string' ? entry.code.trim() : '';
+      if (!code) continue;
+      const name = typeof entry.name === 'string' ? entry.name.trim() : code;
+      const position = parseInteger(entry.position, 0);
+      const hasHours = parseBoolean(entry.hasHours ?? entry.has_hours, true);
+      const isParallel = parseBoolean(entry.isParallel ?? entry.is_parallel, false);
+      const isActive = parseBoolean(entry.isActive ?? entry.is_active, true);
+      if (entry.id) {
+        await client.query(
+          `UPDATE processes
+             SET code = $2,
+                 name = $3,
+                 position = $4,
+                 has_hours = $5,
+                 is_parallel = $6,
+                 is_active = $7
+           WHERE id = $1`,
+          [Number(entry.id), code, name, position, hasHours, isParallel, isActive]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO processes (code, name, position, has_hours, is_parallel, is_active)
+           VALUES ($1,$2,$3,$4,$5,$6)
+           ON CONFLICT (code) DO UPDATE
+             SET name = EXCLUDED.name,
+                 position = EXCLUDED.position,
+                 has_hours = EXCLUDED.has_hours,
+                 is_parallel = EXCLUDED.is_parallel,
+                 is_active = EXCLUDED.is_active`,
+          [code, name, position, hasHours, isParallel, isActive]
+        );
+      }
+    }
+    const removals = Array.isArray(changes.processes.remove) ? changes.processes.remove : [];
+    for (const id of removals) {
+      const normalized = parseInteger(id, null);
+      if (normalized === null) continue;
+      await client.query('DELETE FROM processes WHERE id = $1', [normalized]);
+    }
+    if (entries.length > 0 || removals.length > 0) {
+      details.push(`processes(upserts=${entries.length}, removals=${removals.length})`);
+    }
+  }
+
+  return details;
+}
+async function applyOrderUpsert(client, entry, allowedFields) {
+  if (!isPlainObject(entry)) return null;
+  const id = parseInteger(entry.id, null);
+  const crmOrderId = entry.crmOrderId ?? entry.crm_order_id ?? null;
+  const number = entry.number ?? entry.orderNo ?? entry.order_no ?? null;
+  const status = entry.status ?? null;
+  const customerId = entry.customerId ?? entry.customer_id ?? null;
+  const deletedAt = entry.deletedAt ?? entry.deleted_at ?? null;
+  const updates = [];
+  const values = [];
+  if (allowedFields.has('crm_order_id') && crmOrderId !== undefined) {
+    updates.push(`crm_order_id = $${values.length + 1}`);
+    values.push(crmOrderId);
+  }
+  if (allowedFields.has('number') && number !== undefined) {
+    updates.push(`number = $${values.length + 1}`);
+    values.push(number);
+  }
+  if (allowedFields.has('status') && status !== undefined) {
+    updates.push(`status = $${values.length + 1}`);
+    values.push(status);
+  }
+  if (allowedFields.has('customer_id') && customerId !== undefined) {
+    updates.push(`customer_id = $${values.length + 1}`);
+    values.push(customerId);
+  }
+  if (allowedFields.has('deleted_at') && deletedAt !== undefined) {
+    updates.push(`deleted_at = $${values.length + 1}`);
+    values.push(deletedAt ? new Date(deletedAt) : null);
+  }
+  if (id !== null) {
+    if (updates.length > 0) {
+      await client.query(`UPDATE orders SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${values.length + 1}`, [...values, id]);
+      return 'update';
+    }
+    return null;
+  }
+  if (!allowedFields.has('insert')) {
+    return null;
+  }
+  if (!number) {
+    return null;
+  }
+  const insertColumns = ['number'];
+  const insertValues = [number];
+  if (crmOrderId !== undefined) {
+    insertColumns.push('crm_order_id');
+    insertValues.push(crmOrderId);
+  }
+  if (status !== undefined) {
+    insertColumns.push('status');
+    insertValues.push(status);
+  }
+  if (customerId !== undefined) {
+    insertColumns.push('customer_id');
+    insertValues.push(customerId);
+  }
+  if (deletedAt !== undefined) {
+    insertColumns.push('deleted_at');
+    insertValues.push(deletedAt ? new Date(deletedAt) : null);
+  }
+  const placeholders = insertValues.map((_, idx) => `$${idx + 1}`);
+  await client.query(
+    `INSERT INTO orders (${insertColumns.join(',')}) VALUES (${placeholders.join(',')})`,
+    insertValues
+  );
+  return 'insert';
+}
+
+function buildOrderProcessAssignments(entry, allowedFields) {
+  const assignments = [];
+  const values = [];
+  if (allowedFields.has('process_id') && entry.processId !== undefined) {
+    assignments.push(`process_id = $${assignments.length + 1}`);
+    values.push(Number(entry.processId));
+  }
+  if (allowedFields.has('order_id') && entry.orderId !== undefined) {
+    assignments.push(`order_id = $${assignments.length + 1}`);
+    values.push(Number(entry.orderId));
+  }
+  if (allowedFields.has('seq') && entry.seq !== undefined) {
+    assignments.push(`seq = $${assignments.length + 1}`);
+    values.push(Number(entry.seq));
+  }
+  if (allowedFields.has('planned_start') && entry.plannedStart !== undefined) {
+    assignments.push(`planned_start = $${assignments.length + 1}`);
+    values.push(entry.plannedStart ? new Date(entry.plannedStart) : null);
+  }
+  if (allowedFields.has('planned_end') && entry.plannedEnd !== undefined) {
+    assignments.push(`planned_end = $${assignments.length + 1}`);
+    values.push(entry.plannedEnd ? new Date(entry.plannedEnd) : null);
+  }
+  if (allowedFields.has('actual_start') && entry.actualStart !== undefined) {
+    assignments.push(`actual_start = $${assignments.length + 1}`);
+    values.push(entry.actualStart ? new Date(entry.actualStart) : null);
+  }
+  if (allowedFields.has('actual_end') && entry.actualEnd !== undefined) {
+    assignments.push(`actual_end = $${assignments.length + 1}`);
+    values.push(entry.actualEnd ? new Date(entry.actualEnd) : null);
+  }
+  if (allowedFields.has('progress') && entry.progress !== undefined) {
+    assignments.push(`progress = $${assignments.length + 1}`);
+    values.push(Number(entry.progress));
+  }
+  if (allowedFields.has('is_done') && entry.isDone !== undefined) {
+    assignments.push(`is_done = $${assignments.length + 1}`);
+    values.push(parseBoolean(entry.isDone));
+  }
+  if (allowedFields.has('position_index') && entry.positionIndex !== undefined) {
+    assignments.push(`position_index = $${assignments.length + 1}`);
+    values.push(entry.positionIndex === null || entry.positionIndex === undefined ? null : Number(entry.positionIndex));
+  }
+  if (allowedFields.has('hidden_by_state') && entry.hiddenByState !== undefined) {
+    assignments.push(`hidden_by_state = $${assignments.length + 1}`);
+    values.push(parseBoolean(entry.hiddenByState));
+  }
+  return { assignments, values };
+}
+
+async function applyOrderProcessUpsert(client, entry, allowedFields) {
+  if (!isPlainObject(entry)) return null;
+  const id = parseInteger(entry.id, null);
+  const { assignments, values } = buildOrderProcessAssignments(entry, allowedFields);
+  if (id !== null) {
+    if (assignments.length === 0) {
+      return null;
+    }
+    assignments.push(`updated_at = NOW()`);
+    await client.query(
+      `UPDATE order_process SET ${assignments.join(', ')} WHERE id = $${values.length + 1}`,
+      [...values, id]
+    );
+    return 'update';
+  }
+  if (!allowedFields.has('insert')) {
+    return null;
+  }
+  if (entry.orderId === undefined || entry.processId === undefined) {
+    return null;
+  }
+  const insertColumns = ['order_id', 'process_id'];
+  const insertValues = [Number(entry.orderId), Number(entry.processId)];
+  const optionalAssignments = buildOrderProcessAssignments(entry, new Set([
+    'seq', 'planned_start', 'planned_end', 'actual_start', 'actual_end', 'progress', 'is_done', 'position_index', 'hidden_by_state'
+  ]));
+  optionalAssignments.assignments.forEach((assignment, idx) => {
+    const column = assignment.split('=')[0].trim();
+    insertColumns.push(column);
+    insertValues.push(optionalAssignments.values[idx]);
+  });
+  const placeholders = insertValues.map((_, idx) => `$${idx + 1}`);
+  await client.query(
+    `INSERT INTO order_process (${insertColumns.join(',')}) VALUES (${placeholders.join(',')})`,
+    insertValues
+  );
+  return 'insert';
+}
+async function applyCrmChanges(client, changes) {
+  const details = [];
+  const allowedOrderFields = new Set(['crm_order_id', 'status', 'deleted_at', 'customer_id']);
+  const allowedProcessFields = new Set(['actual_start', 'actual_end', 'progress', 'is_done', 'hidden_by_state']);
+
+  const orders = Array.isArray(changes.orders) ? changes.orders : [];
+  let orderUpdates = 0;
+  for (const entry of orders) {
+    const action = await applyOrderUpsert(client, entry, allowedOrderFields);
+    if (action) orderUpdates += 1;
+  }
+  if (orderUpdates > 0) {
+    details.push(`orders(${orderUpdates})`);
+  }
+
+  const processes = Array.isArray(changes.orderProcesses) ? changes.orderProcesses : [];
+  let processUpdates = 0;
+  for (const entry of processes) {
+    const action = await applyOrderProcessUpsert(client, entry, allowedProcessFields);
+    if (action) processUpdates += 1;
+  }
+  if (processUpdates > 0) {
+    details.push(`orderProcesses(${processUpdates})`);
+  }
+
+  return details;
+}
+
+async function applyPlannerChanges(client, changes) {
+  const details = [];
+  const allowedOrderFields = new Set(['status', 'deleted_at']);
+  const allowedProcessFields = new Set([
+    'process_id', 'order_id', 'seq', 'planned_start', 'planned_end', 'progress', 'is_done', 'position_index', 'hidden_by_state'
+  ]);
+
+  const orders = Array.isArray(changes.orders) ? changes.orders : [];
+  let orderUpdates = 0;
+  for (const entry of orders) {
+    const action = await applyOrderUpsert(client, entry, allowedOrderFields);
+    if (action) orderUpdates += 1;
+  }
+  if (orderUpdates > 0) {
+    details.push(`orders(${orderUpdates})`);
+  }
+
+  const upserts = Array.isArray(changes.orderProcesses?.upsert)
+    ? changes.orderProcesses.upsert
+    : Array.isArray(changes.orderProcesses)
+      ? changes.orderProcesses
+      : [];
+  let processUpserts = 0;
+  for (const entry of upserts) {
+    const action = await applyOrderProcessUpsert(client, entry, allowedProcessFields);
+    if (action) processUpserts += 1;
+  }
+  const deletions = Array.isArray(changes.orderProcesses?.delete)
+    ? changes.orderProcesses.delete
+    : [];
+  for (const id of deletions) {
+    const normalized = parseInteger(id, null);
+    if (normalized === null) continue;
+    await client.query('DELETE FROM order_process WHERE id = $1', [normalized]);
+    processUpserts += 1;
+  }
+  if (processUpserts > 0) {
+    details.push(`orderProcesses(${processUpserts})`);
+  }
+
+  return details;
+}
+
+async function applyAdminChanges(client, changes) {
+  const details = [];
+  if (changes.capacityByProcess) {
+    const entries = Array.isArray(changes.capacityByProcess) ? changes.capacityByProcess : [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const processId = parseInteger(entry.processId ?? entry.process_id, null);
+      if (processId === null) continue;
+      const day = entry.day ? new Date(entry.day) : null;
+      const minutes = parseInteger(entry.minutes, null);
+      if (!day || minutes === null) continue;
+      await client.query(
+        `INSERT INTO capacity_by_process (process_id, day, minutes)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (process_id, day) DO UPDATE SET minutes = EXCLUDED.minutes`,
+        [processId, day, minutes]
+      );
+    }
+    details.push(`capacityByProcess(${entries.length})`);
+  }
+  if (changes.capacityByProcessRemove) {
+    const entries = Array.isArray(changes.capacityByProcessRemove) ? changes.capacityByProcessRemove : [];
+    for (const entry of entries) {
+      const processId = parseInteger(entry.processId ?? entry.process_id, null);
+      if (processId === null) continue;
+      const day = entry.day ? new Date(entry.day) : null;
+      if (!day) continue;
+      await client.query('DELETE FROM capacity_by_process WHERE process_id = $1 AND day = $2', [processId, day]);
+    }
+    if (entries.length > 0) {
+      details.push(`capacityByProcessRemoved(${entries.length})`);
+    }
+  }
+  return details;
+}
+
+async function applyChangesByStage(client, stage, changes) {
+  switch (stage) {
+    case 'settings':
+      return applySettingsChanges(client, changes || {});
+    case 'crm':
+      return applyCrmChanges(client, changes || {});
+    case 'planner':
+      return applyPlannerChanges(client, changes || {});
+    case 'admin':
+      return applyAdminChanges(client, changes || {});
+    default:
+      return [];
+  }
+}
+
+async function fetchAdminSettings(client) {
+  await ensureSettingsDefaults(client);
+  const { rows } = await client.query('SELECT allow_force_overwrite FROM settings_admin WHERE id = 1');
+  return rows.length > 0 && rows[0].allow_force_overwrite === true;
+}
+
+function parseBaseRev(baseRev) {
+  if (baseRev === null || baseRev === undefined || baseRev === '') return null;
+  const num = Number.parseInt(baseRev, 10);
+  return Number.isFinite(num) ? num : null;
+}
+
+async function resetSequence(client, tableName, column) {
+  const { rows } = await client.query('SELECT pg_get_serial_sequence($1, $2) AS seq', [tableName, column]);
+  if (rows.length === 0 || !rows[0].seq) {
     return;
   }
-  const summary = buildHistorySummary({ prevState, nextState, meta, actor, source, note });
-  const etag = `W/"${sanitizedHash}"`;
-  const statePayload = isPlainObject(nextState) ? nextState : {};
-  const { rows } = await client.query(
-    `INSERT INTO planner_state_history (hash, etag, state, summary, actor, source, note)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (hash) DO NOTHING
-     RETURNING hash, etag, summary, actor, source, note, created_at`,
-    [
-      sanitizedHash,
-      etag,
-      statePayload,
-      summary ?? null,
-      actor ?? null,
-      source ?? null,
-      note ?? null
-    ]
+  await client.query(
+    `SELECT setval($1, COALESCE((SELECT MAX(${column}) FROM ${tableName}), 0))`,
+    [rows[0].seq]
   );
-  await pruneHistory(client, adminSettings || {});
-  return rows[0] ?? null;
-};
+}
 
-const buildStateFromSql = async () => {
-  const client = await pool.connect();
-  try {
-    const plannerRow = await readPlannerStateRow(client);
-    let baseObj;
-    try {
-      baseObj = plannerRow?.state ? JSON.parse(plannerRow.state) : JSON.parse(JSON.stringify(DEFAULT_STATE));
-    } catch (err) {
-      baseObj = JSON.parse(JSON.stringify(DEFAULT_STATE));
-    }
+async function snapshotTableAtRevision(client, tableName, keyColumns, targetRev) {
+  const columnsSql = keyColumns.map((column) => `${column}`).join(', ');
+  const { rows } = await client.query(
+    `SELECT DISTINCT ON (${columnsSql}) *
+       FROM ${tableName}_hist
+      WHERE rev <= $1
+      ORDER BY ${columnsSql}, rev DESC, changed_at DESC`,
+    [targetRev]
+  );
+  return rows;
+}
 
-    const { rows: stageRows } = await client.query(
-      `SELECT os.external_uid, os.payload, os.state, os.status, os.hours, os.extra_hours, os.start_at, os.end_at,
-              os.start_missing, os.end_missing, os.progress, os.use_reserve, os.orig_start_at,
-              os.version, co.order_no, st.code AS stage_code
-         FROM order_stage os
-         JOIN customer_order co ON co.id = os.order_id
-         JOIN stage_type st ON st.id = os.stage_type_id
-        WHERE os.is_deleted = FALSE AND co.is_deleted = FALSE
-        ORDER BY st.sort_order, os.start_at NULLS LAST, os.id`
-    );
-
-    const { rows: doneRows } = await client.query(
-      `SELECT sc.order_stage_id, sc.completed_at, sc.source, sc.note, os.external_uid, co.order_no, st.code AS stage_code
-         FROM stage_completion sc
-         LEFT JOIN order_stage os ON os.id = sc.order_stage_id
-         LEFT JOIN customer_order co ON co.id = os.order_id
-         LEFT JOIN stage_type st ON st.id = os.stage_type_id
-        ORDER BY sc.completed_at DESC`
-    );
-
-    const { rows: excRows } = await client.query(
-      `SELECT se.order_stage_id, se.kind, se.details, se.created_at, se.resolved_at, os.external_uid, co.order_no, st.code AS stage_code
-         FROM stage_exception se
-         LEFT JOIN order_stage os ON os.id = se.order_stage_id
-         LEFT JOIN customer_order co ON co.id = os.order_id
-         LEFT JOIN stage_type st ON st.id = os.stage_type_id
-        ORDER BY se.created_at DESC`
-    );
-
-    const { rows: capacityRows } = await client.query(
-      `SELECT st.code, cb.capacity_per_day
-         FROM capacity_by_stage cb
-         JOIN stage_type st ON st.id = cb.stage_type_id`
-    );
-
-    const { rows: parallelRows } = await client.query('SELECT code, max_parallel FROM parallel_limits');
-
-    const { rows: settingsRows } = await client.query('SELECT autosave_on, auto_optimize_on, shift_on_progress, storage_mode, extra FROM planner_settings WHERE id = 1');
-
-    const stateObj = baseObj && typeof baseObj === 'object' ? baseObj : JSON.parse(JSON.stringify(DEFAULT_STATE));
-
-    stateObj.t = stageRows.map((row) => {
-      if (isPlainObject(row.payload)) {
-        return row.payload;
-      }
-      const uid = row.external_uid || `${row.order_no}::${row.stage_code}`;
-      return {
-        uid,
-        orderId: row.order_no,
-        stage: row.stage_code,
-        parentId: row.order_no,
-        childId: uid,
-        hours: row.hours ?? 0,
-        extraHours: row.extra_hours ?? 0,
-        startDate: row.start_at,
-        endDate: row.end_at,
-        startMissing: !!row.start_missing,
-        endMissing: !!row.end_missing,
-        state: row.state,
-        status: row.status,
-        useReserve: !!row.use_reserve,
-        progress: row.progress ?? 0,
-        origStartDate: row.orig_start_at
-      };
-    });
-
-    stateObj.done = doneRows.map((row) => ({
-      uid: row.external_uid || (row.order_no && row.stage_code ? `${row.order_no}::${row.stage_code}` : null),
-      orderId: row.order_no,
-      stage: row.stage_code,
-      when: row.completed_at,
-      source: row.source,
-      note: row.note
-    })).filter((item) => item.uid);
-
-    stateObj.exc = excRows.map((row) => ({
-      uid: row.external_uid || (row.order_no && row.stage_code ? `${row.order_no}::${row.stage_code}` : null),
-      orderId: row.order_no,
-      stage: row.stage_code,
-      kind: row.kind,
-      details: row.details ?? null,
-      createdAt: row.created_at,
-      resolvedAt: row.resolved_at
-    })).filter((item) => item.uid);
-
-    stateObj.capByProc = capacityRows.reduce((acc, row) => {
-      if (row.code) {
-        acc[row.code] = Number(row.capacity_per_day);
-      }
-      return acc;
-    }, {});
-
-    stateObj.parallelByProc = parallelRows.reduce((acc, row) => {
-      if (row.code) {
-        acc[row.code] = Number(row.max_parallel);
-      }
-      return acc;
-    }, {});
-
-    if (!isPlainObject(stateObj.meta)) {
-      stateObj.meta = clonePlainObject(DEFAULT_STATE.meta);
-    }
-
-    if (settingsRows.length > 0) {
-      const dbSettings = settingsRows[0];
-      const extraSettings = isPlainObject(dbSettings.extra) ? dbSettings.extra : {};
-      stateObj.meta.settings = { ...extraSettings };
-      if (dbSettings.autosave_on !== null) {
-        stateObj.meta.settings.autosave = dbSettings.autosave_on;
-        stateObj.autosaveOn = dbSettings.autosave_on;
-      }
-      if (dbSettings.auto_optimize_on !== null) {
-        stateObj.meta.settings.autoOptimize = dbSettings.auto_optimize_on;
-        stateObj.autoOptimizeOn = dbSettings.auto_optimize_on;
-      }
-      if (dbSettings.shift_on_progress !== null) {
-        stateObj.meta.settings.shiftOnProgress = dbSettings.shift_on_progress;
-        stateObj.shiftOnProgress = dbSettings.shift_on_progress;
-      }
-      if (!isPlainObject(stateObj.meta.storage)) {
-        stateObj.meta.storage = { local: true, remote: true, remotePreferred: true, mode: 'remote' };
-      }
-      if (dbSettings.storage_mode) {
-        stateObj.meta.storage.mode = dbSettings.storage_mode;
-      }
-    }
-
-    if (!isPlainObject(stateObj.meta.settings)) {
-      stateObj.meta.settings = {};
-    }
-    if (!isPlainObject(stateObj.meta.settings.admin)) {
-      stateObj.meta.settings.admin = {};
-    }
-    const adminDefaults = readAdminSettings(stateObj);
-    stateObj.meta.settings.admin = {
-      ...stateObj.meta.settings.admin,
-      historyLimit: adminDefaults.historyLimit,
-      historyDailyLimit: adminDefaults.historyDailyLimit,
-      allowForceOverwrite: adminDefaults.allowForceOverwrite
-    };
-    stateObj.meta.settings.capacity = { ...stateObj.capByProc };
-    stateObj.meta.settings.parallel = { ...stateObj.parallelByProc };
-
-    const versions = {};
-    stageRows.forEach((row) => {
-      if (!row.stage_code) return;
-      const current = versions[row.stage_code] ?? 0;
-      versions[row.stage_code] = Math.max(current, row.version ?? 0);
-    });
-    stateObj.meta.versions = versions;
-
-    const ordersMap = new Map();
-    stageRows.forEach((row) => {
-      const code = row.stage_code;
-      if (!code) return;
-      if (!ordersMap.has(code)) {
-        ordersMap.set(code, []);
-      }
-      const uid = row.external_uid || `${row.order_no}::${row.stage_code}`;
-      ordersMap.get(code).push(uid);
-    });
-    stateObj.orders = Array.from(ordersMap.entries());
-
-    const serialized = serializeStateForStorage(stateObj);
-    const persistedHashRaw = sanitizeHashCandidate(plannerRow?.hash);
-    let hash = serialized.hash;
-    let stateString = serialized.stateString;
-    let parsedState = serialized.stateObj;
-    if (persistedHashRaw) {
-      const embedded = embedHashInState(parsedState, persistedHashRaw);
-      hash = embedded.hash ?? persistedHashRaw;
-      stateString = embedded.stateString;
-      parsedState = embedded.stateObj;
-    }
-    const updatedAt = plannerRow?.updatedAt ?? new Date().toISOString();
-    const meta = plannerRow?.meta ?? null;
-    const etag = hash ? `W/"${hash}"` : null;
-
-    return {
-      state: stateString,
-      meta,
-      updatedAt,
-      hash,
-      etag,
-      parsed: parsedState,
-      hashNormalized: normalizeHashValue(hash)
-    };
-  } finally {
-    client.release();
-  }
-};
-
-const refreshCachedState = async () => {
-  cachedState = await buildStateFromSql();
-  return cachedState;
-};
-
-const buildStageSnapshotMaps = (state) => {
-  const map = new Map();
-  if (!Array.isArray(state?.t)) {
-    return map;
-  }
-  state.t.forEach((entry) => {
-    if (!entry || !entry.uid) return;
-    map.set(entry.uid, {
-      stage: entry.stage || null,
-      payload: entry,
-      serialized: JSON.stringify(entry)
-    });
-  });
-  return map;
-};
-
-const computeDelta = (prevState, nextState) => {
-  const prevStages = buildStageSnapshotMaps(prevState);
-  const nextStages = buildStageSnapshotMaps(nextState);
-
-  const added = [];
-  const updated = [];
-  const removed = [];
-
-  nextStages.forEach((value, uid) => {
-    if (!prevStages.has(uid)) {
-      added.push(uid);
-    } else if (prevStages.get(uid).serialized !== value.serialized) {
-      updated.push(uid);
-    }
-  });
-
-  prevStages.forEach((_value, uid) => {
-    if (!nextStages.has(uid)) {
-      removed.push(uid);
-    }
-  });
-
-  const settingsChanged = JSON.stringify(prevState?.meta?.settings ?? null) !== JSON.stringify(nextState?.meta?.settings ?? null);
+async function buildSnapshotForRevision(client, targetRev) {
+  const orders = await snapshotTableAtRevision(client, 'orders', ['id'], targetRev);
+  const orderProcesses = await snapshotTableAtRevision(client, 'order_process', ['id'], targetRev);
+  const capacities = await snapshotTableAtRevision(client, 'capacity_by_process', ['process_id', 'day'], targetRev);
+  const autoWeight = await snapshotTableAtRevision(client, 'settings_autoweight', ['id'], targetRev);
+  const journal = await snapshotTableAtRevision(client, 'settings_journal', ['id'], targetRev);
+  const columnWidths = await snapshotTableAtRevision(client, 'settings_column_widths', ['column_key'], targetRev);
+  const mapping = await snapshotTableAtRevision(client, 'settings_mapping', ['crm_stage'], targetRev);
+  const admin = await snapshotTableAtRevision(client, 'settings_admin', ['id'], targetRev);
+  const excluded = await snapshotTableAtRevision(client, 'excluded_statuses', ['status_key'], targetRev);
 
   return {
-    stages: { added, updated, removed },
-    settingsChanged
+    orders,
+    orderProcesses,
+    capacities,
+    autoWeight,
+    journal,
+    columnWidths,
+    mapping,
+    admin,
+    excluded
   };
-};
+}
 
-const summarizeStageDifferences = (prevState, nextState) => {
-  const prevStages = buildStageSnapshotMaps(prevState);
-  const nextStages = buildStageSnapshotMaps(nextState);
-  const summary = new Map();
+async function applySnapshot(client, snapshot) {
+  await client.query('DELETE FROM order_process');
+  await client.query('DELETE FROM orders');
+  await client.query('DELETE FROM capacity_by_process');
+  await client.query('DELETE FROM settings_column_widths');
+  await client.query('DELETE FROM settings_mapping');
+  await client.query('DELETE FROM excluded_statuses');
+  await client.query('DELETE FROM settings_autoweight');
+  await client.query('DELETE FROM settings_journal');
+  await client.query('DELETE FROM settings_admin');
 
-  const ensureStage = (code) => {
-    const key = code || 'unknown';
-    if (!summary.has(key)) {
-      summary.set(key, { added: 0, updated: 0, removed: 0 });
-    }
-    return summary.get(key);
-  };
-
-  nextStages.forEach((nextEntry, uid) => {
-    if (!prevStages.has(uid)) {
-      ensureStage(nextEntry.stage).added += 1;
-      return;
-    }
-    const prevEntry = prevStages.get(uid);
-    if ((prevEntry.stage || null) !== (nextEntry.stage || null)) {
-      ensureStage(prevEntry.stage).removed += 1;
-      ensureStage(nextEntry.stage).added += 1;
-      return;
-    }
-    if (prevEntry.serialized !== nextEntry.serialized) {
-      ensureStage(nextEntry.stage).updated += 1;
-    }
-  });
-
-  prevStages.forEach((prevEntry, uid) => {
-    if (!nextStages.has(uid)) {
-      ensureStage(prevEntry.stage).removed += 1;
-    }
-  });
-
-  const result = {};
-  summary.forEach((value, key) => {
-    if (value.added || value.updated || value.removed) {
-      result[key] = value;
-    }
-  });
-  return result;
-};
-
-const collectSettingsDiffKeys = (prevSettings, nextSettings, prefix = '') => {
-  const prevObj = isPlainObject(prevSettings) ? prevSettings : {};
-  const nextObj = isPlainObject(nextSettings) ? nextSettings : {};
-  const keys = new Set([...Object.keys(prevObj), ...Object.keys(nextObj)]);
-  const result = [];
-  keys.forEach((key) => {
-    const nextPrefix = prefix ? `${prefix}.${key}` : key;
-    const prevValue = prevObj[key];
-    const nextValue = nextObj[key];
-    if (isPlainObject(prevValue) && isPlainObject(nextValue)) {
-      result.push(...collectSettingsDiffKeys(prevValue, nextValue, nextPrefix));
-      return;
-    }
-    if (Array.isArray(prevValue) && Array.isArray(nextValue)) {
-      if (prevValue.length !== nextValue.length || prevValue.some((item, idx) => JSON.stringify(item) !== JSON.stringify(nextValue[idx]))) {
-        result.push(nextPrefix);
-      }
-      return;
-    }
-    if (JSON.stringify(prevValue) !== JSON.stringify(nextValue)) {
-      result.push(nextPrefix);
-    }
-  });
-  return result;
-};
-
-const buildHistorySummary = ({ prevState, nextState, meta, actor, source, note }) => {
-  const stages = summarizeStageDifferences(prevState, nextState);
-  const settingsChanged = collectSettingsDiffKeys(prevState?.meta?.settings ?? null, nextState?.meta?.settings ?? null);
-  const summary = normalizeSummaryObject({
-    stages,
-    settingsChanged,
-    actor,
-    source,
-    note
-  });
-  return summary && Object.keys(summary).length > 0 ? summary : null;
-};
-
-let cachedState = null;
-
-const bootstrapState = async () => {
-  await runMigrations();
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    let existing = await readPlannerStateRow(client);
-    if (!existing) {
-      const legacy = await loadLegacyStateFromDisk();
-      const payload = legacy || createInitialState();
-      let stateObj;
-      try {
-        stateObj = payload.state ? JSON.parse(payload.state) : JSON.parse(JSON.stringify(DEFAULT_STATE));
-      } catch (err) {
-        stateObj = JSON.parse(JSON.stringify(DEFAULT_STATE));
-      }
-      const { stateObj: normalizedState, stateString, hash } = serializeStateForStorage(stateObj);
-      await persistSnapshotToSql(client, normalizedState);
-      await upsertPlannerStateRow(
-        client,
-        stateString,
-        payload.meta ?? null,
-        hash,
-        payload.updatedAt ?? new Date().toISOString()
-      );
-      await client.query('COMMIT');
-    } else {
-      await client.query('COMMIT');
-    }
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
+  for (const row of snapshot.orders) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO orders (id, crm_order_id, number, customer_id, status, created_at, updated_at, deleted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [row.id, row.crm_order_id, row.number, row.customer_id, row.status, row.created_at, row.updated_at, row.deleted_at]
+    );
   }
-  await refreshCachedState();
-};
 
-const appendLog = async (entry) => {
-  await pool.query(
-    `INSERT INTO planner_activity_log (timestamp, stage, version, user_name, session, source, summary, diff, orders_summary, ip)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-    [
-      entry.timestamp,
-      entry.stage,
-      entry.version,
-      entry.user,
-      entry.session,
-      entry.source,
-      entry.summary,
-      entry.diff ?? null,
-      entry.ordersSummary ?? null,
-      entry.ip
-    ]
-  );
-};
+  for (const row of snapshot.orderProcesses) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO order_process (id, order_id, process_id, seq, planned_start, planned_end, actual_start, actual_end,
+        progress, is_done, position_index, hidden_by_state, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        row.id,
+        row.order_id,
+        row.process_id,
+        row.seq,
+        row.planned_start,
+        row.planned_end,
+        row.actual_start,
+        row.actual_end,
+        row.progress,
+        row.is_done,
+        row.position_index,
+        row.hidden_by_state,
+        row.updated_at
+      ]
+    );
+  }
 
-const broadcast = (payload) => {
-  const data = `data: ${JSON.stringify(payload)}\n\n`;
-  sseClients.forEach((res) => {
-    res.write(data);
-  });
-};
+  for (const row of snapshot.capacities) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO capacity_by_process (process_id, day, minutes) VALUES ($1,$2,$3)`,
+      [row.process_id, row.day, row.minutes]
+    );
+  }
+
+  for (const row of snapshot.autoWeight) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [row.id, row.enabled, row.percent, row.minimum_hours, row.updated_at]
+    );
+  }
+
+  for (const row of snapshot.journal) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO settings_journal (id, max_rows, updated_at) VALUES ($1,$2,$3)`,
+      [row.id, row.max_rows, row.updated_at]
+    );
+  }
+
+  for (const row of snapshot.admin) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
+       VALUES ($1,$2,$3,$4)`,
+      [row.id, row.allow_force_overwrite, row.snapshot_retention, row.updated_at]
+    );
+  }
+
+  for (const row of snapshot.columnWidths) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO settings_column_widths (column_key, width_px, updated_at) VALUES ($1,$2,$3)`,
+      [row.column_key, row.width_px, row.updated_at]
+    );
+  }
+
+  for (const row of snapshot.mapping) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO settings_mapping (crm_stage, planner_process_id, is_ignored, updated_at)
+       VALUES ($1,$2,$3,$4)`,
+      [row.crm_stage, row.planner_process_id, row.is_ignored, row.updated_at]
+    );
+  }
+
+  for (const row of snapshot.excluded) {
+    if (row.op === 'D') continue;
+    await client.query(
+      `INSERT INTO excluded_statuses (status_key, created_at) VALUES ($1,$2)`,
+      [row.status_key, row.created_at]
+    );
+  }
+
+  await resetSequence(client, 'orders', 'id');
+  await resetSequence(client, 'order_process', 'id');
+  await ensureSettingsDefaults(client);
+}
+app.get('/api/state', async (req, res) => {
+  try {
+    const state = await getCachedState();
+    const etag = weakEtagForRevision(state.rev);
+    if (etag && req.headers['if-none-match']) {
+      const match = parseIfMatchHeader(req.headers['if-none-match']);
+      if (match.hash && match.hash.toLowerCase() === etag.replace(/^W\//, '').replace(/^"|"$/g, '').toLowerCase()) {
+        res.status(304).end();
+        return;
+      }
+    }
+    if (etag) {
+      res.setHeader('ETag', etag);
+    }
+    res.json(state);
+  } catch (err) {
+    console.error('GET /api/state failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 app.get('/api/events', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
-
   sseClients.add(res);
-
   req.on('close', () => {
     sseClients.delete(res);
   });
-
-  const current = cachedState || await refreshCachedState();
-  res.write(`data: ${JSON.stringify({ type: 'state', state: current.state, meta: current.meta, updatedAt: current.updatedAt, hash: current.hash, etag: current.etag })}\n\n`);
+  try {
+    const state = await getCachedState();
+    res.write(`data: ${JSON.stringify({ type: 'revision', rev: state.rev, source: 'bootstrap' })}\n\n`);
+  } catch (err) {
+    console.error('Initial SSE push failed', err);
+  }
 });
-
-app.get('/api/state', async (req, res) => {
-  const current = cachedState || await refreshCachedState();
-  if (req.headers['if-none-match'] && req.headers['if-none-match'] === current.etag) {
-    res.status(304).end();
-    return;
-  }
-  res.setHeader('ETag', current.etag);
-  if (current.hash) {
-    res.setHeader('X-Hash', current.hash);
-  }
-  res.type('application/json').send(current.state);
-});
-
-const extractStateFromBody = (body) => {
-  if (!body) return { state: null, meta: null };
-  if (typeof body === 'string') {
-    return { state: body, meta: null };
-  }
-  if (typeof body === 'object') {
-    if (typeof body.state === 'string') {
-      return { state: body.state, meta: body.meta ?? null };
-    }
-    if (body.state && typeof body.state === 'object') {
-      try {
-        return { state: JSON.stringify(body.state), meta: body.meta ?? null };
-      } catch (err) {
-        console.error('state stringify failed', err);
-        return { state: null, meta: null };
-      }
-    }
-    try {
-      return { state: JSON.stringify(body), meta: null };
-    } catch (err) {
-      return { state: null, meta: null };
-    }
-  }
-  return { state: null, meta: null };
-};
 
 app.put('/api/state', async (req, res) => {
-  const { state, meta } = extractStateFromBody(req.body);
-  if (!state) {
-    res.status(400).send('Invalid state payload');
+  if (!isPlainObject(req.body)) {
+    res.status(400).json({ error: 'Invalid payload' });
     return;
   }
-
-  let nextStateObj = {};
-  try {
-    nextStateObj = JSON.parse(state);
-  } catch (err) {
-    res.status(400).send('State must be valid JSON');
+  const stage = typeof req.body.stage === 'string' ? req.body.stage.trim().toLowerCase() : null;
+  if (!stage || !['crm', 'planner', 'settings', 'admin'].includes(stage)) {
+    res.status(400).json({ error: 'Invalid stage' });
     return;
   }
+  const baseRevFromBody = parseBaseRev(req.body.baseRev ?? req.body.base_rev ?? null);
+  const baseRevFromHeader = parseIfMatchRevision(req.headers['if-match']);
+  const baseRev = baseRevFromBody !== null ? baseRevFromBody : baseRevFromHeader;
+  const forceOverwriteRequested = req.body.forceOverwrite === true || req.body.force_overwrite === true;
+  const actor = typeof req.body.actor === 'string' ? req.body.actor : null;
+  const source = typeof req.body.source === 'string' ? req.body.source : stage;
+  const note = typeof req.body.note === 'string' ? req.body.note : null;
+  const changes = req.body.changes || {};
 
-  const stage = meta?.stage ?? null;
-  const incomingVersion = meta?.version ?? (nextStateObj?.meta?.versions?.[stage] ?? null);
-  const forceOverwriteRequested = meta?.forceOverwrite === true;
-
-  const ifMatchHeader = parseIfMatchHeader(req.headers['if-match']);
-  let expectedHashRaw = ifMatchHeader.hash ? sanitizeHashCandidate(ifMatchHeader.hash) : null;
-  let expectedHash = normalizeHashValue(expectedHashRaw);
-  if (!expectedHash && meta && typeof meta === 'object' && !Array.isArray(meta)) {
-    const metaExpectedRaw = sanitizeHashCandidate(meta.expectedHash) || sanitizeHashCandidate(meta.baseHash);
-    if (metaExpectedRaw) {
-      expectedHashRaw = metaExpectedRaw;
-      expectedHash = normalizeHashValue(metaExpectedRaw);
-    } else if (meta.baseEtag) {
-      const parsed = normalizeWeakEtag(meta.baseEtag);
-      if (parsed && parsed !== '*') {
-        const parsedCandidate = sanitizeHashCandidate(parsed);
-        if (parsedCandidate) {
-          expectedHashRaw = parsedCandidate;
-          expectedHash = normalizeHashValue(parsedCandidate);
-        }
-      }
-    }
-  }
-  const ifMatchAllowsAny = ifMatchHeader.any;
-
-  const updatedAt = new Date().toISOString();
-  let nextMeta = meta || null;
-  if (nextMeta && typeof nextMeta === 'object' && !Array.isArray(nextMeta)) {
-    nextMeta = { ...nextMeta };
-  }
-
-  const previousState = cachedState ? cachedState.parsed : null;
   const client = await pool.connect();
-  let existingRow = null;
-  let currentStateObj = {};
-  let dbHashRaw = null;
-  let dbHashNormalized = null;
-  let adminSettings = { allowForceOverwrite: false, historyLimit: DEFAULT_HISTORY_LIMIT, historyDailyLimit: DEFAULT_HISTORY_DAILY_LIMIT };
-  let forceOverwriteApplied = false;
-  let historyEntry = null;
   try {
     await client.query('BEGIN');
-    existingRow = await readPlannerStateRow(client, { forUpdate: true });
-    dbHashRaw = sanitizeHashCandidate(existingRow?.hash);
-    dbHashNormalized = normalizeHashValue(dbHashRaw);
-
-    if (existingRow?.state) {
-      try {
-        currentStateObj = JSON.parse(existingRow.state);
-      } catch (err) {
-        currentStateObj = cloneDeepPlain(previousState) || {};
-      }
-    } else if (previousState) {
-      currentStateObj = cloneDeepPlain(previousState);
-    }
-    if (!isPlainObject(currentStateObj)) {
-      currentStateObj = {};
-    }
-
-    adminSettings = readAdminSettings(currentStateObj);
-    const forceOverwrite = forceOverwriteRequested && adminSettings.allowForceOverwrite;
-    forceOverwriteApplied = forceOverwrite;
-
-    if (existingRow && !forceOverwrite) {
-      if (dbHashRaw) {
-        if (ifMatchAllowsAny && !expectedHash) {
-          await client.query('ROLLBACK');
-          res.status(428).json({
-            error: 'Precondition Required',
-            message: 'Wildcard If-Match is not allowed once planner state exists',
-            currentHash: dbHashRaw,
-            currentEtag: `W/"${dbHashRaw}"`
-          });
-          return;
-        }
-        if (!expectedHash) {
-          await client.query('ROLLBACK');
-          res.status(428).json({
-            error: 'Precondition Required',
-            message: 'Planner state update requires an If-Match header',
-            currentHash: dbHashRaw,
-            currentEtag: `W/"${dbHashRaw}"`
-          });
-          return;
-        }
-        if (expectedHash !== dbHashNormalized) {
-          await client.query('ROLLBACK');
-          res.status(412).json({
-            error: 'Precondition',
-            currentHash: dbHashRaw,
-            currentEtag: `W/"${dbHashRaw}"`
-          });
-          return;
-        }
-      } else if (ifMatchAllowsAny && !expectedHash) {
-        expectedHash = null;
-        expectedHashRaw = null;
+    const currentRev = await getLatestRevision(client);
+    const allowForceOverwrite = await fetchAdminSettings(client);
+    const expectedRev = baseRev !== null ? baseRev : currentRev;
+    if (!forceOverwriteRequested || !allowForceOverwrite) {
+      if (expectedRev !== currentRev) {
+        await client.query('ROLLBACK');
+        res.status(412).json({ error: 'Precondition Failed', currentRev });
+        return;
       }
     }
 
-    const currentVersion = stage != null ? currentStateObj?.meta?.versions?.[stage] ?? null : null;
-    if (!forceOverwrite && incomingVersion != null && currentVersion != null && incomingVersion <= currentVersion) {
-      const lastAuthor = currentStateObj?.meta?.lastAuthors?.[stage] ?? null;
-      await client.query('ROLLBACK');
-      res.status(409).json({
-        error: 'Conflict',
-        stage,
-        currentVersion,
-        incomingVersion,
-        lastAuthor,
-        updatedAt: existingRow?.updatedAt ?? (cachedState?.updatedAt ?? updatedAt)
-      });
-      return;
-    }
-
-    if (meta?.stage === 'settings') {
-      try {
-        const { stateObj, touched } = mergeSettingsSnapshot(currentStateObj, nextStateObj, meta);
-        if (touched) {
-          nextStateObj = stateObj;
-        }
-      } catch (err) {
-        console.error('Failed to merge settings snapshot, falling back to incoming state', err);
+    const rev = await runWithRevision(client, actor, source, note, async (newRev) => {
+      const details = await applyChangesByStage(client, stage, changes);
+      if (details.length > 0) {
+        await insertActivity(client, newRev, actor, source, stage, details.join('; '));
+      } else {
+        await insertActivity(client, newRev, actor, source, stage, 'no-op');
       }
-    }
-
-    ensureFullSettingsSnapshot(currentStateObj, nextStateObj);
-
-    if (nextMeta && typeof nextMeta === 'object') {
-      delete nextMeta.baseHash;
-      delete nextMeta.baseEtag;
-      delete nextMeta.expectedHash;
-      delete nextMeta.ifMatch;
-      delete nextMeta.forceOverwrite;
-      if (Object.keys(nextMeta).length === 0) {
-        nextMeta = null;
-      }
-    }
-
-    const { stateObj: normalizedStateObj, stateString: nextStateString, hash } = serializeStateForStorage(nextStateObj);
-
-    await persistSnapshotToSql(client, normalizedStateObj);
-    const upsertResult = await upsertPlannerStateRow(client, nextStateString, nextMeta, hash, updatedAt, {
-      expectedHash: forceOverwrite ? null : dbHashRaw,
-      existing: existingRow
     });
-    if (upsertResult?.conflict) {
-      await client.query('ROLLBACK');
-      res.status(409).json({
-        error: 'Conflict',
-        stage,
-        reason: 'hash_mismatch',
-        expectedHash: expectedHashRaw,
-        updatedAt: existingRow?.updatedAt ?? (cachedState?.updatedAt ?? updatedAt)
-      });
-      return;
-    }
 
-    historyEntry = await insertPlannerHistory(client, {
-      prevState: previousState,
-      nextState: normalizedStateObj,
-      hash,
-      meta,
-      actor: resolveActorFromMeta(meta) || meta?.user || null,
-      source: resolveSourceFromMeta(meta) || meta?.source || null,
-      note: meta?.note ?? null,
-      adminSettings: readAdminSettings(normalizedStateObj)
-    });
     await client.query('COMMIT');
+    invalidateCache();
+    const etag = weakEtagForRevision(rev);
+    if (etag) {
+      res.setHeader('ETag', etag);
+    }
+    broadcastRevision({ rev, actor, source, note });
+    res.json({ rev });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Failed to persist snapshot', err);
-    res.status(500).send('Failed to persist snapshot');
-    return;
+    console.error('PUT /api/state failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   } finally {
     client.release();
   }
-
-  const refreshed = await refreshCachedState();
-  const delta = computeDelta(previousState, refreshed.parsed);
-
-  const logEntry = {
-    timestamp: updatedAt,
-    stage,
-    version: incomingVersion ?? null,
-    user: meta?.user ?? null,
-    session: meta?.session ?? null,
-    source: meta?.source ?? null,
-    summary: meta?.summary ?? null,
-    ip: req.ip
-  };
-  if (meta?.diff) {
-    logEntry.diff = meta.diff;
-  }
-  if (meta?.ordersSummary) {
-    logEntry.ordersSummary = meta.ordersSummary;
-  }
-  await appendLog(logEntry);
-
-  if (forceOverwriteApplied) {
-    await appendLog({
-      timestamp: updatedAt,
-      stage: 'admin.rollback',
-      version: null,
-      user: logEntry.user,
-      session: logEntry.session,
-      source: logEntry.source ?? 'admin',
-      summary: 'force-overwrite by admin',
-      ip: req.ip
-    });
-  }
-
-  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
-  if (historyEntry) {
-    broadcast({
-      type: 'history',
-      hash: historyEntry.hash,
-      etag: historyEntry.etag,
-      summary: historyEntry.summary ?? null,
-      actor: historyEntry.actor ?? null,
-      source: historyEntry.source ?? null,
-      note: historyEntry.note ?? null,
-      createdAt: historyEntry.created_at ?? null
-    });
-  }
-  res.setHeader('ETag', refreshed.etag);
-  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag });
 });
-
 app.get('/api/admin/history', async (req, res) => {
-  const limitRaw = Number.parseInt(req.query.limit, 10);
-  const offsetRaw = Number.parseInt(req.query.offset, 10);
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
-  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
-  const filters = [];
-  const params = [];
-
-  if (isNonEmptyString(req.query.actor)) {
-    params.push(`%${req.query.actor.trim()}%`);
-    filters.push(`actor ILIKE $${params.length}`);
+  const limit = Math.min(200, Math.max(1, parseInteger(req.query.limit, 50)));
+  const offset = Math.max(0, parseInteger(req.query.offset, 0));
+  try {
+    const { rows } = await pool.query(
+      `SELECT r.rev, r.ts, r.actor, r.source, r.note,
+              COALESCE(o.cnt,0) AS orders,
+              COALESCE(op.cnt,0) AS order_process,
+              COALESCE(cap.cnt,0) AS capacity,
+              COALESCE(sa.cnt,0) AS settings_autoweight,
+              COALESCE(sj.cnt,0) AS settings_journal,
+              COALESCE(scw.cnt,0) AS settings_column_widths,
+              COALESCE(sm.cnt,0) AS settings_mapping,
+              COALESCE(sadmin.cnt,0) AS settings_admin,
+              COALESCE(ex.cnt,0) AS excluded_statuses
+         FROM revisions r
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM orders_hist GROUP BY rev) o ON o.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM order_process_hist GROUP BY rev) op ON op.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM capacity_by_process_hist GROUP BY rev) cap ON cap.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM settings_autoweight_hist GROUP BY rev) sa ON sa.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM settings_journal_hist GROUP BY rev) sj ON sj.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM settings_column_widths_hist GROUP BY rev) scw ON scw.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM settings_mapping_hist GROUP BY rev) sm ON sm.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM settings_admin_hist GROUP BY rev) sadmin ON sadmin.rev = r.rev
+         LEFT JOIN (SELECT rev, COUNT(*) AS cnt FROM excluded_statuses_hist GROUP BY rev) ex ON ex.rev = r.rev
+        ORDER BY r.rev DESC
+        LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    res.json({ items: rows, limit, offset });
+  } catch (err) {
+    console.error('GET /api/admin/history failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
-  if (isNonEmptyString(req.query.source)) {
-    params.push(req.query.source.trim());
-    filters.push(`source = $${params.length}`);
-  }
-  if (isNonEmptyString(req.query.from)) {
-    const fromDate = new Date(req.query.from);
-    if (!Number.isNaN(fromDate.getTime())) {
-      params.push(fromDate.toISOString());
-      filters.push(`created_at >= $${params.length}`);
-    }
-  }
-  if (isNonEmptyString(req.query.to)) {
-    const toDate = new Date(req.query.to);
-    if (!Number.isNaN(toDate.getTime())) {
-      params.push(toDate.toISOString());
-      filters.push(`created_at <= $${params.length}`);
-    }
-  }
-
-  params.push(limit);
-  params.push(offset);
-  const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-  const { rows } = await pool.query(
-    `SELECT hash, etag, summary, actor, source, note, created_at
-       FROM planner_state_history
-       ${whereClause}
-      ORDER BY created_at DESC
-      LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
-  );
-  res.json({
-    items: rows.map((row) => ({
-      hash: row.hash,
-      etag: row.etag,
-      summary: row.summary ?? null,
-      actor: row.actor ?? null,
-      source: row.source ?? null,
-      note: row.note ?? null,
-      createdAt: row.created_at
-    })),
-    limit,
-    offset
-  });
 });
 
-app.get('/api/admin/history/:hash', async (req, res) => {
-  const hash = sanitizeHashCandidate(req.params.hash);
-  if (!hash) {
-    res.status(400).json({ error: 'Bad Request', message: 'Invalid hash' });
+app.get('/api/admin/history/:rev', async (req, res) => {
+  const rev = parseInteger(req.params.rev, null);
+  if (rev === null) {
+    res.status(400).json({ error: 'Invalid revision' });
     return;
   }
-  const { rows } = await pool.query(
-    `SELECT hash, etag, state, summary, actor, source, note, created_at
-       FROM planner_state_history
-      WHERE LOWER(hash) = LOWER($1)
-      LIMIT 1`,
-    [hash]
-  );
-  if (!rows.length) {
-    res.status(404).json({ error: 'Not Found' });
-    return;
+  try {
+    const [metaRes, ordersRes, orderProcRes, capacityRes, autoRes, journalRes, colRes, mapRes, adminRes, excludedRes] = await Promise.all([
+      pool.query('SELECT rev, ts, actor, source, note FROM revisions WHERE rev = $1', [rev]),
+      pool.query('SELECT * FROM orders_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM order_process_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM capacity_by_process_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM settings_autoweight_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM settings_journal_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM settings_column_widths_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM settings_mapping_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM settings_admin_hist WHERE rev = $1 ORDER BY changed_at', [rev]),
+      pool.query('SELECT * FROM excluded_statuses_hist WHERE rev = $1 ORDER BY changed_at', [rev])
+    ]);
+    if (metaRes.rows.length === 0) {
+      res.status(404).json({ error: 'Revision not found' });
+      return;
+    }
+    res.json({
+      revision: metaRes.rows[0],
+      orders: ordersRes.rows,
+      orderProcesses: orderProcRes.rows,
+      capacityByProcess: capacityRes.rows,
+      settings: {
+        autoweight: autoRes.rows,
+        journal: journalRes.rows,
+        columnWidths: colRes.rows,
+        mapping: mapRes.rows,
+        admin: adminRes.rows
+      },
+      excludedStatuses: excludedRes.rows
+    });
+  } catch (err) {
+    console.error('GET /api/admin/history/:rev failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
-  const row = rows[0];
-  res.json({
-    hash: row.hash,
-    etag: row.etag,
-    state: row.state,
-    summary: row.summary ?? null,
-    actor: row.actor ?? null,
-    source: row.source ?? null,
-    note: row.note ?? null,
-    createdAt: row.created_at
-  });
 });
-
-const bumpRollbackVersions = (stateObj) => {
-  if (!isPlainObject(stateObj.meta)) {
-    stateObj.meta = {};
-  }
-  stateObj.meta.version = Number.isFinite(Number(stateObj.meta.version))
-    ? Number(stateObj.meta.version) + 1
-    : 1;
-  if (!isPlainObject(stateObj.meta.versions)) {
-    stateObj.meta.versions = {};
-  }
-  Object.keys(stateObj.meta.versions).forEach((key) => {
-    const numeric = Number(stateObj.meta.versions[key]);
-    stateObj.meta.versions[key] = Number.isFinite(numeric) ? numeric + 1 : 1;
-  });
-  stateObj.meta.versions['admin.rollback'] = (Number(stateObj.meta.versions['admin.rollback']) || 0) + 1;
-};
-
-const setRollbackMetadata = (stateObj, { actor, note, timestamp }) => {
-  if (!isPlainObject(stateObj.meta)) {
-    stateObj.meta = {};
-  }
-  stateObj.meta.stage = 'admin.rollback';
-  stateObj.meta.source = 'rollback';
-  stateObj.meta.user = actor;
-  if (!isPlainObject(stateObj.meta.lastAuthors)) {
-    stateObj.meta.lastAuthors = {};
-  }
-  stateObj.meta.lastAuthors['admin.rollback'] = { name: actor, at: timestamp };
-  stateObj.meta.lastChange = {
-    stage: 'admin.rollback',
-    user: actor,
-    source: 'rollback',
-    summary: note || `Откат к ${stateObj.hash || ''}`,
-    time: timestamp
-  };
-  if (Array.isArray(stateObj.meta.history)) {
-    stateObj.meta.history = stateObj.meta.history.slice(-199);
-  } else {
-    stateObj.meta.history = [];
-  }
-  stateObj.meta.history.push({
-    id: `rollback-${Date.now().toString(36)}`,
-    stage: 'admin.rollback',
-    user: actor,
-    source: 'rollback',
-    summary: note || `Откат к ${stateObj.hash || ''}`,
-    time: timestamp
-  });
-};
 
 app.post('/api/admin/rollback', async (req, res) => {
-  const targetHash = sanitizeHashCandidate(req.body?.targetHash);
-  const note = isNonEmptyString(req.body?.note) ? req.body.note.trim() : null;
-  const actor = isNonEmptyString(req.body?.actor) ? req.body.actor.trim() : 'admin';
-  if (!targetHash) {
-    res.status(400).json({ error: 'Bad Request', message: 'targetHash required' });
+  if (!isPlainObject(req.body)) {
+    res.status(400).json({ error: 'Invalid payload' });
     return;
   }
+  const targetRev = parseInteger(req.body.targetRev ?? req.body.rev, null);
+  if (targetRev === null) {
+    res.status(400).json({ error: 'Invalid targetRev' });
+    return;
+  }
+  const actor = typeof req.body.actor === 'string' ? req.body.actor : null;
+  const source = typeof req.body.source === 'string' ? req.body.source : 'admin';
+  const note = typeof req.body.note === 'string' ? req.body.note : `rollback to ${targetRev}`;
 
   const client = await pool.connect();
-  let historyEntry = null;
-  let previousStateSnapshot = null;
   try {
     await client.query('BEGIN');
-    const currentRow = await readPlannerStateRow(client, { forUpdate: true });
-    if (!currentRow) {
+    const currentRev = await getLatestRevision(client);
+    if (targetRev > currentRev) {
       await client.query('ROLLBACK');
-      res.status(409).json({ error: 'Conflict', message: 'Planner state is not initialized' });
+      res.status(400).json({ error: 'Target revision is in the future' });
       return;
     }
-    let currentStateObj;
-    try {
-      currentStateObj = currentRow.state ? JSON.parse(currentRow.state) : {};
-    } catch (err) {
-      currentStateObj = {};
-    }
-    previousStateSnapshot = cloneDeepPlain(currentStateObj);
-
-    const { rows } = await client.query(
-      `SELECT state, hash FROM planner_state_history WHERE LOWER(hash) = LOWER($1) LIMIT 1`,
-      [targetHash]
-    );
-    if (!rows.length) {
-      await client.query('ROLLBACK');
-      res.status(404).json({ error: 'Not Found', message: 'Snapshot not found' });
-      return;
-    }
-    const historyState = rows[0].state;
-    const snapshotState = isPlainObject(historyState) ? cloneDeepPlain(historyState) : {};
-    const timestamp = new Date().toISOString();
-
-    bumpRollbackVersions(snapshotState);
-    setRollbackMetadata(snapshotState, { actor, note, timestamp });
-    ensureFullSettingsSnapshot(currentStateObj, snapshotState);
-
-    const { stateObj: normalizedStateObj, stateString, hash } = serializeStateForStorage(snapshotState);
-    await persistSnapshotToSql(client, normalizedStateObj);
-    const metaPayload = {
-      stage: 'admin.rollback',
-      source: 'rollback',
-      user: actor,
-      summary: note || `Откат к ${rows[0].hash}`,
-      note
-    };
-    await upsertPlannerStateRow(client, stateString, metaPayload, hash, timestamp, {
-      existing: currentRow,
-      expectedHash: null
-    });
-    historyEntry = await insertPlannerHistory(client, {
-      prevState: currentStateObj,
-      nextState: normalizedStateObj,
-      hash,
-      meta: metaPayload,
-      actor,
-      source: 'rollback',
-      note,
-      adminSettings: readAdminSettings(normalizedStateObj)
+    const snapshot = await buildSnapshotForRevision(client, targetRev);
+    const rev = await runWithRevision(client, actor, source, note, async (newRev) => {
+      await applySnapshot(client, snapshot);
+      await insertActivity(client, newRev, actor, source, 'rollback', `rollback to ${targetRev}`);
     });
     await client.query('COMMIT');
+    invalidateCache();
+    const etag = weakEtagForRevision(rev);
+    if (etag) {
+      res.setHeader('ETag', etag);
+    }
+    broadcastRevision({ rev, actor, source, note });
+    res.json({ rev });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Rollback failed', err);
+    console.error('POST /api/admin/rollback failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
-    return;
   } finally {
     client.release();
   }
-
-  const refreshed = await refreshCachedState();
-  const delta = computeDelta(previousStateSnapshot, refreshed.parsed);
-  broadcast({ type: 'delta', hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
-  if (historyEntry) {
-    broadcast({
-      type: 'history',
-      hash: historyEntry.hash,
-      etag: historyEntry.etag,
-      summary: historyEntry.summary ?? null,
-      actor: historyEntry.actor ?? null,
-      source: historyEntry.source ?? null,
-      note: historyEntry.note ?? null,
-      createdAt: historyEntry.created_at ?? null
-    });
-  }
-  await appendLog({
-    timestamp: refreshed.updatedAt,
-    stage: 'admin.rollback',
-    version: null,
-    user: actor,
-    source: 'rollback',
-    summary: note || `Откат к ${targetHash}`,
-    ip: req.ip
-  });
-  res.setHeader('ETag', refreshed.etag);
-  res.json({ ok: true, hash: refreshed.hash, updatedAt: refreshed.updatedAt, etag: refreshed.etag, delta });
 });
+app.use(express.static(PUBLIC_DIR, { index: 'Planner_Codex_v3.html' }));
 
-app.post('/api/admin/snapshot', async (req, res) => {
-  const actor = isNonEmptyString(req.body?.actor) ? req.body.actor.trim() : 'admin';
-  const source = isNonEmptyString(req.body?.source) ? req.body.source.trim() : 'manual';
-  const note = isNonEmptyString(req.body?.note) ? req.body.note.trim() : null;
-  const current = cachedState || await refreshCachedState();
-  const client = await pool.connect();
-  let historyEntry = null;
-  try {
-    await client.query('BEGIN');
-    historyEntry = await insertPlannerHistory(client, {
-      prevState: current.parsed,
-      nextState: current.parsed,
-      hash: current.hash,
-      meta: { stage: 'admin.snapshot', source, user: actor, summary: note },
-      actor,
-      source,
-      note,
-      adminSettings: readAdminSettings(current.parsed)
-    });
-    await client.query('COMMIT');
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Manual snapshot failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-    return;
-  } finally {
-    client.release();
-  }
-
-  if (historyEntry) {
-    broadcast({
-      type: 'history',
-      hash: historyEntry.hash,
-      etag: historyEntry.etag,
-      summary: historyEntry.summary ?? null,
-      actor: historyEntry.actor ?? null,
-      source: historyEntry.source ?? null,
-      note: historyEntry.note ?? null,
-      createdAt: historyEntry.created_at ?? null
-    });
-  }
-  res.json({ ok: true, hash: current.hash, etag: current.etag, createdAt: historyEntry?.created_at ?? current.updatedAt });
-});
-
-app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
-
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
-});
-
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).send('Internal Server Error');
-});
-
-let serverInstance = null;
-let shuttingDown = false;
-
-const shutdown = async (signal = 'SIGTERM') => {
-  if (shuttingDown) {
+app.use((req, res, next) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api/')) {
+    res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
     return;
   }
-  shuttingDown = true;
-  console.log(`Received ${signal}, shutting down...`);
-  if (serverInstance) {
-    serverInstance.close();
-  }
-  try {
-    await pool.end();
-  } catch (err) {
-    console.error('Error while closing PostgreSQL pool', err);
-  }
-  process.exit(0);
-};
+  next();
+});
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-bootstrapState().then(() => {
-  serverInstance = app.listen(PORT, () => {
-    console.log(`Planner server running on http://localhost:${PORT}`);
+async function bootstrap() {
+  await runMigrations();
+  await ensureSettingsDefaults(pool);
+  await getCachedState();
+  app.listen(PORT, () => {
+    console.log(`Planner SQL bridge listening on port ${PORT}`);
   });
-}).catch((err) => {
-  console.error('Failed to bootstrap state', err);
+}
+
+bootstrap().catch((err) => {
+  console.error('Failed to bootstrap application', err);
   process.exit(1);
 });
