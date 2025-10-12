@@ -2246,6 +2246,17 @@ function handleRemoteBridgeEvent(evt){
       handleAdminHistoryEvent(payload);
       return;
     }
+    if(payload.type === 'revision'){
+      const skip = skipRealtimeToastOnce;
+      fetchLatestFromRemote({ preserveProcess:true, origin:'remote', skipToasts: skip })
+        .then(applied=>{
+          if(applied && skipRealtimeToastOnce){
+            skipRealtimeToastOnce = false;
+          }
+        })
+        .catch(err=>{ console.warn('failed to refresh after revision event', err); });
+      return;
+    }
     if(payload.type === 'delta'){
       const skip = skipRealtimeToastOnce;
       fetchLatestFromRemote({preserveProcess:true, origin:'remote', skipToasts: skip})
