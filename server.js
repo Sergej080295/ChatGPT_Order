@@ -980,27 +980,33 @@ app.put('/api/state', async (req, res) => {
       summary: summary || undefined
     });
 
-    const { rev } = await runWithRevision(actor, source, note || summary, async (client, nextRev) => {
+    const { rev, result } = await runWithRevision(actor, source, note || summary, async (client, nextRev) => {
       await applySnapshotToSql(client, snapshot);
       await insertSnapshotRow(client, nextRev, snapshot, hash, storedMeta);
+      const persisted = await loadLatestSnapshot(client);
+      if (!persisted || Number(persisted.rev || 0) !== nextRev) {
+        return {
+          rev: nextRev,
+          snapshot,
+          stateString,
+          hash,
+          meta: storedMeta
+        };
+      }
+      return persisted;
     });
 
-    const etag = computeEtag(hash);
+    const latest = result || { rev, snapshot, stateString, hash, meta: storedMeta };
+    const etag = computeEtag(latest.hash);
     if (etag) {
       res.set('ETag', etag);
     }
     res.set('Cache-Control', 'no-store');
 
-    cachedSnapshot = {
-      rev,
-      snapshot,
-      stateString,
-      hash,
-      meta: storedMeta
-    };
+    cachedSnapshot = latest;
 
-    broadcastRevision({ rev, hash, etag });
-    res.status(200).json({ ok: true, rev, hash, etag });
+    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
+    res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
   } catch (err) {
     if (err && err.message && err.message.includes('Snapshot payload')) {
       res.status(400).json({ error: err.message });
@@ -1160,23 +1166,31 @@ app.post('/api/admin/snapshot', async (req, res) => {
       source,
       note: note || undefined
     });
-    const { rev } = await runWithRevision(actor, source, note, async (client, nextRev) => {
+    const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
       await insertSnapshotRow(client, nextRev, latest.snapshot, latest.hash, meta);
+      return await loadLatestSnapshot(client);
     });
-    const etag = computeEtag(latest.hash);
+    const stored = result || await loadLatestSnapshot();
+    const etag = computeEtag(stored?.hash || latest.hash);
     if (etag) {
       res.set('ETag', etag);
     }
     res.set('Cache-Control', 'no-store');
-    cachedSnapshot = {
-      rev,
-      snapshot: latest.snapshot,
-      stateString: latest.stateString,
-      hash: latest.hash,
-      meta
-    };
-    broadcastRevision({ rev, hash: latest.hash, etag });
-    res.status(201).json({ ok: true, rev, hash: latest.hash, etag });
+    if (stored) {
+      cachedSnapshot = stored;
+      broadcastRevision({ rev: stored.rev, hash: stored.hash, etag });
+      res.status(201).json({ ok: true, rev: stored.rev, hash: stored.hash, etag });
+    } else {
+      cachedSnapshot = {
+        rev,
+        snapshot: latest.snapshot,
+        stateString: latest.stateString,
+        hash: latest.hash,
+        meta
+      };
+      broadcastRevision({ rev, hash: latest.hash, etag });
+      res.status(201).json({ ok: true, rev, hash: latest.hash, etag });
+    }
   } catch (err) {
     console.error('POST /api/admin/snapshot failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -1217,19 +1231,21 @@ app.post('/api/admin/rollback', async (req, res) => {
       previousMeta: row.meta || null
     });
 
-    const { rev } = await runWithRevision(actor, 'rollback', note, async (client, nextRev) => {
+    const { rev, result } = await runWithRevision(actor, 'rollback', note, async (client, nextRev) => {
       await applySnapshotToSql(client, snapshot);
       await insertSnapshotRow(client, nextRev, snapshot, hash, rollbackMeta);
+      return await loadLatestSnapshot(client);
     });
 
-    const etag = computeEtag(hash);
+    const latest = result || { rev, snapshot, stateString, hash, meta: rollbackMeta };
+    const etag = computeEtag(latest.hash);
     if (etag) {
       res.set('ETag', etag);
     }
     res.set('Cache-Control', 'no-store');
-    cachedSnapshot = { rev, snapshot, stateString, hash, meta: rollbackMeta };
-    broadcastRevision({ rev, hash, etag });
-    res.json({ ok: true, rev, hash, etag });
+    cachedSnapshot = latest;
+    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
+    res.json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
   } catch (err) {
     console.error('POST /api/admin/rollback failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
