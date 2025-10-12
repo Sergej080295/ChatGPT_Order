@@ -1,15 +1,5 @@
 BEGIN;
 
-DROP TABLE IF EXISTS stage_exception CASCADE;
-DROP TABLE IF EXISTS stage_completion CASCADE;
-DROP TABLE IF EXISTS order_stage CASCADE;
-DROP TABLE IF EXISTS capacity_by_stage CASCADE;
-DROP TABLE IF EXISTS parallel_limits CASCADE;
-DROP TABLE IF EXISTS customer_order CASCADE;
-DROP TABLE IF EXISTS stage_type CASCADE;
-DROP TABLE IF EXISTS planner_settings CASCADE;
-DROP TABLE IF EXISTS planner_activity_log CASCADE;
-DROP TABLE IF EXISTS planner_state CASCADE;
 DROP TABLE IF EXISTS planner_schema_migrations CASCADE;
 
 COMMIT;
