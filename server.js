@@ -280,7 +280,7 @@ async function loadLatestSnapshot(runner) {
     return null;
   }
   const row = rows[0];
-  const snapshotObj = row.snapshot || {};
+  const snapshotObj = parseJsonColumn(row.snapshot, {});
   const stateString = JSON.stringify(snapshotObj);
   const hash = row.hash || computeSnapshotHash(stateString);
   const rev = Number(row.rev || 0);
@@ -289,7 +289,7 @@ async function loadLatestSnapshot(runner) {
     snapshot: snapshotObj,
     stateString,
     hash,
-    meta: row.meta || null
+    meta: parseJsonColumn(row.meta, null)
   };
 }
 
@@ -554,7 +554,7 @@ async function runWithRevision(actor, source, note, handler) {
 }
 
 function mapHistoryRow(row) {
-  const meta = row.meta || null;
+  const meta = parseJsonColumn(row.meta, null);
   const summary = extractHistorySummary(meta);
   return {
     rev: Number(row.rev || 0),
@@ -588,6 +588,32 @@ function parseBoolean(value, fallback = false) {
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   }
   return fallback;
+}
+
+function parseJsonColumn(value, fallback = null) {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (typeof value === 'object' && !(value instanceof Buffer)) {
+    return value;
+  }
+  if (value instanceof Buffer) {
+    if (!value.length) return fallback;
+    try {
+      return JSON.parse(value.toString('utf8'));
+    } catch (_err) {
+      return fallback;
+    }
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_err) {
+    return fallback;
+  }
 }
 
 function orderKeyFromTask(task) {
@@ -1132,7 +1158,8 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const meta = row.meta || null;
+    const meta = parseJsonColumn(row.meta, null);
+    const snapshot = parseJsonColumn(row.snapshot, null);
     const actor = row.actor || (meta && meta.actor ? meta.actor : null);
     const source = row.source || (meta && meta.source ? meta.source : null);
     const note = row.note || (meta && meta.note ? meta.note : null);
@@ -1146,7 +1173,7 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       source,
       note,
       meta,
-      state: row.snapshot || null
+      state: snapshot
     });
   } catch (err) {
     console.error('GET /api/admin/history/:hash failed', err);
@@ -1217,7 +1244,7 @@ app.post('/api/admin/rollback', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const snapshot = row.snapshot || {};
+    const snapshot = parseJsonColumn(row.snapshot, {});
     const stateString = JSON.stringify(snapshot);
     const hash = computeSnapshotHash(stateString);
     const actor = sanitizeString(req.body?.actor) || 'admin';
@@ -1228,7 +1255,7 @@ app.post('/api/admin/rollback', async (req, res) => {
       note: note || undefined,
       rollbackFrom: targetHash,
       baseRev: Number(row.rev || 0),
-      previousMeta: row.meta || null
+      previousMeta: parseJsonColumn(row.meta, null)
     });
 
     const { rev, result } = await runWithRevision(actor, 'rollback', note, async (client, nextRev) => {
