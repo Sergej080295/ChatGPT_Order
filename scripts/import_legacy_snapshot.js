@@ -81,28 +81,31 @@ async function loadRevisionColumnInfo(client) {
 
 async function insertRevisionRow(client, rev, actor, source, note) {
   const info = await loadRevisionColumnInfo(client);
-  const payload = [rev, actor || null, source || null, note || null];
+  const actorValue = actor || null;
+  const sourceValue = source || null;
+  const noteValue = note || null;
+
   if (info.hasCurrentRev) {
     if (info.hasId) {
       await client.query(
-        'INSERT INTO revisions (id, rev, current_rev, actor, source, note) VALUES ($1,$1,$1,$2,$3,$4)',
-        payload
+        'INSERT INTO revisions (id, rev, current_rev, actor, source, note) VALUES ($1,$2,$3,$4,$5,$6)',
+        [rev, rev, rev, actorValue, sourceValue, noteValue]
       );
     } else {
       await client.query(
-        'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$1,$2,$3,$4)',
-        payload
+        'INSERT INTO revisions (rev, current_rev, actor, source, note) VALUES ($1,$2,$3,$4,$5)',
+        [rev, rev, actorValue, sourceValue, noteValue]
       );
     }
   } else if (info.hasId) {
     await client.query(
-      'INSERT INTO revisions (id, rev, actor, source, note) VALUES ($1,$1,$2,$3,$4)',
-      payload
+      'INSERT INTO revisions (id, rev, actor, source, note) VALUES ($1,$2,$3,$4,$5)',
+      [rev, rev, actorValue, sourceValue, noteValue]
     );
   } else {
     await client.query(
       'INSERT INTO revisions (rev, actor, source, note) VALUES ($1,$2,$3,$4)',
-      payload
+      [rev, actorValue, sourceValue, noteValue]
     );
   }
 }
