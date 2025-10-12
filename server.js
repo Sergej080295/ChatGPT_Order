@@ -594,13 +594,20 @@ function parseJsonColumn(value, fallback = null) {
   if (value === null || value === undefined) {
     return fallback;
   }
-  if (typeof value === 'object' && !(value instanceof Buffer)) {
-    return value;
-  }
-  if (value instanceof Buffer) {
+  if (Buffer.isBuffer(value) || value instanceof Buffer) {
     if (!value.length) return fallback;
     try {
       return JSON.parse(value.toString('utf8'));
+    } catch (_err) {
+      return fallback;
+    }
+  }
+  if (typeof value === 'object') {
+    if (value instanceof Date) {
+      return fallback;
+    }
+    try {
+      return JSON.parse(JSON.stringify(value));
     } catch (_err) {
       return fallback;
     }
