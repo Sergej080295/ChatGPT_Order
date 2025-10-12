@@ -643,10 +643,10 @@ async function applySnapshotToSql(client, snapshot) {
     Object.values(snapshot.meta.settings.crmStageMapping).forEach((code) => ensureProcess(code));
   }
 
-  await client.query('TRUNCATE order_process RESTART IDENTITY');
-  await client.query('TRUNCATE orders RESTART IDENTITY');
-  await client.query('TRUNCATE customers RESTART IDENTITY');
-  await client.query('TRUNCATE processes RESTART IDENTITY');
+  await client.query('TRUNCATE order_process RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE orders RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE customers RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE processes RESTART IDENTITY CASCADE');
   await client.query('TRUNCATE capacity_by_process');
   await client.query('TRUNCATE settings_column_widths');
   await client.query('TRUNCATE settings_mapping');
