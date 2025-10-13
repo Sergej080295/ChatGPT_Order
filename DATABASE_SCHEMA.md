@@ -12,6 +12,7 @@
 - Основное состояние планировщика хранится в `planner_state_snapshots (rev, snapshot JSONB, meta JSONB, hash TEXT, created_at)`, которую создаёт миграция `012_restore_planner_state_snapshots.sql`. Для быстрых выборок добавлены индексы по ревизии и дате, а внешний ключ `rev` гарантирует связь с таблицей `revisions`.【F:migrations/012_restore_planner_state_snapshots.sql†L3-L16】
 - Перед записью `insertSnapshotRow()` использует `safeSerializeSnapshot()` и `serializeMeta()`, чтобы гарантировать валидный JSONB и очищенные метаданные. В таблицу никогда не попадут строки вида `[object Object]`, и при повторном чтении возвращается исходный снимок с тем же SHA‑1-хешем.【F:server.js†L520-L573】
 - Функция `applySnapshotToSql()` пересобирает нормализованные таблицы: стадии (`processes`), клиентов (`customers`), заказы (`orders`), прохождение стадий (`order_process`), мощности (`capacity_by_process`) и все настройки (`settings_*`, `excluded_statuses`). Все вставки выполняются через `INSERT ... ON CONFLICT`, поэтому данные в SQL всегда соответствуют последнему снимку, а триггеры `_hist` фиксируют историю.【F:server.js†L762-L1078】
+- Таблица `settings_shared_preferences` хранит общие переключатели интерфейса (автосохранение, автоматический сдвиг прогресса, автоматическая оптимизация и автоготовность). Миграция `014_shared_preferences.sql` создаёт базовую и историческую таблицу, а `applySnapshotToSql()` при каждом сохранении синхронизирует туда актуальные значения, чтобы клиенты всегда читали одинаковые дефолты.【F:migrations/014_shared_preferences.sql†L1-L44】【F:server.js†L776-L787】
 
 ## 3. Поток обработки `/api/state`
 1. Клиент отправляет `PUT /api/state` c телом `{ state, meta }`. Сервер парсит полезную нагрузку, вычисляет SHA‑1 и извлекает ETag из заголовка `If-Match` или из `meta` (поля `baseHash/baseEtag`).【F:server.js†L360-L436】【F:server.js†L1100-L1166】
@@ -31,6 +32,7 @@
    SELECT crm_stage, planner_process_id, is_ignored FROM settings_mapping ORDER BY crm_stage;
    SELECT status_key FROM excluded_statuses ORDER BY status_key;
    SELECT max_rows FROM settings_journal;
+   SELECT pref_key, bool_value FROM settings_shared_preferences ORDER BY pref_key;
    ```
    Параллельно в `planner_state_snapshots` должна появиться новая ревизия с обновлённым `snapshot->'meta'->'settings'`.
 4. **Изменение заказов.** Добавьте или отредактируйте заказ (через CRM или «Общий список заказов»). Проверьте строки в таблицах `orders` и `order_process`, а также соответствующие записи в `orders_hist` и `order_process_hist`.

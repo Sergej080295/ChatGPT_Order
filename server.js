@@ -38,6 +38,14 @@ let cachedSnapshot = null;
 let lastRevision = 0;
 let revisionColumnInfo = null;
 
+const PG_UNDEFINED_TABLE = '42P01';
+const SHARED_BOOLEAN_PREF_KEYS = [
+  'autosaveOn',
+  'shiftOnProgress',
+  'autoOptimizeOn',
+  'cascadeReadyOn'
+];
+
 function normalizeWeakEtag(value) {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -325,6 +333,14 @@ async function loadLatestSnapshot(runner) {
   }
   const row = rows[0];
   const snapshotObj = parseJsonColumn(row.snapshot, {});
+  try {
+    const prefMap = await loadSharedPreferences(client);
+    if (prefMap && prefMap.size) {
+      applySharedPreferencesToSnapshot(snapshotObj, prefMap);
+    }
+  } catch (err) {
+    console.warn('Failed to merge shared preferences into snapshot', err);
+  }
   const stateString = JSON.stringify(snapshotObj);
   const hash = row.hash || computeSnapshotHash(stateString);
   const rev = Number(row.rev || 0);
@@ -775,6 +791,79 @@ function parseJsonColumn(value, fallback = null) {
   }
 }
 
+function extractSharedPreferences(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return [];
+  }
+  const prefs = [];
+  for (const key of SHARED_BOOLEAN_PREF_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+      prefs.push({ key, value: Boolean(snapshot[key]) });
+    }
+  }
+  return prefs;
+}
+
+async function syncSharedPreferences(client, snapshot) {
+  const prefs = extractSharedPreferences(snapshot);
+  try {
+    await client.query('DELETE FROM settings_shared_preferences');
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return;
+    }
+    throw err;
+  }
+
+  if (!prefs.length) {
+    return;
+  }
+
+  for (const pref of prefs) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO settings_shared_preferences (pref_key, bool_value, updated_at)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (pref_key) DO UPDATE
+         SET bool_value = EXCLUDED.bool_value,
+             updated_at = NOW()` ,
+      [pref.key, pref.value]
+    );
+  }
+}
+
+async function loadSharedPreferences(runner) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    const { rows } = await executor.query(
+      'SELECT pref_key, bool_value FROM settings_shared_preferences'
+    );
+    const map = new Map();
+    rows.forEach((row) => {
+      if (row && row.pref_key) {
+        map.set(row.pref_key, Boolean(row.bool_value));
+      }
+    });
+    return map;
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+function applySharedPreferencesToSnapshot(snapshot, prefMap) {
+  if (!isPlainObject(snapshot) || !(prefMap instanceof Map) || prefMap.size === 0) {
+    return;
+  }
+  for (const key of SHARED_BOOLEAN_PREF_KEYS) {
+    if (prefMap.has(key)) {
+      snapshot[key] = Boolean(prefMap.get(key));
+    }
+  }
+}
+
 function valuesEqual(a, b) {
   if (a === b) {
     return true;
@@ -931,6 +1020,8 @@ async function applySnapshotToSql(client, snapshot) {
       if (normalized) parallelSet.add(normalized);
     });
   }
+
+  await syncSharedPreferences(client, snapshot);
 
   const processMap = new Map();
   const ensureProcess = (code) => {

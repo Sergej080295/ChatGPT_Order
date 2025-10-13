@@ -15,6 +15,13 @@ const pool = new Pool({
 });
 
 let revisionColumnInfo = null;
+const PG_UNDEFINED_TABLE = '42P01';
+const SHARED_BOOLEAN_PREF_KEYS = [
+  'autosaveOn',
+  'shiftOnProgress',
+  'autoOptimizeOn',
+  'cascadeReadyOn'
+];
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -94,6 +101,47 @@ function orderKeyFromTask(task) {
   const uid = sanitizeString(task.uid);
   if (uid) return `uid:${uid}`;
   return null;
+}
+
+function extractSharedPreferences(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return [];
+  }
+  const prefs = [];
+  for (const key of SHARED_BOOLEAN_PREF_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+      prefs.push({ key, value: Boolean(snapshot[key]) });
+    }
+  }
+  return prefs;
+}
+
+async function syncSharedPreferences(client, snapshot) {
+  const prefs = extractSharedPreferences(snapshot);
+  try {
+    await client.query('DELETE FROM settings_shared_preferences');
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return;
+    }
+    throw err;
+  }
+
+  if (!prefs.length) {
+    return;
+  }
+
+  for (const pref of prefs) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO settings_shared_preferences (pref_key, bool_value, updated_at)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (pref_key) DO UPDATE
+         SET bool_value = EXCLUDED.bool_value,
+             updated_at = NOW()` ,
+      [pref.key, pref.value]
+    );
+  }
 }
 
 async function loadRevisionColumnInfo(client) {
@@ -268,6 +316,7 @@ function serializeMeta(meta) {
     await client.query('DELETE FROM settings_autoweight');
     await client.query('DELETE FROM settings_journal');
     await client.query('DELETE FROM settings_admin');
+    await syncSharedPreferences(client, snapshot);
 
     const processes = Array.from(stageMap.values());
     processes.sort((a, b) => a.code.localeCompare(b.code));
