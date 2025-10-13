@@ -1159,7 +1159,7 @@ body.overview-fs-active{overflow:hidden}
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:4px;width:100%">
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
-        <label class="small"><input type="checkbox" id="cascadeReady"> Автоготовность при упаковке/отгрузке</label>
+        <label class="small"><input type="checkbox" id="cascadeReady" checked> Автоготовность при упаковке/отгрузке</label>
         <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
         <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
         <div class="row" style="gap:8px;align-items:center">
@@ -1175,7 +1175,7 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
-        <label class="small"><input type="checkbox" id="autosaveSetting"> Автосохранение</label>
+        <label class="small"><input type="checkbox" id="autosaveSetting" checked> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
@@ -1214,6 +1214,7 @@ body.overview-fs-active{overflow:hidden}
         </div>
         <div class="admin-settings-actions">
           <button id="adminSnapshotBtn" class="btn ghost small" type="button">Создать снимок сейчас</button>
+          <button id="adminSnapshotsClearBtn" class="btn ghost small" type="button">Очистить снимки</button>
           <button id="adminSaveBtn" class="btn primary small" type="button">Сохранить</button>
         </div>
       </div>
@@ -2705,7 +2706,7 @@ let shiftOnProgress=true;
 let autoOptimizeOn = true;
 let lockNewOrders = false;
 let lockNewOrdersCsv = false;
-let cascadeReadyOn = false;
+let cascadeReadyOn = true;
 let priorityChangeLoggingOn = true;
 let routeDateChangeLoggingOn = true;
 let notificationsMuted = false;
@@ -13783,6 +13784,12 @@ async function openHistoryDetail(hash){
         `ETag: ${detail.etag || '—'}`,
         `Hash: ${detail.hash || hash}`
       ];
+      if(Number.isFinite(detail.baseRev) && detail.baseRev > 0){
+        info.push(`Сравнение с ревизией ${detail.baseRev}`);
+      }
+      if(detail.baseHash){
+        info.push(`Базовый хэш: ${shortenHash(detail.baseHash)}`);
+      }
       meta.textContent = info.join(' • ');
     }
     const content = document.getElementById('historyViewContent');
@@ -13792,10 +13799,8 @@ async function openHistoryDetail(hash){
         && Object.keys(detail.diff).length ? detail.diff : null;
       if(diffPayload){
         content.value = JSON.stringify(diffPayload, null, 2);
-      }else if(detail.state){
-        content.value = JSON.stringify(detail.state, null, 2);
       }else{
-        content.value = 'Отличий с текущим состоянием не найдено.';
+        content.value = 'Отличий с предыдущим снимком не найдено.';
       }
     }
     dialog.showModal();
@@ -13843,6 +13848,57 @@ async function copyHistoryHash(hash){
     console.warn('clipboard error', err);
     if(typeof showToast === 'function'){
       showToast({ title:'Буфер обмена', message:'Не удалось скопировать хэш.', tone:'error' });
+    }
+  }
+}
+
+async function handleAdminSnapshotsClear(){
+  if(!userCanEdit()){
+    notifyReadOnly();
+    return;
+  }
+  if(!window.confirm('Очистить сохранённые снимки (кроме актуального)?')){
+    return;
+  }
+  const button = document.getElementById('adminSnapshotsClearBtn');
+  const originalLabel = button ? button.textContent : '';
+  if(button){
+    button.disabled = true;
+    button.textContent = 'Очищаем…';
+  }
+  try{
+    const res = await fetch('/api/admin/history', {
+      method:'DELETE',
+      headers:{ 'Accept':'application/json' }
+    });
+    const text = await res.text().catch(()=> '');
+    let payload = {};
+    if(text){
+      try{ payload = JSON.parse(text); }
+      catch(_err){ payload = {}; }
+    }
+    if(!res.ok){
+      const message = payload?.error || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    adminHistoryCache.clear();
+    adminHistoryState.items = [];
+    adminHistoryState.offset = 0;
+    adminHistoryState.hasMore = true;
+    renderAdminHistoryList();
+    fetchAdminHistory({ reset:true });
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Снимки очищены.', tone:'success' });
+    }
+  }catch(err){
+    console.warn('history clear failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:`Не удалось очистить снимки (${err.message || err}).`, tone:'error' });
+    }
+  }finally{
+    if(button){
+      button.disabled = false;
+      button.textContent = originalLabel || 'Очистить снимки';
     }
   }
 }
@@ -14804,6 +14860,10 @@ function wireHandlers(){
   const adminSnapshotBtn = document.getElementById('adminSnapshotBtn');
   if(adminSnapshotBtn){
     adminSnapshotBtn.addEventListener('click', ()=> handleAdminSnapshotRequest());
+  }
+  const adminSnapshotsClearBtn = document.getElementById('adminSnapshotsClearBtn');
+  if(adminSnapshotsClearBtn){
+    adminSnapshotsClearBtn.addEventListener('click', ()=> handleAdminSnapshotsClear());
   }
   const historyApplyBtn = document.getElementById('historyFilterApply');
   if(historyApplyBtn){

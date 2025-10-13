@@ -129,14 +129,14 @@ function buildEmptySnapshot() {
     freshnessManual: '',
     lastImportTime: '',
     lastManualTime: '',
-    autosaveOn: false,
-    autoOptimizeOn: false,
-    cascadeReadyOn: false,
+    autosaveOn: true,
+    autoOptimizeOn: true,
+    cascadeReadyOn: true,
     priorityChangeLoggingOn: false,
     routeDateChangeLoggingOn: false,
     notificationsMuted: false,
     crm: { boards: [], currentBoardId: null },
-    shiftOnProgress: false,
+    shiftOnProgress: true,
     ignoredStates: [],
     meta: {
       versions: {},
@@ -1498,8 +1498,27 @@ app.get('/api/admin/history/:hash', async (req, res) => {
     const row = rows[0];
     const meta = parseJsonColumn(row.meta, null);
     const snapshot = parseJsonColumn(row.snapshot, null);
-    const currentSnapshot = await getCachedSnapshot();
-    const diff = buildSnapshotDiff(currentSnapshot?.snapshot || {}, snapshot || {});
+    let baseRev = null;
+    let baseHash = null;
+    let baseSnapshot = {};
+    try {
+      const { rows: prevRows } = await pool.query(
+        `SELECT rev, hash, snapshot
+           FROM planner_state_snapshots
+          WHERE rev < $1
+          ORDER BY rev DESC
+          LIMIT 1`,
+        [row.rev]
+      );
+      if (prevRows.length) {
+        baseRev = Number(prevRows[0].rev || 0) || null;
+        baseHash = prevRows[0].hash || null;
+        baseSnapshot = parseJsonColumn(prevRows[0].snapshot, {}) || {};
+      }
+    } catch (err) {
+      console.warn('Failed to load previous snapshot for diff', err);
+    }
+    const diff = buildSnapshotDiff(baseSnapshot || {}, snapshot || {});
     const actor = row.actor || (meta && meta.actor ? meta.actor : null);
     const source = row.source || (meta && meta.source ? meta.source : null);
     const note = row.note || (meta && meta.note ? meta.note : null);
@@ -1508,6 +1527,8 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       rev: Number(row.rev || 0),
       hash: row.hash || null,
       etag,
+      baseRev,
+      baseHash,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
       actor,
       source,
@@ -1518,6 +1539,37 @@ app.get('/api/admin/history/:hash', async (req, res) => {
     });
   } catch (err) {
     console.error('GET /api/admin/history/:hash failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.delete('/api/admin/history', async (_req, res) => {
+  const requestId = createRequestId();
+  try {
+    const latest = await loadLatestSnapshot();
+    if (!latest) {
+      const result = await pool.query('TRUNCATE planner_state_snapshots RESTART IDENTITY');
+      const removed = Number(result?.rowCount) || 0;
+      logSaveEvent('info', 'history cleared (no snapshots to keep)', { requestId, removed });
+      res.json({ ok: true, removed, keptRev: null, keptHash: null });
+      return;
+    }
+
+    const result = await pool.query(
+      'DELETE FROM planner_state_snapshots WHERE rev <> $1',
+      [latest.rev]
+    );
+    const removed = Number(result?.rowCount) || 0;
+    logSaveEvent('info', 'history cleared', {
+      requestId,
+      removed,
+      keptRev: latest.rev,
+      keptHash: latest.hash || null
+    });
+    res.json({ ok: true, removed, keptRev: latest.rev, keptHash: latest.hash || null });
+  } catch (err) {
+    logSaveEvent('error', 'history clear failed', { requestId, error: err?.message || String(err) });
+    console.error('DELETE /api/admin/history failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
