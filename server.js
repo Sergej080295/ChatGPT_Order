@@ -605,6 +605,62 @@ async function runWithRevision(actor, source, note, handler) {
   }
 }
 
+function createRequestId() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const SAVE_LOG_PREFIX = '[SaveService]';
+
+function logSaveEvent(level, message, context = {}) {
+  const payload = { ...context };
+  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+  log(`${SAVE_LOG_PREFIX} ${message}`, payload);
+}
+
+async function persistSnapshotWithSql(options) {
+  const {
+    actor,
+    source,
+    note,
+    snapshot,
+    stateString = null,
+    hash = null,
+    meta = null
+  } = options || {};
+
+  const serialized = safeSerializeSnapshot(snapshot, stateString);
+  const parsedSnapshot = isPlainObject(snapshot) ? snapshot : (() => {
+    try {
+      return JSON.parse(serialized);
+    } catch (_err) {
+      return {};
+    }
+  })();
+  const storedMeta = sanitizeMetaForStorage(meta);
+  const effectiveHash = hash || computeSnapshotHash(serialized);
+
+  const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
+    await applySnapshotToSql(client, parsedSnapshot);
+    await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
+    return await loadLatestSnapshot(client);
+  });
+
+  if (result && Number(result.rev || 0) === rev) {
+    return result;
+  }
+
+  return {
+    rev,
+    snapshot: parsedSnapshot,
+    stateString: serialized,
+    hash: effectiveHash,
+    meta: storedMeta
+  };
+}
+
 function mapHistoryRow(row) {
   const meta = parseJsonColumn(row.meta, null);
   const summary = extractHistorySummary(meta);
@@ -694,54 +750,49 @@ async function ensureSqlHydrated() {
     return;
   }
 
-  console.log(`Hydrating normalized tables from snapshot rev ${latest.rev}`);
-  const hydrationMeta =
-    sanitizeMetaForStorage({
-      actor: 'system',
-      source: 'startup-hydrate',
-      note: 'Автоматическое восстановление таблиц из последнего снимка',
-      hydratedFromRev: latest.rev,
-      baseRev: latest.rev,
-      previousMeta: latest.meta || undefined
-    }) || {
-      actor: 'system',
-      source: 'startup-hydrate',
-      hydratedFromRev: latest.rev,
-      baseRev: latest.rev
-    };
+  const hydrationMeta = sanitizeMetaForStorage({
+    actor: 'system',
+    source: 'startup-hydrate',
+    note: 'Автоматическое восстановление таблиц из последнего снимка',
+    hydratedFromRev: latest.rev,
+    baseRev: latest.rev,
+    previousMeta: latest.meta || undefined
+  }) || {
+    actor: 'system',
+    source: 'startup-hydrate',
+    hydratedFromRev: latest.rev,
+    baseRev: latest.rev
+  };
+
+  const requestId = createRequestId();
+  const startedAt = Date.now();
+  logSaveEvent('info', 'auto hydration started', { requestId, rev: latest.rev, hash: latest.hash || null });
 
   try {
-    const { rev, result } = await runWithRevision(
-      'system',
-      'startup-hydrate',
-      'Автоматическое восстановление таблиц из снимка',
-      async (client, nextRev) => {
-        await applySnapshotToSql(client, latest.snapshot);
-        await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, hydrationMeta);
-        return {
-          rev: nextRev,
-          snapshot: latest.snapshot,
-          stateString: latest.stateString,
-          hash: latest.hash,
-          meta: hydrationMeta
-        };
-      }
-    );
-
-    const updated = result || {
-      rev,
+    const persisted = await persistSnapshotWithSql({
+      actor: 'system',
+      source: 'startup-hydrate',
+      note: 'Автоматическое восстановление таблиц из снимка',
       snapshot: latest.snapshot,
       stateString: latest.stateString,
       hash: latest.hash,
       meta: hydrationMeta
-    };
+    });
 
-    cachedSnapshot = updated;
-    const etag = computeEtag(updated.hash);
+    cachedSnapshot = persisted;
+    const etag = computeEtag(persisted.hash);
     if (etag) {
-      broadcastRevision({ rev: updated.rev, hash: updated.hash, etag });
+      broadcastRevision({ rev: persisted.rev, hash: persisted.hash, etag });
     }
+    const duration = Date.now() - startedAt;
+    logSaveEvent('info', 'auto hydration completed', {
+      requestId,
+      rev: persisted.rev,
+      hash: persisted.hash || null,
+      duration
+    });
   } catch (err) {
+    logSaveEvent('error', 'auto hydration failed', { requestId, error: err?.message || String(err) });
     console.error('Failed to hydrate normalized tables from snapshot', err);
   }
 }
@@ -1098,6 +1149,8 @@ app.get('/api/state', async (req, res) => {
 });
 
 app.put('/api/state', async (req, res) => {
+  const requestId = createRequestId();
+  const startedAt = Date.now();
   try {
     const { snapshot, stateString, requestMeta } = extractSnapshotPayload(req.body);
     if (!isPlainObject(snapshot)) {
@@ -1120,7 +1173,26 @@ app.put('/api/state', async (req, res) => {
         && expectedHash
         && currentHash
         && expectedHash !== currentHash) {
-      res.status(412).json({ error: 'Conflict', currentHash, expectedHash });
+      const conflictEtag = computeEtag(currentHash);
+      if (conflictEtag) {
+        res.set('ETag', conflictEtag);
+      }
+      res.set('Cache-Control', 'no-store');
+      logSaveEvent('warn', 'save conflict', {
+        requestId,
+        expectedHash,
+        currentHash,
+        rev: current?.rev || 0
+      });
+      res.status(409).json({
+        error: 'Conflict',
+        conflict: true,
+        expectedHash,
+        currentHash,
+        hash: currentHash,
+        rev: current?.rev || 0,
+        etag: conflictEtag
+      });
       return;
     }
 
@@ -1136,23 +1208,25 @@ app.put('/api/state', async (req, res) => {
       summary: summary || undefined
     });
 
-    const { rev, result } = await runWithRevision(actor, source, note || summary, async (client, nextRev) => {
-      await applySnapshotToSql(client, snapshot);
-      await insertSnapshotRow(client, nextRev, snapshot, stateString, hash, storedMeta);
-      const persisted = await loadLatestSnapshot(client);
-      if (!persisted || Number(persisted.rev || 0) !== nextRev) {
-        return {
-          rev: nextRev,
-          snapshot,
-          stateString,
-          hash,
-          meta: storedMeta
-        };
-      }
-      return persisted;
+    logSaveEvent('info', 'save request received', {
+      requestId,
+      actor,
+      source,
+      expectedHash: expectedHash || null,
+      currentHash,
+      forceOverwrite: normalizedMeta.concurrency.forceOverwrite
     });
 
-    const latest = result || { rev, snapshot, stateString, hash, meta: storedMeta };
+    const latest = await persistSnapshotWithSql({
+      actor,
+      source,
+      note: note || summary,
+      snapshot,
+      stateString,
+      hash,
+      meta: storedMeta
+    });
+
     const etag = computeEtag(latest.hash);
     if (etag) {
       res.set('ETag', etag);
@@ -1162,12 +1236,20 @@ app.put('/api/state', async (req, res) => {
     cachedSnapshot = latest;
 
     broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
-    res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
+    const duration = Date.now() - startedAt;
+    logSaveEvent('info', 'save completed', {
+      requestId,
+      rev: latest.rev,
+      hash: latest.hash || null,
+      duration
+    });
+    res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, conflict: false });
   } catch (err) {
     if (err && err.message && err.message.includes('Snapshot payload')) {
       res.status(400).json({ error: err.message });
       return;
     }
+    logSaveEvent('error', 'save failed', { requestId, error: err?.message || String(err) });
     console.error('PUT /api/state failed error:', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
@@ -1388,13 +1470,20 @@ app.post('/api/admin/rollback', async (req, res) => {
       previousMeta: parseJsonColumn(row.meta, null)
     });
 
-    const { rev, result } = await runWithRevision(actor, 'rollback', note, async (client, nextRev) => {
-      await applySnapshotToSql(client, snapshot);
-      await insertSnapshotRow(client, nextRev, snapshot, stateString, hash, rollbackMeta);
-      return await loadLatestSnapshot(client);
+    const requestId = createRequestId();
+    const startedAt = Date.now();
+    logSaveEvent('info', 'rollback started', { requestId, actor, hash: targetHash });
+
+    const latest = await persistSnapshotWithSql({
+      actor,
+      source: 'rollback',
+      note,
+      snapshot,
+      stateString,
+      hash,
+      meta: rollbackMeta
     });
 
-    const latest = result || { rev, snapshot, stateString, hash, meta: rollbackMeta };
     const etag = computeEtag(latest.hash);
     if (etag) {
       res.set('ETag', etag);
@@ -1402,8 +1491,16 @@ app.post('/api/admin/rollback', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     cachedSnapshot = latest;
     broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
+    const duration = Date.now() - startedAt;
+    logSaveEvent('info', 'rollback completed', {
+      requestId,
+      rev: latest.rev,
+      hash: latest.hash || null,
+      duration
+    });
     res.json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
   } catch (err) {
+    logSaveEvent('error', 'rollback failed', { error: err?.message || String(err) });
     console.error('POST /api/admin/rollback failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
