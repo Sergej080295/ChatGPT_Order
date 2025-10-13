@@ -196,6 +196,7 @@ async function runMigrations() {
       }
       await client.query('BEGIN');
       try {
+        await ensureMigrationRevision(client);
         await client.query(migration.sql);
         await client.query('INSERT INTO planner_schema_migrations (filename) VALUES ($1)', [migration.filename]);
         await client.query('COMMIT');
@@ -266,6 +267,49 @@ async function insertRevisionRow(client, rev, actor, source, note) {
       [rev, actorValue, sourceValue, noteValue]
     );
   }
+}
+
+async function ensureMigrationRevision(client) {
+  const { rows: regRows } = await client.query("SELECT to_regclass('public.revisions') AS oid");
+  if (!regRows.length || regRows[0].oid === null) {
+    return;
+  }
+
+  await loadRevisionColumnInfo(client);
+
+  let rev = null;
+  const { rows: maxRows } = await client.query('SELECT MAX(rev) AS rev FROM revisions');
+  if (maxRows.length && maxRows[0].rev !== null) {
+    const candidate = Number(maxRows[0].rev);
+    if (Number.isFinite(candidate) && candidate > 0) {
+      rev = candidate;
+    }
+  }
+
+  if (rev === null) {
+    let nextRev = null;
+    const { rows: seqRows } = await client.query("SELECT to_regclass('public.revisions_rev_seq') AS oid");
+    if (seqRows.length && seqRows[0].oid !== null) {
+      const { rows: nextRows } = await client.query("SELECT nextval('revisions_rev_seq') AS rev");
+      if (nextRows.length && nextRows[0].rev !== null) {
+        nextRev = Number(nextRows[0].rev);
+      }
+    }
+    if (!Number.isFinite(nextRev) || nextRev <= 0) {
+      nextRev = 1;
+    }
+    rev = nextRev;
+    await insertRevisionRow(
+      client,
+      rev,
+      'system',
+      'migration-bootstrap',
+      'auto-generated revision for pending migrations'
+    );
+  }
+
+  lastRevision = Math.max(lastRevision, rev);
+  await client.query('SELECT set_config($1, $2, true)', ['app.rev', String(rev)]);
 }
 
 async function loadLatestSnapshot(runner) {
