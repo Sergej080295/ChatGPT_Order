@@ -211,7 +211,7 @@
           err.detail = trimmed;
         }
         err.body = text;
-        if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+        if ((res.status === 409 || res.status === 412) && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
           err.name = 'PlannerConflictError';
         }
         if (attempt === 0 && (err.status === 409 || err.status === 412 || err.status === 428)) {
@@ -1966,7 +1966,7 @@ function createRemoteBridge(){
             err.detail = trimmedDetail;
           }
           err.body = detailText;
-          if(res.status === 409 && (parsedDetail?.error === 'Conflict' || parsedDetail?.error === 'CONFLICT')){
+          if((res.status === 409 || res.status === 412) && (parsedDetail?.error === 'Conflict' || parsedDetail?.error === 'CONFLICT')){
             err.name = 'PlannerConflictError';
           }
           throw err;
@@ -12230,7 +12230,7 @@ function persistNow(stageOverride, opts={}){
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409){
+            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
               if(sharedAttempt){
                 err.__sharedHandled = true;
                 handleSharedSettingsCommitError(err);
@@ -12643,7 +12643,7 @@ function persistNow(stageOverride, opts={}){
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409){
+            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
               if(sharedAttempt){
                 err.__sharedHandled = true;
                 handleSharedSettingsCommitError(err);
@@ -13079,7 +13079,7 @@ function handleSharedSettingsCommitSuccess(){
 
 function handleSharedSettingsCommitError(err){
   sharedSettingsApplying = false;
-  if(err?.status === 409 || err?.name === 'PlannerConflictError'){
+  if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
     showToast({
       title:'Конфликт настроек',
       message:'Настройки изменены другим пользователем одновременно с вами. Повторите действие позже.',

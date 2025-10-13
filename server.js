@@ -675,6 +675,77 @@ function parseJsonColumn(value, fallback = null) {
   }
 }
 
+async function ensureSqlHydrated() {
+  let hasOrders = true;
+  try {
+    const { rows } = await pool.query('SELECT EXISTS (SELECT 1 FROM orders LIMIT 1) AS has_orders');
+    hasOrders = Boolean(rows[0]?.has_orders);
+  } catch (err) {
+    console.warn('Failed to probe orders table before hydration', err);
+    return;
+  }
+
+  if (hasOrders) {
+    return;
+  }
+
+  const latest = await loadLatestSnapshot();
+  if (!latest || !Number.isFinite(latest.rev) || latest.rev <= 0) {
+    return;
+  }
+
+  console.log(`Hydrating normalized tables from snapshot rev ${latest.rev}`);
+  const hydrationMeta =
+    sanitizeMetaForStorage({
+      actor: 'system',
+      source: 'startup-hydrate',
+      note: 'Автоматическое восстановление таблиц из последнего снимка',
+      hydratedFromRev: latest.rev,
+      baseRev: latest.rev,
+      previousMeta: latest.meta || undefined
+    }) || {
+      actor: 'system',
+      source: 'startup-hydrate',
+      hydratedFromRev: latest.rev,
+      baseRev: latest.rev
+    };
+
+  try {
+    const { rev, result } = await runWithRevision(
+      'system',
+      'startup-hydrate',
+      'Автоматическое восстановление таблиц из снимка',
+      async (client, nextRev) => {
+        await applySnapshotToSql(client, latest.snapshot);
+        await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, hydrationMeta);
+        return {
+          rev: nextRev,
+          snapshot: latest.snapshot,
+          stateString: latest.stateString,
+          hash: latest.hash,
+          meta: hydrationMeta
+        };
+      }
+    );
+
+    const updated = result || {
+      rev,
+      snapshot: latest.snapshot,
+      stateString: latest.stateString,
+      hash: latest.hash,
+      meta: hydrationMeta
+    };
+
+    cachedSnapshot = updated;
+    const etag = computeEtag(updated.hash);
+    if (etag) {
+      broadcastRevision({ rev: updated.rev, hash: updated.hash, etag });
+    }
+  } catch (err) {
+    console.error('Failed to hydrate normalized tables from snapshot', err);
+  }
+}
+
 function orderKeyFromTask(task) {
   if (!task || typeof task !== 'object') return null;
   const identity = sanitizeString(task.orderIdentity);
@@ -1352,6 +1423,7 @@ async function bootstrap() {
   await runMigrations();
   await getLatestRevision();
   await getCachedSnapshot();
+  await ensureSqlHydrated();
   app.listen(PORT, () => {
     console.log(`Planner SQL bridge listening on port ${PORT}`);
   });

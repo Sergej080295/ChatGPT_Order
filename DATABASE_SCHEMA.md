@@ -1,56 +1,39 @@
-# Архитектура и тестирование базы данных Planner
+# Архитектура и проверка SQL-базы Planner
 
-Документ описывает актуальную схему SQL и работу сервера `server.js`, который полностью сохраняет состояние планировщика и CRM в PostgreSQL. Все изменения схемы доставляются из каталога `migrations/` и помечаются в таблице `planner_schema_migrations`.【F:server.js†L200-L213】
+Документ описывает, как сервер `server.js` работает с PostgreSQL, какие таблицы создают миграции и каким образом проверить, что изменения из интерфейса попадают в базу и возвращаются всем пользователям.
 
-## 1. Ревизии и исторические данные
-- Базовая миграция `003_full_sql_schema.sql` создаёт последовательность `revisions_rev_seq` и таблицу `revisions`, куда для каждой правки записываются `rev`, временная метка, а также опциональные `actor`, `source`, `note`.【F:migrations/003_full_sql_schema.sql†L1-L66】
-- При любом сохранении `runWithRevision()` открывает транзакцию, получает следующий `rev`, вставляет строку в `revisions`, выставляет `SET LOCAL app.rev` и вызывает переданный обработчик. После коммита номер ревизии кэшируется в `lastRevision`.【F:server.js†L585-L605】
-- Миграции `004_settings_admin_snapshot_retention_backfill.sql` и `005_fix_history_tables.sql` синхронизируют структуру всех таблиц `_hist`, удаляют устаревшие триггеры `hist_*` и обеспечивают запись ревизий для настроек, заказов и мощностей без конфликтов. Они используют `ADD COLUMN IF NOT EXISTS` и `ON CONFLICT`, поэтому миграции идемпотентны и безопасно переигрывают старые базы.【F:migrations/004_settings_admin_snapshot_retention_backfill.sql†L1-L126】【F:migrations/005_fix_history_tables.sql†L1-L138】
+## 1. Ревизии и история изменений
+- Базовая миграция `003_full_sql_schema.sql` создаёт последовательность `revisions_rev_seq`, таблицу `revisions` и журнал применённых миграций. Все идентификаторы заказов, стадий и настроек используют единые типы и внешние ключи.【F:migrations/003_full_sql_schema.sql†L1-L109】
+- Миграции `004_settings_admin_snapshot_retention_backfill.sql` и `005_fix_history_tables.sql` приводят все таблицы `_hist` к актуальной структуре, пересоздают универсальные триггеры истории и удаляют легаси-функции. Благодаря `ADD COLUMN IF NOT EXISTS` и `ON CONFLICT` эти файлы можно безопасно применять на старых базах.【F:migrations/004_settings_admin_snapshot_retention_backfill.sql†L1-L158】【F:migrations/005_fix_history_tables.sql†L1-L184】
+- Каждое сохранение вызывает `runWithRevision()`: функция открывает транзакцию, получает следующий `rev` из `revisions_rev_seq`, вставляет строку в `revisions`, устанавливает `SET LOCAL app.rev` и запускает переданный обработчик. После коммита номер ревизии сохраняется в кэше для SSE-оповещений.【F:server.js†L585-L608】
 
-## 2. Нормализованные таблицы планировщика
-- `processes` хранит коды стадий, отображаемые имена и флаги параллельности. Функция `applySnapshotToSql()` собирает уникальные стадии из снимка, нормализует код, создаёт записи и помнит соответствие ID стадии для последующей загрузки задач.【F:server.js†L691-L718】
-- `customers` и `orders` описывают клиентов и заказы. Заказ содержит `crm_order_id`, обязательный `number`, ссылку на клиента, статусы и временные метки; `deleted_at` заполняется для элементов из корзины. Миграции `007–009` выравнивают легаси-схемы: добавляют `customer_id`, `crm_order_id`, поле `number`, индексы и ограничения уникальности. Таким образом сервер всегда может связать задачу со строкой заказа через ключи `orderIdentity/orderId/orderNumber/uid` из снимка.【F:server.js†L733-L842】【F:migrations/007_orders_customer_id_fix.sql†L1-L172】【F:migrations/008_orders_crm_order_id_fix.sql†L1-L144】【F:migrations/009_orders_number_column_fix.sql†L1-L135】
-- `order_process` хранит прохождение заказов по стадиям (seq, плановые/фактические даты, прогресс, позицию). Функция `applySnapshotToSql()` пересоздаёт записи, расставляя порядковые номера и индексы в рамках каждой стадии, что гарантирует сохранение порядка задач при перезагрузке страницы.【F:server.js†L843-L895】
-- `capacity_by_process` фиксирует мощность на дату, `settings_autoweight`, `settings_journal`, `settings_column_widths`, `settings_mapping`, `settings_admin` и `excluded_statuses` отражают общие настройки интерфейса. Каждая вставка выполняется через `INSERT ... ON CONFLICT`, поэтому таблицы всегда соответствуют значениям из последнего снимка и их история корректно ведётся триггерами. 【F:server.js†L896-L918】
+## 2. Хранение снимков и нормализованных таблиц
+- Основное состояние планировщика хранится в `planner_state_snapshots (rev, snapshot JSONB, meta JSONB, hash TEXT, created_at)`, которую создаёт миграция `012_restore_planner_state_snapshots.sql`. Для быстрых выборок добавлены индексы по ревизии и дате, а внешний ключ `rev` гарантирует связь с таблицей `revisions`.【F:migrations/012_restore_planner_state_snapshots.sql†L3-L16】
+- Перед записью `insertSnapshotRow()` использует `safeSerializeSnapshot()` и `serializeMeta()`, чтобы гарантировать валидный JSONB и очищенные метаданные. В таблицу никогда не попадут строки вида `[object Object]`, и при повторном чтении возвращается исходный снимок с тем же SHA‑1-хешем.【F:server.js†L520-L573】
+- Функция `applySnapshotToSql()` пересобирает нормализованные таблицы: стадии (`processes`), клиентов (`customers`), заказы (`orders`), прохождение стадий (`order_process`), мощности (`capacity_by_process`) и все настройки (`settings_*`, `excluded_statuses`). Все вставки выполняются через `INSERT ... ON CONFLICT`, поэтому данные в SQL всегда соответствуют последнему снимку, а триггеры `_hist` фиксируют историю.【F:server.js†L762-L1078】
 
-## 3. Хранение JSON-снимков
-- Миграция `012_restore_planner_state_snapshots.sql` создаёт таблицу `planner_state_snapshots (rev, snapshot JSONB, meta JSONB, hash TEXT, created_at TIMESTAMPTZ)` и индексы по ревизии и дате. Внешний ключ на `revisions` поддерживает каскадное удаление устаревших ревизий. 【F:migrations/012_restore_planner_state_snapshots.sql†L3-L16】
-- Перед записью снимка `safeSerializeSnapshot()` валидирует готовую JSON-строку или пере-стрингует объект, чтобы в таблицу всегда попадало корректное значение JSONB. Метаданные проходят через `serializeMeta()`, которое удаляет недопустимые типы и сериализует в JSON. Благодаря этому PostgreSQL никогда не получает строку вида `[object Object]`, и повторное чтение из `planner_state_snapshots` возвращает исходные данные без искажений.【F:server.js†L520-L582】
-- `loadLatestSnapshot()` выбирает последнюю запись, парсит JSONB в объект, пересчитывает SHA‑1 при отсутствии сохранённого хеша и возвращает структуру `{ snapshot, stateString, hash, meta }`. Эта функция используется как при старте сервера, так и после каждой записи, поэтому кэш `cachedSnapshot` всегда отражает фактическое состояние базы. 【F:server.js†L271-L305】
+## 3. Поток обработки `/api/state`
+1. Клиент отправляет `PUT /api/state` c телом `{ state, meta }`. Сервер парсит полезную нагрузку, вычисляет SHA‑1 и извлекает ETag из заголовка `If-Match` или из `meta` (поля `baseHash/baseEtag`).【F:server.js†L360-L436】【F:server.js†L1100-L1166】
+2. Если хеши не совпадают и не запрошен `forceOverwrite`, сервер отвечает `412 Precondition Failed` с телом `{ error: 'Conflict', currentHash, expectedHash }`. Это позволяет фронтенду запустить повторную загрузку и аккуратно спросить пользователя о перезаписи.【F:server.js†L1119-L1124】
+3. При отсутствии конфликта `runWithRevision()` в одной транзакции вызывает `applySnapshotToSql()`, пишет JSONB-снимок через `insertSnapshotRow()` и возвращает фактическое состояние из базы (`loadLatestSnapshot()`). После коммита сервер обновляет кэш и рассылает SSE-событие `{ type: 'revision', rev, hash, etag }`, чтобы другие клиенты сразу увидели изменения.【F:server.js†L1108-L1164】【F:server.js†L1176-L1209】
 
-## 4. Поток сохранения состояния
-1. Клиент отправляет `PUT /api/state` с обёрткой `{ state, meta }`. `extractSnapshotPayload()` принимает как строку, так и объект, и выдаёт готовый JSON-объект и строковое представление состояния.【F:server.js†L360-L504】
-2. `normalizeRequestMeta()` очищает метаданные запроса, `computeSnapshotHash()` считает SHA‑1 по строке состояния, а `parseIfMatchHeader()` проверяет конфликт по ETag. Если база содержит более свежий хеш и не запрошен `forceOverwrite`, сервер отвечает `412 Precondition Failed` без изменений в БД.【F:server.js†L308-L359】【F:server.js†L942-L980】
-3. Внутри `runWithRevision()` вызывается `applySnapshotToSql()`, которая в транзакции очищает связанные таблицы, пересобирает справочники, заказы, стадии, настройки и список исключённых статусов. Затем `insertSnapshotRow()` записывает JSONB-снимок в `planner_state_snapshots` и закрепляет хеш в той же ревизии. 【F:server.js†L585-L918】
-4. После коммита `loadLatestSnapshot()` повторно считывает сохранённую строку, чтобы гарантированно вернуть клиенту то же состояние, что оказалось в PostgreSQL. Сервер обновляет ETag, хранит снимок в кэше и рассылает событие SSE `{ type: 'revision', rev, hash }` всем подключённым слушателям. Благодаря этому новые настройки или заказы становятся видны остальным пользователям сразу после сохранения. 【F:server.js†L1002-L1045】
+## 4. Автоматическая гидратация нормализованных таблиц
+- При старте `bootstrap()` запускает миграции, поднимает последнюю ревизию и кэш, а затем вызывает `ensureSqlHydrated()`. Если таблица `orders` пуста, сервер загружает последний снимок из `planner_state_snapshots`, внутри новой ревизии пересобирает все связанные таблицы и сохраняет служебную запись с пометкой `startup-hydrate`. Это предотвращает ситуацию, когда в SQL нет данных, хотя снимки существуют (например, после восстановления из бэкапа).【F:server.js†L1422-L1429】【F:server.js†L692-L745】
 
-## 5. Импорт и администрирование
-- Скрипт `scripts/import_legacy_snapshot.js` читает `planner-state.json`, нормализует данные теми же шагами, что и сервер, вычисляет хеш и через `safeSerializeSnapshot()`/`serializeMeta()` вставляет снимок в `planner_state_snapshots`. Перед записью он создаёт новую ревизию и ставит `SET LOCAL app.rev`, чтобы истории настроек и заказов сохранились. Скрипт предназначен для первичного перехода с файлового формата на SQL.【F:scripts/import_legacy_snapshot.js†L1-L520】
-- Эндпоинты `/api/admin/history`, `/api/admin/history/:hash`, `/api/admin/snapshot`, `/api/admin/rollback` позволяют просматривать историю, фиксировать ручные снимки и откатывать состояние, переиспользуя общий механизм ревизий и сериализации. 【F:server.js†L1048-L1233】
-
-## 6. Как проверить работу базы данных
-1. **Миграции.** Выполните `npm run migrate` — скрипт `scripts/run_migrations.js` применит все файлы из `migrations/` и зафиксирует их в `planner_schema_migrations`. Убедитесь, что команда завершается без ошибок.
-2. **Проверка снимков.** После запуска сервера (`npm start`) измените настройки в разделе «Общие» или «Администрирование». На стороне БД проверьте:
+## 5. Проверка работы базы данных
+1. **Миграции.** Выполните `npm run migrate`. В `planner_schema_migrations` должны появиться строки с номерами всех SQL-файлов.
+2. **Автогидратация.** После первого старта сервера (`npm start`) проверьте, что консоль содержит сообщение `Hydrating normalized tables from snapshot rev ...`. Затем убедитесь, что таблица `orders` не пуста: `SELECT COUNT(*) FROM orders;`.
+3. **Проверка настроек.** Измените значения в разделах «Общие» и «Администрирование», нажмите «Применить» и убедитесь, что кнопка возвращается в нормальное состояние. В базе должны обновиться таблицы: 
    ```sql
-   SELECT rev, hash, snapshot->'meta'->'settings' AS settings
-     FROM planner_state_snapshots
-    ORDER BY rev DESC
-    LIMIT 1;
+   SELECT allow_force_overwrite, snapshot_retention FROM settings_admin;
+   SELECT column_key, width_px FROM settings_column_widths ORDER BY column_key;
+   SELECT crm_stage, planner_process_id, is_ignored FROM settings_mapping ORDER BY crm_stage;
+   SELECT status_key FROM excluded_statuses ORDER BY status_key;
+   SELECT max_rows FROM settings_journal;
    ```
-   – запись должна содержать новые значения.
-3. **Настройки в нормализованных таблицах.** Убедитесь, что таблицы `settings_admin`, `settings_autoweight`, `settings_mapping`, `capacity_by_process` обновились в той же ревизии:
-   ```sql
-   SELECT * FROM settings_admin;
-   SELECT * FROM settings_mapping ORDER BY crm_stage;
-   SELECT * FROM capacity_by_process;
-   ```
-4. **Заказы и этапы.** Измените заказ через интерфейс (например, отметьте «Готово» или скорректируйте дату). Проверьте таблицы `orders` и `order_process`, а также историю:
-   ```sql
-   SELECT * FROM orders ORDER BY id DESC LIMIT 5;
-   SELECT * FROM order_process ORDER BY id DESC LIMIT 5;
-   SELECT * FROM orders_hist ORDER BY changed_at DESC LIMIT 5;
-   ```
-5. **Синхронность клиентов.** Подключите второй браузер, измените настройки в первом окне и убедитесь, что второй клиент получает событие SSE и видит правку без перезагрузки (сервер транслирует ревизию через `/api/events`). 【F:server.js†L1002-L1045】
-6. **Импорт.** Для миграции старых данных положите `planner-state.json` в корень проекта и запустите `node scripts/import_legacy_snapshot.js`. После завершения проверьте, что в `planner_state_snapshots` появилась новая ревизия, а таблицы `orders`, `order_process`, `settings_*` и `excluded_statuses` содержат данные из файла.【F:scripts/import_legacy_snapshot.js†L46-L520】
+   Параллельно в `planner_state_snapshots` должна появиться новая ревизия с обновлённым `snapshot->'meta'->'settings'`.
+4. **Изменение заказов.** Добавьте или отредактируйте заказ (через CRM или «Общий список заказов»). Проверьте строки в таблицах `orders` и `order_process`, а также соответствующие записи в `orders_hist` и `order_process_hist`.
+5. **История.** Запросите `/api/admin/history` или выполните в SQL: `SELECT rev, meta FROM planner_state_snapshots ORDER BY created_at DESC LIMIT 5;` — новые ревизии должны появляться после каждого сохранения.
+6. **Синхронизация клиентов.** Откройте приложение в двух браузерах. При изменении настроек на первом клиенте второй должен сразу получить обновление благодаря SSE (`/api/events`).
 
-Следуя этим шагам, вы убедитесь, что любые изменения из веб‑приложения сохраняются в PostgreSQL и немедленно доступны всем пользователям.
+Следуя этим шагам, можно убедиться, что данные надёжно попадают в PostgreSQL, история фиксируется в таблицах `_hist`, а интерфейс корректно читает изменения как для планировщика, так и для CRM.
