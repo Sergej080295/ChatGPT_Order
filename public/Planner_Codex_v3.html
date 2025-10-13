@@ -13787,7 +13787,16 @@ async function openHistoryDetail(hash){
     }
     const content = document.getElementById('historyViewContent');
     if(content){
-      content.value = JSON.stringify(detail.state ?? null, null, 2);
+      const diffPayload = detail && typeof detail === 'object'
+        && detail.diff && typeof detail.diff === 'object'
+        && Object.keys(detail.diff).length ? detail.diff : null;
+      if(diffPayload){
+        content.value = JSON.stringify(diffPayload, null, 2);
+      }else if(detail.state){
+        content.value = JSON.stringify(detail.state, null, 2);
+      }else{
+        content.value = 'Отличий с текущим состоянием не найдено.';
+      }
     }
     dialog.showModal();
   }catch(err){

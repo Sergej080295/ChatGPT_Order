@@ -731,6 +731,71 @@ function parseJsonColumn(value, fallback = null) {
   }
 }
 
+function valuesEqual(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      if (!valuesEqual(a[index], b[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!valuesEqual(a[key], b[key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function diffSnapshotValue(current, next) {
+  if (valuesEqual(current, next)) {
+    return undefined;
+  }
+  if (Array.isArray(current) && Array.isArray(next)) {
+    return next;
+  }
+  if (isPlainObject(current) && isPlainObject(next)) {
+    const diff = {};
+    const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+    for (const key of keys) {
+      const delta = diffSnapshotValue(
+        current ? current[key] : undefined,
+        next ? next[key] : undefined
+      );
+      if (delta !== undefined) {
+        diff[key] = delta;
+      }
+    }
+    return Object.keys(diff).length ? diff : undefined;
+  }
+  if (next === undefined) {
+    return null;
+  }
+  return next;
+}
+
+function buildSnapshotDiff(current, next) {
+  const delta = diffSnapshotValue(current || {}, next || {});
+  if (delta === undefined || delta === null) {
+    return null;
+  }
+  if (isPlainObject(delta) && !Object.keys(delta).length) {
+    return null;
+  }
+  return delta;
+}
+
 async function ensureSqlHydrated() {
   let hasOrders = true;
   try {
@@ -1103,14 +1168,31 @@ async function applySnapshotToSql(client, snapshot) {
   const adminSettings = settings.admin || {};
   const allowForce = parseBoolean(adminSettings.allowForceOverwrite, false);
   const snapshotRetention = parseInteger(adminSettings.snapshotRetention, 50);
+  let historyLimit = parseInteger(adminSettings.historyLimit, 50);
+  if (!Number.isFinite(historyLimit) || historyLimit <= 0) {
+    historyLimit = 50;
+  }
+  historyLimit = Math.max(1, Math.min(historyLimit, 500));
+  let historyDailyLimit = parseInteger(adminSettings.historyDailyLimit, 3);
+  if (!Number.isFinite(historyDailyLimit) || historyDailyLimit <= 0) {
+    historyDailyLimit = 3;
+  }
+  historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
   await client.query(
-    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
-     VALUES (1,$1,$2,NOW())
+    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
+     VALUES (1,$1,$2,$3,$4,NOW())
      ON CONFLICT (id) DO UPDATE
        SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
            snapshot_retention = EXCLUDED.snapshot_retention,
+           history_limit = EXCLUDED.history_limit,
+           history_daily_limit = EXCLUDED.history_daily_limit,
            updated_at = NOW()` ,
-    [allowForce, Number.isFinite(snapshotRetention) ? snapshotRetention : 50]
+    [
+      allowForce,
+      Number.isFinite(snapshotRetention) ? snapshotRetention : 50,
+      historyLimit,
+      historyDailyLimit
+    ]
   );
 
   const ignoredStatuses = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates : [];
@@ -1372,6 +1454,8 @@ app.get('/api/admin/history/:hash', async (req, res) => {
     const row = rows[0];
     const meta = parseJsonColumn(row.meta, null);
     const snapshot = parseJsonColumn(row.snapshot, null);
+    const currentSnapshot = await getCachedSnapshot();
+    const diff = buildSnapshotDiff(currentSnapshot?.snapshot || {}, snapshot || {});
     const actor = row.actor || (meta && meta.actor ? meta.actor : null);
     const source = row.source || (meta && meta.source ? meta.source : null);
     const note = row.note || (meta && meta.note ? meta.note : null);
@@ -1385,7 +1469,8 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       source,
       note,
       meta,
-      state: snapshot
+      state: snapshot,
+      diff: diff || null
     });
   } catch (err) {
     console.error('GET /api/admin/history/:hash failed', err);

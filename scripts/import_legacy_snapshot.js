@@ -466,17 +466,28 @@ function serializeMeta(meta) {
 
     const adminSettings = settings.admin || {};
     const allowForce = adminSettings.allowForceOverwrite === true;
-    const snapshotRetention = Number.isFinite(Number(adminSettings.snapshotRetention))
-      ? Number(adminSettings.snapshotRetention)
-      : 50;
+    const snapshotRetentionRaw = Number(adminSettings.snapshotRetention);
+    const snapshotRetention = Number.isFinite(snapshotRetentionRaw) ? snapshotRetentionRaw : 50;
+    let historyLimit = Number(adminSettings.historyLimit);
+    if (!Number.isFinite(historyLimit) || historyLimit <= 0) {
+      historyLimit = 50;
+    }
+    historyLimit = Math.max(1, Math.min(historyLimit, 500));
+    let historyDailyLimit = Number(adminSettings.historyDailyLimit);
+    if (!Number.isFinite(historyDailyLimit) || historyDailyLimit <= 0) {
+      historyDailyLimit = 3;
+    }
+    historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
     await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
-       VALUES (1,$1,$2,NOW())
+      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
+       VALUES (1,$1,$2,$3,$4,NOW())
        ON CONFLICT (id) DO UPDATE
          SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
              snapshot_retention = EXCLUDED.snapshot_retention,
+             history_limit = EXCLUDED.history_limit,
+             history_daily_limit = EXCLUDED.history_daily_limit,
              updated_at = NOW()` ,
-      [allowForce, snapshotRetention]
+      [allowForce, snapshotRetention, historyLimit, historyDailyLimit]
     );
 
     if (isPlainObject(settings.tableColumns)) {

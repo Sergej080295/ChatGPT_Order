@@ -5,6 +5,7 @@
 ## 1. Ревизии и история изменений
 - Базовая миграция `003_full_sql_schema.sql` создаёт последовательность `revisions_rev_seq`, таблицу `revisions` и журнал применённых миграций. Все идентификаторы заказов, стадий и настроек используют единые типы и внешние ключи.【F:migrations/003_full_sql_schema.sql†L1-L109】
 - Миграции `004_settings_admin_snapshot_retention_backfill.sql` и `005_fix_history_tables.sql` приводят все таблицы `_hist` к актуальной структуре, пересоздают универсальные триггеры истории и удаляют легаси-функции. Благодаря `ADD COLUMN IF NOT EXISTS` и `ON CONFLICT` эти файлы можно безопасно применять на старых базах.【F:migrations/004_settings_admin_snapshot_retention_backfill.sql†L1-L158】【F:migrations/005_fix_history_tables.sql†L1-L184】
+- Обновление `013_settings_admin_limits.sql` добавляет в `settings_admin` и `settings_admin_hist` явные поля `history_limit` и `history_daily_limit`, чтобы административные лимиты журнала фиксировались в SQL и попадали в историю изменений.【F:migrations/013_settings_admin_limits.sql†L1-L47】
 - Каждое сохранение вызывает `runWithRevision()`: функция открывает транзакцию, получает следующий `rev` из `revisions_rev_seq`, вставляет строку в `revisions`, устанавливает `SET LOCAL app.rev` и запускает переданный обработчик. После коммита номер ревизии сохраняется в кэше для SSE-оповещений.【F:server.js†L585-L608】
 
 ## 2. Хранение снимков и нормализованных таблиц
@@ -25,7 +26,7 @@
 2. **Автогидратация.** После первого старта сервера (`npm start`) проверьте, что консоль содержит сообщение `Hydrating normalized tables from snapshot rev ...`. Затем убедитесь, что таблица `orders` не пуста: `SELECT COUNT(*) FROM orders;`.
 3. **Проверка настроек.** Измените значения в разделах «Общие» и «Администрирование», нажмите «Применить» и убедитесь, что кнопка возвращается в нормальное состояние. В базе должны обновиться таблицы: 
    ```sql
-   SELECT allow_force_overwrite, snapshot_retention FROM settings_admin;
+   SELECT allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit FROM settings_admin;
    SELECT column_key, width_px FROM settings_column_widths ORDER BY column_key;
    SELECT crm_stage, planner_process_id, is_ignored FROM settings_mapping ORDER BY crm_stage;
    SELECT status_key FROM excluded_statuses ORDER BY status_key;
