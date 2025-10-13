@@ -5,6 +5,11 @@ ALTER TABLE settings_admin
   ADD COLUMN IF NOT EXISTS history_limit INTEGER,
   ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER;
 
+-- Align history table to the current structure (base columns + rev/op/changed_at).
+ALTER TABLE settings_admin_hist
+  ADD COLUMN IF NOT EXISTS history_limit INTEGER,
+  ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER;
+
 UPDATE settings_admin
    SET history_limit = COALESCE(history_limit, 50);
 
@@ -21,11 +26,6 @@ ALTER TABLE settings_admin
   ALTER COLUMN history_limit SET NOT NULL,
   ALTER COLUMN history_daily_limit SET DEFAULT 3,
   ALTER COLUMN history_daily_limit SET NOT NULL;
-
--- Align history table to the current structure (base columns + rev/op/changed_at).
-ALTER TABLE settings_admin_hist
-  ADD COLUMN IF NOT EXISTS history_limit INTEGER,
-  ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER;
 
 UPDATE settings_admin_hist AS h
    SET history_limit = COALESCE(h.history_limit, a.history_limit, 50),
