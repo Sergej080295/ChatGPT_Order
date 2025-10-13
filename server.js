@@ -517,16 +517,68 @@ function extractHistorySummary(meta) {
   return null;
 }
 
-async function insertSnapshotRow(client, rev, snapshot, hash, meta) {
+function safeSerializeSnapshot(snapshot, stateString = null) {
+  if (typeof stateString === 'string') {
+    const trimmed = stateString.trim();
+    if (trimmed) {
+      try {
+        JSON.parse(trimmed);
+        return trimmed;
+      } catch (err) {
+        console.warn('Failed to validate provided snapshot string, will re-stringify object', err);
+      }
+    }
+  }
+
+  if (typeof snapshot === 'string') {
+    const trimmed = snapshot.trim();
+    if (!trimmed) {
+      return '{}';
+    }
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch (err) {
+      console.warn('Snapshot string payload is invalid JSON, returning empty snapshot', err);
+      return '{}';
+    }
+  }
+
+  try {
+    return JSON.stringify(snapshot ?? {});
+  } catch (err) {
+    console.error('Failed to serialize snapshot payload, falling back to empty object', err);
+    return '{}';
+  }
+}
+
+function serializeMeta(meta) {
+  const sanitized = sanitizeMetaForStorage(meta);
+  if (sanitized === null) {
+    return null;
+  }
+  try {
+    return JSON.stringify(sanitized);
+  } catch (err) {
+    console.warn('Failed to serialize snapshot meta, discarding meta payload', err);
+    return null;
+  }
+}
+
+async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta) {
+  const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
+  const metaJson = serializeMeta(meta);
+  const effectiveHash = hash || computeSnapshotHash(snapshotJson);
+
   await client.query(
     `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-     VALUES ($1,$2,$3,$4)
+     VALUES ($1,$2::jsonb,$3::jsonb,$4)
      ON CONFLICT (rev) DO UPDATE
        SET snapshot = EXCLUDED.snapshot,
            meta = EXCLUDED.meta,
            hash = EXCLUDED.hash,
            created_at = NOW()` ,
-    [rev, snapshot, sanitizeMetaForStorage(meta), hash]
+    [rev, snapshotJson, metaJson, effectiveHash]
   );
 }
 
@@ -1015,7 +1067,7 @@ app.put('/api/state', async (req, res) => {
 
     const { rev, result } = await runWithRevision(actor, source, note || summary, async (client, nextRev) => {
       await applySnapshotToSql(client, snapshot);
-      await insertSnapshotRow(client, nextRev, snapshot, hash, storedMeta);
+      await insertSnapshotRow(client, nextRev, snapshot, stateString, hash, storedMeta);
       const persisted = await loadLatestSnapshot(client);
       if (!persisted || Number(persisted.rev || 0) !== nextRev) {
         return {
@@ -1201,7 +1253,7 @@ app.post('/api/admin/snapshot', async (req, res) => {
       note: note || undefined
     });
     const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-      await insertSnapshotRow(client, nextRev, latest.snapshot, latest.hash, meta);
+      await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, meta);
       return await loadLatestSnapshot(client);
     });
     const stored = result || await loadLatestSnapshot();
@@ -1267,7 +1319,7 @@ app.post('/api/admin/rollback', async (req, res) => {
 
     const { rev, result } = await runWithRevision(actor, 'rollback', note, async (client, nextRev) => {
       await applySnapshotToSql(client, snapshot);
-      await insertSnapshotRow(client, nextRev, snapshot, hash, rollbackMeta);
+      await insertSnapshotRow(client, nextRev, snapshot, stateString, hash, rollbackMeta);
       return await loadLatestSnapshot(client);
     });
 

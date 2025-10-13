@@ -43,9 +43,44 @@ function titleFromCode(code) {
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function safeSerializeSnapshot(snapshot, stateString = null) {
+  if (typeof stateString === 'string') {
+    const trimmed = stateString.trim();
+    if (trimmed) {
+      try {
+        JSON.parse(trimmed);
+        return trimmed;
+      } catch (err) {
+        console.warn('Legacy import: provided state string is invalid JSON, re-stringifying snapshot', err);
+      }
+    }
+  }
+
+  if (typeof snapshot === 'string') {
+    const trimmed = snapshot.trim();
+    if (!trimmed) {
+      return '{}';
+    }
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch (err) {
+      console.warn('Legacy import: snapshot payload string is invalid JSON, falling back to empty object', err);
+      return '{}';
+    }
+  }
+
+  try {
+    return JSON.stringify(snapshot ?? {});
+  } catch (err) {
+    console.error('Legacy import: failed to stringify snapshot, storing empty object instead', err);
+    return '{}';
+  }
+}
+
 function computeSnapshotHash(snapshot) {
-  const stateString = typeof snapshot === 'string' ? snapshot : JSON.stringify(snapshot);
-  return crypto.createHash('sha1').update(stateString, 'utf8').digest('hex');
+  const serialized = safeSerializeSnapshot(snapshot);
+  return crypto.createHash('sha1').update(serialized, 'utf8').digest('hex');
 }
 
 function orderKeyFromTask(task) {
@@ -156,6 +191,19 @@ function sanitizeMetaForStorage(meta) {
     }
   }
   return Object.keys(result).length ? result : null;
+}
+
+function serializeMeta(meta) {
+  const sanitized = sanitizeMetaForStorage(meta);
+  if (sanitized === null) {
+    return null;
+  }
+  try {
+    return JSON.stringify(sanitized);
+  } catch (err) {
+    console.warn('Legacy import: failed to serialize meta payload, discarding meta', err);
+    return null;
+  }
 }
 
 (async () => {
@@ -479,22 +527,25 @@ function sanitizeMetaForStorage(meta) {
       );
     }
 
-    const snapshotMeta = sanitizeMetaForStorage({
+    const snapshotMetaRaw = {
       actor: 'import-script',
       source: 'legacy-import',
       summary: 'Initial import',
       originalMeta: snapshot.meta?.lastChange || null
-    });
+    };
+
+    const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
+    const metaJson = serializeMeta(snapshotMetaRaw);
 
     await client.query(
       `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-       VALUES ($1,$2,$3,$4)
+       VALUES ($1,$2::jsonb,$3::jsonb,$4)
        ON CONFLICT (rev) DO UPDATE
          SET snapshot = EXCLUDED.snapshot,
              meta = EXCLUDED.meta,
              hash = EXCLUDED.hash,
              created_at = NOW()` ,
-      [rev, snapshot, snapshotMeta, hash]
+      [rev, snapshotJson, metaJson, hash]
     );
 
     await client.query('COMMIT');
