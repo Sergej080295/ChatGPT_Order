@@ -341,6 +341,8 @@ async function loadLatestSnapshot(runner) {
     if (prefMap && prefMap.size) {
       applySharedPreferencesToSnapshot(snapshotObj, prefMap);
     }
+    const autoweight = await loadAutoweightSettings(client);
+    normalizeExtraTimeSettings(snapshotObj, autoweight);
   } catch (err) {
     console.warn('Failed to merge shared preferences into snapshot', err);
   }
@@ -615,6 +617,51 @@ function safeSerializeSnapshot(snapshot, stateString = null) {
   }
 }
 
+function normalizeExtraTimeSettings(snapshot, override = null) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+  if (!isPlainObject(snapshot.meta.settings)) {
+    snapshot.meta.settings = {};
+  }
+  if (!isPlainObject(snapshot.meta.settings.extraTime)) {
+    snapshot.meta.settings.extraTime = {};
+  }
+
+  const extra = snapshot.meta.settings.extraTime;
+  const overridePercent = override && Number.isFinite(override.percent)
+    ? override.percent
+    : null;
+  const overrideMinimum = override && Number.isFinite(override.minimum)
+    ? override.minimum
+    : null;
+
+  const percentSource = overridePercent !== null
+    ? overridePercent
+    : Number(extra.percent);
+  const minimumSource = overrideMinimum !== null
+    ? overrideMinimum
+    : Number(extra.minimum);
+
+  const normalizedPercent = Number.isFinite(percentSource)
+    ? Math.max(0, Math.round(percentSource * 100) / 100)
+    : DEFAULT_EXTRA_PERCENT;
+  const normalizedMinimum = Number.isFinite(minimumSource)
+    ? Math.max(0, Math.round(minimumSource * 100) / 100)
+    : DEFAULT_EXTRA_MINIMUM;
+
+  extra.percent = normalizedPercent;
+  extra.minimum = normalizedMinimum;
+  if (override && override.enabled !== null) {
+    extra.enabled = Boolean(override.enabled);
+  } else if (typeof extra.enabled !== 'boolean') {
+    extra.enabled = normalizedPercent > 0 || normalizedMinimum > 0;
+  }
+}
+
 function serializeMeta(meta) {
   const sanitized = sanitizeMetaForStorage(meta);
   if (sanitized === null) {
@@ -694,16 +741,50 @@ async function persistSnapshotWithSql(options) {
     meta = null
   } = options || {};
 
-  const serialized = safeSerializeSnapshot(snapshot, stateString);
-  const parsedSnapshot = isPlainObject(snapshot) ? snapshot : (() => {
+  let parsedSnapshot = null;
+  if (isPlainObject(snapshot)) {
     try {
-      return JSON.parse(serialized);
+      parsedSnapshot = JSON.parse(JSON.stringify(snapshot));
     } catch (_err) {
-      return {};
+      parsedSnapshot = { ...snapshot };
     }
-  })();
+  } else if (typeof stateString === 'string') {
+    const trimmed = stateString.trim();
+    if (trimmed) {
+      try {
+        parsedSnapshot = JSON.parse(trimmed);
+      } catch (_err) {
+        parsedSnapshot = {};
+      }
+    } else {
+      parsedSnapshot = {};
+    }
+  } else if (typeof snapshot === 'string') {
+    const trimmed = snapshot.trim();
+    if (trimmed) {
+      try {
+        parsedSnapshot = JSON.parse(trimmed);
+      } catch (_err) {
+        parsedSnapshot = {};
+      }
+    } else {
+      parsedSnapshot = {};
+    }
+  }
+
+  if (!isPlainObject(parsedSnapshot)) {
+    parsedSnapshot = {};
+  }
+
+  normalizeExtraTimeSettings(parsedSnapshot);
+
+  const serialized = safeSerializeSnapshot(parsedSnapshot);
   const storedMeta = sanitizeMetaForStorage(meta);
-  const effectiveHash = hash || computeSnapshotHash(serialized);
+  const normalizedHash = computeSnapshotHash(serialized);
+  if (hash && hash !== normalizedHash) {
+    logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: normalizedHash, provided: hash });
+  }
+  const effectiveHash = normalizedHash;
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
     await applySnapshotToSql(client, parsedSnapshot);
@@ -864,6 +945,47 @@ function applySharedPreferencesToSnapshot(snapshot, prefMap) {
     if (prefMap.has(key)) {
       snapshot[key] = Boolean(prefMap.get(key));
     }
+  }
+}
+
+async function loadAutoweightSettings(runner) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    const { rows } = await executor.query(
+      'SELECT enabled, percent, minimum_hours FROM settings_autoweight WHERE id = 1'
+    );
+    if (!rows.length) {
+      return null;
+    }
+    const row = rows[0];
+    const percent = row.percent === null || row.percent === undefined ? null : Number(row.percent);
+    const minimum = row.minimum_hours === null || row.minimum_hours === undefined
+      ? null
+      : Number(row.minimum_hours);
+    const enabledRaw = row.enabled;
+    let enabled = null;
+    if (enabledRaw === null || enabledRaw === undefined) {
+      enabled = null;
+    } else if (typeof enabledRaw === 'boolean') {
+      enabled = enabledRaw;
+    } else if (typeof enabledRaw === 'number') {
+      enabled = enabledRaw !== 0;
+    } else if (typeof enabledRaw === 'string') {
+      const normalized = enabledRaw.trim().toLowerCase();
+      enabled = ['1', 't', 'true', 'yes', 'on'].includes(normalized);
+    } else {
+      enabled = Boolean(enabledRaw);
+    }
+    return {
+      enabled,
+      percent: Number.isFinite(percent) ? percent : null,
+      minimum: Number.isFinite(minimum) ? minimum : null
+    };
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -1245,7 +1367,14 @@ async function applySnapshotToSql(client, snapshot) {
   const minimumValue = Number.isFinite(minimumRaw)
     ? Math.max(0, Math.round(minimumRaw * 100) / 100)
     : DEFAULT_EXTRA_MINIMUM;
-  const extraEnabled = percentValue > 0 || minimumValue > 0;
+  const extraEnabled = typeof extra.enabled === 'boolean'
+    ? extra.enabled
+    : (percentValue > 0 || minimumValue > 0);
+  if (!isPlainObject(settings.extraTime)) {
+    settings.extraTime = {};
+  }
+  settings.extraTime.percent = percentValue;
+  settings.extraTime.minimum = minimumValue;
   await client.query(
     `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
      VALUES (1,$1,$2,$3,NOW())

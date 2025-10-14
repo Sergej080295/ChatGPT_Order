@@ -16,6 +16,8 @@ const pool = new Pool({
 
 let revisionColumnInfo = null;
 const PG_UNDEFINED_TABLE = '42P01';
+const DEFAULT_EXTRA_PERCENT = 5;
+const DEFAULT_EXTRA_MINIMUM = 0.25;
 const SHARED_BOOLEAN_PREF_KEYS = [
   'autosaveOn',
   'shiftOnProgress',
@@ -88,6 +90,51 @@ function safeSerializeSnapshot(snapshot, stateString = null) {
 function computeSnapshotHash(snapshot) {
   const serialized = safeSerializeSnapshot(snapshot);
   return crypto.createHash('sha1').update(serialized, 'utf8').digest('hex');
+}
+
+function normalizeExtraTimeSettings(snapshot, override = null) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+  if (!isPlainObject(snapshot.meta.settings)) {
+    snapshot.meta.settings = {};
+  }
+  if (!isPlainObject(snapshot.meta.settings.extraTime)) {
+    snapshot.meta.settings.extraTime = {};
+  }
+
+  const extra = snapshot.meta.settings.extraTime;
+  const overridePercent = override && Number.isFinite(override.percent)
+    ? override.percent
+    : null;
+  const overrideMinimum = override && Number.isFinite(override.minimum)
+    ? override.minimum
+    : null;
+
+  const percentSource = overridePercent !== null
+    ? overridePercent
+    : Number(extra.percent);
+  const minimumSource = overrideMinimum !== null
+    ? overrideMinimum
+    : Number(extra.minimum);
+
+  const normalizedPercent = Number.isFinite(percentSource)
+    ? Math.max(0, Math.round(percentSource * 100) / 100)
+    : DEFAULT_EXTRA_PERCENT;
+  const normalizedMinimum = Number.isFinite(minimumSource)
+    ? Math.max(0, Math.round(minimumSource * 100) / 100)
+    : DEFAULT_EXTRA_MINIMUM;
+
+  extra.percent = normalizedPercent;
+  extra.minimum = normalizedMinimum;
+  if (override && override.enabled !== null) {
+    extra.enabled = Boolean(override.enabled);
+  } else if (typeof extra.enabled !== 'boolean') {
+    extra.enabled = normalizedPercent > 0 || normalizedMinimum > 0;
+  }
 }
 
 function orderKeyFromTask(task) {
@@ -489,17 +536,19 @@ function serializeMeta(meta) {
       );
     }
 
+    normalizeExtraTimeSettings(snapshot);
+
     const settings = snapshot.meta?.settings || {};
     const extra = settings.extraTime || {};
-    const percentRaw = Number(extra.percent);
-    const minimumRaw = Number(extra.minimum);
-    const percentValue = Number.isFinite(percentRaw)
-      ? Math.max(0, Math.round(percentRaw * 100) / 100)
-      : 0;
-    const minimumValue = Number.isFinite(minimumRaw)
-      ? Math.max(0, Math.round(minimumRaw * 100) / 100)
-      : 0;
-    const extraEnabled = percentValue > 0 || minimumValue > 0;
+    const percentValue = Number.isFinite(Number(extra.percent))
+      ? Math.max(0, Math.round(Number(extra.percent) * 100) / 100)
+      : DEFAULT_EXTRA_PERCENT;
+    const minimumValue = Number.isFinite(Number(extra.minimum))
+      ? Math.max(0, Math.round(Number(extra.minimum) * 100) / 100)
+      : DEFAULT_EXTRA_MINIMUM;
+    const extraEnabled = typeof extra.enabled === 'boolean'
+      ? extra.enabled
+      : (percentValue > 0 || minimumValue > 0);
     await client.query(
       `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
        VALUES (1,$1,$2,$3,NOW())
