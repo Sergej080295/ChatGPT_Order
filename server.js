@@ -39,6 +39,9 @@ let lastRevision = 0;
 let revisionColumnInfo = null;
 
 const PG_UNDEFINED_TABLE = '42P01';
+const DEFAULT_EXTRA_PERCENT = 5;
+const DEFAULT_EXTRA_MINIMUM = 0.25;
+
 const SHARED_BOOLEAN_PREF_KEYS = [
   'autosaveOn',
   'shiftOnProgress',
@@ -156,7 +159,7 @@ function buildEmptySnapshot() {
         capacity: {},
         parallel: {},
         tableColumns: {},
-        extraTime: { percent: 5, minimum: 0.25 },
+        extraTime: { percent: DEFAULT_EXTRA_PERCENT, minimum: DEFAULT_EXTRA_MINIMUM },
         crmStageMapping: {},
         logLimit: 50,
         admin: { allowForceOverwrite: false, snapshotRetention: 50 },
@@ -1238,10 +1241,10 @@ async function applySnapshotToSql(client, snapshot) {
   const minimumRaw = Number(extra.minimum);
   const percentValue = Number.isFinite(percentRaw)
     ? Math.max(0, Math.round(percentRaw * 100) / 100)
-    : 0;
+    : DEFAULT_EXTRA_PERCENT;
   const minimumValue = Number.isFinite(minimumRaw)
     ? Math.max(0, Math.round(minimumRaw * 100) / 100)
-    : 0;
+    : DEFAULT_EXTRA_MINIMUM;
   const extraEnabled = percentValue > 0 || minimumValue > 0;
   await client.query(
     `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)

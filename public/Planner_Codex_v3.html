@@ -3217,10 +3217,24 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
   ['лазер','laser'],
   ['гибка','bend'],
   ['сварка','weld'],
+  ['зенковка','mech'],
+  ['зенкование','mech'],
   ['мехобработка','mech'],
   ['мех.обработка','mech'],
   ['мех. обработка','mech'],
   ['мех-обработка','mech'],
+  ['мехобр','mech'],
+  ['мехобр.','mech'],
+  ['сверловка','mech'],
+  ['сверление','mech'],
+  ['сверл','mech'],
+  ['резьбонарезка','mech'],
+  ['резьба','mech'],
+  ['резьб','mech'],
+  ['пуклевка','mech'],
+  ['пукл','mech'],
+  ['заклепка','mech'],
+  ['заклеп','mech'],
   ['кооперация','coop'],
   ['кооп','coop'],
   ['покраска','coop'],
@@ -3278,10 +3292,17 @@ function mapCrmStageName(name){
   const customStage = STAGES.includes(rawCustom) ? rawCustom : '';
   let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
   if(!fallback){
-    if(normalized.includes('кооп') || normalized.includes('кооперац')){
+    if(normalized.includes('кооп') || normalized.includes('кооперац') || normalized.includes('покрас')){
       fallback = 'coop';
-    }else if(normalized.includes('покрас')){
-      fallback = 'coop';
+    }else if(
+      normalized.includes('мехобр')
+      || normalized.includes('зенк')
+      || normalized.includes('сверл')
+      || normalized.includes('резьб')
+      || normalized.includes('пукл')
+      || normalized.includes('заклеп')
+    ){
+      fallback = 'mech';
     }
   }
   const resolved = customStage || fallback;
