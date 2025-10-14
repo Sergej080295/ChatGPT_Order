@@ -346,8 +346,18 @@ async function loadLatestSnapshot(runner) {
   } catch (err) {
     console.warn('Failed to merge shared preferences into snapshot', err);
   }
+  try {
+    const { state: crmState, hasData } = await loadCrmState(client);
+    if (hasData) {
+      snapshotObj.crm = crmState;
+    } else if (!isPlainObject(snapshotObj.crm)) {
+      snapshotObj.crm = { boards: [], currentBoardId: null, updatedAt: '' };
+    }
+  } catch (err) {
+    console.warn('Failed to load CRM state from SQL', err);
+  }
   const stateString = JSON.stringify(snapshotObj);
-  const hash = row.hash || computeSnapshotHash(stateString);
+  const hash = computeSnapshotHash(stateString);
   const rev = Number(row.rev || 0);
   return {
     rev,
@@ -662,6 +672,468 @@ function normalizeExtraTimeSettings(snapshot, override = null) {
   }
 }
 
+function cloneJson(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_err) {
+    if (typeof value !== 'object') {
+      return null;
+    }
+    return Array.isArray(value) ? value.slice() : { ...value };
+  }
+}
+
+function sanitizeDateString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
+function parseMoney(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Math.round(value * 100) / 100 : null;
+  }
+  const normalized = String(value).replace(/\s+/g, '').replace(',', '.');
+  const num = Number.parseFloat(normalized);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  return Math.round(num * 100) / 100;
+}
+
+function parsePercent(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return null;
+  }
+  const clamped = Math.max(0, Math.min(100, num));
+  return Math.round(clamped * 100) / 100;
+}
+
+function normalizeCrmStage(rawStage, index = 0) {
+  const clone = cloneJson(rawStage) || {};
+  const stage = { ...clone };
+  const name = typeof stage.name === 'string' && stage.name.trim()
+    ? stage.name.trim()
+    : `Передел ${index + 1}`;
+  stage.name = name;
+  stage.done = stage.done === true;
+  const progressNum = Number(stage.progress);
+  stage.progress = Number.isFinite(progressNum)
+    ? Math.max(0, Math.min(100, Math.round(progressNum)))
+    : (stage.done ? 100 : 0);
+
+  const start = sanitizeDateString(stage.start);
+  const end = sanitizeDateString(stage.end);
+  const originalStart = sanitizeDateString(stage.originalStart);
+  const originalEnd = sanitizeDateString(stage.originalEnd);
+
+  if (start !== null) stage.start = start; else delete stage.start;
+  if (end !== null) stage.end = end; else delete stage.end;
+  if (originalStart !== null) stage.originalStart = originalStart; else delete stage.originalStart;
+  if (originalEnd !== null) stage.originalEnd = originalEnd; else delete stage.originalEnd;
+  if (stage.value === undefined) delete stage.value;
+
+  return stage;
+}
+
+function normalizeCrmOrder(rawOrder, boardId, lanes, index = 0) {
+  const clone = cloneJson(rawOrder) || {};
+  const order = { ...clone };
+  let id = sanitizeString(order.id);
+  if (!id) {
+    id = `crm-order-${boardId}-${index + 1}-${Math.random().toString(16).slice(2, 10)}`;
+  }
+  order.id = id;
+  order.boardId = boardId;
+
+  const title = typeof order.title === 'string' && order.title.trim()
+    ? order.title.trim()
+    : `Заказ ${index + 1}`;
+  order.title = title;
+
+  const orderNo = sanitizeString(order.orderNo);
+  if (orderNo) {
+    order.orderNo = orderNo;
+  } else {
+    delete order.orderNo;
+  }
+
+  const customer = sanitizeString(order.customer);
+  if (customer) {
+    order.customer = customer;
+  } else {
+    delete order.customer;
+  }
+
+  let status = sanitizeString(order.status || order.lane);
+  if (!status && Array.isArray(lanes) && lanes.length) {
+    status = lanes[0];
+  }
+  if (status) {
+    order.status = status;
+  } else {
+    delete order.status;
+  }
+
+  order.done = order.done === true;
+  const progressNum = Number(order.progress);
+  order.progress = Number.isFinite(progressNum)
+    ? Math.max(0, Math.min(100, Math.round(progressNum)))
+    : (order.done ? 100 : 0);
+  order.progressManual = order.progressManual === true;
+
+  const serviceTotal = parseMoney(order.serviceTotal);
+  if (serviceTotal !== null) {
+    order.serviceTotal = serviceTotal;
+  } else {
+    delete order.serviceTotal;
+  }
+
+  const partOfPct = parsePercent(order.partOfPct);
+  if (partOfPct !== null) {
+    order.partOfPct = partOfPct;
+  } else {
+    delete order.partOfPct;
+  }
+
+  const restOfPct = parsePercent(order.restOfPct);
+  if (restOfPct !== null) {
+    order.restOfPct = restOfPct;
+  } else {
+    delete order.restOfPct;
+  }
+
+  const priorityNum = Number(order.priority);
+  if (Number.isFinite(priorityNum)) {
+    order.priority = Math.trunc(priorityNum);
+  } else {
+    delete order.priority;
+  }
+
+  const stagesRaw = Array.isArray(order.stages) ? order.stages : [];
+  order.stages = stagesRaw.map((stage, stageIndex) => normalizeCrmStage(stage, stageIndex));
+
+  if (Array.isArray(order.childIds)) {
+    const childIds = order.childIds
+      .map((child) => sanitizeString(child))
+      .filter((child) => Boolean(child));
+    if (childIds.length) {
+      order.childIds = childIds;
+    } else {
+      delete order.childIds;
+    }
+  } else {
+    delete order.childIds;
+  }
+
+  const parentId = sanitizeString(order.parentId);
+  if (parentId) {
+    order.parentId = parentId;
+  } else {
+    delete order.parentId;
+  }
+
+  const start = sanitizeDateString(order.start);
+  if (start) {
+    order.start = start;
+  } else if (order.start !== undefined) {
+    delete order.start;
+  }
+
+  const end = sanitizeDateString(order.end);
+  if (end) {
+    order.end = end;
+  } else if (order.end !== undefined) {
+    delete order.end;
+  }
+
+  if (typeof order.notes === 'string') {
+    order.notes = order.notes.trim();
+  } else if (order.notes !== undefined) {
+    delete order.notes;
+  }
+
+  if (typeof order.comments === 'string') {
+    order.comments = order.comments.trim();
+  } else if (order.comments !== undefined) {
+    delete order.comments;
+  }
+
+  const createdAtDate = parseDate(order.createdAt || order.start || order.end) || new Date();
+  const updatedAtDate = parseDate(order.updatedAt || order.end) || createdAtDate;
+  order.createdAt = createdAtDate.toISOString();
+  order.updatedAt = updatedAtDate.toISOString();
+
+  return order;
+}
+
+function normalizeCrmBoard(rawBoard, index = 0) {
+  const clone = cloneJson(rawBoard) || {};
+  const board = { ...clone };
+  let id = sanitizeString(board.id);
+  if (!id) {
+    id = `crm-board-${index + 1}-${Math.random().toString(16).slice(2, 8)}`;
+  }
+  const name = typeof board.name === 'string' && board.name.trim()
+    ? board.name.trim()
+    : `Доска ${index + 1}`;
+
+  const lanesRaw = Array.isArray(board.lanes) ? board.lanes : [];
+  const lanes = lanesRaw
+    .map((lane) => sanitizeString(lane))
+    .filter((lane) => Boolean(lane));
+  if (!lanes.length) {
+    lanes.push('Без статуса');
+  }
+
+  const ordersRaw = Array.isArray(board.orders) ? board.orders : [];
+  const orders = ordersRaw.map((order, orderIndex) => normalizeCrmOrder(order, id, lanes, orderIndex));
+
+  const extras = {};
+  Object.entries(board).forEach(([key, value]) => {
+    if (['id', 'name', 'lanes', 'orders'].includes(key)) {
+      return;
+    }
+    extras[key] = cloneJson(value);
+  });
+
+  const normalizedBoard = { id, name, lanes, orders };
+  Object.assign(normalizedBoard, extras);
+
+  const payload = cloneJson(normalizedBoard) || {};
+  delete payload.orders;
+
+  return { board: normalizedBoard, payload };
+}
+
+function normalizeCrmStateSnapshot(rawState) {
+  const extras = {};
+  if (isPlainObject(rawState)) {
+    Object.entries(rawState).forEach(([key, value]) => {
+      if (['boards', 'currentBoardId', 'updatedAt'].includes(key)) {
+        return;
+      }
+      extras[key] = cloneJson(value);
+    });
+  }
+
+  const boardsRaw = Array.isArray(rawState?.boards) ? rawState.boards : [];
+  const normalizedBoards = boardsRaw.map((board, index) => normalizeCrmBoard(board, index));
+  const boards = normalizedBoards.map((entry) => entry.board);
+
+  let currentBoardId = sanitizeString(rawState?.currentBoardId);
+  if (!currentBoardId || !boards.some((board) => board.id === currentBoardId)) {
+    currentBoardId = boards[0]?.id || null;
+  }
+
+  const updatedAtDate = parseDate(rawState?.updatedAt);
+  const updatedAtIso = updatedAtDate ? updatedAtDate.toISOString() : new Date().toISOString();
+
+  const state = {
+    boards,
+    currentBoardId,
+    updatedAt: updatedAtIso
+  };
+  Object.assign(state, extras);
+
+  return { state, normalizedBoards, stateMeta: extras };
+}
+
+async function syncCrmTables(client, normalizedBoards, crmState, crmMeta) {
+  await client.query('TRUNCATE crm_orders RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE crm_boards RESTART IDENTITY CASCADE');
+  await client.query('DELETE FROM crm_state');
+
+  const updatedAtDate = parseDate(crmState.updatedAt) || new Date();
+
+  for (let index = 0; index < normalizedBoards.length; index += 1) {
+    const entry = normalizedBoards[index];
+    const board = entry.board;
+    const payload = entry.payload || {};
+    const lanes = Array.isArray(board.lanes) ? board.lanes : [];
+
+    await client.query(
+      `INSERT INTO crm_boards (id, name, lanes, position, updated_at, payload)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb)` ,
+      [
+        board.id,
+        board.name,
+        lanes,
+        index,
+        updatedAtDate,
+        JSON.stringify(payload)
+      ]
+    );
+
+    const orders = Array.isArray(board.orders) ? board.orders : [];
+    for (let orderIndex = 0; orderIndex < orders.length; orderIndex += 1) {
+      const order = orders[orderIndex];
+      const orderPayload = cloneJson(order) || {};
+      const orderUpdatedAt = parseDate(order.updatedAt) || updatedAtDate;
+      const orderCreatedAt = parseDate(order.createdAt) || orderUpdatedAt;
+      const childIds = Array.isArray(order.childIds)
+        ? order.childIds.map((child) => sanitizeString(child)).filter((child) => Boolean(child))
+        : [];
+      const parentId = sanitizeString(order.parentId);
+
+      await client.query(
+        `INSERT INTO crm_orders (
+           id, board_id, title, status, position, payload,
+           updated_at, created_at, order_no, customer, progress, done,
+           service_total, start_date, end_date, priority, child_ids, parent_id
+         ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)` ,
+        [
+          order.id,
+          board.id,
+          order.title,
+          order.status || null,
+          orderIndex,
+          JSON.stringify(orderPayload),
+          orderUpdatedAt,
+          orderCreatedAt,
+          order.orderNo || null,
+          order.customer || null,
+          Number.isFinite(Number(order.progress)) ? Math.max(0, Math.min(100, Math.round(Number(order.progress)))) : 0,
+          order.done === true,
+          parseMoney(order.serviceTotal),
+          sanitizeDateString(order.start) ? parseDate(order.start) : null,
+          sanitizeDateString(order.end) ? parseDate(order.end) : null,
+          Number.isFinite(Number(order.priority)) ? Math.trunc(Number(order.priority)) : null,
+          childIds.length ? childIds : null,
+          parentId || null
+        ]
+      );
+    }
+  }
+
+  const meta = sanitizeMetaForStorage(crmMeta) || {};
+  await client.query(
+    `INSERT INTO crm_state (id, current_board_id, updated_at, meta)
+     VALUES (1,$1,$2,$3::jsonb)
+     ON CONFLICT (id) DO UPDATE
+       SET current_board_id = EXCLUDED.current_board_id,
+           updated_at = EXCLUDED.updated_at,
+           meta = EXCLUDED.meta` ,
+    [
+      crmState.currentBoardId || null,
+      updatedAtDate,
+      JSON.stringify(meta)
+    ]
+  );
+}
+
+async function loadCrmState(runner) {
+  const client = runner || pool;
+  const { rows: boardRows } = await client.query(
+    `SELECT id, name, lanes, position, payload, updated_at
+       FROM crm_boards
+      ORDER BY position, name`
+  );
+  const { rows: stateRows } = await client.query(
+    'SELECT current_board_id, updated_at, meta FROM crm_state WHERE id = 1'
+  );
+
+  if (!boardRows.length && !stateRows.length) {
+    return { state: { boards: [], currentBoardId: null, updatedAt: '' }, hasData: false };
+  }
+
+  const boards = boardRows.map((row) => {
+    const payload = parseJsonColumn(row.payload, {});
+    const base = payload && typeof payload === 'object' ? { ...payload } : {};
+    base.id = row.id;
+    base.name = row.name || base.name || 'Доска';
+    const lanes = Array.isArray(row.lanes)
+      ? row.lanes.filter((lane) => typeof lane === 'string' && lane.trim()).map((lane) => lane.trim())
+      : Array.isArray(base.lanes) ? base.lanes : [];
+    base.lanes = lanes.length ? lanes : ['Без статуса'];
+    base.orders = [];
+    return base;
+  });
+
+  const boardMap = new Map(boards.map((board) => [board.id, board]));
+  const { rows: orderRows } = await client.query(
+    `SELECT id, board_id, title, status, position, payload, updated_at, created_at,
+            order_no, customer, progress, done, service_total, start_date, end_date,
+            priority, child_ids, parent_id
+       FROM crm_orders
+      ORDER BY board_id, position, updated_at, id`
+  );
+
+  orderRows.forEach((row) => {
+    const board = boardMap.get(row.board_id);
+    if (!board) {
+      return;
+    }
+    const payload = parseJsonColumn(row.payload, {});
+    const order = payload && typeof payload === 'object' ? { ...payload } : {};
+    order.id = row.id;
+    order.boardId = row.board_id;
+    if (!order.title) order.title = row.title || 'Заказ';
+    if (!order.status) order.status = row.status || board.lanes[0] || '';
+    if (!order.orderNo && row.order_no) order.orderNo = row.order_no;
+    if (!order.customer && row.customer) order.customer = row.customer;
+    if (!Array.isArray(order.stages)) order.stages = [];
+    if (order.progress === undefined && row.progress !== null) order.progress = Number(row.progress);
+    if (order.done === undefined && row.done !== null) order.done = row.done;
+    if (order.serviceTotal === undefined && row.service_total !== null) order.serviceTotal = Number(row.service_total);
+    if (!order.start && row.start_date) {
+      if (row.start_date instanceof Date) {
+        order.start = row.start_date.toISOString().slice(0, 10);
+      } else if (typeof row.start_date === 'string' && row.start_date.trim()) {
+        order.start = row.start_date.trim();
+      }
+    }
+    if (!order.end && row.end_date) {
+      if (row.end_date instanceof Date) {
+        order.end = row.end_date.toISOString().slice(0, 10);
+      } else if (typeof row.end_date === 'string' && row.end_date.trim()) {
+        order.end = row.end_date.trim();
+      }
+    }
+    if (order.priority === undefined && row.priority !== null) order.priority = row.priority;
+    if (!order.childIds && Array.isArray(row.child_ids)) order.childIds = row.child_ids;
+    if (!order.parentId && row.parent_id) order.parentId = row.parent_id;
+    if (!order.createdAt && row.created_at instanceof Date) order.createdAt = row.created_at.toISOString();
+    if (!order.updatedAt && row.updated_at instanceof Date) order.updatedAt = row.updated_at.toISOString();
+    board.orders.push(order);
+  });
+
+  const stateRow = stateRows[0] || null;
+  const meta = parseJsonColumn(stateRow?.meta, null);
+  const updatedAt = stateRow?.updated_at instanceof Date ? stateRow.updated_at.toISOString() : '';
+
+  const state = {
+    boards,
+    currentBoardId: boards.some((board) => board.id === stateRow?.current_board_id)
+      ? stateRow.current_board_id
+      : boards[0]?.id || null,
+    updatedAt
+  };
+
+  if (meta && typeof meta === 'object') {
+    Object.entries(meta).forEach(([key, value]) => {
+      if (['boards', 'currentBoardId', 'updatedAt'].includes(key)) {
+        return;
+      }
+      state[key] = value;
+    });
+  }
+
+  return { state, hasData: true };
+}
+
 function serializeMeta(meta) {
   const sanitized = sanitizeMetaForStorage(meta);
   if (sanitized === null) {
@@ -778,17 +1250,18 @@ async function persistSnapshotWithSql(options) {
 
   normalizeExtraTimeSettings(parsedSnapshot);
 
-  const serialized = safeSerializeSnapshot(parsedSnapshot);
   const storedMeta = sanitizeMetaForStorage(meta);
-  const normalizedHash = computeSnapshotHash(serialized);
-  if (hash && hash !== normalizedHash) {
-    logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: normalizedHash, provided: hash });
-  }
-  const effectiveHash = normalizedHash;
+  let finalSerialized = null;
+  let finalHash = null;
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
     await applySnapshotToSql(client, parsedSnapshot);
-    await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
+    finalSerialized = safeSerializeSnapshot(parsedSnapshot);
+    finalHash = computeSnapshotHash(finalSerialized);
+    if (hash && hash !== finalHash) {
+      logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: finalHash, provided: hash });
+    }
+    await insertSnapshotRow(client, nextRev, parsedSnapshot, finalSerialized, finalHash, storedMeta);
     return await loadLatestSnapshot(client);
   });
 
@@ -796,11 +1269,16 @@ async function persistSnapshotWithSql(options) {
     return result;
   }
 
+  if (finalSerialized === null) {
+    finalSerialized = safeSerializeSnapshot(parsedSnapshot);
+    finalHash = computeSnapshotHash(finalSerialized);
+  }
+
   return {
     rev,
     snapshot: parsedSnapshot,
-    stateString: serialized,
-    hash: effectiveHash,
+    stateString: finalSerialized,
+    hash: finalHash,
     meta: storedMeta
   };
 }
@@ -1147,6 +1625,9 @@ async function applySnapshotToSql(client, snapshot) {
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
 
+  const { state: normalizedCrmState, normalizedBoards, stateMeta: crmStateMeta } = normalizeCrmStateSnapshot(snapshot.crm);
+  snapshot.crm = normalizedCrmState;
+
   const parallelSet = new Set();
   if (isPlainObject(snapshot.parallelByProc)) {
     Object.keys(snapshot.parallelByProc).forEach((key) => {
@@ -1195,6 +1676,8 @@ async function applySnapshotToSql(client, snapshot) {
   await client.query('DELETE FROM settings_autoweight');
   await client.query('DELETE FROM settings_journal');
   await client.query('DELETE FROM settings_admin');
+
+  await syncCrmTables(client, normalizedBoards, normalizedCrmState, crmStateMeta);
 
   const processes = Array.from(processMap.values());
   processes.sort((a, b) => a.code.localeCompare(b.code));
@@ -1945,7 +2428,19 @@ async function bootstrap() {
   });
 }
 
-bootstrap().catch((err) => {
-  console.error('Failed to bootstrap application', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  bootstrap().catch((err) => {
+    console.error('Failed to bootstrap application', err);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app,
+  pool,
+  bootstrap,
+  runMigrations,
+  normalizeCrmStateSnapshot,
+  syncCrmTables,
+  loadCrmState
+};
