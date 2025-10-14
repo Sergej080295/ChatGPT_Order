@@ -491,9 +491,15 @@ function serializeMeta(meta) {
 
     const settings = snapshot.meta?.settings || {};
     const extra = settings.extraTime || {};
-    const percent = Number(extra.percent || 0);
-    const minimum = Number(extra.minimum || 0);
-    const extraEnabled = percent > 0 || minimum > 0;
+    const percentRaw = Number(extra.percent);
+    const minimumRaw = Number(extra.minimum);
+    const percentValue = Number.isFinite(percentRaw)
+      ? Math.max(0, Math.round(percentRaw * 100) / 100)
+      : 0;
+    const minimumValue = Number.isFinite(minimumRaw)
+      ? Math.max(0, Math.round(minimumRaw * 100) / 100)
+      : 0;
+    const extraEnabled = percentValue > 0 || minimumValue > 0;
     await client.query(
       `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
        VALUES (1,$1,$2,$3,NOW())
@@ -502,7 +508,7 @@ function serializeMeta(meta) {
              percent = EXCLUDED.percent,
              minimum_hours = EXCLUDED.minimum_hours,
              updated_at = NOW()` ,
-      [extraEnabled, Math.round(percent), Math.round(minimum)]
+      [extraEnabled, percentValue, minimumValue]
     );
 
     const logLimit = Number(settings.logLimit);

@@ -3223,6 +3223,9 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
   ['мех-обработка','mech'],
   ['кооперация','coop'],
   ['кооп','coop'],
+  ['покраска','coop'],
+  ['цинкование (кооперация)','coop'],
+  ['цинкование','coop'],
   ['упаковка','pack'],
   ['отгрузка','ship']
 ]);
@@ -3273,7 +3276,14 @@ function mapCrmStageName(name){
     return '';
   }
   const customStage = STAGES.includes(rawCustom) ? rawCustom : '';
-  const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+  let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+  if(!fallback){
+    if(normalized.includes('кооп') || normalized.includes('кооперац')){
+      fallback = 'coop';
+    }else if(normalized.includes('покрас')){
+      fallback = 'coop';
+    }
+  }
   const resolved = customStage || fallback;
   registerCrmStageName(rawLabel, normalized, customStage || fallback, !!customStage, fallback);
   return resolved;
@@ -6198,7 +6208,11 @@ function applyStageProgress(identity, stage, value, options={}){
   updateStageSnapshotFromAggregated(stage);
   rebuildAndRenderMasterRoute();
   recompute();
-  const persistOptions = { source, stageOverride: stage };
+  const persistOptions = {
+    source,
+    stageOverride: stage,
+    force: options.force === true || interactive || markDone
+  };
   if(summaryOverrideText) persistOptions.summaryOverride = summaryOverrideText;
   if(ordersSummaryOverride) persistOptions.ordersSummaryOverride = ordersSummaryOverride;
   persistMaybe('data', persistOptions);
