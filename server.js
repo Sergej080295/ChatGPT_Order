@@ -958,8 +958,8 @@ async function loadAutoweightSettings(runner) {
       return null;
     }
     const row = rows[0];
-    const percent = row.percent === null || row.percent === undefined ? null : Number(row.percent);
-    const minimum = row.minimum_hours === null || row.minimum_hours === undefined
+    const percentRaw = row.percent === null || row.percent === undefined ? null : Number(row.percent);
+    const minimumRaw = row.minimum_hours === null || row.minimum_hours === undefined
       ? null
       : Number(row.minimum_hours);
     const enabledRaw = row.enabled;
@@ -976,10 +976,19 @@ async function loadAutoweightSettings(runner) {
     } else {
       enabled = Boolean(enabledRaw);
     }
+    const percent = Number.isFinite(percentRaw)
+      ? Math.max(0, Math.round(percentRaw * 100) / 100)
+      : DEFAULT_EXTRA_PERCENT;
+    const minimum = Number.isFinite(minimumRaw)
+      ? Math.max(0, Math.round(minimumRaw * 100) / 100)
+      : DEFAULT_EXTRA_MINIMUM;
+    if (enabled === null) {
+      enabled = percent > 0 || minimum > 0;
+    }
     return {
       enabled,
-      percent: Number.isFinite(percent) ? percent : null,
-      minimum: Number.isFinite(minimum) ? minimum : null
+      percent,
+      minimum
     };
   } catch (err) {
     if (err && err.code === PG_UNDEFINED_TABLE) {
