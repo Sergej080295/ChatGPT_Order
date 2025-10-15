@@ -306,7 +306,7 @@
     --primary:#4da3ff; --accent:#9bffd6; --warn:#ffce4d; --danger:#ff6b6b;
     --ok:#24a148; --okGlow:rgba(36,161,72,.22);
     --chip:#232a36; --border:#232936; --shadow:0 6px 24px rgba(0,0,0,.35);
-    --col-min:320px; --dlgBorder:#5ca0ff; --tooltipBg:#0c111a; --tooltipBd:#2a3548;
+    --col-min:368px; --dlgBorder:#5ca0ff; --tooltipBg:#0c111a; --tooltipBd:#2a3548;
     --readyOffBd:#3b4a63; --readyOffBg:#0e131b;
     --inputBg:#0b0e13; --inputDisabled:#0a0f16; --placeholder:#77829a;
   }
@@ -320,7 +320,7 @@
     --inputBg:#ffffff; --inputDisabled:#f4f6fb; --placeholder:#9aa5b4;
   }
 
-  body{margin:0;background:linear-gradient(180deg,#0e1117,#0b0d12);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif}
+  body{margin:0;background:linear-gradient(180deg,#0e1117,#0b0d12);color:var(--text);font:14px/1.4 system-ui,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;min-height:100vh;display:flex;flex-direction:column;overflow:hidden}
   body[data-theme="light"]{ background:linear-gradient(180deg,#f8faff,#eef2f8) }
   header{position:sticky;top:0;z-index:10;background:rgba(15,17,21,.8);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
   .bar{display:flex;gap:12px;align-items:center;padding:12px 14px;flex-wrap:wrap}
@@ -362,21 +362,41 @@
   .boards{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#0b0e13}
   body[data-theme="light"] .pill{ background:#fff }
-  main{padding:16px}
-  .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px}
+  :root{--crm-lane-max-height:360px}
+  main{padding:16px;flex:1;overflow:hidden}
+  .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px;align-items:stretch;height:100%}
   .columns::-webkit-scrollbar{height:8px}
   .columns::-webkit-scrollbar-thumb{background:#2a3342;border-radius:8px}
   body[data-theme="light"] .columns::-webkit-scrollbar-thumb{background:#c4ccda}
-  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min)}
-  .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border)}
-  .col h2{font-size:13px;letter-spacing:.2px;margin:0;padding:10px 12px;color:var(--muted)}
-  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px}
-  .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative}
+  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min);display:flex;flex-direction:column;max-height:var(--crm-lane-max-height);height:var(--crm-lane-max-height);overflow:hidden;transition:border-color .2s ease,box-shadow .2s ease}
+  .col.lane-has-issues{border-color:rgba(255,206,77,.6);box-shadow:0 0 0 2px rgba(255,206,77,.2)}
+  .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border);display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+  .col h2{font-size:13px;letter-spacing:.2px;margin:0;color:var(--muted);display:flex;align-items:center;gap:10px}
+  .lane-title{white-space:nowrap}
+  .lane-meta{display:flex;align-items:center;gap:8px;font-size:12px;color:inherit}
+  .lane-sum{font-weight:600;color:var(--text);white-space:nowrap}
+  .lane-count{background:rgba(148,163,184,.16);border-radius:999px;padding:2px 8px;font-weight:600;color:inherit;white-space:nowrap}
+  .lane-alert{display:none;font-size:14px;color:var(--warn)}
+  .lane-alert.visible{display:inline-flex;align-items:center}
+  .col-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px;flex:1;overflow-y:auto;position:relative}
+  .drop-indicator{height:3px;background:var(--primary);border-radius:999px;display:none}
+  .drop-indicator.visible{display:block}
+  .col-more{margin:6px 0 10px;text-align:center;color:var(--muted);cursor:pointer;user-select:none;font-size:12px;letter-spacing:.2px;transition:color .15s ease}
+  .col-more span{display:inline-block;transition:transform .15s ease}
+  .col-more:hover{color:var(--text)}
+  .col-more:hover span{transform:translateY(2px)}
+  .col-more.hidden{display:none}
+  .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative;transition:border-color .15s ease,box-shadow .15s ease}
+  .card.card-warning{border-color:rgba(255,206,77,.7);box-shadow:0 4px 18px rgba(255,206,77,.16)}
   body[data-theme="light"] .card{ background:#fff; border-color:#e6eaf3 }
   .card.dragging{opacity:.5}
   .card .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .rowc{display:flex;align-items:center;gap:8px}
   .title{font-weight:600;display:flex;align-items:center;gap:8px}
+  .card .card-name{flex:1;min-width:0}
+  .card-alert{display:none;margin-left:4px;color:var(--warn);font-size:15px}
+  .card.card-warning .card-alert{display:inline-flex}
   .sub{color:var(--muted);font-size:12px}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chip{background:var(--chip);border:1px solid var(--border);color:#cfe5ff;padding:4px 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
@@ -579,10 +599,12 @@
   .ready-btn{aspect-ratio:1/1;width:10px;height:auto;border:1.2px solid var(--readyOffBd);border-radius:50%;display:none}
   .btn-circle{width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;padding:0}
 
-  .popup{position:fixed;z-index:9999;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:6px}
+  .popup{position:fixed;z-index:9999;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:6px;max-width:280px}
   .popup h4{margin:6px 8px;font-size:12px;color:var(--muted)}
-  .popup .item{padding:6px 10px;border-radius:8px;cursor:pointer}
+  .popup .items{display:flex;flex-direction:column;max-height:220px;overflow-y:auto;padding:4px 0}
+  .popup .item{padding:6px 10px;border-radius:8px;cursor:pointer;text-align:left;border:none;background:transparent;color:inherit;font:inherit;display:flex;align-items:center;gap:8px}
   .popup .item:hover{background:rgba(77,163,255,.12)}
+  .popup .item.custom{font-weight:600;justify-content:center}
 
   .toast-layer{position:fixed;top:20px;right:20px;z-index:11000;display:flex;flex-direction:column;gap:10px;align-items:flex-end;pointer-events:none}
   .toast{min-width:220px;max-width:320px;background:rgba(17,24,38,.92);color:#f8fbff;border:1px solid rgba(92,160,255,.4);border-radius:14px;padding:12px 16px;box-shadow:0 18px 30px rgba(0,0,0,.35);font-size:13px;line-height:1.4;pointer-events:auto;display:grid;gap:6px}
@@ -666,11 +688,11 @@
     </div>
 
     <details class="section-card surface" open>
-      <summary>План переделов (статус, % выполнения, сроки, Руб/часов)</summary>
+      <summary>План переделов (статус, прогресс, сроки, Руб/часов)</summary>
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th>Передел</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th>Передел</th><th>Готово</th><th>Прогресс, %</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
           <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -681,6 +703,7 @@
             <div class="right">
               <button type="button" id="addStageBtn">+ Передел</button>
               <button type="button" id="presetStagesBtn">🔁 Базовые</button>
+              <button type="button" id="allStagesBtn">📋 Все</button>
             </div>
           </div>
         </div>
@@ -737,8 +760,32 @@ const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#15341e"/><path d="M32 4a28 28 0 0 0 0 56z" fill="#70e000"/></svg>`);
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
-const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка'];
+const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
+const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
+const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
+const normalizeWriteMode=value=>{
+  if(value===null||value===undefined) return DATA_WRITE_MODES.both;
+  const normalized=String(value).trim().toLowerCase();
+  if(normalized===DATA_WRITE_MODES.crm) return DATA_WRITE_MODES.crm;
+  if(normalized===DATA_WRITE_MODES.planner) return DATA_WRITE_MODES.planner;
+  return DATA_WRITE_MODES.both;
+};
+let currentWriteMode=DATA_WRITE_MODES.both;
+const crmWriteAccessEnabled=()=> currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
+let lastCrmWriteBlockedAt=0;
+const applyCrmWriteAccess=()=>{
+  const canWrite=crmWriteAccessEnabled();
+  if(document.body){
+    document.body.classList.toggle('crm-write-disabled', !canWrite);
+  }
+  const newOrderBtn=$('#newOrderBtn');
+  if(newOrderBtn){ newOrderBtn.disabled = !canWrite; }
+};
+
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
     try{return structuredClone(value);}catch(_err){/* ignore */}
@@ -750,9 +797,41 @@ const deepClone=value=>{
   }
 };
 
+function parseNumericValue(raw){
+  if(raw===null||raw===undefined){
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw==='number'){
+    if(Number.isFinite(raw)){
+      return { number:raw, hasValue:true };
+    }
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw==='string'){
+    const trimmed=raw.trim();
+    if(!trimmed){
+      return { number:0, hasValue:false };
+    }
+    const normalized=trimmed.replace(/[\s\u202f\u00a0]+/g,'').replace(',', '.');
+    const parsed=Number(normalized);
+    if(Number.isFinite(parsed)){
+      return { number:parsed, hasValue:true };
+    }
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw.valueOf==='function'){
+    const value=raw.valueOf();
+    if(value!==raw){
+      return parseNumericValue(value);
+    }
+  }
+  return { number:0, hasValue:false };
+}
+
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard()],currentBoardId:null};
 if(!state.currentBoardId&&Array.isArray(state.boards)&&state.boards.length){state.currentBoardId=state.boards[0].id;}
 persistLocal();
+applyCrmWriteAccess();
 function load(){
   if(window.__CRM_INITIAL_STATE__){
     const initial=deepClone(window.__CRM_INITIAL_STATE__);
@@ -777,26 +856,130 @@ function spanMuted(t){const s=document.createElement('span');s.className='muted'
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
 const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+const LANE_PAGE_SIZE=10;
+const laneVisibleCount=new Map();
+let laneRegistryBoardId=null;
+let dndInitialized=false;
+let draggingId=null;
+
+function ensureLaneRegistry(lanes,boardId){
+  if(laneRegistryBoardId!==boardId){
+    laneVisibleCount.clear();
+    laneRegistryBoardId=boardId||null;
+  }
+  const snapshot=new Map();
+  lanes.forEach(l=>{const existing=laneVisibleCount.get(l);snapshot.set(l,(existing&&existing>0)?existing:LANE_PAGE_SIZE);});
+  laneVisibleCount.clear();
+  snapshot.forEach((value,key)=>laneVisibleCount.set(key,value));
+}
+
+function increaseLaneLimit(lane){
+  const current=laneVisibleCount.get(lane)||LANE_PAGE_SIZE;
+  laneVisibleCount.set(lane,current+LANE_PAGE_SIZE);
+  renderCards();
+}
+
+function laneLimit(lane){
+  if(!laneVisibleCount.has(lane)) laneVisibleCount.set(lane,LANE_PAGE_SIZE);
+  return laneVisibleCount.get(lane);
+}
 
 function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
-function renderColumns(){const b=currentBoard();columns.innerHTML='';b.lanes.forEach(l=>{const c=document.createElement('div');c.className='col';c.innerHTML=`<header><h2>${escapeHtml(l)}</h2></header><div class="drop" data-lane="${escapeHtml(l)}"></div>`;columns.appendChild(c)});enableDnd()}
+function renderColumns(){
+  const b=currentBoard();
+  columns.innerHTML='';
+  if(!b){return;}
+  ensureLaneRegistry(b.lanes,b.id);
+    b.lanes.forEach(l=>{
+      const c=document.createElement('div');
+      c.className='col';
+      const laneLabel=escapeHtml(l);
+      c.innerHTML=`
+        <header>
+          <h2>
+            <span class="lane-title">${laneLabel}</span>
+            <span class="lane-meta">
+              <span class="lane-sum" data-lane-sum>0 ₽</span>
+              <span class="lane-count" data-lane-count>(0 шт)</span>
+              <span class="lane-alert" data-lane-alert>⚠️</span>
+            </span>
+          </h2>
+        </header>
+        <div class="col-body">
+          <div class="drop" data-lane="${laneLabel}"></div>
+          <div class="col-more hidden" data-lane="${laneLabel}" role="button" tabindex="0">Показать ещё 10<span aria-hidden="true">↓</span></div>
+        </div>
+      `;
+    columns.appendChild(c);
+    c.dataset.lane=l;
+    const header=c.querySelector('header');
+    if(header) header.dataset.lane=l;
+    const drop=c.querySelector('.drop');
+    const more=c.querySelector('.col-more');
+    const laneAlert=header?.querySelector('[data-lane-alert]');
+    if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
+    if(drop) drop.dataset.lane=l;
+    if(more) more.dataset.lane=l;
+  });
+  $$('.col-more',columns).forEach(btn=>{
+    const lane=btn.dataset.lane;
+    if(!lane)return;
+    btn.addEventListener('click',()=>increaseLaneLimit(lane));
+    btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();increaseLaneLimit(lane);}});
+  });
+  enableDnd();
+}
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>x.done||Number(x.progress||0)>=100).length;return[d,s.length]}
+function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
+function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
 function renderCards(){
-  const b=currentBoard(); const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const b=currentBoard();
+  if(!b)return;
+  const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
     const inSearch=!qv||(o.title.toLowerCase().includes(qv)||(o.orderNo||'').toLowerCase().includes(qv)||(o.customer||'').toLowerCase().includes(qv)||(o.stages||[]).some(s=>s.name.toLowerCase().includes(qv)));
     if(!inSearch)return; const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
   });
-  $$('.drop',columns).forEach(d=>d.innerHTML='');
 
   Object.entries(map).forEach(([lane,arr])=>{
+    const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
-    if(!arr.length){const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p)}
-    arr.forEach(o=>{
+    if(col){
+      const sumValue=arr.reduce((acc,o)=>{
+        const raw=o?.serviceTotal;
+        if(raw===''||raw==null) return acc;
+        let numeric=raw;
+        if(typeof numeric==='string'){
+          numeric=Number(numeric.replace(/[\s\u202f\u00a0]+/g,'').replace(',', '.'));
+        }else{
+          numeric=Number(numeric);
+        }
+        return Number.isFinite(numeric)?acc+numeric:acc;
+      },0);
+      const sumEl=col.querySelector('[data-lane-sum]');
+      if(sumEl){
+        const formatted=sumValue.toLocaleString('ru-RU');
+        sumEl.textContent=`${formatted} ₽`;
+      }
+      const countEl=col.querySelector('[data-lane-count]');
+      if(countEl) countEl.textContent=`(${arr.length} шт)`;
+    }
+    if(!drop)return;
+    const moreBtn=$(`.col-more[data-lane="${CSS.escape(lane)}"]`,columns);
+    const prevScroll=drop.scrollTop;
+    drop.innerHTML='';
+    const limit=laneLimit(lane);
+    const visible=arr.slice(0,limit);
+    const laneIssueSet=new Set();
+    let laneHasIssues=false;
+    if(!visible.length){
+      const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p);
+    }
+    visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
       const progress=calcAutoProgress(o.stages); const [doneCnt,totalCnt]=stagesDoneCount(o);
       const chips=document.createElement('div');chips.className='chips';
@@ -810,7 +993,8 @@ function renderCards(){
         <div class="row">
           <div class="title">
             <input type="checkbox" class="ready-switch card-ready" data-act="toggle-done" ${readyChecked} title="Отметить заказ готовым" />
-            ${escapeHtml(o.title)}
+            <span class="card-name">${escapeHtml(o.title)}</span>
+            <span class="card-alert">⚠️</span>
           </div>
           <div class="kebab grow"></div>
           <button class="ghost" data-act="move" title="Переместить ↩">↩</button>
@@ -821,6 +1005,20 @@ function renderCards(){
       const foot=document.createElement('div');foot.className='foot';
       const prog=document.createElement('div');prog.className='progress';const bar=document.createElement('i');bar.style.width=`${Math.max(0,Math.min(100,progress))}%`;prog.appendChild(bar);
       foot.appendChild(prog);foot.appendChild(spanMuted(`${doneCnt}/${totalCnt}`));card.appendChild(foot);
+
+      const stageIssues=collectStageIssues(o.stages);
+      const cardAlert=card.querySelector('.card-alert');
+      if(stageIssues.hasIssues){
+        laneHasIssues=true;
+        const orderLabel=(o.title||o.orderNo||'Заказ').toString();
+        if(stageIssues.messages.length){stageIssues.messages.slice(0,2).forEach(msg=>laneIssueSet.add(`${orderLabel}: ${msg}`));}
+        else{laneIssueSet.add(`${orderLabel}: незаполненные данные`);}
+        card.classList.add('card-warning');
+        if(cardAlert){cardAlert.title=stageIssues.tooltip||'Есть незаполненные данные';}
+      }else{
+        card.classList.remove('card-warning');
+        if(cardAlert){cardAlert.removeAttribute('title');}
+      }
 
       card.addEventListener('click',e=>{
         const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
@@ -833,19 +1031,115 @@ function renderCards(){
       card.addEventListener('mouseleave',hideTooltip);
       drop.appendChild(card);
     })
+    if(moreBtn){
+      if(arr.length>visible.length){moreBtn.classList.remove('hidden');}
+      else{moreBtn.classList.add('hidden');}
+    }
+    drop.scrollTop=prevScroll;
+    if(col){
+      col.classList.toggle('lane-has-issues',laneHasIssues);
+      const alertEl=col.querySelector('[data-lane-alert]');
+      if(alertEl){
+        if(laneHasIssues){
+          alertEl.classList.add('visible');
+          const summary=laneIssueSet.size?Array.from(laneIssueSet).slice(0,5).join('\n'):'Есть незаполненные данные';
+          alertEl.title=summary;
+        }else{
+          alertEl.classList.remove('visible');
+          alertEl.removeAttribute('title');
+        }
+      }
+    }
   });
   const total=b.orders.length; const active=b.orders.filter(x=>x.status!==b.lanes[b.lanes.length-1]).length;
   stats.textContent=`Всего: ${total} • Активных: ${active}`;
 }
 
+function computeDropReference(container,clientY){
+  const cards=Array.from(container.querySelectorAll('.card:not(.dragging)'));
+  for(const card of cards){
+    const rect=card.getBoundingClientRect();
+    if(clientY<rect.top+rect.height/2){
+      return card.dataset.id||null;
+    }
+  }
+  return null;
+}
+function ensureDropIndicatorEl(drop){let el=drop.querySelector('.drop-indicator');if(!el){el=document.createElement('div');el.className='drop-indicator';drop.appendChild(el);}return el;}
+function hideDropIndicator(drop){const el=drop.querySelector('.drop-indicator');if(el)el.classList.remove('visible');}
+
+function moveOrderToLane(orderId,targetLane,beforeId){
+  const b=currentBoard();
+  if(!b)return false;
+  const list=b.orders;
+  const fromIndex=list.findIndex(o=>o.id===orderId);
+  if(fromIndex===-1)return false;
+  const order=list[fromIndex];
+  const originalLane=order.status;
+  const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
+  list.splice(fromIndex,1);
+  order.status=targetLane;
+  let insertIndex=list.length;
+  if(beforeId){
+    const idx=list.findIndex(o=>o.id===beforeId);
+    if(idx>=0){
+      insertIndex=idx;
+    }else{
+      beforeId=null;
+    }
+  }
+  if(!beforeId){
+    insertIndex=list.length;
+    for(let i=list.length-1;i>=0;i--){
+      if(list[i].status===targetLane){
+        insertIndex=i+1;
+        break;
+      }
+    }
+  }
+  list.splice(insertIndex,0,order);
+  let finalLaneIndex=0;
+  let seen=0;
+  for(const item of list){
+    if(item.status===targetLane){
+      if(item.id===orderId){
+        finalLaneIndex=seen;
+        break;
+      }
+      seen++;
+    }
+  }
+  const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  return changed;
+}
+
 function enableDnd(){
-  let draggingId=null;
-  columns.addEventListener('dragstart',e=>{const card=e.target.closest('.card');if(!card)return;draggingId=card.dataset.id;card.classList.add('dragging')});
-  columns.addEventListener('dragend',e=>{const card=e.target.closest('.card');if(card)card.classList.remove('dragging');draggingId=null});
+  draggingId=null;
+  if(!dndInitialized){
+    columns.addEventListener('dragstart',e=>{const card=e.target.closest('.card');if(!card)return;draggingId=card.dataset.id;card.classList.add('dragging')});
+    columns.addEventListener('dragend',e=>{const card=e.target.closest('.card');if(card)card.classList.remove('dragging');draggingId=null});
+    dndInitialized=true;
+  }
   $$('.drop',columns).forEach(d=>{
-    d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
-    d.addEventListener('dragleave',()=>{d.style.outline='none'});
-    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);o.status=d.dataset.lane;save('Перемещение заказа между статусами');renderCards()});
+    d.addEventListener('dragover',e=>{
+      e.preventDefault();
+      const indicator=ensureDropIndicatorEl(d);
+      const beforeId=computeDropReference(d,e.clientY);
+      const beforeCard=beforeId?d.querySelector(`.card[data-id="${CSS.escape(beforeId)}"]`):null;
+      indicator.classList.add('visible');
+      if(beforeCard){d.insertBefore(indicator,beforeCard);}else{d.appendChild(indicator);}
+    });
+    d.addEventListener('dragleave',()=>{hideDropIndicator(d);});
+    d.addEventListener('drop',e=>{
+      e.preventDefault();
+      hideDropIndicator(d);
+      if(!draggingId)return;
+      const lane=d.dataset.lane;
+      if(!lane)return;
+      const beforeId=computeDropReference(d,e.clientY);
+      const changed=moveOrderToLane(draggingId,lane,beforeId);
+      if(changed){save('Перемещение заказа между статусами');renderCards();}
+    });
   });
 }
 
@@ -870,20 +1164,27 @@ function showTooltipForOrder(o,anchorEl){
 function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
-const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),orderDone=$('#orderDone'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday');
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),orderDone=$('#orderDone'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday');
 
 function openOrder(id=null){
   const b=currentBoard(); statusSel.innerHTML=''; b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)}); stagesTableBody.innerHTML='';
   if(id){
     dlgTitle.textContent='Редактировать заказ'; const o=b.orders.find(x=>x.id===id); fillOrderForm(o,b);
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
-    deleteOrderBtn.style.display=''; deleteOrderBtn.onclick=()=>{if(!confirm('Удалить этот заказ?'))return;b.orders=b.orders.filter(x=>x.id!==o.id);save('Удаление заказа');renderCards();orderDlg.close()};
+    deleteOrderBtn.style.display='';
+    deleteOrderBtn.onclick=()=>{
+      if(!confirm('Удалить этот заказ?'))return;
+      handleOrderRemoval(o,b);
+      renderCards();
+      orderDlg.close();
+    };
   }else{
     dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
-    DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''})); window._editingOrigValues=null; syncAutoDates(); deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
+    applyStagePreset(DEFAULT_STAGES); window._editingOrigValues=null; deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
   }
-  addStageBtn.onclick=()=>appendStageRow({name:'Новый передел',done:false,progress:0,start:'',end:'',value:''});
-  presetStagesBtn.onclick=()=>{stagesTableBody.innerHTML='';DEFAULT_STAGES.forEach(name=>appendStageRow({name,done:false,progress:0,start:'',end:'',value:''}));syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
+  addStageBtn.onclick=()=>showStagePicker(addStageBtn);
+  presetStagesBtn.onclick=()=>applyStagePreset(DEFAULT_STAGES);
+  if(allStagesBtn){allStagesBtn.onclick=()=>applyStagePreset(ALL_STAGE_PRESETS);}
   splitBtn.onclick=()=>openSplitDialog();
   dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates();updateAllStageExpectations()};
   orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress();updateAllStageExpectations()};
@@ -965,19 +1266,21 @@ function updateAllStageExpectations(){
 if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
 
 function appendStageRow(st){
-  const nm=(st.name||'').trim(); const isZakupka=nm.toLowerCase()==='закупка';
-  const isBoolOnly=['закупка','рубка','упаковка','отгрузка'].includes(nm.toLowerCase());
+  const nmRaw=(st.name||'').trim();
+  const nmNormalized=normalizeStageName(st.name);
+  const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
+  const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
   const tr=document.createElement('tr');
   tr.innerHTML=`
-    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nm)}" /></td>
+    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
     <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
-    <td>${isZakupka?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
+    <td>${suppressValue?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
     <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
   const origMap=window._editingOrigValues||null;
-  if(origMap&&!isZakupka){const nameNow=nm||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
+  if(origMap&&!suppressValue){const nameNow=nmRaw||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
 
   const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
   const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
@@ -988,18 +1291,84 @@ function appendStageRow(st){
   if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();updateStageRowExpectation(tr);});}
   if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();updateStageRowExpectation(tr);});}
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr);
+  return tr;
+}
+
+function focusStageRow(tr){
+  if(!tr) return;
+  const input=tr.querySelector('[data-k="name"]');
+  if(input){
+    input.focus();
+    input.select?.();
+  }
+}
+
+function appendStageByName(name){
+  const row=appendStageRow({name,done:false,progress:0,start:'',end:'',value:''});
+  focusStageRow(row);
+}
+
+function applyStagePreset(names){
+  stagesTableBody.innerHTML='';
+  (names||[]).forEach(stageName=>appendStageRow({name:stageName,done:false,progress:0,start:'',end:'',value:''}));
+  syncAutoProgress();
+  syncAutoDates();
+  updateAllStageExpectations();
+}
+
+function showStagePicker(anchor){
+  const rect=anchor?.getBoundingClientRect?.();
+  closePopup();
+  const menu=document.createElement('div');
+  menu.className='popup stage-picker';
+  menu.innerHTML='<h4>Добавить передел</h4>';
+  const list=document.createElement('div');
+  list.className='items';
+  ALL_STAGE_PRESETS.forEach(stageName=>{
+    const item=document.createElement('button');
+    item.type='button';
+    item.className='item';
+    item.textContent=stageName;
+    item.onclick=()=>{appendStageByName(stageName);closePopup();};
+    list.appendChild(item);
+  });
+  menu.appendChild(list);
+  const custom=document.createElement('button');
+  custom.type='button';
+  custom.className='item custom';
+  custom.textContent='➕ Свой передел';
+  custom.onclick=()=>{
+    let name=prompt('Название передела');
+    if(name){
+      name=name.trim();
+      if(name){
+        appendStageByName(name);
+      }
+    }
+    closePopup();
+  };
+  menu.appendChild(custom);
+  document.body.appendChild(menu);
+  const left=Math.min(window.innerWidth- menu.offsetWidth - 12, rect?rect.left:20);
+  const top=Math.min(window.innerHeight- menu.offsetHeight - 12, rect?(rect.bottom+6):20);
+  menu.style.left=`${Math.max(12,left)}px`;
+  menu.style.top=`${Math.max(12,top)}px`;
+  _popup=menu;
+  setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
 
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
   return rows.map(r=>{const get=k=>r.querySelector(`[data-k="${k}"]`);
-    const name=(get('name').value.trim()||'Передел'); const isZak=name.toLowerCase()==='закупка';
-    const boolOnly=['закупка','рубка','упаковка','отгрузка'].includes(name.toLowerCase());
+    const rawName=(get('name').value.trim()||'Передел');
+    const normalized=normalizeStageName(rawName);
+    const boolOnly=BOOL_STAGE_NAMES.has(normalized);
+    const suppressValue=HOURLESS_STAGE_NAMES.has(normalized);
     const done=get('done').checked; const progEl=get('progress');
     const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
     const startInput=get('start');
     const endInput=get('end');
-    return {name,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:isZak?'':(get('value')?.value??'')}
+    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??'')}
   })
 }
 
@@ -1037,10 +1406,20 @@ const splitDlg=document.createElement('dialog'); splitDlg.id='splitDlg'; splitDl
       <div class="rowc" style="flex-direction:column;align-items:stretch"><label>% от основного</label><input name="partPct" type="number" min="1" max="99" value="50"/></div>
       <div class="rowc" style="flex-direction:column;align-items:stretch"><label>Суффикс №</label><input name="suffix" placeholder="-1"/></div>
     </div>
+    <div class="rowc" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+      <div class="rowc" style="flex-direction:column;align-items:stretch;min-width:180px">
+        <label>Сумма услуг — % доли</label>
+        <input name="servicePct" type="number" min="0" max="100" step="0.01" placeholder="по умолчанию %" />
+      </div>
+      <div class="rowc" style="flex-direction:column;align-items:stretch;min-width:180px">
+        <label>Сумма услуг — значение</label>
+        <input name="serviceValue" type="number" min="0" step="0.01" placeholder="сумма" />
+      </div>
+    </div>
     <details open>
       <summary>Доли по переделам (опционально)</summary>
-      <table id="splitStagesTable"><thead><tr><th>Передел</th><th style="width:22%">% доли</th></tr></thead><tbody></tbody></table>
-      <small class="muted">Если указана хотя бы одна доля — общий % игнорируется. Для пустых долей — всё остаётся в основном заказе.</small>
+      <table id="splitStagesTable"><thead><tr><th>Передел</th><th style="width:22%">% доли</th><th style="width:22%">Значение</th></tr></thead><tbody></tbody></table>
+      <small class="muted">Если указана хотя бы одна доля — общий % игнорируется. Значение имеет приоритет над % доли. Для пустых долей — всё остаётся в основном заказе.</small>
     </details>
     <div class="rowc" style="justify-content:flex-end;gap:8px">
       <button type="button" onclick="document.getElementById('splitDlg').close()">Отмена</button>
@@ -1052,32 +1431,227 @@ const splitForm=splitDlg.querySelector('#splitForm'); const splitStagesTbody=spl
 function openSplitDialog(){
   const b=currentBoard(); const id=orderForm.id.value; const o=b.orders.find(x=>x.id===id)||null; splitContextId=id||null;
   splitForm.reset(); splitStagesTbody.innerHTML=''; const stages=readStages();
-  stages.forEach(st=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td><input type="number" min="0" max="100" placeholder="" /></td>`;splitStagesTbody.appendChild(tr)});
+  stages.forEach(st=>{
+    const tr=document.createElement('tr');
+    const normalized=normalizeStageName(st.name);
+    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    tr.dataset.stageName=st.name||'';
+    tr.dataset.stageNormalized=normalized;
+    tr.dataset.hourless=hourless?'1':'0';
+    const pctCell=hourless?'<span class="muted">—</span>':`<input type="number" data-kind="pct" min="0" max="100" step="0.01" placeholder="%" />`;
+    const valueCell=hourless?'<span class="muted">—</span>':`<input type="number" data-kind="abs" min="0" step="0.01" placeholder="значение" />`;
+    tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td>${pctCell}</td><td>${valueCell}</td>`;
+    splitStagesTbody.appendChild(tr);
+  });
   const defTitle=(orderForm.title.value.trim()||'Заказ')+' — часть'; splitForm.titlePart.value=defTitle; splitForm.suffix.value='-1'; splitForm.partPct.value=50;
   splitDlg.showModal();
 }
 splitForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard(); const parent=b.orders.find(x=>x.id===splitContextId); if(!parent){alert('Не удалось найти исходный заказ');return}
-  const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0))); const stageRows=[...splitStagesTbody.querySelectorAll('tr')]; const stageShares={};
-  (parent.stages||[]).forEach((st,i)=>{const vRaw=stageRows[i]?.querySelector('input')?.value??'';const v=vRaw===''?NaN:Number(vRaw);if(!Number.isNaN(v)&&v>=0&&v<=100)stageShares[st.name]=v});
-  const hasAnyStageShare=Object.keys(stageShares).length>0;
-  if(!parent._origValues){parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>[s.name,Number(s.value)||0]))}
+  const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0)));
+  const servicePctRaw=splitForm.servicePct?.value??'';
+  const servicePct=servicePctRaw===''?null:Number(servicePctRaw);
+  const serviceValueRaw=splitForm.serviceValue?.value??'';
+  const serviceValue=serviceValueRaw===''?null:Number(serviceValueRaw);
+  const stageRows=[...splitStagesTbody.querySelectorAll('tr')];
+  const stageSharePrefs=[];
+  let hasAnyStageShare=false;
+  (parent.stages||[]).forEach((st,i)=>{
+    const row=stageRows[i];
+    if(!row||row.dataset.hourless==='1'){stageSharePrefs[i]=null;return;}
+    const pctEl=row.querySelector('input[data-kind="pct"]');
+    const absEl=row.querySelector('input[data-kind="abs"]');
+    const pctRaw=pctEl?pctEl.value.trim():'';
+    const absRaw=absEl?absEl.value.trim():'';
+    let pct=null;
+    if(pctRaw!==''){const parsed=Number(pctRaw); if(Number.isFinite(parsed)&&parsed>=0&&parsed<=100) pct=parsed;}
+    let abs=null;
+    if(absRaw!==''){const parsed=Number(absRaw); if(Number.isFinite(parsed)&&parsed>=0) abs=parsed;}
+    if(pct!==null||abs!==null){stageSharePrefs[i]={pct,abs};hasAnyStageShare=true;}else{stageSharePrefs[i]=null;}
+  });
+  if(!parent._origValues){
+    parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>{
+      const parsed=parseNumericValue(s.value);
+      return [s.name, parsed.hasValue?parsed.number:0];
+    }));
+  }
   if(typeof parent._origPctUsed!=='number') parent._origPctUsed=0;
+  if(!Number.isFinite(parent._origServiceTotal)){
+    const currentService=parseNumericValue(parent.serviceTotal);
+    parent._origServiceTotal=currentService.hasValue?currentService.number:0;
+  }
+
+  const originalServiceTotal=Number.isFinite(parent._origServiceTotal)?parent._origServiceTotal:0;
+  const currentServiceInfo=parseNumericValue(parent.serviceTotal);
+  const currentServiceTotal=currentServiceInfo.hasValue?currentServiceInfo.number:originalServiceTotal;
+  const parentHadExplicitService=currentServiceInfo.hasValue;
+  const effectiveServicePct=(servicePct!==null&&Number.isFinite(servicePct)&&servicePct>=0&&servicePct<=100)?servicePct:null;
+  const effectiveServiceValue=(serviceValue!==null&&Number.isFinite(serviceValue)&&serviceValue>=0)?serviceValue:null;
 
   const child=deepClone(parent); child.id=crypto.randomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
   child.orderNo=parent.orderNo+(splitForm.suffix.value||'-1'); child.createdAt=new Date().toISOString();
   child.partOfPct=hasAnyStageShare?null:basePct; child.restOfPct=null; child.done=false; child.progress=0; child.progressManual=true;
-  child.parentId=parent.id; child.isPart=true; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
+  child.parentId=parent.id; child.isPart=true; child.childIds=[]; child._origPctUsed=0; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
 
-  child.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); return {...st,value:childWant}});
-  parent.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); const parentVal=round(curr-childWant); return {...st,value:parentVal}});
+  const stageShareResults=[];
+  child.stages=(parent.stages||[]).map((st,i)=>{
+    const normalized=normalizeStageName(st.name);
+    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    if(hourless){
+      const parsedHourless=parseNumericValue(st.value);
+      stageShareResults[i]={share:0,current:parsedHourless.number,hourless:true,hadValue:parsedHourless.hasValue};
+      return {...st};
+    }
+    const parsedCurrent=parseNumericValue(st.value);
+    const current=parsedCurrent.number;
+    const pref=stageSharePrefs[i];
+    let childWant=0;
+    if(pref&&pref.abs!==null){
+      childWant=Math.min(round(pref.abs), current);
+    } else if(pref&&pref.pct!==null){
+      childWant=Math.min(round(current*(pref.pct/100)), current);
+    } else if(hasAnyStageShare){
+      childWant=0;
+    } else {
+      childWant=Math.min(round(current*(basePct/100)), current);
+    }
+    stageShareResults[i]={share:childWant,current,hourless:false,hadValue:parsedCurrent.hasValue};
+    return {...st,value:childWant>0?childWant:''};
+  });
+  parent.stages=(parent.stages||[]).map((st,i)=>{
+    const res=stageShareResults[i];
+    if(!res||res.hourless){
+      return {...st};
+    }
+    const fallback=parseNumericValue(st.value);
+    const baseValue=Number.isFinite(res.current)?res.current:fallback.number;
+    const remaining=round(Math.max(0,baseValue-res.share));
+    return {...st,value:remaining>0?remaining:''};
+  });
 
-  if(!hasAnyStageShare){const allowed=Math.max(0,100-parent._origPctUsed);const used=Math.min(allowed,basePct);child.partOfPct=used;parent._origPctUsed+=used;parent.restOfPct=Math.max(0,100-parent._origPctUsed);if(parent.restOfPct===0)parent.restOfPct=null}else{child.partOfPct=null;parent.restOfPct=null}
+  child._origValues=Object.fromEntries((child.stages||[]).map(s=>{
+    const parsed=parseNumericValue(s.value);
+    return [s.name, parsed.hasValue?parsed.number:0];
+  }));
+
+  const hasHourDistribution=stageShareResults.some(res=>res && !res.hourless && res.share>0);
+  if(!hasAnyStageShare){
+    if(hasHourDistribution){
+      const allowed=Math.max(0,100-parent._origPctUsed);
+      const used=Math.min(allowed,basePct);
+      child.partOfPct=used;
+      parent._origPctUsed+=used;
+      parent.restOfPct=Math.max(0,100-parent._origPctUsed);
+      if(parent.restOfPct===0)parent.restOfPct=null;
+    }else{
+      child.partOfPct=null;
+    }
+  }else{
+    child.partOfPct=null;
+    parent.restOfPct=null;
+  }
+
+  const calculateServiceShare=()=>{
+    if(effectiveServiceValue!==null){
+      const desired=round(effectiveServiceValue);
+      if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+      return desired;
+    }
+    if(effectiveServicePct!==null){
+      const desired=round(originalServiceTotal*(effectiveServicePct/100));
+      if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+      return desired;
+    }
+    const desired=round(originalServiceTotal*(basePct/100));
+    if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+    return desired;
+  };
+
+  const childService=calculateServiceShare();
+  const parentServiceBaseline=Number.isFinite(currentServiceTotal)?currentServiceTotal:originalServiceTotal;
+  const parentServiceRemaining=round(Math.max(0,parentServiceBaseline-childService));
+  child.serviceTotal=childService>0?childService:'';
+  if(parentHadExplicitService||childService>0){
+    parent.serviceTotal=parentServiceRemaining>0?parentServiceRemaining:'';
+  }
+  const childServiceInfo=parseNumericValue(child.serviceTotal);
+  child._origServiceTotal=childServiceInfo.hasValue?childServiceInfo.number:0;
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
   b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
 });
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
+
+function recalcParentSplitMeta(parent, board){
+  if(!parent) return;
+  const ids=Array.isArray(parent.childIds)?parent.childIds.filter(Boolean):[];
+  if(!ids.length){
+    parent.childIds=[];
+    parent._origPctUsed=0;
+    parent.restOfPct=null;
+    return;
+  }
+  const orders=board?.orders||[];
+  let used=0;
+  let hasPart=false;
+  ids.forEach(id=>{
+    const child=orders.find(x=>x.id===id);
+    if(!child) return;
+    if(typeof child.partOfPct==='number'){used+=child.partOfPct;hasPart=true;}
+  });
+  parent._origPctUsed=round(used);
+  if(hasPart){
+    const rest=Math.max(0,round(100-used));
+    parent.restOfPct=rest>0?rest:null;
+  }else{
+    parent.restOfPct=null;
+  }
+}
+
+function mergeSuborderBack(parent, child, board){
+  if(!parent||!child) return;
+  const childStages=child.stages||[];
+  const childMap=new Map();
+  childStages.forEach(st=>{childMap.set(normalizeStageName(st.name||''),st);});
+  parent.stages=(parent.stages||[]).map(st=>{
+    const normalized=normalizeStageName(st.name);
+    if(HOURLESS_STAGE_NAMES.has(normalized)){
+      return {...st};
+    }
+    const childStage=childMap.get(normalized);
+    if(!childStage) return {...st};
+    const parentValRaw=Number(st.value??0);
+    const childValRaw=Number(childStage.value??0);
+    const parentVal=Number.isFinite(parentValRaw)?parentValRaw:0;
+    const childVal=Number.isFinite(childValRaw)?childValRaw:0;
+    const total=round(parentVal+childVal);
+    return {...st,value:total>0?total:''};
+  });
+  const parentServiceRaw=Number(parent.serviceTotal||0);
+  const childServiceRaw=Number(child.serviceTotal||0);
+  const mergedService=round((Number.isFinite(parentServiceRaw)?parentServiceRaw:0)+(Number.isFinite(childServiceRaw)?childServiceRaw:0));
+  parent.serviceTotal=mergedService>0?mergedService:'';
+  parent.childIds=(Array.isArray(parent.childIds)?parent.childIds.filter(id=>id!==child.id):[]);
+  if(!parent.childIds.length) parent.childIds=[];
+  recalcParentSplitMeta(parent, board);
+  computeOrderDatesFromStages(parent);
+  parent.progress=calcAutoProgress(parent.stages);
+}
+
+function handleOrderRemoval(order, board){
+  if(!order) return;
+  const b=board||currentBoard();
+  if(!b) return;
+  if(order.parentId){
+    const parent=b.orders.find(x=>x.id===order.parentId);
+    if(parent){
+      mergeSuborderBack(parent, order, b);
+    }
+  }
+  b.orders=b.orders.filter(x=>x.id!==order.id);
+  const summary=order.parentId?'Удаление подзаказа':'Удаление заказа';
+  save(summary);
+}
 
 /* TOP BAR & INIT */
 const addBoardBtn=$('#addBoardBtn');
@@ -1091,24 +1665,6 @@ q.oninput=()=>renderCards();
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
-
-$('#exportBtn').insertAdjacentHTML('afterend','<button id="demoBtn" title="Загрузить демо">☆</button>');
-$('#demoBtn').onclick=()=>{loadDemo();save('Загрузка демо-данных');renderAll();alert('Загружено 12 демо-заказов')};
-
-function loadDemo(){
-  const b=currentBoard(); b.orders=[]; const lanes=b.lanes; const today=new Date(); today.setHours(0,0,0,0);
-  const names=['Корпус шкафа','Панель фасадная','Кожух вентиляции','Стойка рамы','Лоток кабельный','Кронштейн опорный','Щит распределительный','Дверца ревизионная','Профиль С-образный','Балка связующая','Люк сервисный','Ступень лестничная'];
-  for(let i=0;i<12;i++){
-    const id=crypto.randomUUID(); const startShift=-10+Math.floor(Math.random()*15); const len=3+Math.floor(Math.random()*10);
-    const s=new Date(today); s.setDate(s.getDate()+startShift); const e=new Date(s); e.setDate(e.getDate()+len);
-    const st=DEFAULT_STAGES.map(n=>{const stS=new Date(s);stS.setDate(stS.getDate()+Math.floor(Math.random()*Math.max(1,len-1)));const stE=new Date(stS);stE.setDate(stE.getDate()+Math.floor(Math.random()*3));const done=Math.random()<0.4;const prog=done?100:Math.floor(Math.random()*80);const val=n.toLowerCase()==='закупка'?'':(Math.random()<0.5?(5+Math.floor(Math.random()*15)):'');return {name:n,done,progress:prog,start:fmtDate(stS),end:fmtDate(stE),value:val}});
-    const order={id,title:names[i],orderNo:`24-${100+i}`,customer:['ООО Ромашка','ЗАО Лист','ИП Металл'][i%3],
-      start:fmtDate(s),end:fmtDate(e),done:Math.random()<0.15,progress:Math.floor(Math.random()*100),progressManual:true,
-      notes:'',status:lanes[Math.floor(Math.random()*lanes.length)],
-      serviceTotal:Math.random()<0.6?(10000+Math.floor(Math.random()*90000)):'',stages:st,createdAt:new Date().toISOString()};
-    b.orders.push(order);
-  }
-}
 
 /* === CRM ↔ Planner Sync === */
 const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
@@ -1127,6 +1683,16 @@ function positionToastLayer(){
 }
 positionToastLayer();
 window.addEventListener('resize', positionToastLayer);
+
+function updateLaneHeightVar(){
+  const header=document.querySelector('header');
+  const headerHeight=header?header.getBoundingClientRect().height:0;
+  const available=Math.max(320, window.innerHeight - headerHeight - 72);
+  document.documentElement.style.setProperty('--crm-lane-max-height', `${Math.round(available)}px`);
+}
+updateLaneHeightVar();
+window.addEventListener('resize', updateLaneHeightVar);
+
 let crmNotificationsMuted=window.__CRM_NOTIFICATIONS_MUTED__===true;
 function derivePlannerNotificationsMuted(state){
   if(!state||typeof state!=='object') return undefined;
@@ -1202,6 +1768,14 @@ function buildCrmOrdersSummary(snapshot){
 async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
+  if(!crmWriteAccessEnabled()){
+    const now=Date.now();
+    if(now - lastCrmWriteBlockedAt > 5000){
+      showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
+      lastCrmWriteBlockedAt = now;
+    }
+    return;
+  }
   crmSyncInFlight=true;
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
     crmSyncInFlight=false;
@@ -1235,6 +1809,14 @@ async function pushCrmToServer(){
     }
     if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
     syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+    const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
+    currentWriteMode = adminWriteMode;
+    applyCrmWriteAccess();
+    if(adminWriteMode === DATA_WRITE_MODES.planner){
+      const err = new Error('Изменения разрешены только из Планировщика');
+      err.code = 'WRITE_MODE_FORBIDDEN';
+      throw err;
+    }
     plannerSnapshot.crm=snapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
@@ -1285,6 +1867,7 @@ async function pushCrmToServer(){
       if(baseEtag) metaPayload.ifMatch=baseEtag;
       else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
     }
+    metaPayload.channel='crm';
     return {
       stateString:JSON.stringify(plannerSnapshot),
       metaPayload
@@ -1310,6 +1893,9 @@ async function pushCrmToServer(){
     }catch(err){
       crmSuppressNext=false;
       lastError=err;
+      if(err && err.code==='WRITE_MODE_FORBIDDEN'){
+        break;
+      }
       if(err && err.name==='PlannerConflictError' && attempt<2){
         continue;
       }
@@ -1324,6 +1910,12 @@ async function pushCrmToServer(){
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
       console.error('CRM: load planner state failed',lastError.originalError||lastError);
       showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+      const now=Date.now();
+      if(now - lastCrmWriteBlockedAt > 5000){
+        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+        lastCrmWriteBlockedAt = now;
+      }
     }else{
       console.error('CRM sync failed',lastError);
       const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
@@ -1359,6 +1951,8 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
     try{
       const parsed=JSON.parse(payload.state);
       syncCrmNotificationsMutedFromPlanner(parsed);
+      currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
+      applyCrmWriteAccess();
       if(parsed&&parsed.crm){
         applyRemoteCrm(parsed.crm);
         showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
@@ -1384,7 +1978,7 @@ document.addEventListener('click',e=>{
 });
 
 /* INIT */
-function renderAll(){renderBoardSelect();renderColumns();renderCards()}
+function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
 renderAll();
 
 /* hotkeys */

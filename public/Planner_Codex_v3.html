@@ -211,7 +211,7 @@
           err.detail = trimmed;
         }
         err.body = text;
-        if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+        if ((res.status === 409 || res.status === 412) && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
           err.name = 'PlannerConflictError';
         }
         if (attempt === 0 && (err.status === 409 || err.status === 412 || err.status === 428)) {
@@ -400,8 +400,6 @@ th,td{border-bottom:1px solid var(--line);padding:4px 6px;height:var(--cell);ver
 td[contenteditable="true"]{background:#fffceb;outline:0;border-radius:4px}
 .error{background:#ffdada}
 .newRow td{font-weight:700}
-.lock-btn{background:transparent;border:none;cursor:pointer;padding:0;line-height:0}
-.lock-btn:focus{outline:2px solid #bfdbfe;outline-offset:2px;border-radius:6px}
 .rest-cell{background:#f8fafc;font-weight:600}
 td[data-field="progress"]{background:#fffef3}
 td[data-field="progress"][data-expected]{position:relative;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -511,7 +509,7 @@ td[data-field="progress"][data-expected][data-behind="1"]:after{color:#dc2626;ba
 .gantt-right{display:flex;flex-direction:column;overflow:hidden}
 .gantt-header-x{background:#fff;border-bottom:1px solid var(--line);overflow:hidden}
 .gantt-header-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth);will-change:transform}
-.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap;flex-direction:column;gap:2px}
 .gantt-body{display:flex;overflow:auto}
 .gantt-dates{min-width:calc(var(--dayWidth)*var(--dayCount));display:grid;grid-auto-rows:var(--gcell);grid-auto-flow:row}
 .gantt-dates-row{display:grid;grid-template-columns:repeat(var(--dayCount),var(--dayWidth))}
@@ -573,13 +571,24 @@ body.overview-fs-active{overflow:hidden}
   pointer-events:none;
 }
 
+.gantt-header-cell .dow,
+.ov-head-cell .dow{font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.gantt-header-cell .date,
+.ov-head-cell .date{font-size:12px;line-height:1.1}
+.gantt-header-cell.weekend:not(.today),
+.ov-head-cell.weekend:not(.today){background:#f1f5f9}
+.gantt-header-cell.weekend .dow,
+.ov-head-cell.weekend .dow{color:#dc2626}
+.gcell.weekend:not(.today),
+.ov-cell.weekend:not(.today){background:#f8fafc}
+
 #overview{border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .ov-wrap{display:grid;grid-template-columns:var(--orderPaneWidth) 1fr;max-height:min(calc(var(--gcell)*18+56px),calc(100vh - 260px))}
 .ov-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow:auto}
 .ov-right{display:flex;flex-direction:column;overflow:hidden}
 .ov-head{background:#fff;border-bottom:1px solid var(--line)}
 .ov-head-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth)}
-.ov-head-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.ov-head-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap;flex-direction:column;gap:2px}
 .ov-left .row-label{height:var(--ovRow, var(--gcell));display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ov-left .row-label.stage{padding-left:18px;color:#475569;font-size:13px}
 .ov-left .row-label.header{height:calc(var(--gcell)*0.9);font-weight:600}
@@ -963,7 +972,6 @@ body.overview-fs-active{overflow:hidden}
       <table id="tasksTable">
         <colgroup>
           <col id="colIndex"   data-col="index"   style="width:42px">  <!-- № -->
-          <col id="colLock"    data-col="lock"    style="width:34px">  <!-- замок -->
           <col id="colEye"     data-col="eye"     style="width:34px">  <!-- глаз -->
           <col id="colOrderId" data-col="order"   style="width:340px">
           <col id="colProg"    data-col="progress" style="width:110px">  <!-- Прогресс, % -->
@@ -980,7 +988,6 @@ body.overview-fs-active{overflow:hidden}
         <thead>
           <tr>
             <th>№</th>
-            <th>🔐</th>
             <th>👁</th>
             <th>Заказ</th>
             <th>Прогресс, %</th>
@@ -998,10 +1005,10 @@ body.overview-fs-active{overflow:hidden}
         <tbody></tbody>
         <tfoot>
           <tr id="totalsRow">
-            <td colspan="6" style="text-align:right;font-weight:700">Итого:</td>
+            <td colspan="5" style="text-align:right;font-weight:700">Итого:</td>
             <td id="totHours"  style="font-weight:700">0</td>
             <td id="totRest"   style="font-weight:700">0</td>
-            <td colspan="6"></td>
+            <td colspan="5"></td>
           </tr>
         </tfoot>
       </table>
@@ -1159,9 +1166,7 @@ body.overview-fs-active{overflow:hidden}
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:10px;margin-top:4px;width:100%">
         <label class="small"><input type="checkbox" id="shiftOnProgress" checked> Сдвигать старт при правке «Прогресса»</label>
         <label class="small"><input type="checkbox" id="autoOptimize" checked> Автооптимизация</label>
-        <label class="small"><input type="checkbox" id="cascadeReady"> Автоготовность при упаковке/отгрузке</label>
-        <label class="small"><input type="checkbox" id="lockNewOrders" title="Все новые заказы создавать с замком и ставить в конец списка"> Автоблок</label>
-        <label class="small" id="lockNewOrdersCsvWrap" style="margin-left:20px"><input type="checkbox" id="lockNewOrdersCsv"> Применять и к новым заказам из CSV</label>
+        <label class="small"><input type="checkbox" id="cascadeReady" checked> Автоготовность при упаковке/отгрузке</label>
         <div class="row" style="gap:8px;align-items:center">
           <button id="ignoredStatesBtn" class="btn small ghost" type="button">Исключить состояния…</button>
           <span id="ignoredStatesSummary" class="small muted">Все состояния учитываются</span>
@@ -1175,7 +1180,7 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
-        <label class="small"><input type="checkbox" id="autosaveSetting"> Автосохранение</label>
+        <label class="small"><input type="checkbox" id="autosaveSetting" checked> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
@@ -1207,6 +1212,13 @@ body.overview-fs-active{overflow:hidden}
           <label>Снимков на день (N)
             <input id="adminHistoryDailyLimit" type="number" min="1" max="100" step="1" />
           </label>
+          <label>Запись данных
+            <select id="adminWriteMode">
+              <option value="both">CRM и Планировщик</option>
+              <option value="crm">Только CRM</option>
+              <option value="planner">Только Планировщик</option>
+            </select>
+          </label>
           <label class="admin-force-toggle">
             <span>Разрешить перезапись без проверки версий</span>
             <input id="adminAllowForceOverwrite" type="checkbox" />
@@ -1214,6 +1226,7 @@ body.overview-fs-active{overflow:hidden}
         </div>
         <div class="admin-settings-actions">
           <button id="adminSnapshotBtn" class="btn ghost small" type="button">Создать снимок сейчас</button>
+          <button id="adminSnapshotsClearBtn" class="btn ghost small" type="button">Очистить снимки</button>
           <button id="adminSaveBtn" class="btn primary small" type="button">Сохранить</button>
         </div>
       </div>
@@ -1497,6 +1510,28 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 
 const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);x.setHours(0,0,0,0);return x;}
 const fmtDate=d=>`${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`
+const WEEKDAY_SHORT=['ВС','ПН','ВТ','СР','ЧТ','ПТ','СБ'];
+const toValidDate=value=>{
+  if(value instanceof Date){
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const parsed=new Date(value);
+  return Number.isNaN(parsed.getTime())?null:parsed;
+};
+const weekdayShort=value=>{
+  const date=toValidDate(value);
+  return date?WEEKDAY_SHORT[date.getDay()]:'';
+};
+const isWeekendDate=value=>{
+  const date=toValidDate(value);
+  if(!date) return false;
+  const day=date.getDay();
+  return day===0||day===6;
+};
+const formatDateWithWeekday=value=>{
+  const date=toValidDate(value);
+  return date?`${weekdayShort(date)} ${fmtDate(date)}`:'—';
+};
 
 // dd.mm.yyyy — для CSV-экспорта состояния
 const fmtDateCSV = d => `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
@@ -1966,7 +2001,7 @@ function createRemoteBridge(){
             err.detail = trimmedDetail;
           }
           err.body = detailText;
-          if(res.status === 409 && (parsedDetail?.error === 'Conflict' || parsedDetail?.error === 'CONFLICT')){
+          if((res.status === 409 || res.status === 412) && (parsedDetail?.error === 'Conflict' || parsedDetail?.error === 'CONFLICT')){
             err.name = 'PlannerConflictError';
           }
           throw err;
@@ -2085,43 +2120,48 @@ function userCanEdit(){
   return accessMode === ACCESS_MODES.edit;
 }
 
+function plannerWriteAccessEnabled(){
+  const mode = normalizeWriteModeSetting(adminSettingsState.writeMode);
+  return mode === DATA_WRITE_MODES.both || mode === DATA_WRITE_MODES.planner;
+}
+
 function applyAccessMode(){
   const canEdit = userCanEdit();
+  const plannerCanWrite = plannerWriteAccessEnabled();
+  const effectiveEdit = canEdit && plannerCanWrite;
   if(document.body){
-    document.body.classList.toggle('view-only', !canEdit);
+    document.body.classList.toggle('view-only', !effectiveEdit);
+    document.body.classList.toggle('write-disabled', !plannerCanWrite);
   }
   const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
-      el.disabled = !canEdit;
+      el.disabled = !effectiveEdit;
     }
   });
-  const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#lockNewOrders','#lockNewOrdersCsv','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
+  const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
-    if(el){
-      if('disabled' in el) el.disabled = !canEdit;
-      if(el.id === 'lockNewOrders' || el.id === 'lockNewOrdersCsv'){
-        el.dataset.accessDisabled = !canEdit ? '1' : '0';
-      }
+    if(el && 'disabled' in el){
+      el.disabled = !effectiveEdit;
     }
   });
   ['#file'].forEach(sel=>{
     const input = $(sel);
-    if(input){ input.disabled = !canEdit; }
+    if(input){ input.disabled = !effectiveEdit; }
   });
   const textareas = ['#exceptionsText','#reserveText'];
   textareas.forEach(sel=>{
     const el = $(sel);
-    if(el){ el.readOnly = !canEdit; }
+    if(el){ el.readOnly = !effectiveEdit; }
   });
-  $$('#tasksTable tbody tr').forEach(tr=>{ tr.draggable = canEdit; });
+  $$('#tasksTable tbody tr').forEach(tr=>{ tr.draggable = effectiveEdit; });
   $$('#tasksTable [contenteditable]').forEach(cell=>{
-    cell.setAttribute('contenteditable', canEdit ? 'true' : 'false');
+    cell.setAttribute('contenteditable', effectiveEdit ? 'true' : 'false');
   });
-  $$('#tasksTable input[data-reserve], #tasksTable input[data-done]').forEach(el=>{ el.disabled = !canEdit; });
-  $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !canEdit; });
+  $$('#tasksTable input[data-reserve], #tasksTable input[data-done]').forEach(el=>{ el.disabled = !effectiveEdit; });
+  $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !effectiveEdit; });
   $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
   refreshSystemSettingsAccess();
@@ -2244,6 +2284,17 @@ function handleRemoteBridgeEvent(evt){
   if(payload && typeof payload === 'object'){
     if(payload.type === 'history'){
       handleAdminHistoryEvent(payload);
+      return;
+    }
+    if(payload.type === 'revision'){
+      const skip = skipRealtimeToastOnce;
+      fetchLatestFromRemote({ preserveProcess:true, origin:'remote', skipToasts: skip })
+        .then(applied=>{
+          if(applied && skipRealtimeToastOnce){
+            skipRealtimeToastOnce = false;
+          }
+        })
+        .catch(err=>{ console.warn('failed to refresh after revision event', err); });
       return;
     }
     if(payload.type === 'delta'){
@@ -2588,7 +2639,6 @@ const ADMIN_HISTORY_DAILY_LIMIT_DEFAULT = 3;
 const ADMIN_HISTORY_PAGE_SIZE = 20;
 const TABLE_COLUMN_DEFS = [
   { key:'index',   label:'№',              settingsLabel:'№',              defaultWidth:42 },
-  { key:'lock',    label:'🔐',             settingsLabel:'Замок',          defaultWidth:34 },
   { key:'eye',     label:'👁',             settingsLabel:'Маршрут',        defaultWidth:34 },
   { key:'order',   label:'Заказ',          settingsLabel:'Заказ',          defaultWidth:340 },
   { key:'progress',label:'Прогресс, %',    settingsLabel:'Прогресс, %',    defaultWidth:110 },
@@ -2607,6 +2657,7 @@ const DEFAULT_TABLE_COLUMN_WIDTHS = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
   return acc;
 }, {});
 const DEFAULT_EXTRA_TIME_SETTINGS = { percent:5, minimum:0.25 };
+const DATA_WRITE_MODES = { both:'both', crm:'crm', planner:'planner' };
 const TABLE_COLUMN_LABEL_MAP = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
   acc[def.key] = def.settingsLabel || def.label;
   return acc;
@@ -2637,22 +2688,23 @@ let stateMeta = {
   csvTimestamp:'',
   manualTimestamp:'',
   history:[],
-  settings:{
-    capacity: { ...DEFAULT_CAP },
-    parallel: { ...DEFAULT_PARALLEL },
-    plannerMode: plannerMode,
-    notificationsMuted: false,
-    tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
-    extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
-    crmStageMapping: {},
-    logLimit: DEFAULT_LOG_LIMIT,
-    admin: {
-      historyLimit: ADMIN_HISTORY_LIMIT_DEFAULT,
-      historyDailyLimit: ADMIN_HISTORY_DAILY_LIMIT_DEFAULT,
-      allowForceOverwrite: false
+    settings:{
+      capacity: { ...DEFAULT_CAP },
+      parallel: { ...DEFAULT_PARALLEL },
+      plannerMode: plannerMode,
+      notificationsMuted: false,
+      tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
+      extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
+      crmStageMapping: {},
+      logLimit: DEFAULT_LOG_LIMIT,
+      admin: {
+        historyLimit: ADMIN_HISTORY_LIMIT_DEFAULT,
+        historyDailyLimit: ADMIN_HISTORY_DAILY_LIMIT_DEFAULT,
+        allowForceOverwrite: false,
+        writeMode: DATA_WRITE_MODES.both
+      },
+      updatedAt: ''
     },
-    updatedAt: ''
-  },
   ignoredStates: []
 };
 
@@ -2692,9 +2744,7 @@ let lockedUids=new Set();    // замки на позициях (по uid)
 let autosaveOn=true;
 let shiftOnProgress=true;
 let autoOptimizeOn = true;
-let lockNewOrders = false;
-let lockNewOrdersCsv = false;
-let cascadeReadyOn = false;
+let cascadeReadyOn = true;
 let priorityChangeLoggingOn = true;
 let routeDateChangeLoggingOn = true;
 let notificationsMuted = false;
@@ -2710,6 +2760,7 @@ let lastDiffApplied=null;    // запомненный diff для выборо�
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
 let crmStageTasks = [];
 const MODE_SCOPED_KEYS = [PLANNER_MODES.csv, PLANNER_MODES.crm];
+let lastWriteModeBlockAt = 0;
 function toIsoSafe(value){
   if(!value) return '';
   const date = value instanceof Date ? value : new Date(value);
@@ -3005,7 +3056,7 @@ function applyModeScopedState(mode){
     }];
   }));
   ordersByStage = new Map(Array.isArray(snapshot.orders) ? snapshot.orders : []);
-  lockedUids = new Set(Array.isArray(snapshot.locked) ? snapshot.locked : []);
+  lockedUids = new Set();
   ignoredStates = Array.isArray(snapshot.ignored) ? snapshot.ignored.slice() : [];
   ignoredStateSet = new Set(ignoredStates);
   const filterEntries = snapshot.stageFilters && typeof snapshot.stageFilters === 'object'
@@ -3038,7 +3089,7 @@ function applyModeScopedState(mode){
     const stageTasks = stageMap.get(currentStage) || [];
     tasks = stageTasks.map(cloneTaskRecord);
     sortBySavedOrder(tasks, currentStage);
-    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+    lockedUids = new Set();
   }else{
     tasks = [];
   }
@@ -3122,6 +3173,20 @@ function sanitizeLogLimit(raw){
   return Math.max(0, Math.round(num));
 }
 
+function normalizeWriteModeSetting(value){
+  if(value === null || value === undefined){
+    return DATA_WRITE_MODES.both;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if(normalized === DATA_WRITE_MODES.crm){
+    return DATA_WRITE_MODES.crm;
+  }
+  if(normalized === DATA_WRITE_MODES.planner){
+    return DATA_WRITE_MODES.planner;
+  }
+  return DATA_WRITE_MODES.both;
+}
+
 function sanitizeAdminSettings(raw, fallback = adminSettingsState){
   const base = raw && typeof raw === 'object' ? raw : {};
   const defaults = fallback && typeof fallback === 'object' ? fallback : {};
@@ -3132,7 +3197,8 @@ function sanitizeAdminSettings(raw, fallback = adminSettingsState){
   let historyDailyLimit = Number.isFinite(dailyRaw) ? Math.round(dailyRaw) : ADMIN_HISTORY_DAILY_LIMIT_DEFAULT;
   historyDailyLimit = Math.max(1, Math.min(historyLimit, historyDailyLimit));
   const allowForceOverwrite = base.allowForceOverwrite === true || base.allowForceOverwrite === 'true';
-  return { historyLimit, historyDailyLimit, allowForceOverwrite };
+  const writeMode = normalizeWriteModeSetting(base.writeMode ?? defaults.writeMode ?? DATA_WRITE_MODES.both);
+  return { historyLimit, historyDailyLimit, allowForceOverwrite, writeMode };
 }
 
 function getEffectiveLogLimit(){
@@ -3205,12 +3271,29 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
   ['лазер','laser'],
   ['гибка','bend'],
   ['сварка','weld'],
+  ['зенковка','mech'],
+  ['зенкование','mech'],
   ['мехобработка','mech'],
   ['мех.обработка','mech'],
   ['мех. обработка','mech'],
   ['мех-обработка','mech'],
+  ['мехобр','mech'],
+  ['мехобр.','mech'],
+  ['сверловка','mech'],
+  ['сверление','mech'],
+  ['сверл','mech'],
+  ['резьбонарезка','mech'],
+  ['резьба','mech'],
+  ['резьб','mech'],
+  ['пуклевка','mech'],
+  ['пукл','mech'],
+  ['заклепка','mech'],
+  ['заклеп','mech'],
   ['кооперация','coop'],
   ['кооп','coop'],
+  ['покраска','coop'],
+  ['цинкование (кооперация)','coop'],
+  ['цинкование','coop'],
   ['упаковка','pack'],
   ['отгрузка','ship']
 ]);
@@ -3261,7 +3344,21 @@ function mapCrmStageName(name){
     return '';
   }
   const customStage = STAGES.includes(rawCustom) ? rawCustom : '';
-  const fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+  let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
+  if(!fallback){
+    if(normalized.includes('кооп') || normalized.includes('кооперац') || normalized.includes('покрас')){
+      fallback = 'coop';
+    }else if(
+      normalized.includes('мехобр')
+      || normalized.includes('зенк')
+      || normalized.includes('сверл')
+      || normalized.includes('резьб')
+      || normalized.includes('пукл')
+      || normalized.includes('заклеп')
+    ){
+      fallback = 'mech';
+    }
+  }
   const resolved = customStage || fallback;
   registerCrmStageName(rawLabel, normalized, customStage || fallback, !!customStage, fallback);
   return resolved;
@@ -3894,7 +3991,7 @@ function purgeCrmTasksFromCaches(){
   });
   if(currentProc && STAGES.includes(currentProc)){
     tasks = tasks.filter(task => !isCrmTask(task));
-    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+    lockedUids = new Set();
   }
 }
 
@@ -3927,7 +4024,7 @@ function injectCrmTasksIntoCaches(){
       const stageTasks = allTasksFromState.filter(task => task && task.stage === stage);
       tasks = stageTasks.map(cloneTaskRecord);
       sortBySavedOrder(tasks, stage);
-      lockedUids = new Set(stageTasks.filter(task => task && task.locked).map(task => task.uid));
+      lockedUids = new Set();
     }else{
       stagesDirtyFromRoute.add(stage);
     }
@@ -5669,8 +5766,8 @@ function renderRouteDialog(context){
       const meta = document.createElement('span');
       meta.className = 'route-stage-meta';
       const seg = item.seg || {};
-      const startText = seg.start instanceof Date ? fmtDate(seg.start) : '—';
-      const endText = seg.end instanceof Date ? fmtDate(seg.end) : '—';
+      const startText = formatDateWithWeekday(seg.start);
+      const endText = formatDateWithWeekday(seg.end);
       const parts = [`${startText} → ${endText}`];
       if(Number.isFinite(seg.hours) && seg.hours > 0){
         parts.push(`${seg.hours.toFixed(1)} ч`);
@@ -5847,9 +5944,36 @@ function applyStageProgress(identity, stage, value, options={}){
   let summaryOrderId = identity?.orderId || '';
   let summaryOrderKey = identity?.orderKey || '';
   const crmUpdates = [];
+  const crmReferenceTask = findCrmStageTaskForIdentity(identity, stage);
+  const ensureCrmMeta = taskObj => {
+    if(!taskObj) return null;
+    if(taskObj.crmMeta && taskObj.crmMeta.stageKey){
+      return taskObj;
+    }
+    const fallback = crmReferenceTask || findCrmStageTaskForIdentity(identity, stage);
+    if(fallback && fallback.crmMeta){
+      taskObj.crmMeta = { ...fallback.crmMeta };
+    }else if(fallback){
+      const stageName = fallback.stage || fallback.stageName || (STAGE_TITLE[stage] || stage);
+      taskObj.crmMeta = {
+        stageKey: stage,
+        stageName,
+        boardId: fallback.crmMeta?.boardId || fallback.boardId || '',
+        crmOrderId: fallback.crmMeta?.crmOrderId || fallback.crmOrderId || fallback.orderId || '',
+        orderIdentity: fallback.orderIdentity || '',
+        orderId: fallback.orderId || ''
+      };
+    }
+    if(taskObj.crmMeta){
+      if(!taskObj.crmMeta.stageKey) taskObj.crmMeta.stageKey = stage;
+      if(!taskObj.crmMeta.stageName) taskObj.crmMeta.stageName = STAGE_TITLE[stage] || stage;
+    }
+    return taskObj;
+  };
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment, extraOptions={})=>{
-    if(!taskObj || !taskObj.crmMeta) return;
-    const payload = buildCrmUpdateFromTask(taskObj, stage, {
+    const enriched = ensureCrmMeta(taskObj);
+    if(!enriched || !enriched.crmMeta) return;
+    const payload = buildCrmUpdateFromTask(enriched, stage, {
       progress: progressValue,
       done: !!doneFlag,
       doneAt: doneFlag && doneMoment ? new Date(doneMoment) : undefined,
@@ -5873,6 +5997,7 @@ function applyStageProgress(identity, stage, value, options={}){
     if(crmCandidate){
       if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
       const clone = cloneTaskRecord(crmCandidate);
+      ensureCrmMeta(clone);
       allTasksFromState.push(clone);
       storedMatches.push({ task: clone, index: allTasksFromState.length - 1 });
     }
@@ -5927,10 +6052,13 @@ function applyStageProgress(identity, stage, value, options={}){
           target = cloneTaskRecord(activeEntry.task);
         }
       }
-      if(!target){
+      if(target){
+        ensureCrmMeta(target);
+      }else{
         const doneEntry = doneMatches.find(entry => entry.rec && entry.rec.uid === uid);
         if(doneEntry?.rec){
           target = buildDoneTaskRecord(doneEntry.rec);
+          ensureCrmMeta(target);
         }
       }
       if(!target) return;
@@ -5944,6 +6072,7 @@ function applyStageProgress(identity, stage, value, options={}){
         if(keyCandidate) summaryOrderKey = keyCandidate;
       }
       if(prevProgress < 100) changed = true;
+      ensureCrmMeta(target);
       target.progress = 100;
       target.isDone = true;
       assignCompletionMeta(target, stage, completionMoment, source);
@@ -5969,7 +6098,7 @@ function applyStageProgress(identity, stage, value, options={}){
       const before = tasks.length;
       tasks = tasks.filter(task => !(task && removeSet.has(task.uid)));
       if(tasks.length !== before) changed = true;
-      lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+      lockedUids = new Set();
       rememberStageOrder(stage);
     }else{
       stagesDirtyFromRoute.add(stage);
@@ -6004,6 +6133,7 @@ function applyStageProgress(identity, stage, value, options={}){
           if(keyCandidate) summaryOrderKey = keyCandidate;
         }
         if(prevProgress !== normalized) changed = true;
+        ensureCrmMeta(stored);
         stored.progress = normalized;
         stored.isDone = false;
         clearCompletionMeta(stored, stage);
@@ -6015,6 +6145,7 @@ function applyStageProgress(identity, stage, value, options={}){
       const activeEntry = activeMatches.find(entry => entry.task && entry.task.uid === uid);
       if(activeEntry?.task){
         const copy = cloneTaskRecord(activeEntry.task);
+        ensureCrmMeta(copy);
         const prevProgress = clampProgressValue(copy.progress);
         if(!summaryRecords.has(uid) && copy) summaryRecords.set(uid, copy);
         if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
@@ -6038,6 +6169,7 @@ function applyStageProgress(identity, stage, value, options={}){
       if(doneEntry?.rec){
         const restored = buildDoneTaskRecord(doneEntry.rec);
         if(restored){
+          ensureCrmMeta(restored);
           const prevProgress = clampProgressValue(restored.progress);
           if(!summaryRecords.has(uid) && restored) summaryRecords.set(uid, restored);
           if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
@@ -6064,12 +6196,16 @@ function applyStageProgress(identity, stage, value, options={}){
         if(!record) return;
         const entry = byUid.get(uid);
         if(entry){
-          tasks[entry.idx] = cloneTaskRecord(record);
+          const clone = cloneTaskRecord(record);
+          ensureCrmMeta(clone);
+          tasks[entry.idx] = clone;
         }else{
-          tasks.push(cloneTaskRecord(record));
+          const clone = cloneTaskRecord(record);
+          ensureCrmMeta(clone);
+          tasks.push(clone);
         }
       });
-      lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+      lockedUids = new Set();
       rememberStageOrder(stage);
     }else{
       stagesDirtyFromRoute.add(stage);
@@ -6103,7 +6239,7 @@ function applyStageProgress(identity, stage, value, options={}){
 
   if(currentProc === stage){
     tasks = stageActive.map(cloneTaskRecord);
-    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+    lockedUids = new Set();
     rememberStageOrder(stage);
   }
 
@@ -6186,7 +6322,11 @@ function applyStageProgress(identity, stage, value, options={}){
   updateStageSnapshotFromAggregated(stage);
   rebuildAndRenderMasterRoute();
   recompute();
-  const persistOptions = { source, stageOverride: stage };
+  const persistOptions = {
+    source,
+    stageOverride: stage,
+    force: options.force === true || interactive || markDone
+  };
   if(summaryOverrideText) persistOptions.summaryOverride = summaryOverrideText;
   if(ordersSummaryOverride) persistOptions.ordersSummaryOverride = ordersSummaryOverride;
   persistMaybe('data', persistOptions);
@@ -6440,6 +6580,16 @@ function renderOrdersOverviewTable(){
   syncOverviewTotalsColumns();
   attachOverviewTotalsScrollSync();
 }
+
+function refreshOrderPerfUI(){
+  try{
+    renderOrdersOverviewTable();
+  }catch(err){
+    console.warn('refreshOrderPerfUI fallback failed', err);
+  }
+}
+
+window.refreshOrderPerfUI = refreshOrderPerfUI;
 
 function syncOverviewTotalsColumns(){
   const overviewTable = document.getElementById('ordersOverviewTable');
@@ -6901,6 +7051,118 @@ function clonePlain(value){
   return value;
 }
 
+function isPlainObject(value){
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneEntryList(entries){
+  if(!Array.isArray(entries)) return [];
+  return entries.map(entry=>{
+    if(!Array.isArray(entry) || entry.length < 2) return clonePlain(entry);
+    const [key, value] = entry;
+    if(Array.isArray(value)) return [key, value.map(clonePlain)];
+    if(isPlainObject(value)) return [key, clonePlain(value)];
+    return [key, value];
+  });
+}
+
+function normalizeSnapshotForPush(snapshot, options={}){
+  const target = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const prev = options.previous && typeof options.previous === 'object' ? options.previous : null;
+  const currentStage = typeof options.stage === 'string' ? options.stage : null;
+
+  const cloneTaskArray = (value)=>{
+    if(!Array.isArray(value)) return [];
+    return value.map(task=> clonePlain(task));
+  };
+
+  const ensureStringArray = (value, fallback=[])=>{
+    if(Array.isArray(value)) return value.slice();
+    if(Array.isArray(fallback)) return fallback.slice();
+    return [];
+  };
+
+  const mergeTasks = (baseTasks, prevTasks, { skipStage }={})=>{
+    const tasks = cloneTaskArray(baseTasks);
+    const seen = new Set(tasks.map(task => (task && task.uid) ? task.uid : null).filter(Boolean));
+    if(Array.isArray(prevTasks)){
+      prevTasks.forEach(task=>{
+        if(!task) return;
+        if(skipStage && task.stage === skipStage) return;
+        const uid = task.uid || null;
+        if(uid && seen.has(uid)) return;
+        tasks.push(clonePlain(task));
+      });
+    }
+    return tasks;
+  };
+
+  target.t = mergeTasks(target.t, prev?.t, { skipStage: currentStage });
+  target.done = mergeTasks(target.done, prev?.done);
+  target.trash = mergeTasks(target.trash, prev?.trash);
+
+  const ensureEntries = (value, fallback)=>{
+    const base = cloneEntryList(value);
+    if(base.length) return base;
+    return cloneEntryList(fallback);
+  };
+
+  target.exc = ensureEntries(target.exc, prev?.exc);
+  target.res = ensureEntries(target.res, prev?.res);
+  target.routeOverrides = ensureEntries(target.routeOverrides, prev?.routeOverrides);
+
+  const stageOrderMap = new Map();
+  if(Array.isArray(prev?.orders)){
+    prev.orders.forEach(entry=>{
+      if(!Array.isArray(entry) || entry.length < 2) return;
+      const [stageKey, list] = entry;
+      if(currentStage && stageKey === currentStage) return;
+      stageOrderMap.set(stageKey, Array.isArray(list) ? list.slice() : []);
+    });
+  }
+  if(Array.isArray(target.orders)){
+    target.orders.forEach(entry=>{
+      if(!Array.isArray(entry) || entry.length < 2) return;
+      const [stageKey, list] = entry;
+      stageOrderMap.set(stageKey, Array.isArray(list) ? list.slice() : []);
+    });
+  }
+  target.orders = Array.from(stageOrderMap.entries());
+
+  if(!target.orders.length && Array.isArray(prev?.orders)){
+    target.orders = cloneEntryList(prev.orders);
+  }
+
+  target.locked = ensureStringArray(target.locked, prev?.locked);
+  target.ignoredStates = ensureStringArray(target.ignoredStates, prev?.ignoredStates);
+
+  if(!isPlainObject(target.meta)){
+    target.meta = isPlainObject(prev?.meta) ? clonePlain(prev.meta) : {};
+  }
+  if(!isPlainObject(target.meta.settings)){
+    if(isPlainObject(prev?.meta?.settings)) target.meta.settings = clonePlain(prev.meta.settings);
+    else target.meta.settings = cloneSettingsForSerialize(stateMeta.settings || {});
+  }
+  if(!isPlainObject(target.meta.versions)){
+    target.meta.versions = isPlainObject(prev?.meta?.versions) ? { ...prev.meta.versions } : {};
+  }
+  if(!Array.isArray(target.meta.history)){
+    target.meta.history = Array.isArray(prev?.meta?.history) ? cloneEntryList(prev.meta.history) : [];
+  }
+  if(!isPlainObject(target.meta.lastAuthors)){
+    target.meta.lastAuthors = isPlainObject(prev?.meta?.lastAuthors) ? { ...prev.meta.lastAuthors } : {};
+  }
+
+  if(!isPlainObject(target.modeScoped)){
+    target.modeScoped = cloneModeScopedStateForSave();
+  }
+  if(!isPlainObject(target.crm)){
+    target.crm = cloneCrmState(crmState);
+  }
+
+  return target;
+}
+
 function sanitizeSharedSettings(raw, context={}){
   const source = raw && typeof raw === 'object' ? raw : {};
   const fallbackMode = typeof context.fallbackMode === 'string' && context.fallbackMode
@@ -7092,11 +7354,6 @@ function remainingTotal(t){
   const base = (+t.hours||0)+(+t.extraHours||0);
   const p = Math.max(0, Math.min(100, +t.progress || 0));
   return +(base * (1 - p/100)).toFixed(4);
-}
-function lockSvg(locked){
-  return locked
-    ? '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#ef4444" d="M7 10V7a5 5 0 1 1 10 0v3h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h1Zm2 0h6V7a3 3 0 1 0-6 0v3Z"/></svg>'
-    : '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="#94a3b8" d="M17 10h1a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8a2 2 0 1 1 2-2h9V7a3 3 0 1 0-6 0 1 1 0 1 1-2 0 5 5 0 1 1 10 0v3Z"/></svg>';
 }
 function stageIcon(name){
   switch(name){
@@ -8251,7 +8508,6 @@ function renderTasksTable(){
 
     tr.innerHTML = `
       <td>${visibleIndex + 1}</td>
-      <td><button class="lock-btn" title="Закрепить позицию" data-locked="${lockedUids.has(t.uid)}">${lockSvg(lockedUids.has(t.uid))}</button></td>
       <td class="eye" title="Маршрут заказа">👁</td>
       <td class="drag-handle" ${orderAttrs}>${orderDisplay}</td>
       <td ${allowEdit ? 'contenteditable="true"' : 'contenteditable="false"'} data-field="progress"${progressAttrString}>${progressText}</td>
@@ -8297,20 +8553,6 @@ function renderTasksTable(){
     const endCell = tr.querySelector('[data-field="endDate"]');
     if(endCell){
       endCell.title = endText.trim();
-    }
-
-    const lockBtn = tr.querySelector('.lock-btn');
-    if(lockBtn){
-      lockBtn.disabled = !allowEdit;
-      if(allowEdit){
-        lockBtn.addEventListener('click', (e)=>{
-          if(lockedUids.has(t.uid)) lockedUids.delete(t.uid); else lockedUids.add(t.uid);
-          e.currentTarget.dataset.locked = lockedUids.has(t.uid);
-          e.currentTarget.innerHTML = lockSvg(lockedUids.has(t.uid));
-          t.locked = lockedUids.has(t.uid);
-          persistMaybe();
-        });
-      }
     }
 
     const doneBox = tr.querySelector('input[data-done]');
@@ -8693,12 +8935,14 @@ function renderGantt(intoFS=false){
 
   const todayDs = fmtDate(today0());
   visIdx.forEach(i=>{
-	const d=addDays(schedule.minD,i);
-	const c=document.createElement('div');
-	c.className='gantt-header-cell';
-	c.textContent=fmtDate(d);
-	if (fmtDate(d)===todayDs) c.classList.add('today');
-	cards.header.appendChild(c);
+        const d=addDays(schedule.minD,i);
+        const ds=fmtDate(d);
+        const c=document.createElement('div');
+        c.className='gantt-header-cell';
+        if(isWeekendDate(d)) c.classList.add('weekend');
+        if (ds===todayDs) c.classList.add('today');
+        c.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+        cards.header.appendChild(c);
   });
 
   const stageEntries = collectStageActiveEntries(curProc);
@@ -8715,7 +8959,8 @@ function renderGantt(intoFS=false){
     visIdx.forEach(i=>{
       const d=addDays(schedule.minD,i), ds=fmtDate(d);
       const cell=document.createElement('div'); cell.className='gcell';
-	  if (fmtDate(d)===todayDs) cell.classList.add('today');
+          if(isWeekendDate(d)) cell.classList.add('weekend');
+          if (ds===todayDs) cell.classList.add('today');
       const segs=(rec.get(ds)||[]).filter(x=>x.uid===t.uid);
       const val=segs.reduce((s,x)=>s+x.hours,0);
       const late=segs.some(x=>x.late);
@@ -9159,13 +9404,16 @@ function renderOverview(){
     $("#overview").style.setProperty('--ovRow', '24px');
 
     const hdr=$("#ovHeadRow"); hdr.innerHTML='';
-	const todayDs = fmtDate(today0());
-	idxs.forEach(i=>{
-	  const d=addDays(minD,i);
-	  const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
-	  if (fmtDate(d)===todayDs) cell.classList.add('today');
-	  hdr.appendChild(cell);
-	});
+        const todayDs = fmtDate(today0());
+        idxs.forEach(i=>{
+          const d=addDays(minD,i);
+          const ds=fmtDate(d);
+          const cell=document.createElement('div'); cell.className='ov-head-cell';
+          if(isWeekendDate(d)) cell.classList.add('weekend');
+          if (ds===todayDs) cell.classList.add('today');
+          cell.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+          hdr.appendChild(cell);
+        });
 
     const left=$("#ovLeftBody"); left.innerHTML='';
     const grid=$("#ovGrid"); grid.innerHTML='';
@@ -9186,12 +9434,14 @@ function renderOverview(){
       const orderLab=document.createElement('div'); orderLab.className='row-label'; orderLab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
       left.appendChild(orderLab);
 	  const emptyRow=document.createElement('div'); emptyRow.className='ov-row';
-	  idxs.forEach(i=>{
-		const d=addDays(minD,i);
-		const c=document.createElement('div'); c.className='ov-cell';
-		if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		emptyRow.appendChild(c);
-	  });
+          idxs.forEach(i=>{
+                const d=addDays(minD,i);
+                const ds=fmtDate(d);
+                const c=document.createElement('div'); c.className='ov-cell';
+                if(isWeekendDate(d)) c.classList.add('weekend');
+                if (ds===todayDs) c.classList.add('today');
+                emptyRow.appendChild(c);
+          });
 	  grid.appendChild(emptyRow);
 
 
@@ -9201,13 +9451,15 @@ function renderOverview(){
         const lab=document.createElement('div'); lab.className='row-label stage'; lab.textContent='— '+STAGE_TITLE[st];
         left.appendChild(lab);
 
-		const row=document.createElement('div'); row.className='ov-row';
-		idxs.forEach(i=>{
-		  const d=addDays(minD,i);
-		  const c=document.createElement('div'); c.className='ov-cell';
-		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		  row.appendChild(c);
-		});
+                const row=document.createElement('div'); row.className='ov-row';
+                idxs.forEach(i=>{
+                  const d=addDays(minD,i);
+                  const ds=fmtDate(d);
+                  const c=document.createElement('div'); c.className='ov-cell';
+                  if(isWeekendDate(d)) c.classList.add('weekend');
+                  if (ds===todayDs) c.classList.add('today');
+                  row.appendChild(c);
+                });
 
         const startIdx = daysBetween(minD, seg.start);
         const spanDays = daysSpan(seg.start, seg.end);
@@ -9246,14 +9498,17 @@ function renderOverview(){
 
 	  cont.style.setProperty('--ovDayCount', idxs.length);
 
-	  const hdrC=$("#ovHeadRowC"); hdrC.innerHTML='';
-	  const todayDs = fmtDate(today0());
-	  idxs.forEach(i=>{
-		const d=addDays(minD,i);
-		const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
-		if (fmtDate(d)===todayDs) cell.classList.add('today');
-		hdrC.appendChild(cell);
-	  });
+          const hdrC=$("#ovHeadRowC"); hdrC.innerHTML='';
+          const todayDs = fmtDate(today0());
+          idxs.forEach(i=>{
+                const d=addDays(minD,i);
+                const ds=fmtDate(d);
+                const cell=document.createElement('div'); cell.className='ov-head-cell';
+                if(isWeekendDate(d)) cell.classList.add('weekend');
+                if (ds===todayDs) cell.classList.add('today');
+                cell.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+                hdrC.appendChild(cell);
+          });
 
 	  const leftC=$("#ovLeftBodyC"); leftC.innerHTML='';
 	  const gridC=$("#ovGridC"); gridC.innerHTML='';
@@ -9294,13 +9549,15 @@ function renderOverview(){
 		const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
 		leftC.appendChild(lab);
 
-		const row=document.createElement('div'); row.className='ov-row';
-		idxs.forEach(i=>{
-		  const d=addDays(minD,i);
-		  const c=document.createElement('div'); c.className='ov-cell';
-		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		  row.appendChild(c);
-		});
+                const row=document.createElement('div'); row.className='ov-row';
+                idxs.forEach(i=>{
+                  const d=addDays(minD,i);
+                  const ds=fmtDate(d);
+                  const c=document.createElement('div'); c.className='ov-cell';
+                  if(isWeekendDate(d)) c.classList.add('weekend');
+                  if (ds===todayDs) c.classList.add('today');
+                  row.appendChild(c);
+                });
 
 		// контейнер бара: ставим по реальным датам (левый край — earliest, правый — latest)
 		const startIdx = daysBetween(minD, earliest);
@@ -10192,8 +10449,6 @@ function renderDeltaDialog(diffByStage, currentByStage){
     const stageDiffEntries = [];
     const updatedByStage = new Map();
     const appliedDiff = { added:[], removed:[], changed:[], toDone:[] };
-    const csvLockedAdds = new Map();
-
     STAGES.forEach(stage=>{
       const baseline = (currentByStage.get(stage) || []).map(cloneTaskRecord).filter(Boolean);
       const diff = diffByStage.get(stage) || { added:[], removed:[], changed:[], toDone:[] };
@@ -10275,18 +10530,10 @@ function renderDeltaDialog(diffByStage, currentByStage){
         }
       });
 
-      const csvLockOrder = (lockNewOrders && lockNewOrdersCsv) ? new Map() : null;
       diff.added.forEach(item=>{
         if(stageSel.get(item.uid) !== 'add') return;
         const clone = cloneTaskRecord(item);
         clone.isNew = true;
-        if(csvLockOrder){
-          clone.locked = true;
-          csvLockOrder.set(clone.uid, csvLockOrder.size);
-          if(stage === curStage){
-            lockedUids.add(clone.uid);
-          }
-        }
         applyIgnoredStateToTask(clone);
         stageTasks.push(clone);
         if(stage === curStage) appliedDiff.added.push(cloneTaskRecord(item));
@@ -10294,14 +10541,6 @@ function renderDeltaDialog(diffByStage, currentByStage){
 
       if(autoOptimizeOn){
         stageTasks.sort((a,b)=>{
-          if(csvLockOrder && csvLockOrder.size){
-            const aLocked = csvLockOrder.has(a.uid);
-            const bLocked = csvLockOrder.has(b.uid);
-            if(aLocked !== bLocked) return aLocked ? 1 : -1;
-            if(aLocked && bLocked){
-              return csvLockOrder.get(a.uid) - csvLockOrder.get(b.uid);
-            }
-          }
           const aStart = a.startDate ? +a.startDate : 0;
           const bStart = b.startDate ? +b.startDate : 0;
           if(aStart !== bStart) return aStart - bStart;
@@ -10309,12 +10548,8 @@ function renderDeltaDialog(diffByStage, currentByStage){
         });
       }
 
-      if(csvLockOrder && csvLockOrder.size){
-        csvLockedAdds.set(stage, [...csvLockOrder.keys()]);
-      }
-
-      const beforeSnapshot = captureSnapshotFromRaw(baseline, stage, stage === curStage ? lockedUids : undefined);
-      const afterSnapshot = captureSnapshotFromRaw(stageTasks, stage, stage === curStage ? lockedUids : undefined);
+      const beforeSnapshot = captureSnapshotFromRaw(baseline, stage);
+      const afterSnapshot = captureSnapshotFromRaw(stageTasks, stage);
       stageSnapshots.set(stage, afterSnapshot);
       stageDiffEntries.push({ stage, diff: computeDiff(beforeSnapshot, afterSnapshot) });
       updatedByStage.set(stage, stageTasks);
@@ -10331,7 +10566,7 @@ function renderDeltaDialog(diffByStage, currentByStage){
       ordersByStage.set(stage, list.map(t=>t.uid));
       if(stage === curStage){
         tasks = list;
-        lockedUids = new Set(list.filter(t=> t && t.locked).map(t=> t.uid));
+        lockedUids = new Set();
       }
     });
 
@@ -10359,15 +10594,6 @@ function renderDeltaDialog(diffByStage, currentByStage){
       sortTasksByStart();
       ordersByStage.set(curStage, tasks.map(t=>t.uid));
     } else {
-      rememberStageOrder(curStage);
-    }
-    const csvTail = csvLockedAdds.get(curStage);
-    if(csvTail && csvTail.length){
-      const tailSet = new Set(csvTail);
-      const others = tasks.filter(t=> !tailSet.has(t.uid));
-      const tail = tasks.filter(t=> tailSet.has(t.uid));
-      tasks = others.concat(tail);
-      lockedUids = new Set(tasks.filter(t=> t && t.locked).map(t=> t.uid));
       rememberStageOrder(curStage);
     }
     if(autoOptimizeOn){
@@ -10452,7 +10678,7 @@ async function importRows(rows){
       tasks = [];
     }
 
-    lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
+    lockedUids = new Set();
 
     if(autoOptimizeOn){
       optimizeAllStages({ persist:false, rebuild:false });
@@ -12061,9 +12287,15 @@ function persistNow(stageOverride, opts={}){
         }catch(_){ prev = null; }
       }
 
+      const curStageKey = typeof curStage === 'string' ? curStage.trim().toLowerCase() : '';
       if(prevTasks.length){
         const merged = new Map();
-        prevTasks.forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        prevTasks.forEach(task=>{
+          if(!task || !task.uid) return;
+          const taskStage = typeof task.stage === 'string' ? task.stage.trim().toLowerCase() : '';
+          if(taskStage && curStageKey && taskStage === curStageKey) return;
+          merged.set(task.uid, task);
+        });
         (stateObj.t || []).forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
         stateObj.t = [...merged.values()];
       }
@@ -12184,6 +12416,8 @@ function persistNow(stageOverride, opts={}){
         }
       };
 
+      normalizeSnapshotForPush(stateObj, { previous: prev, stage: curStage });
+      console.log('State перед сохранением:', stateObj);
       const payload = JSON.stringify(stateObj);
       const fingerprint = simpleHash(payload);
       lastAppliedRemoteFingerprint = fingerprint;
@@ -12203,23 +12437,25 @@ function persistNow(stageOverride, opts={}){
       const targetStageLabel = visibleStageLabel;
 
       if(remoteSyncEnabled()){
-        pushPromise = remoteBridge.push(payload, {
+        pushPromise = saveState(payload, {
           stage: targetStageLabel,
           diff: combinedDiff,
           version:null,
           source,
+          actor:userAlias,
           user:userAlias,
           session:SESSION_ID,
           summary: summaryLine || undefined,
           authors: authorsMap,
           ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
           time: nowStr,
-          changeType
+          changeType,
+          channel: DATA_WRITE_MODES.planner
         })
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409){
+            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
               if(sharedAttempt){
                 err.__sharedHandled = true;
                 handleSharedSettingsCommitError(err);
@@ -12376,7 +12612,7 @@ function persistNow(stageOverride, opts={}){
       }
     }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
-    const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
+    let baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const prevVersionRaw = (prevMeta.versions && prevMeta.versions[curStage]) || 0;
     const prevVersion = Number(prevVersionRaw) || 0;
     const knownVersionRaw = lastKnownVersions.get(curStage);
@@ -12401,15 +12637,14 @@ function persistNow(stageOverride, opts={}){
           trimActivityLogInPlace();
         }
         updateFreshnessUI();
+        baseline = prevSnapshot;
         if(!silentOnConflict){
-          const authorInfo = stateMeta.lastAuthors?.[curStage];
-          showConflictDialog(conflict, authorInfo ? { ...authorInfo, stage: curStage } : null);
-          if(prev){
-            restoreState(prev, {preserveProcess:true});
-            setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
-          }
+          showToast({
+            title:'Обновление версии',
+            message:'На сервере появилась более свежая версия данных. Применяем ваши изменения поверх неё.',
+            actions:[{label:'OK', handler:(el)=> el.remove()}]
+          });
         }
-        return;
       }
     }
 
@@ -12419,6 +12654,21 @@ function persistNow(stageOverride, opts={}){
     const announcementDiff = diffChanged ? filterDiffForAnnouncements(diff) : diff;
     const announcementChanged = diffChanged ? diffHasChanges(announcementDiff) : false;
     const isSettingsChange = Array.isArray(settingsChange?.entries) && settingsChange.entries.length > 0;
+    if(!isSettingsChange && source !== 'system'){
+      const currentWriteMode = normalizeWriteModeSetting(adminSettingsState.writeMode);
+      if(currentWriteMode === DATA_WRITE_MODES.crm){
+        const nowBlock = Date.now();
+        if(nowBlock - lastWriteModeBlockAt > 5000){
+          showToast({
+            title:'Сохранение отключено',
+            message:'Изменения разрешены только из CRM. Измените настройку «Запись данных», чтобы править из Планировщика.',
+            tone:'warn'
+          });
+          lastWriteModeBlockAt = nowBlock;
+        }
+        return Promise.resolve(false);
+      }
+    }
     const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
     let authorsMap = null;
     let settingsSummary = '';
@@ -12460,7 +12710,7 @@ function persistNow(stageOverride, opts={}){
     const versions = { ...(stateMeta.versions || {}) };
     const baseVersion = Math.max(
       Number.isFinite(prevVersion) ? prevVersion : 0,
-      Number.isFinite(knownVersion) ? knownVersion : 0
+      Number.isFinite(knownVersionBefore) ? knownVersionBefore : 0
     );
     const shouldBumpStageVersion = diffChanged || (!isSettingsChange && (force || !rawPrev));
     const newVersion = baseVersion + (shouldBumpStageVersion ? 1 : 0);
@@ -12572,6 +12822,8 @@ function persistNow(stageOverride, opts={}){
       }
     };
 
+    normalizeSnapshotForPush(stateObj, { previous: prev, stage: curStage });
+    console.log('State перед сохранением:', stateObj);
     const payload = JSON.stringify(stateObj);
     const fingerprint = simpleHash(payload);
     lastAppliedRemoteFingerprint = fingerprint;
@@ -12612,14 +12864,16 @@ function persistNow(stageOverride, opts={}){
           updatedAt: stateMeta.settings?.updatedAt || nowStr
         };
         const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
+        const metaChannel = isSettingsChange ? 'admin' : DATA_WRITE_MODES.planner;
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
-        pushPromise = remoteBridge.push(payload, {
+        pushPromise = saveState(payload, {
           stage:remoteStage,
           diff:remoteDiff,
           version:remoteVersion,
           source,
+          actor:userAlias,
           user:userAlias,
           session:SESSION_ID,
           summary: remoteSummary,
@@ -12627,12 +12881,13 @@ function persistNow(stageOverride, opts={}){
           ordersSummary: remoteOrdersSummary,
           time: nowStr,
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
+          channel: metaChannel,
           ...remoteExtras
         })
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409){
+            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
               if(sharedAttempt){
                 err.__sharedHandled = true;
                 handleSharedSettingsCommitError(err);
@@ -12744,11 +12999,28 @@ function persistNow(stageOverride, opts={}){
   return pushPromise;
 }
 
+function reportPersistError(err){
+  console.error('persistMaybe failed', err);
+  showToast({
+    title:'Ошибка сохранения',
+    message:'Не удалось подготовить данные для сохранения. Подробности — в консоли.'
+  });
+}
+
 function persistMaybe(reason='data', opts={}){
   if(reason==='ui'){ saveUiPreferences(); return; }
   if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
   const stageOverride = Object.prototype.hasOwnProperty.call(opts, 'stageOverride') ? opts.stageOverride : undefined;
-  if(autosaveOn || opts.force) persistNow(stageOverride, opts);
+  if(autosaveOn || opts.force){
+    try{
+      const result = persistNow(stageOverride, opts);
+      if(result && typeof result.then === 'function'){
+        result.catch(reportPersistError);
+      }
+    }catch(err){
+      reportPersistError(err);
+    }
+  }
 }
 
 let pendingSettingsTimer = null;
@@ -13068,7 +13340,7 @@ function handleSharedSettingsCommitSuccess(){
 
 function handleSharedSettingsCommitError(err){
   sharedSettingsApplying = false;
-  if(err?.status === 409 || err?.name === 'PlannerConflictError'){
+  if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
     showToast({
       title:'Конфликт настроек',
       message:'Настройки изменены другим пользователем одновременно с вами. Повторите действие позже.',
@@ -13475,6 +13747,11 @@ function renderAdminSettingsUI(){
     dailyInput.value = String(source.historyDailyLimit);
     dailyInput.disabled = !canEdit;
   }
+  const writeModeSelect = document.getElementById('adminWriteMode');
+  if(writeModeSelect){
+    writeModeSelect.value = source.writeMode || DATA_WRITE_MODES.both;
+    writeModeSelect.disabled = !canEdit;
+  }
   const forceInput = document.getElementById('adminAllowForceOverwrite');
   if(forceInput){
     forceInput.checked = !!source.allowForceOverwrite;
@@ -13716,6 +13993,8 @@ function handleAdminSettingsChange(event){
     current.historyLimit = Number(target.value);
   }else if(target.id === 'adminHistoryDailyLimit'){
     current.historyDailyLimit = Number(target.value);
+  }else if(target.id === 'adminWriteMode'){
+    current.writeMode = normalizeWriteModeSetting(target.value);
   }else if(target.id === 'adminAllowForceOverwrite'){
     current.allowForceOverwrite = !!target.checked;
   }
@@ -13772,11 +14051,24 @@ async function openHistoryDetail(hash){
         `ETag: ${detail.etag || '—'}`,
         `Hash: ${detail.hash || hash}`
       ];
+      if(Number.isFinite(detail.baseRev) && detail.baseRev > 0){
+        info.push(`Сравнение с ревизией ${detail.baseRev}`);
+      }
+      if(detail.baseHash){
+        info.push(`Базовый хэш: ${shortenHash(detail.baseHash)}`);
+      }
       meta.textContent = info.join(' • ');
     }
     const content = document.getElementById('historyViewContent');
     if(content){
-      content.value = JSON.stringify(detail.state ?? null, null, 2);
+      const diffPayload = detail && typeof detail === 'object'
+        && detail.diff && typeof detail.diff === 'object'
+        && Object.keys(detail.diff).length ? detail.diff : null;
+      if(diffPayload){
+        content.value = JSON.stringify(diffPayload, null, 2);
+      }else{
+        content.value = 'Отличий с предыдущим снимком не найдено.';
+      }
     }
     dialog.showModal();
   }catch(err){
@@ -13823,6 +14115,57 @@ async function copyHistoryHash(hash){
     console.warn('clipboard error', err);
     if(typeof showToast === 'function'){
       showToast({ title:'Буфер обмена', message:'Не удалось скопировать хэш.', tone:'error' });
+    }
+  }
+}
+
+async function handleAdminSnapshotsClear(){
+  if(!userCanEdit()){
+    notifyReadOnly();
+    return;
+  }
+  if(!window.confirm('Очистить сохранённые снимки (кроме актуального)?')){
+    return;
+  }
+  const button = document.getElementById('adminSnapshotsClearBtn');
+  const originalLabel = button ? button.textContent : '';
+  if(button){
+    button.disabled = true;
+    button.textContent = 'Очищаем…';
+  }
+  try{
+    const res = await fetch('/api/admin/history', {
+      method:'DELETE',
+      headers:{ 'Accept':'application/json' }
+    });
+    const text = await res.text().catch(()=> '');
+    let payload = {};
+    if(text){
+      try{ payload = JSON.parse(text); }
+      catch(_err){ payload = {}; }
+    }
+    if(!res.ok){
+      const message = payload?.error || `HTTP ${res.status}`;
+      throw new Error(message);
+    }
+    adminHistoryCache.clear();
+    adminHistoryState.items = [];
+    adminHistoryState.offset = 0;
+    adminHistoryState.hasMore = true;
+    renderAdminHistoryList();
+    fetchAdminHistory({ reset:true });
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Снимки очищены.', tone:'success' });
+    }
+  }catch(err){
+    console.warn('history clear failed', err);
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:`Не удалось очистить снимки (${err.message || err}).`, tone:'error' });
+    }
+  }finally{
+    if(button){
+      button.disabled = false;
+      button.textContent = originalLabel || 'Очистить снимки';
     }
   }
 }
@@ -14177,7 +14520,7 @@ function handleCrmStageMappingSelect(e){
 function refreshSystemSettingsAccess(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
-  const disabled = !userCanEdit();
+  const disabled = !userCanEdit() || !plannerWriteAccessEnabled();
   container.querySelectorAll('input[data-stage]').forEach(input=>{
     input.disabled = disabled;
   });
@@ -14197,7 +14540,7 @@ function handleSystemSettingChange(e){
   const kind = input.dataset.kind;
   if(!stage || !kind) return;
   const isNoHours = kind === 'parallel';
-  if(!userCanEdit()){
+  if(!userCanEdit() || !plannerWriteAccessEnabled()){
     const fallback = isNoHours
       ? (parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3)
       : (capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
@@ -14356,7 +14699,7 @@ function loadUiPreferences(){
     if(!raw) return {};
     const parsed = JSON.parse(raw);
     if(parsed && typeof parsed === 'object'){
-      ['cascadeReadyOn','autosaveOn','shiftOnProgress','autoOptimizeOn','lockNewOrders','lockNewOrdersCsv'].forEach(key=>{
+      ['cascadeReadyOn','autosaveOn','shiftOnProgress','autoOptimizeOn'].forEach(key=>{
         if(Object.prototype.hasOwnProperty.call(parsed, key)) delete parsed[key];
       });
     }
@@ -14377,12 +14720,6 @@ function applyUiPreferences(prefs={}){
   }
   if(typeof prefs.autoOptimizeOn === 'boolean'){
     autoOptimizeOn = prefs.autoOptimizeOn;
-  }
-  if(typeof prefs.lockNewOrders === 'boolean'){
-    lockNewOrders = prefs.lockNewOrders;
-  }
-  if(typeof prefs.lockNewOrdersCsv === 'boolean'){
-    lockNewOrdersCsv = prefs.lockNewOrdersCsv;
   }
   if(Array.isArray(prefs.ignoredStates)){
     const metaStates = Array.isArray(stateMeta.ignoredStates) ? stateMeta.ignoredStates : [];
@@ -14406,10 +14743,6 @@ function applyUiPreferences(prefs={}){
   if(autoOptEl) autoOptEl.checked = !!autoOptimizeOn;
   const cascadeEl = $("#cascadeReady");
   if(cascadeEl) cascadeEl.checked = !!cascadeReadyOn;
-  const lockNewOrdersEl = $("#lockNewOrders");
-  if(lockNewOrdersEl) lockNewOrdersEl.checked = !!lockNewOrders;
-  const lockNewOrdersCsvEl = $("#lockNewOrdersCsv");
-  if(lockNewOrdersCsvEl) lockNewOrdersCsvEl.checked = !!lockNewOrdersCsv;
   const priorityNotifyEl = $("#notifyPriorityChange");
   if(priorityNotifyEl) priorityNotifyEl.checked = !!priorityChangeLoggingOn;
   const routeNotifyEl = $("#notifyRouteDates");
@@ -14418,24 +14751,6 @@ function applyUiPreferences(prefs={}){
     document.body.classList.toggle('show-ids', prefs.showIds);
     const toggle = document.getElementById('showIdsToggle');
     if(toggle && 'checked' in toggle) toggle.checked = prefs.showIds;
-  }
-  refreshNewOrderPrefUI();
-}
-
-function refreshNewOrderPrefUI(){
-  const csvBox = document.getElementById('lockNewOrdersCsv');
-  const csvWrap = document.getElementById('lockNewOrdersCsvWrap');
-  const shouldDisable = !lockNewOrders;
-  if(csvBox){
-    const accessDisabled = csvBox.dataset.accessDisabled === '1';
-    const disableNow = shouldDisable || accessDisabled;
-    csvBox.disabled = disableNow;
-    csvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
-    if(csvWrap){
-      csvWrap.classList.toggle('muted', disableNow);
-    }
-  }else if(csvWrap){
-    csvWrap.classList.toggle('muted', shouldDisable);
   }
 }
 
@@ -14656,7 +14971,7 @@ function switchProcess(newProc){
     tasks = active;
   }
 
-  lockedUids = new Set(tasks.filter(task=> task && task.locked).map(task=> task.uid));
+  lockedUids = new Set();
 
   stagesDirtyFromRoute.delete(newProc);
 
@@ -14784,6 +15099,10 @@ function wireHandlers(){
   const adminSnapshotBtn = document.getElementById('adminSnapshotBtn');
   if(adminSnapshotBtn){
     adminSnapshotBtn.addEventListener('click', ()=> handleAdminSnapshotRequest());
+  }
+  const adminSnapshotsClearBtn = document.getElementById('adminSnapshotsClearBtn');
+  if(adminSnapshotsClearBtn){
+    adminSnapshotsClearBtn.addEventListener('click', ()=> handleAdminSnapshotsClear());
   }
   const historyApplyBtn = document.getElementById('historyFilterApply');
   if(historyApplyBtn){
@@ -14939,10 +15258,6 @@ function wireHandlers(){
     applyIgnoredStateToTask(t);
     ensureOrderIdentity(t);
     tasks.push(t);
-    if(lockNewOrders){
-      lockedUids.add(uid);
-      t.locked = true;
-    }
         rememberStageOrder();
         recompute();
         rebuildAndRenderMasterRoute();
@@ -15039,18 +15354,6 @@ function wireHandlers(){
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
     persistSharedPreference('shiftOnProgress', 'Сдвигать старт при правке «Прогресса»', shiftOnProgress);
-  });
-  $("#lockNewOrders").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = lockNewOrders; notifyReadOnly(); return; }
-    lockNewOrders = !!e.target.checked;
-    refreshNewOrderPrefUI();
-    persistSharedPreference('lockNewOrders', 'Автоблок', lockNewOrders);
-  });
-  $("#lockNewOrdersCsv").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = lockNewOrdersCsv; notifyReadOnly(); return; }
-    lockNewOrdersCsv = !!e.target.checked;
-    refreshNewOrderPrefUI();
-    persistSharedPreference('lockNewOrdersCsv', 'Автоблок для CSV', lockNewOrdersCsv);
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -15339,10 +15642,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(autoBox) autoBox.checked = autoOptimizeOn;
             const cascadeBox = $('#cascadeReady');
             if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
-            const lockBox = $('#lockNewOrders');
-            if(lockBox) lockBox.checked = lockNewOrders;
-            const lockCsvBox = $('#lockNewOrdersCsv');
-            if(lockCsvBox) lockCsvBox.checked = !!(lockNewOrders && lockNewOrdersCsv);
             const autosaveBox = $('#autosaveSetting');
             if(autosaveBox) autosaveBox.checked = autosaveOn;
             const logLimitField = $('#logLimitInput');
@@ -15364,7 +15663,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             renderAdminSettingsUI();
             captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
-            refreshNewOrderPrefUI();
             refreshPlannerModeUI();
             activateSettingsTab('personal');
             $('#settingsDlg').showModal();

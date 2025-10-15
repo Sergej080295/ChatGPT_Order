@@ -1,28 +1,6 @@
 BEGIN;
 
--- 1. Удаляем пользовательские триггеры, которые все ещё ссылаются на устаревшие hist_* функции.
-DO $$
-DECLARE
-  trig RECORD;
-BEGIN
-  FOR trig IN
-    SELECT ns.nspname AS schema_name,
-           tbl.relname AS table_name,
-           tg.tgname AS trigger_name
-      FROM pg_trigger tg
-      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
-      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-      JOIN pg_proc fn ON fn.oid = tg.tgfoid
-     WHERE NOT tg.tgisinternal
-       AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
-       AND fn.proname LIKE 'hist\\_%'
-  LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
-  END LOOP;
-END;
-$$;
-
--- 2. Снимаем стандартные history-триггеры, чтобы безопасно пересоздать схему.
+-- 1. На время правок снимаем history-триггеры, чтобы исключить записи в историю.
 DROP TRIGGER IF EXISTS orders_history_trg ON orders;
 DROP TRIGGER IF EXISTS order_process_history_trg ON order_process;
 DROP TRIGGER IF EXISTS capacity_by_process_history_trg ON capacity_by_process;
@@ -33,66 +11,8 @@ DROP TRIGGER IF EXISTS settings_mapping_history_trg ON settings_mapping;
 DROP TRIGGER IF EXISTS settings_admin_history_trg ON settings_admin;
 DROP TRIGGER IF EXISTS excluded_statuses_history_trg ON excluded_statuses;
 
--- Дополнительно удаляем все пользовательские триггеры на целевых таблицах,
--- чтобы исключить зависание устаревших hist_* обработчиков.
-DO $$
-DECLARE
-  trig RECORD;
-BEGIN
-  FOR trig IN
-    SELECT ns.nspname AS schema_name,
-           tbl.relname AS table_name,
-           tg.tgname AS trigger_name
-      FROM pg_trigger tg
-      JOIN pg_class tbl ON tbl.oid = tg.tgrelid
-      JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
-      LEFT JOIN pg_proc fn ON fn.oid = tg.tgfoid
-     WHERE NOT tg.tgisinternal
-       AND ns.nspname = 'public'
-       AND tbl.relname IN (
-         'orders',
-         'order_process',
-         'capacity_by_process',
-         'settings_autoweight',
-         'settings_journal',
-         'settings_column_widths',
-         'settings_mapping',
-         'settings_admin',
-         'excluded_statuses'
-       )
-       AND (
-         (fn.proname IS NOT NULL AND fn.proname LIKE 'hist\_%') OR
-         tg.tgname LIKE '%hist%'
-       )
-  LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS %I ON %I.%I;', trig.trigger_name, trig.schema_name, trig.table_name);
-  END LOOP;
-END;
-$$;
-
--- 3. Удаляем устаревшие функции hist_*.
-DO $$
-DECLARE
-  fn RECORD;
-BEGIN
-  FOR fn IN
-    SELECT p.proname,
-           pg_get_function_identity_arguments(p.oid) AS args
-      FROM pg_proc p
-      JOIN pg_namespace n ON n.oid = p.pronamespace
-     WHERE n.nspname = 'public'
-       AND p.proname LIKE 'hist\\_%'
-  LOOP
-    EXECUTE format('DROP FUNCTION IF EXISTS public.%I(%s) CASCADE;', fn.proname, fn.args);
-  END LOOP;
-END;
-$$;
-
--- На некоторых установках могла сохраниться старая версия hist_apply_settings_admin без зависимостей,
--- поэтому удаляем её напрямую, чтобы исключить обращения к колонке rev_to.
-DROP FUNCTION IF EXISTS public.hist_apply_settings_admin() CASCADE;
-
--- 4. Вспомогательная функция выравнивания структуры history-таблицы под базовую.
+-- 2. Гарантируем наличие вспомогательной функции выравнивания history-таблиц
+--    даже на базах, где обновлённая версия миграции 004 ещё не применялась.
 CREATE OR REPLACE FUNCTION rebuild_history_table(base_table TEXT) RETURNS VOID AS $$
 DECLARE
   base_schema TEXT := 'public';
@@ -326,20 +246,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 5. Гарантируем наличие всех необходимых колонок и дефолтов в settings_admin.
-ALTER TABLE settings_admin
-  ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN,
-  ADD COLUMN IF NOT EXISTS snapshot_retention INTEGER,
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
-
-ALTER TABLE settings_admin
-  ALTER COLUMN allow_force_overwrite SET DEFAULT FALSE,
-  ALTER COLUMN snapshot_retention SET DEFAULT 50,
-  ALTER COLUMN updated_at SET DEFAULT NOW();
-
--- Перед выравниванием истории убеждаемся, что при наличии наследованной колонки id
--- у таблицы revisions настроен дефолт, чтобы вспомогательный бэкоф мог без ошибок
--- записывать новые ревизии.
+-- Перед запуском выравнивания истории дополнительно убеждаемся, что в таблице revisions
+-- при наличии унаследованной колонки id настроен корректный дефолт, чтобы временный
+-- бэкоф мог безопасно добавлять ревизии.
 DO $$
 BEGIN
   IF EXISTS (
@@ -411,7 +320,7 @@ BEGIN
 END;
 $$;
 
--- 6. Выравниваем структуру settings_admin_hist.
+-- 3. Гарантируем выравнивание всех history-таблиц с базовыми структурами.
 DO $$
 DECLARE
   has_current BOOLEAN := false;
@@ -432,8 +341,19 @@ END;
 $$;
 
 SELECT rebuild_history_table('settings_admin');
+SELECT rebuild_history_table('settings_autoweight');
+SELECT rebuild_history_table('settings_journal');
+SELECT rebuild_history_table('settings_column_widths');
+SELECT rebuild_history_table('settings_mapping');
+SELECT rebuild_history_table('excluded_statuses');
+SELECT rebuild_history_table('orders');
+SELECT rebuild_history_table('order_process');
+SELECT rebuild_history_table('capacity_by_process');
 
--- 7. Актуализируем универсальный history-триггер.
+-- После использования вспомогательной функции можно удалить её, чтобы не засорять схему.
+DROP FUNCTION IF EXISTS rebuild_history_table(TEXT);
+
+-- 4. На всякий случай переопределяем универсальный history-триггер актуальной версией.
 CREATE OR REPLACE FUNCTION generic_history_trigger() RETURNS trigger AS $$
 DECLARE
   hist_table TEXT := TG_TABLE_NAME || '_hist';
@@ -489,7 +409,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- 8. Возвращаем history-триггеры.
+-- 5. Возвращаем history-триггеры на места.
 CREATE TRIGGER orders_history_trg
 AFTER INSERT OR UPDATE OR DELETE ON orders
 FOR EACH ROW
@@ -535,25 +455,12 @@ AFTER INSERT OR UPDATE OR DELETE ON excluded_statuses
 FOR EACH ROW
 EXECUTE FUNCTION generic_history_trigger();
 
--- 9. Backfill данных и история в рамках новой ревизии.
+-- 6. Синхронизируем последовательность для revisions.id, если такая колонка присутствует.
 DO $$
 DECLARE
-  new_rev BIGINT;
-  has_current_rev BOOLEAN;
-  has_id_column BOOLEAN;
+  has_id BOOLEAN := false;
   seq_name TEXT;
 BEGIN
-  SELECT nextval('revisions_rev_seq') INTO new_rev;
-
-  SELECT EXISTS (
-           SELECT 1
-             FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'revisions'
-              AND column_name = 'current_rev'
-         )
-    INTO has_current_rev;
-
   SELECT EXISTS (
            SELECT 1
              FROM information_schema.columns
@@ -561,60 +468,9 @@ BEGIN
               AND table_name = 'revisions'
               AND column_name = 'id'
          )
-    INTO has_id_column;
+    INTO has_id;
 
-  IF has_current_rev THEN
-    IF has_id_column THEN
-      EXECUTE '
-        INSERT INTO revisions (id, rev, current_rev, actor, source, note)
-        VALUES ($1, $1, $1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
-    ELSE
-      EXECUTE '
-        INSERT INTO revisions (rev, current_rev, actor, source, note)
-        VALUES ($1, $1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
-    END IF;
-  ELSE
-    IF has_id_column THEN
-      EXECUTE '
-        INSERT INTO revisions (id, rev, actor, source, note)
-        VALUES ($1, $1, $2, $3, $4)
-        ON CONFLICT (rev) DO NOTHING
-      ' USING new_rev, 'system', 'migration', 'backfill settings_admin defaults';
-    ELSE
-      INSERT INTO revisions (rev, actor, source, note)
-      VALUES (new_rev, 'system', 'migration', 'backfill settings_admin defaults')
-      ON CONFLICT (rev) DO NOTHING;
-    END IF;
-  END IF;
-
-  PERFORM set_config('app.rev', new_rev::TEXT, true);
-
-  UPDATE settings_admin
-     SET allow_force_overwrite = FALSE
-   WHERE allow_force_overwrite IS NULL;
-
-  UPDATE settings_admin
-     SET snapshot_retention = 50
-   WHERE snapshot_retention IS NULL;
-
-  UPDATE settings_admin
-     SET updated_at = NOW()
-   WHERE updated_at IS NULL;
-
-  INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, updated_at)
-  VALUES (1, FALSE, 50, NOW())
-  ON CONFLICT (id) DO UPDATE
-        SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-            snapshot_retention = EXCLUDED.snapshot_retention,
-            updated_at = NOW();
-
-  PERFORM set_config('app.rev', NULL, true);
-
-  IF has_id_column THEN
+  IF has_id THEN
     SELECT pg_get_serial_sequence('public.revisions', 'id') INTO seq_name;
     IF seq_name IS NULL THEN
       seq_name := 'public.revisions_id_seq';
@@ -627,9 +483,10 @@ BEGIN
 END;
 $$;
 
-ALTER TABLE settings_admin
-  ALTER COLUMN allow_force_overwrite SET NOT NULL,
-  ALTER COLUMN snapshot_retention SET NOT NULL,
-  ALTER COLUMN updated_at SET NOT NULL;
+-- 7. Дополнительно убеждаемся, что последовательность revisions_rev_seq существует и привязана к колонке rev.
+CREATE SEQUENCE IF NOT EXISTS revisions_rev_seq;
+ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
+ALTER TABLE revisions
+  ALTER COLUMN rev SET DEFAULT nextval('revisions_rev_seq');
 
 COMMIT;
