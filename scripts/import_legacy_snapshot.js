@@ -87,6 +87,226 @@ async function getOrdersTableInfo(client, { forceReload = false } = {}) {
   return ordersTableInfo;
 }
 
+async function ensureHistoryTrigger(client, tableName) {
+  const triggerName = `${tableName}_history_trg`;
+  const tableReg = `public.${tableName}`;
+  try {
+    const { rows } = await client.query(
+      'SELECT 1 FROM pg_trigger WHERE tgname = $1 AND tgrelid = to_regclass($2)',
+      [triggerName, tableReg]
+    );
+    if (rows.length) {
+      return;
+    }
+    const { rows: fnRows } = await client.query(
+      "SELECT to_regprocedure('generic_history_trigger()') AS proc"
+    );
+    if (!fnRows.length || !fnRows[0].proc) {
+      return;
+    }
+    await client.query(`
+      CREATE TRIGGER ${triggerName}
+        AFTER INSERT OR UPDATE OR DELETE ON ${tableName}
+        FOR EACH ROW EXECUTE FUNCTION generic_history_trigger()
+    `);
+  } catch (err) {
+    console.warn(`Legacy import: failed to ensure history trigger for ${tableName}`, err);
+  }
+}
+
+async function ensurePlannerSettingsSchema(client) {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_admin (
+      id SMALLINT PRIMARY KEY DEFAULT 1,
+      allow_force_overwrite BOOLEAN NOT NULL DEFAULT FALSE,
+      snapshot_retention INTEGER NOT NULL DEFAULT 50,
+      history_limit INTEGER NOT NULL DEFAULT 50,
+      history_daily_limit INTEGER NOT NULL DEFAULT 3,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_admin_hist (
+      id SMALLINT,
+      allow_force_overwrite BOOLEAN,
+      snapshot_retention INTEGER,
+      history_limit INTEGER,
+      history_daily_limit INTEGER,
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(
+    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_limit INTEGER'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_limit INTEGER'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ALTER COLUMN history_limit SET DEFAULT 50'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET DEFAULT 3'
+  );
+  await client.query(
+    'UPDATE settings_admin SET history_limit = 50 WHERE history_limit IS NULL'
+  );
+  await client.query(
+    'UPDATE settings_admin SET history_daily_limit = 3 WHERE history_daily_limit IS NULL'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ALTER COLUMN history_limit SET NOT NULL'
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET NOT NULL'
+  );
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_journal (
+      id SMALLINT PRIMARY KEY,
+      max_rows INTEGER NOT NULL DEFAULT 50,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_journal_hist (
+      id SMALLINT,
+      max_rows INTEGER,
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_column_widths (
+      column_key TEXT PRIMARY KEY,
+      width_px INTEGER NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_column_widths_hist (
+      column_key TEXT,
+      width_px INTEGER,
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_mapping (
+      crm_stage TEXT PRIMARY KEY,
+      planner_process_id SMALLINT REFERENCES processes(id) ON DELETE SET NULL,
+      is_ignored BOOLEAN NOT NULL DEFAULT FALSE,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_mapping_hist (
+      crm_stage TEXT,
+      planner_process_id SMALLINT,
+      is_ignored BOOLEAN,
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS excluded_statuses (
+      status_key TEXT PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS excluded_statuses_hist (
+      status_key TEXT,
+      created_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_autoweight (
+      id SMALLINT PRIMARY KEY DEFAULT 1,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      percent NUMERIC(10,2) NOT NULL DEFAULT 0,
+      minimum_hours NUMERIC(10,2) NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_autoweight_hist (
+      id SMALLINT,
+      enabled BOOLEAN,
+      percent NUMERIC(10,2),
+      minimum_hours NUMERIC(10,2),
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_shared_preferences (
+      pref_key TEXT PRIMARY KEY,
+      bool_value BOOLEAN NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings_shared_preferences_hist (
+      pref_key TEXT,
+      bool_value BOOLEAN,
+      updated_at TIMESTAMPTZ,
+      rev BIGINT NOT NULL REFERENCES revisions(rev),
+      op CHAR(1) NOT NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await client.query(
+    `INSERT INTO settings_shared_preferences (pref_key, bool_value)
+      VALUES
+        ('autosaveOn', TRUE),
+        ('shiftOnProgress', TRUE),
+        ('autoOptimizeOn', TRUE),
+        ('cascadeReadyOn', TRUE)
+      ON CONFLICT (pref_key) DO NOTHING`
+  );
+
+  const tablesWithHistory = [
+    'settings_admin',
+    'settings_journal',
+    'settings_column_widths',
+    'settings_mapping',
+    'excluded_statuses',
+    'settings_autoweight',
+    'settings_shared_preferences'
+  ];
+
+  for (const tableName of tablesWithHistory) {
+    // eslint-disable-next-line no-await-in-loop
+    await ensureHistoryTrigger(client, tableName);
+  }
+}
+
 function safeSerializeSnapshot(snapshot, stateString = null) {
   if (typeof stateString === 'string') {
     const trimmed = stateString.trim();
@@ -468,6 +688,7 @@ function serializeMeta(meta) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await ensurePlannerSettingsSchema(client);
     const { rows: revRows } = await client.query("SELECT nextval('revisions_rev_seq') AS rev");
     const rev = Number(revRows[0].rev);
     await client.query(`SET LOCAL app.rev = ${rev}`);
