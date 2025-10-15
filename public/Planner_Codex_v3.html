@@ -3905,7 +3905,11 @@ function buildCrmStageTasks(){
         if(!seg) return;
         const meta = stageMeta?.[stageKey] ? { ...stageMeta[stageKey], boardId: board.id } : { boardId: board.id };
         const task = buildCrmStageTask(plannerOrder, stageKey, seg, meta);
-        if(task) tasks.push(task);
+        if(!task) return;
+        if(task.isDone || clampProgressValue(task.progress) >= 100){
+          return;
+        }
+        tasks.push(task);
       });
     });
   });
