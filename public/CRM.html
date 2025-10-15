@@ -368,22 +368,34 @@
   .columns::-webkit-scrollbar{height:8px}
   .columns::-webkit-scrollbar-thumb{background:#2a3342;border-radius:8px}
   body[data-theme="light"] .columns::-webkit-scrollbar-thumb{background:#c4ccda}
-  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min);display:flex;flex-direction:column;max-height:var(--crm-lane-max-height);overflow:hidden}
-  .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border)}
-  .col h2{font-size:13px;letter-spacing:.2px;margin:0;padding:10px 12px;color:var(--muted)}
-  .col-body{display:flex;flex-direction:column;flex:1;min-height:0}
-  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px;flex:1;overflow-y:auto}
+  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min);display:flex;flex-direction:column;max-height:var(--crm-lane-max-height);height:var(--crm-lane-max-height);overflow:hidden;transition:border-color .2s ease,box-shadow .2s ease}
+  .col.lane-has-issues{border-color:rgba(255,206,77,.6);box-shadow:0 0 0 2px rgba(255,206,77,.2)}
+  .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border);display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+  .col h2{font-size:13px;letter-spacing:.2px;margin:0;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .lane-title{white-space:nowrap}
+  .lane-meta{display:flex;align-items:center;gap:6px;font-size:12px;color:inherit}
+  .lane-count{background:rgba(148,163,184,.16);border-radius:999px;padding:2px 8px;font-weight:600;color:inherit}
+  .lane-alert{display:none;font-size:14px;color:var(--warn)}
+  .lane-alert.visible{display:inline-flex;align-items:center}
+  .col-body{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px;flex:1;overflow-y:auto;position:relative}
+  .drop-indicator{height:3px;background:var(--primary);border-radius:999px;display:none}
+  .drop-indicator.visible{display:block}
   .col-more{margin:6px 0 10px;text-align:center;color:var(--muted);cursor:pointer;user-select:none;font-size:12px;letter-spacing:.2px;transition:color .15s ease}
   .col-more span{display:inline-block;transition:transform .15s ease}
   .col-more:hover{color:var(--text)}
   .col-more:hover span{transform:translateY(2px)}
   .col-more.hidden{display:none}
-  .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative}
+  .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative;transition:border-color .15s ease,box-shadow .15s ease}
+  .card.card-warning{border-color:rgba(255,206,77,.7);box-shadow:0 4px 18px rgba(255,206,77,.16)}
   body[data-theme="light"] .card{ background:#fff; border-color:#e6eaf3 }
   .card.dragging{opacity:.5}
   .card .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .rowc{display:flex;align-items:center;gap:8px}
   .title{font-weight:600;display:flex;align-items:center;gap:8px}
+  .card .card-name{flex:1;min-width:0}
+  .card-alert{display:none;margin-left:4px;color:var(--warn);font-size:15px}
+  .card.card-warning .card-alert{display:inline-flex}
   .sub{color:var(--muted);font-size:12px}
   .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .chip{background:var(--chip);border:1px solid var(--border);color:#cfe5ff;padding:4px 8px;border-radius:999px;font-size:12px;display:inline-flex;align-items:center;gap:6px}
@@ -745,6 +757,9 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка'];
+const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
@@ -822,10 +837,15 @@ function renderColumns(){
     const c=document.createElement('div');
     c.className='col';
     const laneLabel=escapeHtml(l);
-    c.innerHTML=`<header><h2>${laneLabel}</h2></header><div class="col-body"><div class="drop" data-lane="${laneLabel}"></div><div class="col-more hidden" data-lane="${laneLabel}" role="button" tabindex="0">Показать ещё 10 <span aria-hidden="true">↓</span></div></div>`;
+    c.innerHTML=`<header><h2><span class="lane-title">${laneLabel}</span><span class="lane-meta"><span class="lane-count" data-lane-count>0</span><span class="lane-alert" data-lane-alert>⚠️</span></span></h2></header><div class="col-body"><div class="drop" data-lane="${laneLabel}"></div><div class="col-more hidden" data-lane="${laneLabel}" role="button" tabindex="0">Показать ещё 10 <span aria-hidden="true">↓</span></div></div>`;
     columns.appendChild(c);
+    c.dataset.lane=l;
+    const header=c.querySelector('header');
+    if(header) header.dataset.lane=l;
     const drop=c.querySelector('.drop');
     const more=c.querySelector('.col-more');
+    const laneAlert=header?.querySelector('[data-lane-alert]');
+    if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
   });
@@ -840,6 +860,8 @@ function renderColumns(){
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>x.done||Number(x.progress||0)>=100).length;return[d,s.length]}
+function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
+function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
 function renderCards(){
   const b=currentBoard();
@@ -852,13 +874,17 @@ function renderCards(){
   });
 
   Object.entries(map).forEach(([lane,arr])=>{
+    const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
+    if(col){const countEl=col.querySelector('[data-lane-count]');if(countEl)countEl.textContent=arr.length;}
     if(!drop)return;
     const moreBtn=$(`.col-more[data-lane="${CSS.escape(lane)}"]`,columns);
     const prevScroll=drop.scrollTop;
     drop.innerHTML='';
     const limit=laneLimit(lane);
     const visible=arr.slice(0,limit);
+    const laneIssueSet=new Set();
+    let laneHasIssues=false;
     if(!visible.length){
       const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p);
     }
@@ -876,7 +902,8 @@ function renderCards(){
         <div class="row">
           <div class="title">
             <input type="checkbox" class="ready-switch card-ready" data-act="toggle-done" ${readyChecked} title="Отметить заказ готовым" />
-            ${escapeHtml(o.title)}
+            <span class="card-name">${escapeHtml(o.title)}</span>
+            <span class="card-alert">⚠️</span>
           </div>
           <div class="kebab grow"></div>
           <button class="ghost" data-act="move" title="Переместить ↩">↩</button>
@@ -887,6 +914,20 @@ function renderCards(){
       const foot=document.createElement('div');foot.className='foot';
       const prog=document.createElement('div');prog.className='progress';const bar=document.createElement('i');bar.style.width=`${Math.max(0,Math.min(100,progress))}%`;prog.appendChild(bar);
       foot.appendChild(prog);foot.appendChild(spanMuted(`${doneCnt}/${totalCnt}`));card.appendChild(foot);
+
+      const stageIssues=collectStageIssues(o.stages);
+      const cardAlert=card.querySelector('.card-alert');
+      if(stageIssues.hasIssues){
+        laneHasIssues=true;
+        const orderLabel=(o.title||o.orderNo||'Заказ').toString();
+        if(stageIssues.messages.length){stageIssues.messages.slice(0,2).forEach(msg=>laneIssueSet.add(`${orderLabel}: ${msg}`));}
+        else{laneIssueSet.add(`${orderLabel}: незаполненные данные`);}
+        card.classList.add('card-warning');
+        if(cardAlert){cardAlert.title=stageIssues.tooltip||'Есть незаполненные данные';}
+      }else{
+        card.classList.remove('card-warning');
+        if(cardAlert){cardAlert.removeAttribute('title');}
+      }
 
       card.addEventListener('click',e=>{
         const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
@@ -904,6 +945,20 @@ function renderCards(){
       else{moreBtn.classList.add('hidden');}
     }
     drop.scrollTop=prevScroll;
+    if(col){
+      col.classList.toggle('lane-has-issues',laneHasIssues);
+      const alertEl=col.querySelector('[data-lane-alert]');
+      if(alertEl){
+        if(laneHasIssues){
+          alertEl.classList.add('visible');
+          const summary=laneIssueSet.size?Array.from(laneIssueSet).slice(0,5).join('\n'):'Есть незаполненные данные';
+          alertEl.title=summary;
+        }else{
+          alertEl.classList.remove('visible');
+          alertEl.removeAttribute('title');
+        }
+      }
+    }
   });
   const total=b.orders.length; const active=b.orders.filter(x=>x.status!==b.lanes[b.lanes.length-1]).length;
   stats.textContent=`Всего: ${total} • Активных: ${active}`;
@@ -919,6 +974,8 @@ function computeDropReference(container,clientY){
   }
   return null;
 }
+function ensureDropIndicatorEl(drop){let el=drop.querySelector('.drop-indicator');if(!el){el=document.createElement('div');el.className='drop-indicator';drop.appendChild(el);}return el;}
+function hideDropIndicator(drop){const el=drop.querySelector('.drop-indicator');if(el)el.classList.remove('visible');}
 
 function moveOrderToLane(orderId,targetLane,beforeId){
   const b=currentBoard();
@@ -973,9 +1030,25 @@ function enableDnd(){
     dndInitialized=true;
   }
   $$('.drop',columns).forEach(d=>{
-    d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
-    d.addEventListener('dragleave',()=>{d.style.outline='none'});
-    d.addEventListener('drop',e=>{e.preventDefault();d.style.outline='none';if(!draggingId)return;const lane=d.dataset.lane;if(!lane)return;const beforeId=computeDropReference(d,e.clientY);const changed=moveOrderToLane(draggingId,lane,beforeId);if(changed){save('Перемещение заказа между статусами');renderCards();}});
+    d.addEventListener('dragover',e=>{
+      e.preventDefault();
+      const indicator=ensureDropIndicatorEl(d);
+      const beforeId=computeDropReference(d,e.clientY);
+      const beforeCard=beforeId?d.querySelector(`.card[data-id="${CSS.escape(beforeId)}"]`):null;
+      indicator.classList.add('visible');
+      if(beforeCard){d.insertBefore(indicator,beforeCard);}else{d.appendChild(indicator);}
+    });
+    d.addEventListener('dragleave',()=>{hideDropIndicator(d);});
+    d.addEventListener('drop',e=>{
+      e.preventDefault();
+      hideDropIndicator(d);
+      if(!draggingId)return;
+      const lane=d.dataset.lane;
+      if(!lane)return;
+      const beforeId=computeDropReference(d,e.clientY);
+      const changed=moveOrderToLane(draggingId,lane,beforeId);
+      if(changed){save('Перемещение заказа между статусами');renderCards();}
+    });
   });
 }
 
@@ -1095,19 +1168,22 @@ function updateAllStageExpectations(){
 if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
 
 function appendStageRow(st){
-  const nm=(st.name||'').trim(); const isZakupka=nm.toLowerCase()==='закупка';
-  const isBoolOnly=['закупка','рубка','упаковка','отгрузка'].includes(nm.toLowerCase());
+  const nmRaw=(st.name||'').trim();
+  const nmNormalized=normalizeStageName(st.name);
+  const isZakupka=nmNormalized==='закупка';
+  const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
+  const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
   const tr=document.createElement('tr');
   tr.innerHTML=`
-    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nm)}" /></td>
+    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
     <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
-    <td>${isZakupka?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
+    <td>${suppressValue?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
     <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
   const origMap=window._editingOrigValues||null;
-  if(origMap&&!isZakupka){const nameNow=nm||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
+  if(origMap&&!suppressValue){const nameNow=nmRaw||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
 
   const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
   const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
@@ -1123,13 +1199,15 @@ function appendStageRow(st){
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
   return rows.map(r=>{const get=k=>r.querySelector(`[data-k="${k}"]`);
-    const name=(get('name').value.trim()||'Передел'); const isZak=name.toLowerCase()==='закупка';
-    const boolOnly=['закупка','рубка','упаковка','отгрузка'].includes(name.toLowerCase());
+    const rawName=(get('name').value.trim()||'Передел');
+    const normalized=normalizeStageName(rawName);
+    const boolOnly=BOOL_STAGE_NAMES.has(normalized);
+    const suppressValue=HOURLESS_STAGE_NAMES.has(normalized);
     const done=get('done').checked; const progEl=get('progress');
     const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
     const startInput=get('start');
     const endInput=get('end');
-    return {name,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:isZak?'':(get('value')?.value??'')}
+    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??'')}
   })
 }
 
