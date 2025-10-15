@@ -181,7 +181,6 @@ function readMigrations() {
 }
 
 async function runMigrations() {
-  resetOrdersTableInfo();
   const client = await pool.connect();
   try {
     await ensureMigrationTable(client);
