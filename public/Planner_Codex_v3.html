@@ -511,7 +511,7 @@ td[data-field="progress"][data-expected][data-behind="1"]:after{color:#dc2626;ba
 .gantt-right{display:flex;flex-direction:column;overflow:hidden}
 .gantt-header-x{background:#fff;border-bottom:1px solid var(--line);overflow:hidden}
 .gantt-header-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth);will-change:transform}
-.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.gantt-header-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap;flex-direction:column;gap:2px}
 .gantt-body{display:flex;overflow:auto}
 .gantt-dates{min-width:calc(var(--dayWidth)*var(--dayCount));display:grid;grid-auto-rows:var(--gcell);grid-auto-flow:row}
 .gantt-dates-row{display:grid;grid-template-columns:repeat(var(--dayCount),var(--dayWidth))}
@@ -573,13 +573,24 @@ body.overview-fs-active{overflow:hidden}
   pointer-events:none;
 }
 
+.gantt-header-cell .dow,
+.ov-head-cell .dow{font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.gantt-header-cell .date,
+.ov-head-cell .date{font-size:12px;line-height:1.1}
+.gantt-header-cell.weekend:not(.today),
+.ov-head-cell.weekend:not(.today){background:#f1f5f9}
+.gantt-header-cell.weekend .dow,
+.ov-head-cell.weekend .dow{color:#dc2626}
+.gcell.weekend:not(.today),
+.ov-cell.weekend:not(.today){background:#f8fafc}
+
 #overview{border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .ov-wrap{display:grid;grid-template-columns:var(--orderPaneWidth) 1fr;max-height:min(calc(var(--gcell)*18+56px),calc(100vh - 260px))}
 .ov-left{position:sticky;left:0;z-index:5;background:#fff;border-right:1px solid var(--line);box-shadow:2px 0 0 #e5e7eb;overflow:auto}
 .ov-right{display:flex;flex-direction:column;overflow:hidden}
 .ov-head{background:#fff;border-bottom:1px solid var(--line)}
 .ov-head-row{display:grid;grid-auto-flow:column;grid-auto-columns:var(--dayWidth)}
-.ov-head-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap}
+.ov-head-cell{padding:2px 4px;text-align:center;font-size:12px;color:#333;border-left:1px solid #eee;height:calc(var(--gcell)*0.9);display:flex;align-items:center;justify-content:center;white-space:nowrap;flex-direction:column;gap:2px}
 .ov-left .row-label{height:var(--ovRow, var(--gcell));display:flex;align-items:center;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ov-left .row-label.stage{padding-left:18px;color:#475569;font-size:13px}
 .ov-left .row-label.header{height:calc(var(--gcell)*0.9);font-weight:600}
@@ -1498,6 +1509,28 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 
 const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);x.setHours(0,0,0,0);return x;}
 const fmtDate=d=>`${String(d.getDate()).padStart(2,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${d.getFullYear()}`
+const WEEKDAY_SHORT=['ВС','ПН','ВТ','СР','ЧТ','ПТ','СБ'];
+const toValidDate=value=>{
+  if(value instanceof Date){
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const parsed=new Date(value);
+  return Number.isNaN(parsed.getTime())?null:parsed;
+};
+const weekdayShort=value=>{
+  const date=toValidDate(value);
+  return date?WEEKDAY_SHORT[date.getDay()]:'';
+};
+const isWeekendDate=value=>{
+  const date=toValidDate(value);
+  if(!date) return false;
+  const day=date.getDay();
+  return day===0||day===6;
+};
+const formatDateWithWeekday=value=>{
+  const date=toValidDate(value);
+  return date?`${weekdayShort(date)} ${fmtDate(date)}`:'—';
+};
 
 // dd.mm.yyyy — для CSV-экспорта состояния
 const fmtDateCSV = d => `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
@@ -5712,8 +5745,8 @@ function renderRouteDialog(context){
       const meta = document.createElement('span');
       meta.className = 'route-stage-meta';
       const seg = item.seg || {};
-      const startText = seg.start instanceof Date ? fmtDate(seg.start) : '—';
-      const endText = seg.end instanceof Date ? fmtDate(seg.end) : '—';
+      const startText = formatDateWithWeekday(seg.start);
+      const endText = formatDateWithWeekday(seg.end);
       const parts = [`${startText} → ${endText}`];
       if(Number.isFinite(seg.hours) && seg.hours > 0){
         parts.push(`${seg.hours.toFixed(1)} ч`);
@@ -8740,12 +8773,14 @@ function renderGantt(intoFS=false){
 
   const todayDs = fmtDate(today0());
   visIdx.forEach(i=>{
-	const d=addDays(schedule.minD,i);
-	const c=document.createElement('div');
-	c.className='gantt-header-cell';
-	c.textContent=fmtDate(d);
-	if (fmtDate(d)===todayDs) c.classList.add('today');
-	cards.header.appendChild(c);
+        const d=addDays(schedule.minD,i);
+        const ds=fmtDate(d);
+        const c=document.createElement('div');
+        c.className='gantt-header-cell';
+        if(isWeekendDate(d)) c.classList.add('weekend');
+        if (ds===todayDs) c.classList.add('today');
+        c.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+        cards.header.appendChild(c);
   });
 
   const stageEntries = collectStageActiveEntries(curProc);
@@ -8762,7 +8797,8 @@ function renderGantt(intoFS=false){
     visIdx.forEach(i=>{
       const d=addDays(schedule.minD,i), ds=fmtDate(d);
       const cell=document.createElement('div'); cell.className='gcell';
-	  if (fmtDate(d)===todayDs) cell.classList.add('today');
+          if(isWeekendDate(d)) cell.classList.add('weekend');
+          if (ds===todayDs) cell.classList.add('today');
       const segs=(rec.get(ds)||[]).filter(x=>x.uid===t.uid);
       const val=segs.reduce((s,x)=>s+x.hours,0);
       const late=segs.some(x=>x.late);
@@ -9206,13 +9242,16 @@ function renderOverview(){
     $("#overview").style.setProperty('--ovRow', '24px');
 
     const hdr=$("#ovHeadRow"); hdr.innerHTML='';
-	const todayDs = fmtDate(today0());
-	idxs.forEach(i=>{
-	  const d=addDays(minD,i);
-	  const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
-	  if (fmtDate(d)===todayDs) cell.classList.add('today');
-	  hdr.appendChild(cell);
-	});
+        const todayDs = fmtDate(today0());
+        idxs.forEach(i=>{
+          const d=addDays(minD,i);
+          const ds=fmtDate(d);
+          const cell=document.createElement('div'); cell.className='ov-head-cell';
+          if(isWeekendDate(d)) cell.classList.add('weekend');
+          if (ds===todayDs) cell.classList.add('today');
+          cell.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+          hdr.appendChild(cell);
+        });
 
     const left=$("#ovLeftBody"); left.innerHTML='';
     const grid=$("#ovGrid"); grid.innerHTML='';
@@ -9233,12 +9272,14 @@ function renderOverview(){
       const orderLab=document.createElement('div'); orderLab.className='row-label'; orderLab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
       left.appendChild(orderLab);
 	  const emptyRow=document.createElement('div'); emptyRow.className='ov-row';
-	  idxs.forEach(i=>{
-		const d=addDays(minD,i);
-		const c=document.createElement('div'); c.className='ov-cell';
-		if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		emptyRow.appendChild(c);
-	  });
+          idxs.forEach(i=>{
+                const d=addDays(minD,i);
+                const ds=fmtDate(d);
+                const c=document.createElement('div'); c.className='ov-cell';
+                if(isWeekendDate(d)) c.classList.add('weekend');
+                if (ds===todayDs) c.classList.add('today');
+                emptyRow.appendChild(c);
+          });
 	  grid.appendChild(emptyRow);
 
 
@@ -9248,13 +9289,15 @@ function renderOverview(){
         const lab=document.createElement('div'); lab.className='row-label stage'; lab.textContent='— '+STAGE_TITLE[st];
         left.appendChild(lab);
 
-		const row=document.createElement('div'); row.className='ov-row';
-		idxs.forEach(i=>{
-		  const d=addDays(minD,i);
-		  const c=document.createElement('div'); c.className='ov-cell';
-		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		  row.appendChild(c);
-		});
+                const row=document.createElement('div'); row.className='ov-row';
+                idxs.forEach(i=>{
+                  const d=addDays(minD,i);
+                  const ds=fmtDate(d);
+                  const c=document.createElement('div'); c.className='ov-cell';
+                  if(isWeekendDate(d)) c.classList.add('weekend');
+                  if (ds===todayDs) c.classList.add('today');
+                  row.appendChild(c);
+                });
 
         const startIdx = daysBetween(minD, seg.start);
         const spanDays = daysSpan(seg.start, seg.end);
@@ -9293,14 +9336,17 @@ function renderOverview(){
 
 	  cont.style.setProperty('--ovDayCount', idxs.length);
 
-	  const hdrC=$("#ovHeadRowC"); hdrC.innerHTML='';
-	  const todayDs = fmtDate(today0());
-	  idxs.forEach(i=>{
-		const d=addDays(minD,i);
-		const cell=document.createElement('div'); cell.className='ov-head-cell'; cell.textContent=fmtDate(d);
-		if (fmtDate(d)===todayDs) cell.classList.add('today');
-		hdrC.appendChild(cell);
-	  });
+          const hdrC=$("#ovHeadRowC"); hdrC.innerHTML='';
+          const todayDs = fmtDate(today0());
+          idxs.forEach(i=>{
+                const d=addDays(minD,i);
+                const ds=fmtDate(d);
+                const cell=document.createElement('div'); cell.className='ov-head-cell';
+                if(isWeekendDate(d)) cell.classList.add('weekend');
+                if (ds===todayDs) cell.classList.add('today');
+                cell.innerHTML=`<span class="dow">${weekdayShort(d)}</span><span class="date">${ds}</span>`;
+                hdrC.appendChild(cell);
+          });
 
 	  const leftC=$("#ovLeftBodyC"); leftC.innerHTML='';
 	  const gridC=$("#ovGridC"); gridC.innerHTML='';
@@ -9341,13 +9387,15 @@ function renderOverview(){
 		const lab=document.createElement('div'); lab.className='row-label'; lab.textContent=`${o.number}. ${formatOrderIdForDisplay(o.orderId || '')}`;
 		leftC.appendChild(lab);
 
-		const row=document.createElement('div'); row.className='ov-row';
-		idxs.forEach(i=>{
-		  const d=addDays(minD,i);
-		  const c=document.createElement('div'); c.className='ov-cell';
-		  if (fmtDate(d)===fmtDate(today0())) c.classList.add('today');
-		  row.appendChild(c);
-		});
+                const row=document.createElement('div'); row.className='ov-row';
+                idxs.forEach(i=>{
+                  const d=addDays(minD,i);
+                  const ds=fmtDate(d);
+                  const c=document.createElement('div'); c.className='ov-cell';
+                  if(isWeekendDate(d)) c.classList.add('weekend');
+                  if (ds===todayDs) c.classList.add('today');
+                  row.appendChild(c);
+                });
 
 		// контейнер бара: ставим по реальным датам (левый край — earliest, правый — latest)
 		const startIdx = daysBetween(minD, earliest);
