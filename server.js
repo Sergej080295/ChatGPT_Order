@@ -664,6 +664,50 @@ function normalizeExtraTimeSettings(snapshot, override = null) {
   }
 }
 
+function validateSnapshotStructure(snapshot) {
+  const missing = [];
+  if (!Array.isArray(snapshot?.t)) missing.push('tasks');
+  if (!Array.isArray(snapshot?.done)) missing.push('done');
+  if (!Array.isArray(snapshot?.trash)) missing.push('trash');
+  if (!Array.isArray(snapshot?.orders)) missing.push('orders');
+  return { ok: missing.length === 0, missing };
+}
+
+function normalizeSnapshotCollections(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+
+  const ensureArray = (key) => {
+    if (!Array.isArray(snapshot[key])) {
+      snapshot[key] = [];
+    }
+  };
+
+  ensureArray('t');
+  ensureArray('done');
+  ensureArray('trash');
+  ensureArray('exc');
+  ensureArray('res');
+  ensureArray('routeOverrides');
+  ensureArray('orders');
+  ensureArray('locked');
+  ensureArray('ignoredStates');
+
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+  if (!Array.isArray(snapshot.meta.history)) {
+    snapshot.meta.history = [];
+  }
+  if (!isPlainObject(snapshot.meta.versions)) {
+    snapshot.meta.versions = {};
+  }
+  if (!isPlainObject(snapshot.meta.settings)) {
+    snapshot.meta.settings = {};
+  }
+}
+
 function serializeMeta(meta) {
   const sanitized = sanitizeMetaForStorage(meta);
   if (sanitized === null) {
@@ -782,6 +826,7 @@ async function persistSnapshotWithSql(options) {
   }
 
   normalizeExtraTimeSettings(parsedSnapshot);
+  normalizeSnapshotCollections(parsedSnapshot);
 
   const serialized = safeSerializeSnapshot(parsedSnapshot);
   const storedMeta = sanitizeMetaForStorage(meta);
@@ -1759,6 +1804,13 @@ app.put('/api/state', async (req, res) => {
     const { snapshot, stateString, requestMeta } = extractSnapshotPayload(req.body);
     if (!isPlainObject(snapshot)) {
       res.status(400).json({ error: 'Snapshot must be an object' });
+      return;
+    }
+
+    const structure = validateSnapshotStructure(snapshot);
+    if (!structure.ok) {
+      logSaveEvent('warn', 'snapshot missing required sections', { requestId, missing: structure.missing });
+      res.status(422).json({ error: 'Unprocessable snapshot', missing: structure.missing });
       return;
     }
 

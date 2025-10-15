@@ -6548,6 +6548,16 @@ function renderOrdersOverviewTable(){
   attachOverviewTotalsScrollSync();
 }
 
+function refreshOrderPerfUI(){
+  try{
+    renderOrdersOverviewTable();
+  }catch(err){
+    console.warn('refreshOrderPerfUI fallback failed', err);
+  }
+}
+
+window.refreshOrderPerfUI = refreshOrderPerfUI;
+
 function syncOverviewTotalsColumns(){
   const overviewTable = document.getElementById('ordersOverviewTable');
   const totalsBox = document.getElementById('ordersOverviewTotals');
@@ -7006,6 +7016,118 @@ function clonePlain(value){
     return out;
   }
   return value;
+}
+
+function isPlainObject(value){
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneEntryList(entries){
+  if(!Array.isArray(entries)) return [];
+  return entries.map(entry=>{
+    if(!Array.isArray(entry) || entry.length < 2) return clonePlain(entry);
+    const [key, value] = entry;
+    if(Array.isArray(value)) return [key, value.map(clonePlain)];
+    if(isPlainObject(value)) return [key, clonePlain(value)];
+    return [key, value];
+  });
+}
+
+function normalizeSnapshotForPush(snapshot, options={}){
+  const target = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const prev = options.previous && typeof options.previous === 'object' ? options.previous : null;
+  const currentStage = typeof options.stage === 'string' ? options.stage : null;
+
+  const cloneTaskArray = (value)=>{
+    if(!Array.isArray(value)) return [];
+    return value.map(task=> clonePlain(task));
+  };
+
+  const ensureStringArray = (value, fallback=[])=>{
+    if(Array.isArray(value)) return value.slice();
+    if(Array.isArray(fallback)) return fallback.slice();
+    return [];
+  };
+
+  const mergeTasks = (baseTasks, prevTasks, { skipStage }={})=>{
+    const tasks = cloneTaskArray(baseTasks);
+    const seen = new Set(tasks.map(task => (task && task.uid) ? task.uid : null).filter(Boolean));
+    if(Array.isArray(prevTasks)){
+      prevTasks.forEach(task=>{
+        if(!task) return;
+        if(skipStage && task.stage === skipStage) return;
+        const uid = task.uid || null;
+        if(uid && seen.has(uid)) return;
+        tasks.push(clonePlain(task));
+      });
+    }
+    return tasks;
+  };
+
+  target.t = mergeTasks(target.t, prev?.t, { skipStage: currentStage });
+  target.done = mergeTasks(target.done, prev?.done);
+  target.trash = mergeTasks(target.trash, prev?.trash);
+
+  const ensureEntries = (value, fallback)=>{
+    const base = cloneEntryList(value);
+    if(base.length) return base;
+    return cloneEntryList(fallback);
+  };
+
+  target.exc = ensureEntries(target.exc, prev?.exc);
+  target.res = ensureEntries(target.res, prev?.res);
+  target.routeOverrides = ensureEntries(target.routeOverrides, prev?.routeOverrides);
+
+  const stageOrderMap = new Map();
+  if(Array.isArray(prev?.orders)){
+    prev.orders.forEach(entry=>{
+      if(!Array.isArray(entry) || entry.length < 2) return;
+      const [stageKey, list] = entry;
+      if(currentStage && stageKey === currentStage) return;
+      stageOrderMap.set(stageKey, Array.isArray(list) ? list.slice() : []);
+    });
+  }
+  if(Array.isArray(target.orders)){
+    target.orders.forEach(entry=>{
+      if(!Array.isArray(entry) || entry.length < 2) return;
+      const [stageKey, list] = entry;
+      stageOrderMap.set(stageKey, Array.isArray(list) ? list.slice() : []);
+    });
+  }
+  target.orders = Array.from(stageOrderMap.entries());
+
+  if(!target.orders.length && Array.isArray(prev?.orders)){
+    target.orders = cloneEntryList(prev.orders);
+  }
+
+  target.locked = ensureStringArray(target.locked, prev?.locked);
+  target.ignoredStates = ensureStringArray(target.ignoredStates, prev?.ignoredStates);
+
+  if(!isPlainObject(target.meta)){
+    target.meta = isPlainObject(prev?.meta) ? clonePlain(prev.meta) : {};
+  }
+  if(!isPlainObject(target.meta.settings)){
+    if(isPlainObject(prev?.meta?.settings)) target.meta.settings = clonePlain(prev.meta.settings);
+    else target.meta.settings = cloneSettingsForSerialize(stateMeta.settings || {});
+  }
+  if(!isPlainObject(target.meta.versions)){
+    target.meta.versions = isPlainObject(prev?.meta?.versions) ? { ...prev.meta.versions } : {};
+  }
+  if(!Array.isArray(target.meta.history)){
+    target.meta.history = Array.isArray(prev?.meta?.history) ? cloneEntryList(prev.meta.history) : [];
+  }
+  if(!isPlainObject(target.meta.lastAuthors)){
+    target.meta.lastAuthors = isPlainObject(prev?.meta?.lastAuthors) ? { ...prev.meta.lastAuthors } : {};
+  }
+
+  if(!isPlainObject(target.modeScoped)){
+    target.modeScoped = cloneModeScopedStateForSave();
+  }
+  if(!isPlainObject(target.crm)){
+    target.crm = cloneCrmState(crmState);
+  }
+
+  return target;
 }
 
 function sanitizeSharedSettings(raw, context={}){
@@ -12261,6 +12383,8 @@ function persistNow(stageOverride, opts={}){
         }
       };
 
+      normalizeSnapshotForPush(stateObj, { previous: prev, stage: curStage });
+      console.log('State перед сохранением:', stateObj);
       const payload = JSON.stringify(stateObj);
       const fingerprint = simpleHash(payload);
       lastAppliedRemoteFingerprint = fingerprint;
@@ -12285,6 +12409,7 @@ function persistNow(stageOverride, opts={}){
           diff: combinedDiff,
           version:null,
           source,
+          actor:userAlias,
           user:userAlias,
           session:SESSION_ID,
           summary: summaryLine || undefined,
@@ -12648,6 +12773,8 @@ function persistNow(stageOverride, opts={}){
       }
     };
 
+    normalizeSnapshotForPush(stateObj, { previous: prev, stage: curStage });
+    console.log('State перед сохранением:', stateObj);
     const payload = JSON.stringify(stateObj);
     const fingerprint = simpleHash(payload);
     lastAppliedRemoteFingerprint = fingerprint;
@@ -12696,6 +12823,7 @@ function persistNow(stageOverride, opts={}){
           diff:remoteDiff,
           version:remoteVersion,
           source,
+          actor:userAlias,
           user:userAlias,
           session:SESSION_ID,
           summary: remoteSummary,
@@ -12820,11 +12948,28 @@ function persistNow(stageOverride, opts={}){
   return pushPromise;
 }
 
+function reportPersistError(err){
+  console.error('persistMaybe failed', err);
+  showToast({
+    title:'Ошибка сохранения',
+    message:'Не удалось подготовить данные для сохранения. Подробности — в консоли.'
+  });
+}
+
 function persistMaybe(reason='data', opts={}){
   if(reason==='ui'){ saveUiPreferences(); return; }
   if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
   const stageOverride = Object.prototype.hasOwnProperty.call(opts, 'stageOverride') ? opts.stageOverride : undefined;
-  if(autosaveOn || opts.force) persistNow(stageOverride, opts);
+  if(autosaveOn || opts.force){
+    try{
+      const result = persistNow(stageOverride, opts);
+      if(result && typeof result.then === 'function'){
+        result.catch(reportPersistError);
+      }
+    }catch(err){
+      reportPersistError(err);
+    }
+  }
 }
 
 let pendingSettingsTimer = null;
