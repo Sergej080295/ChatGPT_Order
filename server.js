@@ -183,6 +183,28 @@ async function ensureMigrationTable(client) {
   `);
 }
 
+async function ensurePlannerSnapshotsSchema(client) {
+  const runner = client || pool;
+  await runner.query(`
+    CREATE TABLE IF NOT EXISTS planner_state_snapshots (
+      id BIGSERIAL PRIMARY KEY,
+      rev BIGINT NOT NULL REFERENCES revisions(rev) ON DELETE CASCADE,
+      snapshot JSONB NOT NULL,
+      meta JSONB,
+      hash TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await runner.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS planner_state_snapshots_rev_key
+      ON planner_state_snapshots(rev)
+  `);
+  await runner.query(`
+    CREATE INDEX IF NOT EXISTS planner_state_snapshots_created_idx
+      ON planner_state_snapshots(created_at DESC)
+  `);
+}
+
 function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) {
     return [];
@@ -327,6 +349,7 @@ async function ensureMigrationRevision(client) {
 
 async function loadLatestSnapshot(runner) {
   const client = runner || pool;
+  await ensurePlannerSnapshotsSchema(client);
   const { rows } = await client.query(`
     SELECT rev, snapshot, hash, meta
       FROM planner_state_snapshots
@@ -722,6 +745,7 @@ function serializeMeta(meta) {
 }
 
 async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta) {
+  await ensurePlannerSnapshotsSchema(client);
   const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
   const metaJson = serializeMeta(meta);
   const effectiveHash = hash || computeSnapshotHash(snapshotJson);
