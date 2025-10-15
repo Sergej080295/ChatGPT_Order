@@ -5923,9 +5923,36 @@ function applyStageProgress(identity, stage, value, options={}){
   let summaryOrderId = identity?.orderId || '';
   let summaryOrderKey = identity?.orderKey || '';
   const crmUpdates = [];
+  const crmReferenceTask = findCrmStageTaskForIdentity(identity, stage);
+  const ensureCrmMeta = taskObj => {
+    if(!taskObj) return null;
+    if(taskObj.crmMeta && taskObj.crmMeta.stageKey){
+      return taskObj;
+    }
+    const fallback = crmReferenceTask || findCrmStageTaskForIdentity(identity, stage);
+    if(fallback && fallback.crmMeta){
+      taskObj.crmMeta = { ...fallback.crmMeta };
+    }else if(fallback){
+      const stageName = fallback.stage || fallback.stageName || (STAGE_TITLE[stage] || stage);
+      taskObj.crmMeta = {
+        stageKey: stage,
+        stageName,
+        boardId: fallback.crmMeta?.boardId || fallback.boardId || '',
+        crmOrderId: fallback.crmMeta?.crmOrderId || fallback.crmOrderId || fallback.orderId || '',
+        orderIdentity: fallback.orderIdentity || '',
+        orderId: fallback.orderId || ''
+      };
+    }
+    if(taskObj.crmMeta){
+      if(!taskObj.crmMeta.stageKey) taskObj.crmMeta.stageKey = stage;
+      if(!taskObj.crmMeta.stageName) taskObj.crmMeta.stageName = STAGE_TITLE[stage] || stage;
+    }
+    return taskObj;
+  };
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment, extraOptions={})=>{
-    if(!taskObj || !taskObj.crmMeta) return;
-    const payload = buildCrmUpdateFromTask(taskObj, stage, {
+    const enriched = ensureCrmMeta(taskObj);
+    if(!enriched || !enriched.crmMeta) return;
+    const payload = buildCrmUpdateFromTask(enriched, stage, {
       progress: progressValue,
       done: !!doneFlag,
       doneAt: doneFlag && doneMoment ? new Date(doneMoment) : undefined,
@@ -5949,6 +5976,7 @@ function applyStageProgress(identity, stage, value, options={}){
     if(crmCandidate){
       if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
       const clone = cloneTaskRecord(crmCandidate);
+      ensureCrmMeta(clone);
       allTasksFromState.push(clone);
       storedMatches.push({ task: clone, index: allTasksFromState.length - 1 });
     }
@@ -6003,10 +6031,13 @@ function applyStageProgress(identity, stage, value, options={}){
           target = cloneTaskRecord(activeEntry.task);
         }
       }
-      if(!target){
+      if(target){
+        ensureCrmMeta(target);
+      }else{
         const doneEntry = doneMatches.find(entry => entry.rec && entry.rec.uid === uid);
         if(doneEntry?.rec){
           target = buildDoneTaskRecord(doneEntry.rec);
+          ensureCrmMeta(target);
         }
       }
       if(!target) return;
@@ -6020,6 +6051,7 @@ function applyStageProgress(identity, stage, value, options={}){
         if(keyCandidate) summaryOrderKey = keyCandidate;
       }
       if(prevProgress < 100) changed = true;
+      ensureCrmMeta(target);
       target.progress = 100;
       target.isDone = true;
       assignCompletionMeta(target, stage, completionMoment, source);
@@ -6080,6 +6112,7 @@ function applyStageProgress(identity, stage, value, options={}){
           if(keyCandidate) summaryOrderKey = keyCandidate;
         }
         if(prevProgress !== normalized) changed = true;
+        ensureCrmMeta(stored);
         stored.progress = normalized;
         stored.isDone = false;
         clearCompletionMeta(stored, stage);
@@ -6091,6 +6124,7 @@ function applyStageProgress(identity, stage, value, options={}){
       const activeEntry = activeMatches.find(entry => entry.task && entry.task.uid === uid);
       if(activeEntry?.task){
         const copy = cloneTaskRecord(activeEntry.task);
+        ensureCrmMeta(copy);
         const prevProgress = clampProgressValue(copy.progress);
         if(!summaryRecords.has(uid) && copy) summaryRecords.set(uid, copy);
         if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
@@ -6114,6 +6148,7 @@ function applyStageProgress(identity, stage, value, options={}){
       if(doneEntry?.rec){
         const restored = buildDoneTaskRecord(doneEntry.rec);
         if(restored){
+          ensureCrmMeta(restored);
           const prevProgress = clampProgressValue(restored.progress);
           if(!summaryRecords.has(uid) && restored) summaryRecords.set(uid, restored);
           if(!progressBeforeMap.has(uid)) progressBeforeMap.set(uid, prevProgress);
@@ -6140,9 +6175,13 @@ function applyStageProgress(identity, stage, value, options={}){
         if(!record) return;
         const entry = byUid.get(uid);
         if(entry){
-          tasks[entry.idx] = cloneTaskRecord(record);
+          const clone = cloneTaskRecord(record);
+          ensureCrmMeta(clone);
+          tasks[entry.idx] = clone;
         }else{
-          tasks.push(cloneTaskRecord(record));
+          const clone = cloneTaskRecord(record);
+          ensureCrmMeta(clone);
+          tasks.push(clone);
         }
       });
       lockedUids = new Set(tasks.filter(task => task && task.locked).map(task => task.uid));
