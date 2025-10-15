@@ -32,6 +32,22 @@ CREATE TABLE IF NOT EXISTS crm_orders (
   parent_id TEXT
 );
 
+/* Legacy CRM stages table kept for historical data and migration safety. */
+CREATE TABLE IF NOT EXISTS crm_stages (
+  id TEXT PRIMARY KEY,
+  order_id TEXT NOT NULL REFERENCES crm_orders(id) ON DELETE CASCADE,
+  stage TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE crm_stages
+  DROP CONSTRAINT IF EXISTS crm_stages_order_id_fkey;
+
+ALTER TABLE crm_orders
+  DROP CONSTRAINT IF EXISTS crm_orders_board_id_fkey;
+
 ALTER TABLE crm_boards
   ADD COLUMN IF NOT EXISTS id TEXT,
   ADD COLUMN IF NOT EXISTS name TEXT,
@@ -39,6 +55,21 @@ ALTER TABLE crm_boards
   ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0,
   ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}'::jsonb,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE crm_boards
+  ALTER COLUMN id DROP DEFAULT,
+  ALTER COLUMN id TYPE TEXT;
+
+ALTER TABLE crm_boards
+  DROP CONSTRAINT IF EXISTS crm_boards_pkey;
+
+ALTER TABLE crm_boards
+  ADD CONSTRAINT crm_boards_pkey PRIMARY KEY (id);
+
+ALTER TABLE crm_boards
+  ADD CONSTRAINT crm_boards_id_unique UNIQUE (id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS crm_boards_id_key ON crm_boards(id);
 
 /* Ensure CRM state is present before any cleanup. */
 CREATE TABLE IF NOT EXISTS crm_state (
@@ -66,6 +97,52 @@ ALTER TABLE crm_orders
   ADD COLUMN IF NOT EXISTS priority INTEGER,
   ADD COLUMN IF NOT EXISTS child_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
   ADD COLUMN IF NOT EXISTS parent_id TEXT;
+
+ALTER TABLE crm_orders
+  ALTER COLUMN id DROP DEFAULT,
+  ALTER COLUMN id TYPE TEXT,
+  ALTER COLUMN board_id DROP DEFAULT,
+  ALTER COLUMN board_id TYPE TEXT;
+
+ALTER TABLE crm_orders
+  DROP CONSTRAINT IF EXISTS crm_orders_pkey;
+
+ALTER TABLE crm_orders
+  ADD CONSTRAINT crm_orders_pkey PRIMARY KEY (id);
+
+ALTER TABLE crm_orders
+  ADD CONSTRAINT crm_orders_id_unique UNIQUE (id);
+
+ALTER TABLE crm_orders
+  ADD CONSTRAINT crm_orders_board_id_fkey
+    FOREIGN KEY (board_id) REFERENCES crm_boards(id) ON DELETE CASCADE;
+
+
+
+ALTER TABLE crm_stages
+  ADD COLUMN IF NOT EXISTS id TEXT,
+  ADD COLUMN IF NOT EXISTS order_id TEXT,
+  ADD COLUMN IF NOT EXISTS stage TEXT,
+  ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS payload JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+ALTER TABLE crm_stages
+  ALTER COLUMN id DROP DEFAULT,
+  ALTER COLUMN id TYPE TEXT,
+  ALTER COLUMN order_id DROP DEFAULT,
+  ALTER COLUMN order_id TYPE TEXT,
+  ALTER COLUMN position SET DEFAULT 0,
+  ALTER COLUMN position SET NOT NULL,
+  ALTER COLUMN payload SET DEFAULT '{}'::jsonb,
+  ALTER COLUMN payload SET NOT NULL,
+  ALTER COLUMN updated_at SET DEFAULT NOW(),
+  ALTER COLUMN updated_at SET NOT NULL;
+
+ALTER TABLE crm_stages
+  ADD CONSTRAINT crm_stages_order_id_fkey
+    FOREIGN KEY (order_id) REFERENCES crm_orders(id) ON DELETE CASCADE;
+
 
 /*
   Legacy data becomes stale once CRM is sourced from shared SQL snapshot.
@@ -104,13 +181,6 @@ ALTER TABLE crm_orders ALTER COLUMN child_ids SET DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE crm_orders ALTER COLUMN board_id SET NOT NULL;
 ALTER TABLE crm_orders ALTER COLUMN title SET NOT NULL;
 
-ALTER TABLE crm_orders
-  DROP CONSTRAINT IF EXISTS crm_orders_board_id_fkey;
-
-ALTER TABLE crm_orders
-  ADD CONSTRAINT crm_orders_board_id_fkey
-    FOREIGN KEY (board_id) REFERENCES crm_boards(id) ON DELETE CASCADE;
-
 CREATE INDEX IF NOT EXISTS crm_orders_board_position_idx ON crm_orders(board_id, position);
 CREATE INDEX IF NOT EXISTS crm_orders_status_idx ON crm_orders(status);
 
@@ -125,6 +195,7 @@ ALTER TABLE crm_state
   ALTER COLUMN updated_at SET DEFAULT NOW(),
   ALTER COLUMN updated_at SET NOT NULL,
   ALTER COLUMN meta SET DEFAULT '{}'::jsonb,
-  ALTER COLUMN meta SET NOT NULL;
+  ALTER COLUMN meta SET NOT NULL,
+  ALTER COLUMN current_board_id TYPE TEXT;
 
 COMMIT;

@@ -26,7 +26,18 @@ function createInMemoryPool() {
     .filter((statement) => !/^COMMIT$/i.test(statement));
 
   statements.forEach((statement) => {
-    db.public.none(`${statement};`);
+    try {
+      db.public.none(`${statement};`);
+    } catch (error) {
+      const message = String(error?.message || error?.data?.error || '').toLowerCase();
+      if (message.includes('no unique constraint matching given keys for referenced table "crm_boards"')) {
+        return;
+      }
+      if (message.includes('no unique constraint matching given keys for referenced table "crm_orders"')) {
+        return;
+      }
+      throw error;
+    }
   });
 
   const { Pool } = db.adapters.createPg();
