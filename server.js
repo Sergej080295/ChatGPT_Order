@@ -1328,11 +1328,23 @@ async function applySnapshotToSql(client, snapshot) {
   trash.forEach((task) => collectOrderData(task, { deleted: true }));
 
   const orderIdMap = new Map();
+  let fallbackOrderCounter = 0;
   for (const data of orderData.values()) {
     const customerId = data.customerName ? customerMap.get(data.customerName) || null : null;
     const createdAt = data.createdAt || new Date();
     const updatedAt = data.updatedAt || createdAt;
-    const number = data.number || data.crmOrderId || data.key;
+    let number = data.number || data.crmOrderId || data.title || null;
+    if (!number || (typeof number === 'string' && !number.trim())) {
+      number = data.key;
+    }
+    if (!number || (typeof number === 'string' && !number.trim())) {
+      fallbackOrderCounter += 1;
+      number = `order-${fallbackOrderCounter}`;
+    }
+    if (typeof number === 'string') {
+      const trimmed = number.trim();
+      number = trimmed || `order-${fallbackOrderCounter || 1}`;
+    }
     const deletedAt = data.deleted ? (data.deletedAt || updatedAt) : null;
     const title = data.title || number;
     const priority = Number.isFinite(data.priority) ? data.priority : null;
