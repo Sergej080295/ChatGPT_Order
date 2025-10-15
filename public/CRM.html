@@ -777,6 +777,37 @@ const deepClone=value=>{
   }
 };
 
+function parseNumericValue(raw){
+  if(raw===null||raw===undefined){
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw==='number'){
+    if(Number.isFinite(raw)){
+      return { number:raw, hasValue:true };
+    }
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw==='string'){
+    const trimmed=raw.trim();
+    if(!trimmed){
+      return { number:0, hasValue:false };
+    }
+    const normalized=trimmed.replace(/[\s\u202f\u00a0]+/g,'').replace(',', '.');
+    const parsed=Number(normalized);
+    if(Number.isFinite(parsed)){
+      return { number:parsed, hasValue:true };
+    }
+    return { number:0, hasValue:false };
+  }
+  if(typeof raw.valueOf==='function'){
+    const value=raw.valueOf();
+    if(value!==raw){
+      return parseNumericValue(value);
+    }
+  }
+  return { number:0, hasValue:false };
+}
+
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard()],currentBoardId:null};
 if(!state.currentBoardId&&Array.isArray(state.boards)&&state.boards.length){state.currentBoardId=state.boards[0].id;}
 persistLocal();
@@ -1417,12 +1448,22 @@ splitForm.addEventListener('submit',e=>{
     if(absRaw!==''){const parsed=Number(absRaw); if(Number.isFinite(parsed)&&parsed>=0) abs=parsed;}
     if(pct!==null||abs!==null){stageSharePrefs[i]={pct,abs};hasAnyStageShare=true;}else{stageSharePrefs[i]=null;}
   });
-  if(!parent._origValues){parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>[s.name,Number(s.value)||0]))}
+  if(!parent._origValues){
+    parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>{
+      const parsed=parseNumericValue(s.value);
+      return [s.name, parsed.hasValue?parsed.number:0];
+    }));
+  }
   if(typeof parent._origPctUsed!=='number') parent._origPctUsed=0;
-  if(typeof parent._origServiceTotal!=='number'){const initTotal=Number(parent.serviceTotal);parent._origServiceTotal=Number.isFinite(initTotal)?initTotal:0;}
+  if(!Number.isFinite(parent._origServiceTotal)){
+    const currentService=parseNumericValue(parent.serviceTotal);
+    parent._origServiceTotal=currentService.hasValue?currentService.number:0;
+  }
 
-  const originalServiceTotal=Number(parent._origServiceTotal||0);
-  const currentServiceTotal=Number(parent.serviceTotal||0);
+  const originalServiceTotal=Number.isFinite(parent._origServiceTotal)?parent._origServiceTotal:0;
+  const currentServiceInfo=parseNumericValue(parent.serviceTotal);
+  const currentServiceTotal=currentServiceInfo.hasValue?currentServiceInfo.number:originalServiceTotal;
+  const parentHadExplicitService=currentServiceInfo.hasValue;
   const effectiveServicePct=(servicePct!==null&&Number.isFinite(servicePct)&&servicePct>=0&&servicePct<=100)?servicePct:null;
   const effectiveServiceValue=(serviceValue!==null&&Number.isFinite(serviceValue)&&serviceValue>=0)?serviceValue:null;
 
@@ -1436,11 +1477,12 @@ splitForm.addEventListener('submit',e=>{
     const normalized=normalizeStageName(st.name);
     const hourless=HOURLESS_STAGE_NAMES.has(normalized);
     if(hourless){
-      stageShareResults[i]={share:0,current:Number(st.value??0)||0,hourless:true};
+      const parsedHourless=parseNumericValue(st.value);
+      stageShareResults[i]={share:0,current:parsedHourless.number,hourless:true,hadValue:parsedHourless.hasValue};
       return {...st};
     }
-    const currRaw=Number(st.value??0);
-    const current=Number.isFinite(currRaw)?currRaw:0;
+    const parsedCurrent=parseNumericValue(st.value);
+    const current=parsedCurrent.number;
     const pref=stageSharePrefs[i];
     let childWant=0;
     if(pref&&pref.abs!==null){
@@ -1452,7 +1494,7 @@ splitForm.addEventListener('submit',e=>{
     } else {
       childWant=Math.min(round(current*(basePct/100)), current);
     }
-    stageShareResults[i]={share:childWant,current,hourless:false};
+    stageShareResults[i]={share:childWant,current,hourless:false,hadValue:parsedCurrent.hasValue};
     return {...st,value:childWant>0?childWant:''};
   });
   parent.stages=(parent.stages||[]).map((st,i)=>{
@@ -1460,11 +1502,16 @@ splitForm.addEventListener('submit',e=>{
     if(!res||res.hourless){
       return {...st};
     }
-    const remaining=round(Math.max(0,(Number.isFinite(res.current)?res.current:Number(st.value??0)||0)-res.share));
+    const fallback=parseNumericValue(st.value);
+    const baseValue=Number.isFinite(res.current)?res.current:fallback.number;
+    const remaining=round(Math.max(0,baseValue-res.share));
     return {...st,value:remaining>0?remaining:''};
   });
 
-  child._origValues=Object.fromEntries((child.stages||[]).map(s=>[s.name,Number(s.value)||0]));
+  child._origValues=Object.fromEntries((child.stages||[]).map(s=>{
+    const parsed=parseNumericValue(s.value);
+    return [s.name, parsed.hasValue?parsed.number:0];
+  }));
 
   const hasHourDistribution=stageShareResults.some(res=>res && !res.hourless && res.share>0);
   if(!hasAnyStageShare){
@@ -1500,10 +1547,14 @@ splitForm.addEventListener('submit',e=>{
   };
 
   const childService=calculateServiceShare();
-  const parentServiceRemaining=Number.isFinite(currentServiceTotal)?round(Math.max(0,currentServiceTotal-childService)):currentServiceTotal;
+  const parentServiceBaseline=Number.isFinite(currentServiceTotal)?currentServiceTotal:originalServiceTotal;
+  const parentServiceRemaining=round(Math.max(0,parentServiceBaseline-childService));
   child.serviceTotal=childService>0?childService:'';
-  parent.serviceTotal=Number.isFinite(parentServiceRemaining)&&parentServiceRemaining>0?parentServiceRemaining:'';
-  child._origServiceTotal=Number(child.serviceTotal||0);
+  if(parentHadExplicitService||childService>0){
+    parent.serviceTotal=parentServiceRemaining>0?parentServiceRemaining:'';
+  }
+  const childServiceInfo=parseNumericValue(child.serviceTotal);
+  child._origServiceTotal=childServiceInfo.hasValue?childServiceInfo.number:0;
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
   b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
