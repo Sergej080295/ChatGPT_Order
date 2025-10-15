@@ -88,12 +88,6 @@ ALTER TABLE crm_boards ALTER COLUMN payload SET NOT NULL;
 ALTER TABLE crm_boards ALTER COLUMN updated_at SET DEFAULT NOW();
 ALTER TABLE crm_boards ALTER COLUMN updated_at SET NOT NULL;
 
-ALTER TABLE crm_boards
-  DROP CONSTRAINT IF EXISTS crm_boards_pkey;
-
-ALTER TABLE crm_boards
-  ADD CONSTRAINT crm_boards_pkey PRIMARY KEY (id);
-
 CREATE INDEX IF NOT EXISTS crm_boards_position_idx ON crm_boards(position);
 
 ALTER TABLE crm_orders ALTER COLUMN position SET DEFAULT 0;
@@ -109,12 +103,6 @@ ALTER TABLE crm_orders ALTER COLUMN done SET NOT NULL;
 ALTER TABLE crm_orders ALTER COLUMN child_ids SET DEFAULT ARRAY[]::TEXT[];
 ALTER TABLE crm_orders ALTER COLUMN board_id SET NOT NULL;
 ALTER TABLE crm_orders ALTER COLUMN title SET NOT NULL;
-
-ALTER TABLE crm_orders
-  DROP CONSTRAINT IF EXISTS crm_orders_pkey;
-
-ALTER TABLE crm_orders
-  ADD CONSTRAINT crm_orders_pkey PRIMARY KEY (id);
 
 ALTER TABLE crm_orders
   DROP CONSTRAINT IF EXISTS crm_orders_board_id_fkey;
@@ -138,11 +126,5 @@ ALTER TABLE crm_state
   ALTER COLUMN updated_at SET NOT NULL,
   ALTER COLUMN meta SET DEFAULT '{}'::jsonb,
   ALTER COLUMN meta SET NOT NULL;
-
-ALTER TABLE crm_state
-  DROP CONSTRAINT IF EXISTS crm_state_pkey;
-
-ALTER TABLE crm_state
-  ADD CONSTRAINT crm_state_pkey PRIMARY KEY (id);
 
 COMMIT;
