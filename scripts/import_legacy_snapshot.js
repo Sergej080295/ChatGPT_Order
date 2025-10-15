@@ -461,6 +461,31 @@ function serializeMeta(meta) {
   }
 }
 
+async function upsertSettingValue(client, key, { text = null, number = null, boolean = null } = {}) {
+  const normalizedKey = sanitizeString(key);
+  if (!normalizedKey) {
+    return;
+  }
+  const valueText = text === undefined ? null : text;
+  const valueNumber = Number.isFinite(number) ? number : null;
+  let valueBoolean = null;
+  if (typeof boolean === 'boolean') {
+    valueBoolean = boolean;
+  } else if (boolean !== null && boolean !== undefined) {
+    valueBoolean = Boolean(boolean);
+  }
+  await client.query(
+    `INSERT INTO settings_values (key, value_text, value_number, value_boolean, updated_at)
+     VALUES ($1,$2,$3,$4,NOW())
+     ON CONFLICT (key) DO UPDATE
+       SET value_text = EXCLUDED.value_text,
+           value_number = EXCLUDED.value_number,
+           value_boolean = EXCLUDED.value_boolean,
+           updated_at = NOW()` ,
+    [normalizedKey, valueText, valueNumber, valueBoolean]
+  );
+}
+
 (async () => {
   const snapshot = await loadSnapshot();
   const stateString = JSON.stringify(snapshot);
@@ -522,9 +547,7 @@ function serializeMeta(meta) {
     await client.query('TRUNCATE settings_column_widths');
     await client.query('TRUNCATE settings_mapping');
     await client.query('TRUNCATE excluded_statuses');
-    await client.query('DELETE FROM settings_autoweight');
-    await client.query('DELETE FROM settings_journal');
-    await client.query('DELETE FROM settings_admin');
+    await client.query('DELETE FROM settings_values');
     await syncSharedPreferences(client, snapshot);
 
     const processes = Array.from(stageMap.values());
@@ -780,24 +803,13 @@ function serializeMeta(meta) {
     const extraEnabled = typeof extra.enabled === 'boolean'
       ? extra.enabled
       : (percentValue > 0 || minimumValue > 0);
-    await client.query(
-      `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
-       VALUES (1,$1,$2,$3,NOW())
-       ON CONFLICT (id) DO UPDATE
-         SET enabled = EXCLUDED.enabled,
-             percent = EXCLUDED.percent,
-             minimum_hours = EXCLUDED.minimum_hours,
-             updated_at = NOW()` ,
-      [extraEnabled, percentValue, minimumValue]
-    );
+    await upsertSettingValue(client, 'autoweight.enabled', { boolean: extraEnabled });
+    await upsertSettingValue(client, 'autoweight.percent', { number: percentValue });
+    await upsertSettingValue(client, 'autoweight.minimum_hours', { number: minimumValue });
 
     const logLimit = Number(settings.logLimit);
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,$1,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
-      [Number.isFinite(logLimit) && logLimit > 0 ? Math.round(logLimit) : 50]
-    );
+    const logLimitValue = Number.isFinite(logLimit) && logLimit > 0 ? Math.round(logLimit) : 50;
+    await upsertSettingValue(client, 'journal.max_rows', { number: logLimitValue });
 
     const adminSettings = settings.admin || {};
     const allowForce = adminSettings.allowForceOverwrite === true;
@@ -813,17 +825,10 @@ function serializeMeta(meta) {
       historyDailyLimit = 3;
     }
     historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
-    await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
-       VALUES (1,$1,$2,$3,$4,NOW())
-       ON CONFLICT (id) DO UPDATE
-         SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-             snapshot_retention = EXCLUDED.snapshot_retention,
-             history_limit = EXCLUDED.history_limit,
-             history_daily_limit = EXCLUDED.history_daily_limit,
-             updated_at = NOW()` ,
-      [allowForce, snapshotRetention, historyLimit, historyDailyLimit]
-    );
+    await upsertSettingValue(client, 'admin.allow_force_overwrite', { boolean: allowForce });
+    await upsertSettingValue(client, 'admin.snapshot_retention', { number: snapshotRetention });
+    await upsertSettingValue(client, 'admin.history_limit', { number: historyLimit });
+    await upsertSettingValue(client, 'admin.history_daily_limit', { number: historyDailyLimit });
 
     if (isPlainObject(settings.tableColumns)) {
       for (const [key, width] of Object.entries(settings.tableColumns)) {
@@ -880,18 +885,21 @@ function serializeMeta(meta) {
       originalMeta: snapshot.meta?.lastChange || null
     };
 
-    const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
+    const snapshotText = safeSerializeSnapshot(snapshot, stateString);
     const metaJson = serializeMeta(snapshotMetaRaw);
 
     await client.query(
-      `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-       VALUES ($1,$2::jsonb,$3::jsonb,$4)
+      `INSERT INTO state_snapshots (rev, state_text, meta_text, hash, actor, source, note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (rev) DO UPDATE
-         SET snapshot = EXCLUDED.snapshot,
-             meta = EXCLUDED.meta,
+         SET state_text = EXCLUDED.state_text,
+             meta_text = EXCLUDED.meta_text,
              hash = EXCLUDED.hash,
+             actor = EXCLUDED.actor,
+             source = EXCLUDED.source,
+             note = EXCLUDED.note,
              created_at = NOW()` ,
-      [rev, snapshotJson, metaJson, hash]
+      [rev, snapshotText, metaJson, hash, 'import-script', 'legacy-import', 'Initial import']
     );
 
     await client.query('COMMIT');
