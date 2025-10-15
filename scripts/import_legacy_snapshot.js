@@ -172,17 +172,142 @@ function normalizeExtraTimeSettings(snapshot, override = null) {
   }
 }
 
-function orderKeyFromTask(task) {
-  if (!task || typeof task !== 'object') return null;
-  const identity = sanitizeString(task.orderIdentity);
-  if (identity) return `identity:${identity}`;
-  const orderId = sanitizeString(task.orderId);
-  if (orderId) return `id:${orderId}`;
-  const number = sanitizeString(task.orderNumber);
-  if (number) return `number:${number}`;
-  const uid = sanitizeString(task.uid);
-  if (uid) return `uid:${uid}`;
-  return null;
+function createOrderKeyResolver() {
+  const aliasToCanonical = new Map();
+  const canonicalToAliases = new Map();
+  let fallbackCounter = 0;
+
+  const registerAlias = (alias, canonical) => {
+    if (!alias) return;
+    aliasToCanonical.set(alias, canonical);
+    if (!canonicalToAliases.has(canonical)) {
+      canonicalToAliases.set(canonical, new Set());
+    }
+    canonicalToAliases.get(canonical).add(alias);
+  };
+
+  const mergeCanonicals = (source, target) => {
+    if (!source || !target || source === target) return;
+    const aliases = canonicalToAliases.get(source);
+    if (aliases) {
+      aliases.forEach((alias) => {
+        aliasToCanonical.set(alias, target);
+        if (!canonicalToAliases.has(target)) {
+          canonicalToAliases.set(target, new Set());
+        }
+        canonicalToAliases.get(target).add(alias);
+      });
+      canonicalToAliases.delete(source);
+    }
+    registerAlias(source, target);
+  };
+
+  return (task) => {
+    if (!task || typeof task !== 'object') {
+      return { key: null, merged: [] };
+    }
+
+    const identity = sanitizeString(task.orderIdentity);
+    const crmOrderId = sanitizeString(task.orderId || task.crmOrderId);
+    const numberPrimary = sanitizeString(task.orderNumber || task.number || task.orderNo);
+    const numberAlt = sanitizeString(task.orderIdNumber || task.orderRef);
+    const title = sanitizeString(task.orderTitle || task.title || task.orderName);
+    const customer = sanitizeString(task.orderCustomer);
+    const uid = sanitizeString(task.uid);
+
+    const aliases = [];
+    if (identity) aliases.push(`identity:${identity}`);
+    if (crmOrderId) aliases.push(`crm:${crmOrderId}`);
+    if (numberPrimary) aliases.push(`number:${numberPrimary}`);
+    if (numberAlt && numberAlt !== numberPrimary) aliases.push(`number:${numberAlt}`);
+    if (title && customer) aliases.push(`title:${title}::${customer}`);
+    if (title) aliases.push(`title:${title}`);
+    if (customer) aliases.push(`customer:${customer}`);
+    if (uid) aliases.push(`uid:${uid}`);
+
+    let canonical = null;
+    const seenCanonicals = new Set();
+    for (const alias of aliases) {
+      const existing = aliasToCanonical.get(alias);
+      if (existing) {
+        if (!canonical) {
+          canonical = existing;
+        }
+        seenCanonicals.add(existing);
+      }
+    }
+
+    if (!canonical) {
+      canonical = aliases.find((alias) => !alias.startsWith('uid:')) || aliases[0] || null;
+    }
+
+    if (!canonical) {
+      fallbackCounter += 1;
+      canonical = `generated:${fallbackCounter}`;
+    }
+
+    const merged = [];
+    seenCanonicals.forEach((seen) => {
+      if (seen !== canonical) {
+        merged.push(seen);
+        mergeCanonicals(seen, canonical);
+      }
+    });
+
+    aliases.forEach((alias) => registerAlias(alias, canonical));
+    registerAlias(canonical, canonical);
+
+    return { key: canonical, merged };
+  };
+}
+
+function mergeOrderRecords(target, source) {
+  if (!target) return source;
+  if (!source) return target;
+
+  const toDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  if (!target.crmOrderId && source.crmOrderId) target.crmOrderId = source.crmOrderId;
+  if (!target.number && source.number) target.number = source.number;
+  if (!target.customerName && source.customerName) target.customerName = source.customerName;
+  if (!target.status && source.status) target.status = source.status;
+  if (!target.title && source.title) target.title = source.title;
+  if (target.priority === null || target.priority === undefined) target.priority = source.priority ?? target.priority;
+  else if ((source.priority ?? null) !== null && (target.priority ?? null) === null) target.priority = source.priority;
+
+  if (!target.dueDate && source.dueDate) target.dueDate = source.dueDate;
+
+  const createdTarget = toDate(target.createdAt);
+  const createdSource = toDate(source.createdAt);
+  if (createdTarget && createdSource) {
+    target.createdAt = createdTarget < createdSource ? createdTarget : createdSource;
+  } else if (!createdTarget && createdSource) {
+    target.createdAt = createdSource;
+  }
+
+  const updatedTarget = toDate(target.updatedAt);
+  const updatedSource = toDate(source.updatedAt);
+  if (updatedTarget && updatedSource) {
+    target.updatedAt = updatedTarget > updatedSource ? updatedTarget : updatedSource;
+  } else if (!updatedTarget && updatedSource) {
+    target.updatedAt = updatedSource;
+  }
+
+  if (source.deleted) target.deleted = true;
+  const deletedSource = toDate(source.deletedAt);
+  const deletedTarget = toDate(target.deletedAt);
+  if (deletedSource && (!deletedTarget || deletedSource > deletedTarget)) {
+    target.deletedAt = deletedSource;
+  }
+
+  return target;
 }
 
 function extractSharedPreferences(snapshot) {
@@ -352,6 +477,8 @@ function serializeMeta(meta) {
     const done = Array.isArray(snapshot.done) ? snapshot.done : [];
     const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
 
+    const resolveOrderKey = createOrderKeyResolver();
+
     const parallelSet = new Set();
     if (isPlainObject(snapshot.parallelByProc)) {
       Object.keys(snapshot.parallelByProc).forEach((key) => {
@@ -437,11 +564,12 @@ function serializeMeta(meta) {
     const ordersInfo = await getOrdersTableInfo(client);
 
     const orderData = new Map();
-    const collectOrderData = (task, options = {}) => {
-      if (!task || typeof task !== 'object') return;
-      const key = orderKeyFromTask(task);
-      if (!key) return;
-      const existing = orderData.get(key) || {
+    const ensureRecord = (key) => {
+      if (!key) return null;
+      if (orderData.has(key)) {
+        return orderData.get(key);
+      }
+      const record = {
         key,
         crmOrderId: null,
         number: null,
@@ -455,6 +583,26 @@ function serializeMeta(meta) {
         priority: null,
         dueDate: null
       };
+      orderData.set(key, record);
+      return record;
+    };
+
+    const collectOrderData = (task, options = {}) => {
+      if (!task || typeof task !== 'object') return;
+      const resolution = resolveOrderKey(task);
+      const key = resolution.key;
+      if (!key) return;
+      if (Array.isArray(resolution.merged) && resolution.merged.length) {
+        for (const aliasKey of resolution.merged) {
+          if (!aliasKey || aliasKey === key) continue;
+          if (!orderData.has(aliasKey)) continue;
+          const aliasRecord = orderData.get(aliasKey);
+          orderData.delete(aliasKey);
+          const target = ensureRecord(key);
+          mergeOrderRecords(target, aliasRecord);
+        }
+      }
+      const existing = ensureRecord(key);
       const crmOrderId = sanitizeString(task.orderId);
       if (crmOrderId) existing.crmOrderId = existing.crmOrderId || crmOrderId;
       const number = sanitizeString(task.orderNumber);
@@ -552,7 +700,8 @@ function serializeMeta(meta) {
     const positionByProcess = new Map();
     const insertTask = async (task, options = {}) => {
       if (!task) return;
-      const key = orderKeyFromTask(task);
+      const resolution = resolveOrderKey(task);
+      const key = resolution.key;
       if (!key) return;
       const orderId = orderIdMap.get(key);
       if (!orderId) return;
