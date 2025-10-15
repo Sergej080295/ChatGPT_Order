@@ -15,6 +15,7 @@ const pool = new Pool({
 });
 
 let revisionColumnInfo = null;
+let ordersTableInfo = null;
 const PG_UNDEFINED_TABLE = '42P01';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
@@ -35,6 +36,14 @@ function sanitizeString(value) {
   return String(value).trim();
 }
 
+function parseInteger(value, fallback = null) {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number.parseInt(String(value).replace(/\s+/g, ''), 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+}
+
 function parseDate(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -50,6 +59,32 @@ function normalizeStage(code) {
 function titleFromCode(code) {
   if (!code) return '';
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function resetOrdersTableInfo() {
+  ordersTableInfo = null;
+}
+
+async function getOrdersTableInfo(client, { forceReload = false } = {}) {
+  if (!forceReload && ordersTableInfo) {
+    return ordersTableInfo;
+  }
+
+  const { rows } = await client.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'orders'
+  `);
+
+  const columnSet = new Set(rows.map((row) => row.column_name));
+  ordersTableInfo = {
+    columns: columnSet,
+    has(column) {
+      return columnSet.has(column);
+    }
+  };
+
+  return ordersTableInfo;
 }
 
 function safeSerializeSnapshot(snapshot, stateString = null) {
@@ -398,6 +433,9 @@ function serializeMeta(meta) {
       customerIdMap.set(name, rows[0].id);
     }
 
+    resetOrdersTableInfo();
+    const ordersInfo = await getOrdersTableInfo(client);
+
     const orderData = new Map();
     const collectOrderData = (task, options = {}) => {
       if (!task || typeof task !== 'object') return;
@@ -412,7 +450,10 @@ function serializeMeta(meta) {
         deleted: false,
         deletedAt: null,
         createdAt: null,
-        updatedAt: null
+        updatedAt: null,
+        title: null,
+        priority: null,
+        dueDate: null
       };
       const crmOrderId = sanitizeString(task.orderId);
       if (crmOrderId) existing.crmOrderId = existing.crmOrderId || crmOrderId;
@@ -420,12 +461,30 @@ function serializeMeta(meta) {
       if (number) existing.number = existing.number || number;
       const customerName = sanitizeString(task.orderCustomer);
       if (customerName) existing.customerName = existing.customerName || customerName;
+      const title = sanitizeString(
+        task.orderTitle
+          || task.title
+          || task.orderName
+          || task.name
+          || task.project
+      );
+      if (title) {
+        existing.title = existing.title || title;
+      }
       const status = sanitizeString(task.status) || sanitizeString(task.state);
       if (status) existing.status = status;
       const start = parseDate(task.startDate || task.start);
       if (start && !existing.createdAt) existing.createdAt = start;
       const end = parseDate(task.endDate || task.end);
       if (end) existing.updatedAt = end;
+      const due = parseDate(task.orderDueDate || task.dueDate || task.deadline);
+      if (due && !existing.dueDate) {
+        existing.dueDate = due;
+      }
+      const priority = parseInteger(task.orderPriority ?? task.priority, null);
+      if (priority !== null && !Number.isNaN(priority)) {
+        existing.priority = existing.priority ?? priority;
+      }
       if (options.isDone) {
         existing.status = existing.status || 'done';
         const doneAt = parseDate(task.doneMeta?.when || task.when || end || start);
@@ -449,20 +508,43 @@ function serializeMeta(meta) {
       const createdAt = data.createdAt || new Date().toISOString();
       const updatedAt = data.updatedAt || createdAt;
       const number = data.number || data.crmOrderId || data.key;
-      const { rows } = await client.query(
-        `INSERT INTO orders (crm_order_id, number, customer_id, status, created_at, updated_at, deleted_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         RETURNING id`,
-        [
-          data.crmOrderId || null,
-          number,
-          customerId,
-          data.status || null,
-          createdAt,
-          updatedAt,
-          data.deleted ? (data.deletedAt || updatedAt) : null
-        ]
-      );
+      const deletedAt = data.deleted ? (data.deletedAt || updatedAt) : null;
+      const title = data.title || number;
+      const priority = Number.isFinite(data.priority) ? data.priority : null;
+      const dueDate = data.dueDate || null;
+
+      const columns = [];
+      const placeholders = [];
+      const values = [];
+      let paramIndex = 1;
+      const addColumn = (column, value) => {
+        if (!ordersInfo.has(column)) return;
+        columns.push(column);
+        placeholders.push(`$${paramIndex}`);
+        values.push(value === undefined ? null : value);
+        paramIndex += 1;
+      };
+
+      addColumn('crm_order_id', data.crmOrderId || null);
+      addColumn('number', number);
+      addColumn('order_no', number);
+      addColumn('customer_id', customerId);
+      addColumn('status', data.status || null);
+      addColumn('title', title || null);
+      addColumn('client', data.customerName || null);
+      addColumn('priority', priority);
+      addColumn('due_date', dueDate);
+      addColumn('created_at', createdAt);
+      addColumn('updated_at', updatedAt);
+      addColumn('deleted_at', deletedAt);
+      addColumn('is_deleted', Boolean(data.deleted));
+
+      if (!columns.length) {
+        throw new Error('orders table has no known columns for insertion');
+      }
+
+      const sql = `INSERT INTO orders (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING id`;
+      const { rows } = await client.query(sql, values);
       orderIdMap.set(data.key, rows[0].id);
     }
 
