@@ -12510,7 +12510,7 @@ function persistNow(stageOverride, opts={}){
       }
     }
     const prevSnapshot = captureSnapshotFromRaw(prevStageTasks, curStage, prevLocked);
-    const baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
+    let baseline = lastSyncedSnapshots.get(curStage) || captureSnapshotFromTasks(curStage, tasks, lockedUids);
     const prevVersionRaw = (prevMeta.versions && prevMeta.versions[curStage]) || 0;
     const prevVersion = Number(prevVersionRaw) || 0;
     const knownVersionRaw = lastKnownVersions.get(curStage);
@@ -12535,15 +12535,14 @@ function persistNow(stageOverride, opts={}){
           trimActivityLogInPlace();
         }
         updateFreshnessUI();
+        baseline = prevSnapshot;
         if(!silentOnConflict){
-          const authorInfo = stateMeta.lastAuthors?.[curStage];
-          showConflictDialog(conflict, authorInfo ? { ...authorInfo, stage: curStage } : null);
-          if(prev){
-            restoreState(prev, {preserveProcess:true});
-            setDataMode(remoteSyncEnabled() ? 'remote' : (enableLocalStore ? 'local' : 'session'));
-          }
+          showToast({
+            title:'Обновление версии',
+            message:'На сервере появилась более свежая версия данных. Применяем ваши изменения поверх неё.',
+            actions:[{label:'OK', handler:(el)=> el.remove()}]
+          });
         }
-        return;
       }
     }
 
