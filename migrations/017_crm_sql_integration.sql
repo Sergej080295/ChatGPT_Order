@@ -71,8 +71,8 @@ ALTER TABLE crm_orders
   Legacy data becomes stale once CRM is sourced from shared SQL snapshot.
   Clean the tables so the planner can repopulate them on the next save.
 */
-DELETE FROM crm_orders;
-DELETE FROM crm_boards;
+TRUNCATE TABLE crm_orders RESTART IDENTITY CASCADE;
+TRUNCATE TABLE crm_boards RESTART IDENTITY CASCADE;
 DELETE FROM crm_state;
 
 ALTER TABLE crm_orders DROP COLUMN IF EXISTS progress;
