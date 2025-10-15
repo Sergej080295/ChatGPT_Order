@@ -328,8 +328,8 @@ async function ensureMigrationRevision(client) {
 async function loadLatestSnapshot(runner) {
   const client = runner || pool;
   const { rows } = await client.query(`
-    SELECT rev, snapshot, hash, meta
-      FROM planner_state_snapshots
+    SELECT rev, state_text, hash, meta_text
+      FROM state_snapshots
      ORDER BY rev DESC, created_at DESC
      LIMIT 1
   `);
@@ -337,7 +337,7 @@ async function loadLatestSnapshot(runner) {
     return null;
   }
   const row = rows[0];
-  const snapshotObj = parseJsonColumn(row.snapshot, {});
+  const snapshotObj = parseJsonColumn(row.state_text, {});
   try {
     const prefMap = await loadSharedPreferences(client);
     if (prefMap && prefMap.size) {
@@ -348,7 +348,8 @@ async function loadLatestSnapshot(runner) {
   } catch (err) {
     console.warn('Failed to merge shared preferences into snapshot', err);
   }
-  const stateString = JSON.stringify(snapshotObj);
+  const storedState = typeof row.state_text === 'string' ? row.state_text : null;
+  const stateString = storedState && storedState.trim() ? storedState : JSON.stringify(snapshotObj);
   const hash = row.hash || computeSnapshotHash(stateString);
   const rev = Number(row.rev || 0);
   return {
@@ -356,7 +357,7 @@ async function loadLatestSnapshot(runner) {
     snapshot: snapshotObj,
     stateString,
     hash,
-    meta: parseJsonColumn(row.meta, null)
+    meta: parseJsonColumn(row.meta_text, null)
   };
 }
 
@@ -677,20 +678,26 @@ function serializeMeta(meta) {
   }
 }
 
-async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta) {
-  const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
-  const metaJson = serializeMeta(meta);
-  const effectiveHash = hash || computeSnapshotHash(snapshotJson);
+async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta, context = {}) {
+  const snapshotText = safeSerializeSnapshot(snapshot, stateString);
+  const metaText = serializeMeta(meta);
+  const effectiveHash = hash || computeSnapshotHash(snapshotText);
+  const actor = sanitizeString(context.actor) || null;
+  const source = sanitizeString(context.source) || null;
+  const note = sanitizeString(context.note) || null;
 
   await client.query(
-    `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-     VALUES ($1,$2::jsonb,$3::jsonb,$4)
+    `INSERT INTO state_snapshots (rev, state_text, meta_text, hash, actor, source, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
      ON CONFLICT (rev) DO UPDATE
-       SET snapshot = EXCLUDED.snapshot,
-           meta = EXCLUDED.meta,
+       SET state_text = EXCLUDED.state_text,
+           meta_text = EXCLUDED.meta_text,
            hash = EXCLUDED.hash,
+           actor = EXCLUDED.actor,
+           source = EXCLUDED.source,
+           note = EXCLUDED.note,
            created_at = NOW()` ,
-    [rev, snapshotJson, metaJson, effectiveHash]
+    [rev, snapshotText, metaText, effectiveHash, actor, source, note]
   );
 }
 
@@ -793,7 +800,15 @@ async function persistSnapshotWithSql(options) {
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
     await applySnapshotToSql(client, parsedSnapshot);
-    await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
+    await insertSnapshotRow(
+      client,
+      nextRev,
+      parsedSnapshot,
+      serialized,
+      effectiveHash,
+      storedMeta,
+      { actor, source, note }
+    );
     return await loadLatestSnapshot(client);
   });
 
@@ -811,16 +826,19 @@ async function persistSnapshotWithSql(options) {
 }
 
 function mapHistoryRow(row) {
-  const meta = parseJsonColumn(row.meta, null);
+  const meta = parseJsonColumn(row.meta_text, null);
   const summary = extractHistorySummary(meta);
+  const actor = row.actor || (meta && meta.actor ? meta.actor : null);
+  const source = row.source || (meta && meta.source ? meta.source : null);
+  const note = row.note || (meta && meta.note ? meta.note : null);
   return {
     rev: Number(row.rev || 0),
     hash: row.hash || null,
     etag: computeEtag(row.hash || null),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    actor: row.actor || (meta && meta.actor ? meta.actor : null),
-    source: row.source || (meta && meta.source ? meta.source : null),
-    note: row.note || (meta && meta.note ? meta.note : null),
+    actor,
+    source,
+    note,
     summary: summary || null,
     meta
   };
@@ -906,6 +924,49 @@ function parseJsonColumn(value, fallback = null) {
   }
 }
 
+async function upsertSettingValue(client, key, { text = null, number = null, boolean = null } = {}) {
+  const normalizedKey = sanitizeString(key);
+  if (!normalizedKey) {
+    return;
+  }
+  const valueText = text === undefined ? null : text;
+  const valueNumber = Number.isFinite(number) ? number : null;
+  let valueBoolean = null;
+  if (typeof boolean === 'boolean') {
+    valueBoolean = boolean;
+  } else if (boolean !== null && boolean !== undefined) {
+    valueBoolean = Boolean(boolean);
+  }
+  await client.query(
+    `INSERT INTO settings_values (key, value_text, value_number, value_boolean, updated_at)
+     VALUES ($1,$2,$3,$4,NOW())
+     ON CONFLICT (key) DO UPDATE
+       SET value_text = EXCLUDED.value_text,
+           value_number = EXCLUDED.value_number,
+           value_boolean = EXCLUDED.value_boolean,
+           updated_at = NOW()` ,
+    [normalizedKey, valueText, valueNumber, valueBoolean]
+  );
+}
+
+async function loadSettingsValuesMap(runner, keys) {
+  if (!Array.isArray(keys) || keys.length === 0) {
+    return new Map();
+  }
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  const { rows } = await executor.query(
+    'SELECT key, value_text, value_number, value_boolean FROM settings_values WHERE key = ANY($1::text[])',
+    [keys]
+  );
+  const map = new Map();
+  rows.forEach((row) => {
+    if (row && row.key) {
+      map.set(row.key, row);
+    }
+  });
+  return map;
+}
+
 function extractSharedPreferences(snapshot) {
   if (!isPlainObject(snapshot)) {
     return [];
@@ -980,30 +1041,28 @@ function applySharedPreferencesToSnapshot(snapshot, prefMap) {
 }
 
 async function loadAutoweightSettings(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
   try {
-    const { rows } = await executor.query(
-      'SELECT enabled, percent, minimum_hours FROM settings_autoweight WHERE id = 1'
-    );
-    if (!rows.length) {
+    const map = await loadSettingsValuesMap(runner, [
+      'autoweight.enabled',
+      'autoweight.percent',
+      'autoweight.minimum_hours'
+    ]);
+    if (!map.size) {
       return null;
     }
-    const row = rows[0];
-    const percentRaw = row.percent === null || row.percent === undefined ? null : Number(row.percent);
-    const minimumRaw = row.minimum_hours === null || row.minimum_hours === undefined
-      ? null
-      : Number(row.minimum_hours);
-    const enabledRaw = row.enabled;
+    const enabledRow = map.get('autoweight.enabled');
+    const percentRow = map.get('autoweight.percent');
+    const minimumRow = map.get('autoweight.minimum_hours');
+    const percentRaw = percentRow && percentRow.value_number !== null && percentRow.value_number !== undefined
+      ? Number(percentRow.value_number)
+      : null;
+    const minimumRaw = minimumRow && minimumRow.value_number !== null && minimumRow.value_number !== undefined
+      ? Number(minimumRow.value_number)
+      : null;
+    const enabledRaw = enabledRow ? enabledRow.value_boolean : null;
     let enabled = null;
     if (enabledRaw === null || enabledRaw === undefined) {
       enabled = null;
-    } else if (typeof enabledRaw === 'boolean') {
-      enabled = enabledRaw;
-    } else if (typeof enabledRaw === 'number') {
-      enabled = enabledRaw !== 0;
-    } else if (typeof enabledRaw === 'string') {
-      const normalized = enabledRaw.trim().toLowerCase();
-      enabled = ['1', 't', 'true', 'yes', 'on'].includes(normalized);
     } else {
       enabled = Boolean(enabledRaw);
     }
@@ -1350,9 +1409,7 @@ async function applySnapshotToSql(client, snapshot) {
   await client.query('TRUNCATE settings_column_widths');
   await client.query('TRUNCATE settings_mapping');
   await client.query('TRUNCATE excluded_statuses');
-  await client.query('DELETE FROM settings_autoweight');
-  await client.query('DELETE FROM settings_journal');
-  await client.query('DELETE FROM settings_admin');
+  await client.query('DELETE FROM settings_values');
 
   const processes = Array.from(processMap.values());
   processes.sort((a, b) => a.code.localeCompare(b.code));
@@ -1624,33 +1681,13 @@ async function applySnapshotToSql(client, snapshot) {
   }
   settings.extraTime.percent = percentValue;
   settings.extraTime.minimum = minimumValue;
-  await client.query(
-    `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
-     VALUES (1,$1,$2,$3,NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET enabled = EXCLUDED.enabled,
-           percent = EXCLUDED.percent,
-           minimum_hours = EXCLUDED.minimum_hours,
-           updated_at = NOW()` ,
-    [extraEnabled, percentValue, minimumValue]
-  );
+  await upsertSettingValue(client, 'autoweight.enabled', { boolean: extraEnabled });
+  await upsertSettingValue(client, 'autoweight.percent', { number: percentValue });
+  await upsertSettingValue(client, 'autoweight.minimum_hours', { number: minimumValue });
 
   const logLimit = Number(settings.logLimit);
-  if (Number.isFinite(logLimit) && logLimit > 0) {
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,$1,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
-      [Math.round(logLimit)]
-    );
-  } else {
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,50,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
-      [50]
-    );
-  }
+  const logLimitValue = Number.isFinite(logLimit) && logLimit > 0 ? Math.round(logLimit) : 50;
+  await upsertSettingValue(client, 'journal.max_rows', { number: logLimitValue });
 
   if (isPlainObject(settings.tableColumns)) {
     for (const [key, width] of Object.entries(settings.tableColumns)) {
@@ -1700,22 +1737,12 @@ async function applySnapshotToSql(client, snapshot) {
     historyDailyLimit = 3;
   }
   historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
-  await client.query(
-    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
-     VALUES (1,$1,$2,$3,$4,NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-           snapshot_retention = EXCLUDED.snapshot_retention,
-           history_limit = EXCLUDED.history_limit,
-           history_daily_limit = EXCLUDED.history_daily_limit,
-           updated_at = NOW()` ,
-    [
-      allowForce,
-      Number.isFinite(snapshotRetention) ? snapshotRetention : 50,
-      historyLimit,
-      historyDailyLimit
-    ]
-  );
+  await upsertSettingValue(client, 'admin.allow_force_overwrite', { boolean: allowForce });
+  await upsertSettingValue(client, 'admin.snapshot_retention', {
+    number: Number.isFinite(snapshotRetention) ? snapshotRetention : 50
+  });
+  await upsertSettingValue(client, 'admin.history_limit', { number: historyLimit });
+  await upsertSettingValue(client, 'admin.history_daily_limit', { number: historyDailyLimit });
 
   const ignoredStatuses = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates : [];
   for (const status of ignoredStatuses) {
@@ -1895,12 +1922,12 @@ app.get('/api/admin/history', async (req, res) => {
 
   if (actor) {
     params.push(`%${actor.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.actor, s.meta->>'actor')) LIKE $${params.length})`);
+    conditions.push(`LOWER(COALESCE(r.actor, s.actor)) LIKE $${params.length}`);
   }
 
   if (source) {
     params.push(`%${source.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.source, s.meta->>'source')) LIKE $${params.length})`);
+    conditions.push(`LOWER(COALESCE(r.source, s.source)) LIKE $${params.length}`);
   }
 
   if (from) {
@@ -1920,8 +1947,11 @@ app.get('/api/admin/history', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.hash, s.created_at, s.meta_text,
+              COALESCE(r.actor, s.actor) AS actor,
+              COALESCE(r.source, s.source) AS source,
+              COALESCE(r.note, s.note) AS note
+         FROM state_snapshots AS s
          LEFT JOIN revisions AS r ON r.rev = s.rev
         ${whereClause}
         ORDER BY s.created_at DESC, s.rev DESC
@@ -1946,8 +1976,11 @@ app.get('/api/admin/history/:hash', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, s.snapshot, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.hash, s.created_at, s.meta_text, s.state_text,
+              COALESCE(r.actor, s.actor) AS actor,
+              COALESCE(r.source, s.source) AS source,
+              COALESCE(r.note, s.note) AS note
+         FROM state_snapshots AS s
          LEFT JOIN revisions AS r ON r.rev = s.rev
         WHERE s.hash = $1
         ORDER BY s.created_at DESC, s.rev DESC
@@ -1959,15 +1992,15 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const meta = parseJsonColumn(row.meta, null);
-    const snapshot = parseJsonColumn(row.snapshot, null);
+    const meta = parseJsonColumn(row.meta_text, null);
+    const snapshot = parseJsonColumn(row.state_text, null);
     let baseRev = null;
     let baseHash = null;
     let baseSnapshot = {};
     try {
       const { rows: prevRows } = await pool.query(
-        `SELECT rev, hash, snapshot
-           FROM planner_state_snapshots
+        `SELECT rev, hash, state_text
+           FROM state_snapshots
           WHERE rev < $1
           ORDER BY rev DESC
           LIMIT 1`,
@@ -1976,7 +2009,7 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       if (prevRows.length) {
         baseRev = Number(prevRows[0].rev || 0) || null;
         baseHash = prevRows[0].hash || null;
-        baseSnapshot = parseJsonColumn(prevRows[0].snapshot, {}) || {};
+        baseSnapshot = parseJsonColumn(prevRows[0].state_text, {}) || {};
       }
     } catch (err) {
       console.warn('Failed to load previous snapshot for diff', err);
@@ -2011,7 +2044,7 @@ app.delete('/api/admin/history', async (_req, res) => {
   try {
     const latest = await loadLatestSnapshot();
     if (!latest) {
-      const result = await pool.query('TRUNCATE planner_state_snapshots RESTART IDENTITY');
+      const result = await pool.query('TRUNCATE state_snapshots RESTART IDENTITY');
       const removed = Number(result?.rowCount) || 0;
       logSaveEvent('info', 'history cleared (no snapshots to keep)', { requestId, removed });
       res.json({ ok: true, removed, keptRev: null, keptHash: null });
@@ -2019,7 +2052,7 @@ app.delete('/api/admin/history', async (_req, res) => {
     }
 
     const result = await pool.query(
-      'DELETE FROM planner_state_snapshots WHERE rev <> $1',
+      'DELETE FROM state_snapshots WHERE rev <> $1',
       [latest.rev]
     );
     const removed = Number(result?.rowCount) || 0;
@@ -2050,7 +2083,15 @@ app.post('/api/admin/snapshot', async (req, res) => {
       note: note || undefined
     });
     const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-      await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, meta);
+      await insertSnapshotRow(
+        client,
+        nextRev,
+        latest.snapshot,
+        latest.stateString,
+        latest.hash,
+        meta,
+        { actor, source, note }
+      );
       return await loadLatestSnapshot(client);
     });
     const stored = result || await loadLatestSnapshot();
@@ -2088,8 +2129,8 @@ app.post('/api/admin/rollback', async (req, res) => {
   }
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.snapshot, s.hash, s.meta, s.created_at
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.state_text, s.hash, s.meta_text, s.created_at
+         FROM state_snapshots AS s
         WHERE s.hash = $1
         ORDER BY s.created_at DESC, s.rev DESC
         LIMIT 1`,
@@ -2100,8 +2141,9 @@ app.post('/api/admin/rollback', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const snapshot = parseJsonColumn(row.snapshot, {});
-    const stateString = JSON.stringify(snapshot);
+    const snapshot = parseJsonColumn(row.state_text, {});
+    const storedState = typeof row.state_text === 'string' ? row.state_text : null;
+    const stateString = storedState && storedState.trim() ? storedState : JSON.stringify(snapshot);
     const hash = computeSnapshotHash(stateString);
     const actor = sanitizeString(req.body?.actor) || 'admin';
     const note = sanitizeString(req.body?.note) || null;
@@ -2111,7 +2153,7 @@ app.post('/api/admin/rollback', async (req, res) => {
       note: note || undefined,
       rollbackFrom: targetHash,
       baseRev: Number(row.rev || 0),
-      previousMeta: parseJsonColumn(row.meta, null)
+      previousMeta: parseJsonColumn(row.meta_text, null)
     });
 
     const requestId = createRequestId();
