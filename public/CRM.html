@@ -688,11 +688,11 @@
     </div>
 
     <details class="section-card surface" open>
-      <summary>План переделов (статус, % выполнения, сроки, Руб/часов)</summary>
+      <summary>План переделов (статус, прогресс, сроки, Руб/часов)</summary>
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th>Передел</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th>Передел</th><th>Готово</th><th>Прогресс, %</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
           <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -766,6 +766,26 @@ const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка'
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
+const normalizeWriteMode=value=>{
+  if(value===null||value===undefined) return DATA_WRITE_MODES.both;
+  const normalized=String(value).trim().toLowerCase();
+  if(normalized===DATA_WRITE_MODES.crm) return DATA_WRITE_MODES.crm;
+  if(normalized===DATA_WRITE_MODES.planner) return DATA_WRITE_MODES.planner;
+  return DATA_WRITE_MODES.both;
+};
+let currentWriteMode=DATA_WRITE_MODES.both;
+const crmWriteAccessEnabled=()=> currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
+let lastCrmWriteBlockedAt=0;
+const applyCrmWriteAccess=()=>{
+  const canWrite=crmWriteAccessEnabled();
+  if(document.body){
+    document.body.classList.toggle('crm-write-disabled', !canWrite);
+  }
+  const newOrderBtn=$('#newOrderBtn');
+  if(newOrderBtn){ newOrderBtn.disabled = !canWrite; }
+};
+
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
     try{return structuredClone(value);}catch(_err){/* ignore */}
@@ -811,6 +831,7 @@ function parseNumericValue(raw){
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard()],currentBoardId:null};
 if(!state.currentBoardId&&Array.isArray(state.boards)&&state.boards.length){state.currentBoardId=state.boards[0].id;}
 persistLocal();
+applyCrmWriteAccess();
 function load(){
   if(window.__CRM_INITIAL_STATE__){
     const initial=deepClone(window.__CRM_INITIAL_STATE__);
@@ -1747,6 +1768,14 @@ function buildCrmOrdersSummary(snapshot){
 async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
+  if(!crmWriteAccessEnabled()){
+    const now=Date.now();
+    if(now - lastCrmWriteBlockedAt > 5000){
+      showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
+      lastCrmWriteBlockedAt = now;
+    }
+    return;
+  }
   crmSyncInFlight=true;
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
     crmSyncInFlight=false;
@@ -1780,6 +1809,14 @@ async function pushCrmToServer(){
     }
     if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
     syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+    const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
+    currentWriteMode = adminWriteMode;
+    applyCrmWriteAccess();
+    if(adminWriteMode === DATA_WRITE_MODES.planner){
+      const err = new Error('Изменения разрешены только из Планировщика');
+      err.code = 'WRITE_MODE_FORBIDDEN';
+      throw err;
+    }
     plannerSnapshot.crm=snapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
@@ -1830,6 +1867,7 @@ async function pushCrmToServer(){
       if(baseEtag) metaPayload.ifMatch=baseEtag;
       else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
     }
+    metaPayload.channel='crm';
     return {
       stateString:JSON.stringify(plannerSnapshot),
       metaPayload
@@ -1855,6 +1893,9 @@ async function pushCrmToServer(){
     }catch(err){
       crmSuppressNext=false;
       lastError=err;
+      if(err && err.code==='WRITE_MODE_FORBIDDEN'){
+        break;
+      }
       if(err && err.name==='PlannerConflictError' && attempt<2){
         continue;
       }
@@ -1869,6 +1910,12 @@ async function pushCrmToServer(){
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
       console.error('CRM: load planner state failed',lastError.originalError||lastError);
       showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+      const now=Date.now();
+      if(now - lastCrmWriteBlockedAt > 5000){
+        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+        lastCrmWriteBlockedAt = now;
+      }
     }else{
       console.error('CRM sync failed',lastError);
       const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
@@ -1904,6 +1951,8 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
     try{
       const parsed=JSON.parse(payload.state);
       syncCrmNotificationsMutedFromPlanner(parsed);
+      currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
+      applyCrmWriteAccess();
       if(parsed&&parsed.crm){
         applyRemoteCrm(parsed.crm);
         showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});

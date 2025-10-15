@@ -44,6 +44,21 @@ const PG_UNDEFINED_TABLE = '42P01';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
 
+const WRITE_CHANNELS = Object.freeze({
+  CRM: 'crm',
+  PLANNER: 'planner',
+  ADMIN: 'admin',
+  SYSTEM: 'system'
+});
+
+const WRITE_MODES = Object.freeze({
+  CRM: 'crm',
+  PLANNER: 'planner',
+  BOTH: 'both'
+});
+
+const DEFAULT_WRITE_MODE = WRITE_MODES.BOTH;
+
 const SHARED_BOOLEAN_PREF_KEYS = [
   'autosaveOn',
   'shiftOnProgress',
@@ -123,6 +138,79 @@ function titleFromCode(code) {
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function normalizeWriteMode(value) {
+  if (value === null || value === undefined) {
+    return DEFAULT_WRITE_MODE;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_WRITE_MODE;
+  }
+  if (normalized === WRITE_MODES.CRM) {
+    return WRITE_MODES.CRM;
+  }
+  if (normalized === WRITE_MODES.PLANNER) {
+    return WRITE_MODES.PLANNER;
+  }
+  return WRITE_MODES.BOTH;
+}
+
+function normalizeChannelValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === WRITE_CHANNELS.CRM || normalized.startsWith('crm')) {
+    return WRITE_CHANNELS.CRM;
+  }
+  if (normalized === WRITE_CHANNELS.PLANNER || normalized.startsWith('planner')) {
+    return WRITE_CHANNELS.PLANNER;
+  }
+  if (normalized === WRITE_CHANNELS.ADMIN || normalized.includes('admin')) {
+    return WRITE_CHANNELS.ADMIN;
+  }
+  if (normalized === WRITE_CHANNELS.SYSTEM
+      || normalized.includes('system')
+      || normalized.includes('startup')
+      || normalized.includes('rollback')) {
+    return WRITE_CHANNELS.SYSTEM;
+  }
+  return WRITE_CHANNELS.PLANNER;
+}
+
+function classifyWriteChannel({ channel = null, source = null } = {}) {
+  const explicit = normalizeChannelValue(channel);
+  if (explicit) {
+    return explicit;
+  }
+  const derived = normalizeChannelValue(source);
+  if (derived) {
+    return derived;
+  }
+  return WRITE_CHANNELS.PLANNER;
+}
+
+function isWriteChannelAllowed(writeMode, channel) {
+  const normalizedMode = normalizeWriteMode(writeMode);
+  const normalizedChannel = channel ? channel : WRITE_CHANNELS.PLANNER;
+  if (normalizedChannel === WRITE_CHANNELS.SYSTEM || normalizedChannel === WRITE_CHANNELS.ADMIN) {
+    return true;
+  }
+  if (normalizedMode === WRITE_MODES.BOTH) {
+    return true;
+  }
+  if (normalizedMode === WRITE_MODES.CRM) {
+    return normalizedChannel === WRITE_CHANNELS.CRM;
+  }
+  if (normalizedMode === WRITE_MODES.PLANNER) {
+    return normalizedChannel === WRITE_CHANNELS.PLANNER;
+  }
+  return true;
+}
+
 function buildEmptySnapshot() {
   return {
     routeOverrides: [],
@@ -164,7 +252,7 @@ function buildEmptySnapshot() {
         extraTime: { percent: DEFAULT_EXTRA_PERCENT, minimum: DEFAULT_EXTRA_MINIMUM },
         crmStageMapping: {},
         logLimit: 50,
-        admin: { allowForceOverwrite: false, snapshotRetention: 50 },
+        admin: { allowForceOverwrite: false, snapshotRetention: 50, writeMode: DEFAULT_WRITE_MODE },
         updatedAt: ''
       },
       ignoredStates: [],
@@ -224,6 +312,7 @@ async function ensurePlannerSettingsSchema(client) {
       snapshot_retention INTEGER NOT NULL DEFAULT 50,
       history_limit INTEGER NOT NULL DEFAULT 50,
       history_daily_limit INTEGER NOT NULL DEFAULT 3,
+      write_mode TEXT NOT NULL DEFAULT 'both',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -234,6 +323,7 @@ async function ensurePlannerSettingsSchema(client) {
       snapshot_retention INTEGER,
       history_limit INTEGER,
       history_daily_limit INTEGER,
+      write_mode TEXT,
       updated_at TIMESTAMPTZ,
       rev BIGINT NOT NULL REFERENCES revisions(rev),
       op CHAR(1) NOT NULL,
@@ -247,16 +337,31 @@ async function ensurePlannerSettingsSchema(client) {
     'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
   );
   await runner.query(
+    "ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS write_mode TEXT"
+  );
+  await runner.query(
     'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_limit INTEGER'
   );
   await runner.query(
     'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
   );
   await runner.query(
+    "ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS write_mode TEXT"
+  );
+  await runner.query(
     'ALTER TABLE settings_admin ALTER COLUMN history_limit SET DEFAULT 50'
   );
   await runner.query(
     'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET DEFAULT 3'
+  );
+  await runner.query(
+    "UPDATE settings_admin SET write_mode = 'both' WHERE write_mode IS NULL OR write_mode NOT IN ('crm','planner','both')"
+  );
+  await runner.query(
+    "ALTER TABLE settings_admin ALTER COLUMN write_mode SET DEFAULT 'both'"
+  );
+  await runner.query(
+    'ALTER TABLE settings_admin ALTER COLUMN write_mode SET NOT NULL'
   );
   await runner.query(
     'ALTER TABLE settings_admin ALTER COLUMN updated_at SET DEFAULT NOW()'
@@ -695,6 +800,7 @@ function normalizeRequestMeta(rawMeta) {
     source: null,
     note: null,
     summary: null,
+    channel: null,
     meta: null,
     concurrency: {
       baseHash: null,
@@ -730,6 +836,8 @@ function normalizeRequestMeta(rawMeta) {
   delete working.forceOverwrite;
   delete working.force;
   delete working.ifMatch;
+  const channel = sanitizeString(working.channel);
+  delete working.channel;
 
   const actor = sanitizeString(working.actor || working.user || working.username || working.owner);
   const source = sanitizeString(working.source || working.changeType || working.stage || working.reason);
@@ -755,6 +863,11 @@ function normalizeRequestMeta(rawMeta) {
     working.summary = summary;
   } else {
     delete working.summary;
+  }
+
+  if (channel) {
+    response.channel = channel;
+    working.channel = channel;
   }
 
   response.meta = sanitizeMetaForStorage(working);
@@ -1043,7 +1156,8 @@ async function persistSnapshotWithSql(options) {
     snapshot,
     stateString = null,
     hash = null,
-    meta = null
+    meta = null,
+    channel = null
   } = options || {};
 
   let parsedSnapshot = null;
@@ -1270,6 +1384,24 @@ async function loadSharedPreferences(runner) {
   }
 }
 
+async function getCurrentWriteMode(runner) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    const { rows } = await executor.query(
+      'SELECT write_mode FROM settings_admin WHERE id = 1'
+    );
+    if (rows.length && rows[0] && rows[0].write_mode) {
+      return normalizeWriteMode(rows[0].write_mode);
+    }
+    return DEFAULT_WRITE_MODE;
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return DEFAULT_WRITE_MODE;
+    }
+    throw err;
+  }
+}
+
 function applySharedPreferencesToSnapshot(snapshot, prefMap) {
   if (!isPlainObject(snapshot) || !(prefMap instanceof Map) || prefMap.size === 0) {
     return;
@@ -1441,7 +1573,8 @@ async function ensureSqlHydrated() {
       snapshot: latest.snapshot,
       stateString: latest.stateString,
       hash: latest.hash,
-      meta: hydrationMeta
+      meta: hydrationMeta,
+      channel: WRITE_CHANNELS.SYSTEM
     });
 
     cachedSnapshot = persisted;
@@ -1602,6 +1735,7 @@ function mergeOrderRecords(target, source) {
 
 async function applySnapshotToSql(client, snapshot) {
   await ensurePlannerSettingsSchema(client);
+  const previousWriteMode = await getCurrentWriteMode(client);
   const tasks = Array.isArray(snapshot.t) ? snapshot.t : [];
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
@@ -2003,20 +2137,23 @@ async function applySnapshotToSql(client, snapshot) {
     historyDailyLimit = 3;
   }
   historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
+  const writeMode = normalizeWriteMode(adminSettings.writeMode || previousWriteMode);
   await client.query(
-    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
-     VALUES (1,$1,$2,$3,$4,NOW())
+    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, write_mode, updated_at)
+     VALUES (1,$1,$2,$3,$4,$5,NOW())
      ON CONFLICT (id) DO UPDATE
        SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
            snapshot_retention = EXCLUDED.snapshot_retention,
            history_limit = EXCLUDED.history_limit,
            history_daily_limit = EXCLUDED.history_daily_limit,
+           write_mode = EXCLUDED.write_mode,
            updated_at = NOW()` ,
     [
       allowForce,
       Number.isFinite(snapshotRetention) ? snapshotRetention : 50,
       historyLimit,
-      historyDailyLimit
+      historyDailyLimit,
+      writeMode
     ]
   );
 
@@ -2083,6 +2220,22 @@ app.put('/api/state', async (req, res) => {
       ? null
       : (baseHashFromMeta || (ifMatch.any ? null : ifMatch.hash));
 
+    await ensurePlannerSettingsSchema();
+    const channel = classifyWriteChannel({
+      channel: normalizedMeta.channel
+        || sanitizeString(requestMeta?.channel)
+        || sanitizeString(requestMeta?.meta?.channel),
+      source: normalizedMeta.source
+        || sanitizeString(requestMeta?.source)
+        || sanitizeString(requestMeta?.meta?.source)
+    });
+    const writeMode = await getCurrentWriteMode();
+    if (!isWriteChannelAllowed(writeMode, channel)) {
+      logSaveEvent('warn', 'write rejected due to mode', { requestId, channel, writeMode });
+      res.status(403).json({ error: 'Write mode restriction', channel, writeMode });
+      return;
+    }
+
     if (!normalizedMeta.concurrency.forceOverwrite
         && expectedHash
         && currentHash
@@ -2104,13 +2257,15 @@ app.put('/api/state', async (req, res) => {
       actor: actor || undefined,
       source: source || undefined,
       note: note || undefined,
-      summary: summary || undefined
+      summary: summary || undefined,
+      channel
     });
 
     logSaveEvent('info', 'save request received', {
       requestId,
       actor,
       source,
+      channel,
       expectedHash: expectedHash || null,
       currentHash,
       forceOverwrite: normalizedMeta.concurrency.forceOverwrite
@@ -2123,7 +2278,8 @@ app.put('/api/state', async (req, res) => {
       snapshot,
       stateString,
       hash,
-      meta: storedMeta
+      meta: storedMeta,
+      channel
     });
 
     const etag = computeEtag(latest.hash);
@@ -2357,7 +2513,8 @@ app.post('/api/admin/snapshot', async (req, res) => {
       ...(latest.meta || {}),
       actor,
       source,
-      note: note || undefined
+      note: note || undefined,
+      channel: WRITE_CHANNELS.ADMIN
     });
     const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
       await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, meta);
@@ -2421,7 +2578,8 @@ app.post('/api/admin/rollback', async (req, res) => {
       note: note || undefined,
       rollbackFrom: targetHash,
       baseRev: Number(row.rev || 0),
-      previousMeta: parseJsonColumn(row.meta, null)
+      previousMeta: parseJsonColumn(row.meta, null),
+      channel: WRITE_CHANNELS.ADMIN
     });
 
     const requestId = createRequestId();
@@ -2435,7 +2593,8 @@ app.post('/api/admin/rollback', async (req, res) => {
       snapshot,
       stateString,
       hash,
-      meta: rollbackMeta
+      meta: rollbackMeta,
+      channel: WRITE_CHANNELS.ADMIN
     });
 
     const etag = computeEtag(latest.hash);

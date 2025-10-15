@@ -19,6 +19,14 @@ let ordersTableInfo = null;
 const PG_UNDEFINED_TABLE = '42P01';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
+const WRITE_MODES = Object.freeze({
+  CRM: 'crm',
+  PLANNER: 'planner',
+  BOTH: 'both'
+});
+
+const DEFAULT_WRITE_MODE = WRITE_MODES.BOTH;
+
 const SHARED_BOOLEAN_PREF_KEYS = [
   'autosaveOn',
   'shiftOnProgress',
@@ -59,6 +67,23 @@ function normalizeStage(code) {
 function titleFromCode(code) {
   if (!code) return '';
   return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizeWriteMode(value) {
+  if (value === null || value === undefined) {
+    return DEFAULT_WRITE_MODE;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) {
+    return DEFAULT_WRITE_MODE;
+  }
+  if (normalized === WRITE_MODES.CRM) {
+    return WRITE_MODES.CRM;
+  }
+  if (normalized === WRITE_MODES.PLANNER) {
+    return WRITE_MODES.PLANNER;
+  }
+  return WRITE_MODES.BOTH;
 }
 
 function resetOrdersTableInfo() {
@@ -122,6 +147,7 @@ async function ensurePlannerSettingsSchema(client) {
       snapshot_retention INTEGER NOT NULL DEFAULT 50,
       history_limit INTEGER NOT NULL DEFAULT 50,
       history_daily_limit INTEGER NOT NULL DEFAULT 3,
+      write_mode TEXT NOT NULL DEFAULT 'both',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
@@ -132,6 +158,7 @@ async function ensurePlannerSettingsSchema(client) {
       snapshot_retention INTEGER,
       history_limit INTEGER,
       history_daily_limit INTEGER,
+      write_mode TEXT,
       updated_at TIMESTAMPTZ,
       rev BIGINT NOT NULL REFERENCES revisions(rev),
       op CHAR(1) NOT NULL,
@@ -145,16 +172,31 @@ async function ensurePlannerSettingsSchema(client) {
     'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
   );
   await client.query(
+    "ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS write_mode TEXT"
+  );
+  await client.query(
     'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_limit INTEGER'
   );
   await client.query(
     'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
   );
   await client.query(
+    "ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS write_mode TEXT"
+  );
+  await client.query(
     'ALTER TABLE settings_admin ALTER COLUMN history_limit SET DEFAULT 50'
   );
   await client.query(
     'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET DEFAULT 3'
+  );
+  await client.query(
+    "UPDATE settings_admin SET write_mode = 'both' WHERE write_mode IS NULL OR write_mode NOT IN ('crm','planner','both')"
+  );
+  await client.query(
+    "ALTER TABLE settings_admin ALTER COLUMN write_mode SET DEFAULT 'both'"
+  );
+  await client.query(
+    'ALTER TABLE settings_admin ALTER COLUMN write_mode SET NOT NULL'
   );
   await client.query(
     'UPDATE settings_admin SET history_limit = 50 WHERE history_limit IS NULL'
@@ -1034,16 +1076,18 @@ function serializeMeta(meta) {
       historyDailyLimit = 3;
     }
     historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
+    const writeMode = normalizeWriteMode(adminSettings.writeMode);
     await client.query(
-      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
-       VALUES (1,$1,$2,$3,$4,NOW())
+      `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, write_mode, updated_at)
+       VALUES (1,$1,$2,$3,$4,$5,NOW())
        ON CONFLICT (id) DO UPDATE
          SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
              snapshot_retention = EXCLUDED.snapshot_retention,
              history_limit = EXCLUDED.history_limit,
              history_daily_limit = EXCLUDED.history_daily_limit,
+             write_mode = EXCLUDED.write_mode,
              updated_at = NOW()` ,
-      [allowForce, snapshotRetention, historyLimit, historyDailyLimit]
+      [allowForce, snapshotRetention, historyLimit, historyDailyLimit, writeMode]
     );
 
     if (isPlainObject(settings.tableColumns)) {

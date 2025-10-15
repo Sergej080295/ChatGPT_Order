@@ -26,7 +26,7 @@
 * **Исторические таблицы `orders_hist`, `order_process_hist`, `capacity_by_process_hist`** фиксируют состояние при каждой ревизии и позволяют откатывать изменения или анализировать историю по времени.【F:migrations/003_full_sql_schema.sql†L221-L274】
 
 ### 1.5 Настройки и пользовательские списки
-* **`settings_admin` / `settings_admin_hist`** — глобальные параметры (разрешение форс-перезаписи, срок хранения снимков, лимиты журнала). Миграция `013` добавила поля `history_limit` и `history_daily_limit`, а история автоматически пополняется триггером при каждом изменении.【F:migrations/013_settings_admin_limits.sql†L1-L47】【F:server.js†L1700-L1713】
+* **`settings_admin` / `settings_admin_hist`** — глобальные параметры (разрешение форс-перезаписи, срок хранения снимков, лимиты журнала и режим записи данных `write_mode`: `crm`, `planner` или `both`). Миграция `013` добавила поля `history_limit` и `history_daily_limit`, а `017` закрепила колонку `write_mode`. История автоматически пополняется триггером при каждом изменении.【F:migrations/013_settings_admin_limits.sql†L1-L47】【F:migrations/017_settings_write_mode.sql†L1-L24】【F:server.js†L1700-L1716】
 * **`settings_journal`** — хранит лимит записей журнала. Обновляется при изменении настройки «Количество записей в журнале» и фиксируется в истории `settings_journal_hist`.【F:migrations/003_full_sql_schema.sql†L125-L135】【F:server.js†L1677-L1689】
 * **`settings_column_widths`** — пользовательские ширины колонок таблицы заказов; после очистки таблицы сервер пересоздаёт значения из текущих настроек и журналирует изменения в `settings_column_widths_hist`.【F:migrations/003_full_sql_schema.sql†L135-L143】【F:server.js†L1655-L1668】
 * **`settings_mapping`** — сопоставление стадий CRM и переделов планировщика (`planner_process_id`) с флагом игнорирования. Таблица используется для автоматической маршрутизации заказов при импорте из CRM.【F:migrations/003_full_sql_schema.sql†L143-L153】【F:server.js†L1670-L1676】
@@ -52,7 +52,7 @@
 2. **Автогидратация.** После `npm start` проверьте логи на наличие `auto hydration completed` и убедитесь, что `SELECT COUNT(*) FROM orders;` возвращает значение > 0.
 3. **Общие настройки.** Измените параметры в разделе «Общие/Администрирование», нажмите «Применить» и выполните запросы:
    ```sql
-   SELECT allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit FROM settings_admin;
+  SELECT allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, write_mode FROM settings_admin;
    SELECT pref_key, bool_value FROM settings_shared_preferences ORDER BY pref_key;
    SELECT column_key, width_px FROM settings_column_widths ORDER BY column_key;
    SELECT crm_stage, planner_process_id, is_ignored FROM settings_mapping ORDER BY crm_stage;

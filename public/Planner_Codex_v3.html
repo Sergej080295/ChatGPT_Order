@@ -1212,6 +1212,13 @@ body.overview-fs-active{overflow:hidden}
           <label>Снимков на день (N)
             <input id="adminHistoryDailyLimit" type="number" min="1" max="100" step="1" />
           </label>
+          <label>Запись данных
+            <select id="adminWriteMode">
+              <option value="both">CRM и Планировщик</option>
+              <option value="crm">Только CRM</option>
+              <option value="planner">Только Планировщик</option>
+            </select>
+          </label>
           <label class="admin-force-toggle">
             <span>Разрешить перезапись без проверки версий</span>
             <input id="adminAllowForceOverwrite" type="checkbox" />
@@ -2113,40 +2120,48 @@ function userCanEdit(){
   return accessMode === ACCESS_MODES.edit;
 }
 
+function plannerWriteAccessEnabled(){
+  const mode = normalizeWriteModeSetting(adminSettingsState.writeMode);
+  return mode === DATA_WRITE_MODES.both || mode === DATA_WRITE_MODES.planner;
+}
+
 function applyAccessMode(){
   const canEdit = userCanEdit();
+  const plannerCanWrite = plannerWriteAccessEnabled();
+  const effectiveEdit = canEdit && plannerCanWrite;
   if(document.body){
-    document.body.classList.toggle('view-only', !canEdit);
+    document.body.classList.toggle('view-only', !effectiveEdit);
+    document.body.classList.toggle('write-disabled', !plannerCanWrite);
   }
   const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#saveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
-      el.disabled = !canEdit;
+      el.disabled = !effectiveEdit;
     }
   });
   const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
-      el.disabled = !canEdit;
+      el.disabled = !effectiveEdit;
     }
   });
   ['#file'].forEach(sel=>{
     const input = $(sel);
-    if(input){ input.disabled = !canEdit; }
+    if(input){ input.disabled = !effectiveEdit; }
   });
   const textareas = ['#exceptionsText','#reserveText'];
   textareas.forEach(sel=>{
     const el = $(sel);
-    if(el){ el.readOnly = !canEdit; }
+    if(el){ el.readOnly = !effectiveEdit; }
   });
-  $$('#tasksTable tbody tr').forEach(tr=>{ tr.draggable = canEdit; });
+  $$('#tasksTable tbody tr').forEach(tr=>{ tr.draggable = effectiveEdit; });
   $$('#tasksTable [contenteditable]').forEach(cell=>{
-    cell.setAttribute('contenteditable', canEdit ? 'true' : 'false');
+    cell.setAttribute('contenteditable', effectiveEdit ? 'true' : 'false');
   });
-  $$('#tasksTable input[data-reserve], #tasksTable input[data-done]').forEach(el=>{ el.disabled = !canEdit; });
-  $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !canEdit; });
+  $$('#tasksTable input[data-reserve], #tasksTable input[data-done]').forEach(el=>{ el.disabled = !effectiveEdit; });
+  $$('#tasksTable .lock-btn, #tasksTable [data-del]').forEach(el=>{ if('disabled' in el) el.disabled = !effectiveEdit; });
   $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
   if(typeof renderTasksTable === 'function'){ renderTasksTable(); }
   refreshSystemSettingsAccess();
@@ -2642,6 +2657,7 @@ const DEFAULT_TABLE_COLUMN_WIDTHS = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
   return acc;
 }, {});
 const DEFAULT_EXTRA_TIME_SETTINGS = { percent:5, minimum:0.25 };
+const DATA_WRITE_MODES = { both:'both', crm:'crm', planner:'planner' };
 const TABLE_COLUMN_LABEL_MAP = TABLE_COLUMN_DEFS.reduce((acc, def)=>{
   acc[def.key] = def.settingsLabel || def.label;
   return acc;
@@ -2672,22 +2688,23 @@ let stateMeta = {
   csvTimestamp:'',
   manualTimestamp:'',
   history:[],
-  settings:{
-    capacity: { ...DEFAULT_CAP },
-    parallel: { ...DEFAULT_PARALLEL },
-    plannerMode: plannerMode,
-    notificationsMuted: false,
-    tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
-    extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
-    crmStageMapping: {},
-    logLimit: DEFAULT_LOG_LIMIT,
-    admin: {
-      historyLimit: ADMIN_HISTORY_LIMIT_DEFAULT,
-      historyDailyLimit: ADMIN_HISTORY_DAILY_LIMIT_DEFAULT,
-      allowForceOverwrite: false
+    settings:{
+      capacity: { ...DEFAULT_CAP },
+      parallel: { ...DEFAULT_PARALLEL },
+      plannerMode: plannerMode,
+      notificationsMuted: false,
+      tableColumns: { ...DEFAULT_TABLE_COLUMN_WIDTHS },
+      extraTime: { ...DEFAULT_EXTRA_TIME_SETTINGS },
+      crmStageMapping: {},
+      logLimit: DEFAULT_LOG_LIMIT,
+      admin: {
+        historyLimit: ADMIN_HISTORY_LIMIT_DEFAULT,
+        historyDailyLimit: ADMIN_HISTORY_DAILY_LIMIT_DEFAULT,
+        allowForceOverwrite: false,
+        writeMode: DATA_WRITE_MODES.both
+      },
+      updatedAt: ''
     },
-    updatedAt: ''
-  },
   ignoredStates: []
 };
 
@@ -2743,6 +2760,7 @@ let lastDiffApplied=null;    // запомненный diff для выборо�
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
 let crmStageTasks = [];
 const MODE_SCOPED_KEYS = [PLANNER_MODES.csv, PLANNER_MODES.crm];
+let lastWriteModeBlockAt = 0;
 function toIsoSafe(value){
   if(!value) return '';
   const date = value instanceof Date ? value : new Date(value);
@@ -3155,6 +3173,20 @@ function sanitizeLogLimit(raw){
   return Math.max(0, Math.round(num));
 }
 
+function normalizeWriteModeSetting(value){
+  if(value === null || value === undefined){
+    return DATA_WRITE_MODES.both;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if(normalized === DATA_WRITE_MODES.crm){
+    return DATA_WRITE_MODES.crm;
+  }
+  if(normalized === DATA_WRITE_MODES.planner){
+    return DATA_WRITE_MODES.planner;
+  }
+  return DATA_WRITE_MODES.both;
+}
+
 function sanitizeAdminSettings(raw, fallback = adminSettingsState){
   const base = raw && typeof raw === 'object' ? raw : {};
   const defaults = fallback && typeof fallback === 'object' ? fallback : {};
@@ -3165,7 +3197,8 @@ function sanitizeAdminSettings(raw, fallback = adminSettingsState){
   let historyDailyLimit = Number.isFinite(dailyRaw) ? Math.round(dailyRaw) : ADMIN_HISTORY_DAILY_LIMIT_DEFAULT;
   historyDailyLimit = Math.max(1, Math.min(historyLimit, historyDailyLimit));
   const allowForceOverwrite = base.allowForceOverwrite === true || base.allowForceOverwrite === 'true';
-  return { historyLimit, historyDailyLimit, allowForceOverwrite };
+  const writeMode = normalizeWriteModeSetting(base.writeMode ?? defaults.writeMode ?? DATA_WRITE_MODES.both);
+  return { historyLimit, historyDailyLimit, allowForceOverwrite, writeMode };
 }
 
 function getEffectiveLogLimit(){
@@ -12416,7 +12449,8 @@ function persistNow(stageOverride, opts={}){
           authors: authorsMap,
           ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
           time: nowStr,
-          changeType
+          changeType,
+          channel: DATA_WRITE_MODES.planner
         })
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
@@ -12620,6 +12654,21 @@ function persistNow(stageOverride, opts={}){
     const announcementDiff = diffChanged ? filterDiffForAnnouncements(diff) : diff;
     const announcementChanged = diffChanged ? diffHasChanges(announcementDiff) : false;
     const isSettingsChange = Array.isArray(settingsChange?.entries) && settingsChange.entries.length > 0;
+    if(!isSettingsChange && source !== 'system'){
+      const currentWriteMode = normalizeWriteModeSetting(adminSettingsState.writeMode);
+      if(currentWriteMode === DATA_WRITE_MODES.crm){
+        const nowBlock = Date.now();
+        if(nowBlock - lastWriteModeBlockAt > 5000){
+          showToast({
+            title:'Сохранение отключено',
+            message:'Изменения разрешены только из CRM. Измените настройку «Запись данных», чтобы править из Планировщика.',
+            tone:'warn'
+          });
+          lastWriteModeBlockAt = nowBlock;
+        }
+        return Promise.resolve(false);
+      }
+    }
     const hadChanges = diffChanged || force || !rawPrev || isSettingsChange;
     let authorsMap = null;
     let settingsSummary = '';
@@ -12815,6 +12864,7 @@ function persistNow(stageOverride, opts={}){
           updatedAt: stateMeta.settings?.updatedAt || nowStr
         };
         const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
+        const metaChannel = isSettingsChange ? 'admin' : DATA_WRITE_MODES.planner;
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
@@ -12831,6 +12881,7 @@ function persistNow(stageOverride, opts={}){
           ordersSummary: remoteOrdersSummary,
           time: nowStr,
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
+          channel: metaChannel,
           ...remoteExtras
         })
           .then(()=>{ setDataMode('remote'); return true; })
@@ -13696,6 +13747,11 @@ function renderAdminSettingsUI(){
     dailyInput.value = String(source.historyDailyLimit);
     dailyInput.disabled = !canEdit;
   }
+  const writeModeSelect = document.getElementById('adminWriteMode');
+  if(writeModeSelect){
+    writeModeSelect.value = source.writeMode || DATA_WRITE_MODES.both;
+    writeModeSelect.disabled = !canEdit;
+  }
   const forceInput = document.getElementById('adminAllowForceOverwrite');
   if(forceInput){
     forceInput.checked = !!source.allowForceOverwrite;
@@ -13937,6 +13993,8 @@ function handleAdminSettingsChange(event){
     current.historyLimit = Number(target.value);
   }else if(target.id === 'adminHistoryDailyLimit'){
     current.historyDailyLimit = Number(target.value);
+  }else if(target.id === 'adminWriteMode'){
+    current.writeMode = normalizeWriteModeSetting(target.value);
   }else if(target.id === 'adminAllowForceOverwrite'){
     current.allowForceOverwrite = !!target.checked;
   }
@@ -14462,7 +14520,7 @@ function handleCrmStageMappingSelect(e){
 function refreshSystemSettingsAccess(){
   const container = document.getElementById('systemSettings');
   if(!container) return;
-  const disabled = !userCanEdit();
+  const disabled = !userCanEdit() || !plannerWriteAccessEnabled();
   container.querySelectorAll('input[data-stage]').forEach(input=>{
     input.disabled = disabled;
   });
@@ -14482,7 +14540,7 @@ function handleSystemSettingChange(e){
   const kind = input.dataset.kind;
   if(!stage || !kind) return;
   const isNoHours = kind === 'parallel';
-  if(!userCanEdit()){
+  if(!userCanEdit() || !plannerWriteAccessEnabled()){
     const fallback = isNoHours
       ? (parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3)
       : (capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
