@@ -1614,27 +1614,12 @@ app.put('/api/state', async (req, res) => {
         && expectedHash
         && currentHash
         && expectedHash !== currentHash) {
-      const conflictEtag = computeEtag(currentHash);
-      if (conflictEtag) {
-        res.set('ETag', conflictEtag);
-      }
-      res.set('Cache-Control', 'no-store');
-      logSaveEvent('warn', 'save conflict', {
+      logSaveEvent('warn', 'save conflict ignored (last write wins)', {
         requestId,
         expectedHash,
         currentHash,
         rev: current?.rev || 0
       });
-      res.status(409).json({
-        error: 'Conflict',
-        conflict: true,
-        expectedHash,
-        currentHash,
-        hash: currentHash,
-        rev: current?.rev || 0,
-        etag: conflictEtag
-      });
-      return;
     }
 
     const actor = normalizedMeta.actor || requestMeta?.actor || requestMeta?.user || 'planner-ui';
