@@ -1348,10 +1348,20 @@ const splitDlg=document.createElement('dialog'); splitDlg.id='splitDlg'; splitDl
       <div class="rowc" style="flex-direction:column;align-items:stretch"><label>% от основного</label><input name="partPct" type="number" min="1" max="99" value="50"/></div>
       <div class="rowc" style="flex-direction:column;align-items:stretch"><label>Суффикс №</label><input name="suffix" placeholder="-1"/></div>
     </div>
+    <div class="rowc" style="gap:10px;flex-wrap:wrap;margin-top:10px">
+      <div class="rowc" style="flex-direction:column;align-items:stretch;min-width:180px">
+        <label>Сумма услуг — % доли</label>
+        <input name="servicePct" type="number" min="0" max="100" step="0.01" placeholder="по умолчанию %" />
+      </div>
+      <div class="rowc" style="flex-direction:column;align-items:stretch;min-width:180px">
+        <label>Сумма услуг — значение</label>
+        <input name="serviceValue" type="number" min="0" step="0.01" placeholder="сумма" />
+      </div>
+    </div>
     <details open>
       <summary>Доли по переделам (опционально)</summary>
-      <table id="splitStagesTable"><thead><tr><th>Передел</th><th style="width:22%">% доли</th></tr></thead><tbody></tbody></table>
-      <small class="muted">Если указана хотя бы одна доля — общий % игнорируется. Для пустых долей — всё остаётся в основном заказе.</small>
+      <table id="splitStagesTable"><thead><tr><th>Передел</th><th style="width:22%">% доли</th><th style="width:22%">Значение</th></tr></thead><tbody></tbody></table>
+      <small class="muted">Если указана хотя бы одна доля — общий % игнорируется. Значение имеет приоритет над % доли. Для пустых долей — всё остаётся в основном заказе.</small>
     </details>
     <div class="rowc" style="justify-content:flex-end;gap:8px">
       <button type="button" onclick="document.getElementById('splitDlg').close()">Отмена</button>
@@ -1363,27 +1373,118 @@ const splitForm=splitDlg.querySelector('#splitForm'); const splitStagesTbody=spl
 function openSplitDialog(){
   const b=currentBoard(); const id=orderForm.id.value; const o=b.orders.find(x=>x.id===id)||null; splitContextId=id||null;
   splitForm.reset(); splitStagesTbody.innerHTML=''; const stages=readStages();
-  stages.forEach(st=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td><input type="number" min="0" max="100" placeholder="" /></td>`;splitStagesTbody.appendChild(tr)});
+  stages.forEach(st=>{
+    const tr=document.createElement('tr');
+    const normalized=normalizeStageName(st.name);
+    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    tr.dataset.stageName=st.name||'';
+    tr.dataset.stageNormalized=normalized;
+    tr.dataset.hourless=hourless?'1':'0';
+    const pctCell=hourless?'<span class="muted">—</span>':`<input type="number" data-kind="pct" min="0" max="100" step="0.01" placeholder="%" />`;
+    const valueCell=hourless?'<span class="muted">—</span>':`<input type="number" data-kind="abs" min="0" step="0.01" placeholder="значение" />`;
+    tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td>${pctCell}</td><td>${valueCell}</td>`;
+    splitStagesTbody.appendChild(tr);
+  });
   const defTitle=(orderForm.title.value.trim()||'Заказ')+' — часть'; splitForm.titlePart.value=defTitle; splitForm.suffix.value='-1'; splitForm.partPct.value=50;
   splitDlg.showModal();
 }
 splitForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard(); const parent=b.orders.find(x=>x.id===splitContextId); if(!parent){alert('Не удалось найти исходный заказ');return}
-  const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0))); const stageRows=[...splitStagesTbody.querySelectorAll('tr')]; const stageShares={};
-  (parent.stages||[]).forEach((st,i)=>{const vRaw=stageRows[i]?.querySelector('input')?.value??'';const v=vRaw===''?NaN:Number(vRaw);if(!Number.isNaN(v)&&v>=0&&v<=100)stageShares[st.name]=v});
-  const hasAnyStageShare=Object.keys(stageShares).length>0;
+  const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0)));
+  const servicePctRaw=splitForm.servicePct?.value??'';
+  const servicePct=servicePctRaw===''?null:Number(servicePctRaw);
+  const serviceValueRaw=splitForm.serviceValue?.value??'';
+  const serviceValue=serviceValueRaw===''?null:Number(serviceValueRaw);
+  const stageRows=[...splitStagesTbody.querySelectorAll('tr')];
+  const stageSharePrefs=new Map();
+  (parent.stages||[]).forEach((st,i)=>{
+    const row=stageRows[i];
+    if(!row||row.dataset.hourless==='1') return;
+    const pctEl=row.querySelector('input[data-kind="pct"]');
+    const absEl=row.querySelector('input[data-kind="abs"]');
+    const pctRaw=pctEl?pctEl.value.trim():'';
+    const absRaw=absEl?absEl.value.trim():'';
+    let pct=null;
+    if(pctRaw!==''){const parsed=Number(pctRaw); if(Number.isFinite(parsed)&&parsed>=0&&parsed<=100) pct=parsed;}
+    let abs=null;
+    if(absRaw!==''){const parsed=Number(absRaw); if(Number.isFinite(parsed)&&parsed>=0) abs=parsed;}
+    if(pct!==null||abs!==null){stageSharePrefs.set(st.name,{pct,abs});}
+  });
+  const hasAnyStageShare=stageSharePrefs.size>0;
   if(!parent._origValues){parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>[s.name,Number(s.value)||0]))}
   if(typeof parent._origPctUsed!=='number') parent._origPctUsed=0;
+  if(typeof parent._origServiceTotal!=='number'){const initTotal=Number(parent.serviceTotal);parent._origServiceTotal=Number.isFinite(initTotal)?initTotal:0;}
+
+  const originalServiceTotal=Number(parent._origServiceTotal||0);
+  const currentServiceTotal=Number(parent.serviceTotal||0);
+  const effectiveServicePct=(servicePct!==null&&Number.isFinite(servicePct)&&servicePct>=0&&servicePct<=100)?servicePct:null;
+  const effectiveServiceValue=(serviceValue!==null&&Number.isFinite(serviceValue)&&serviceValue>=0)?serviceValue:null;
 
   const child=deepClone(parent); child.id=crypto.randomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
   child.orderNo=parent.orderNo+(splitForm.suffix.value||'-1'); child.createdAt=new Date().toISOString();
   child.partOfPct=hasAnyStageShare?null:basePct; child.restOfPct=null; child.done=false; child.progress=0; child.progressManual=true;
   child.parentId=parent.id; child.isPart=true; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
 
-  child.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); return {...st,value:childWant}});
-  parent.stages=(parent.stages||[]).map(st=>{const init=Number(parent._origValues?.[st.name]??st.value??0);const curr=Number(st.value??0);const share=hasAnyStageShare?(stageShares[st.name]??0):basePct; if(!Number.isFinite(init)||init<=0)return {...st}; let childWant=round(init*(share/100)); childWant=Math.min(childWant,curr); const parentVal=round(curr-childWant); return {...st,value:parentVal}});
+  child.stages=(parent.stages||[]).map(st=>{
+    const initRaw=Number(parent._origValues?.[st.name]??st.value??0);
+    const currRaw=Number(st.value??0);
+    const init=Number.isFinite(initRaw)?initRaw:0;
+    const curr=Number.isFinite(currRaw)?currRaw:0;
+    const pref=stageSharePrefs.get(st.name);
+    let childWant=0;
+    if(pref&&pref.abs!==null){
+      childWant=Math.min(round(pref.abs), curr);
+    } else if(pref&&pref.pct!==null){
+      childWant=Math.min(round(init*(pref.pct/100)), curr);
+    } else if(hasAnyStageShare){
+      childWant=0;
+    } else {
+      childWant=Math.min(round(init*(basePct/100)), curr);
+    }
+    return {...st,value:childWant};
+  });
+  parent.stages=(parent.stages||[]).map(st=>{
+    const initRaw=Number(parent._origValues?.[st.name]??st.value??0);
+    const currRaw=Number(st.value??0);
+    const init=Number.isFinite(initRaw)?initRaw:0;
+    const curr=Number.isFinite(currRaw)?currRaw:0;
+    const pref=stageSharePrefs.get(st.name);
+    let childWant=0;
+    if(pref&&pref.abs!==null){
+      childWant=Math.min(round(pref.abs), curr);
+    } else if(pref&&pref.pct!==null){
+      childWant=Math.min(round(init*(pref.pct/100)), curr);
+    } else if(hasAnyStageShare){
+      childWant=0;
+    } else {
+      childWant=Math.min(round(init*(basePct/100)), curr);
+    }
+    const parentVal=round(curr-childWant);
+    return {...st,value:parentVal};
+  });
 
   if(!hasAnyStageShare){const allowed=Math.max(0,100-parent._origPctUsed);const used=Math.min(allowed,basePct);child.partOfPct=used;parent._origPctUsed+=used;parent.restOfPct=Math.max(0,100-parent._origPctUsed);if(parent.restOfPct===0)parent.restOfPct=null}else{child.partOfPct=null;parent.restOfPct=null}
+
+  const calculateServiceShare=()=>{
+    if(effectiveServiceValue!==null){
+      const desired=round(effectiveServiceValue);
+      if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+      return desired;
+    }
+    if(effectiveServicePct!==null){
+      const desired=round(originalServiceTotal*(effectiveServicePct/100));
+      if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+      return desired;
+    }
+    const desired=round(originalServiceTotal*(basePct/100));
+    if(Number.isFinite(currentServiceTotal)) return Math.min(desired, currentServiceTotal);
+    return desired;
+  };
+
+  const childService=calculateServiceShare();
+  const parentServiceRemaining=Number.isFinite(currentServiceTotal)?round(Math.max(0,currentServiceTotal-childService)):currentServiceTotal;
+  child.serviceTotal=childService>0?childService:'';
+  parent.serviceTotal=Number.isFinite(parentServiceRemaining)&&parentServiceRemaining>0?parentServiceRemaining:'';
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
   b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
