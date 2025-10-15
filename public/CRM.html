@@ -362,15 +362,22 @@
   .boards{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .pill{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:#0b0e13}
   body[data-theme="light"] .pill{ background:#fff }
+  :root{--crm-lane-max-height:max(320px,calc(100vh - 220px))}
   main{padding:16px}
-  .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px}
+  .columns{display:flex;gap:14px;overflow-x:auto;padding-bottom:6px;align-items:stretch}
   .columns::-webkit-scrollbar{height:8px}
   .columns::-webkit-scrollbar-thumb{background:#2a3342;border-radius:8px}
   body[data-theme="light"] .columns::-webkit-scrollbar-thumb{background:#c4ccda}
-  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min)}
+  .col{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:120px;box-shadow:var(--shadow);flex:0 0 var(--col-min);min-width:var(--col-min);display:flex;flex-direction:column;max-height:var(--crm-lane-max-height);overflow:hidden}
   .col header{position:relative;background:transparent;border-bottom:1px dashed var(--border)}
   .col h2{font-size:13px;letter-spacing:.2px;margin:0;padding:10px 12px;color:var(--muted)}
-  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px}
+  .col-body{display:flex;flex-direction:column;flex:1;min-height:0}
+  .drop{padding:10px;display:flex;flex-direction:column;gap:10px;min-height:100px;flex:1;overflow-y:auto}
+  .col-more{margin:6px 0 10px;text-align:center;color:var(--muted);cursor:pointer;user-select:none;font-size:12px;letter-spacing:.2px;transition:color .15s ease}
+  .col-more span{display:inline-block;transition:transform .15s ease}
+  .col-more:hover{color:var(--text)}
+  .col-more:hover span{transform:translateY(2px)}
+  .col-more.hidden{display:none}
   .card{background:#111620;border:1px solid #1f2632;border-radius:14px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:grab;position:relative}
   body[data-theme="light"] .card{ background:#fff; border-color:#e6eaf3 }
   .card.dragging{opacity:.5}
@@ -777,26 +784,85 @@ function spanMuted(t){const s=document.createElement('span');s.className='muted'
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
 const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+const LANE_PAGE_SIZE=10;
+const laneVisibleCount=new Map();
+let laneRegistryBoardId=null;
+let dndInitialized=false;
+let draggingId=null;
+
+function ensureLaneRegistry(lanes,boardId){
+  if(laneRegistryBoardId!==boardId){
+    laneVisibleCount.clear();
+    laneRegistryBoardId=boardId||null;
+  }
+  const snapshot=new Map();
+  lanes.forEach(l=>{const existing=laneVisibleCount.get(l);snapshot.set(l,(existing&&existing>0)?existing:LANE_PAGE_SIZE);});
+  laneVisibleCount.clear();
+  snapshot.forEach((value,key)=>laneVisibleCount.set(key,value));
+}
+
+function increaseLaneLimit(lane){
+  const current=laneVisibleCount.get(lane)||LANE_PAGE_SIZE;
+  laneVisibleCount.set(lane,current+LANE_PAGE_SIZE);
+  renderCards();
+}
+
+function laneLimit(lane){
+  if(!laneVisibleCount.has(lane)) laneVisibleCount.set(lane,LANE_PAGE_SIZE);
+  return laneVisibleCount.get(lane);
+}
 
 function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
-function renderColumns(){const b=currentBoard();columns.innerHTML='';b.lanes.forEach(l=>{const c=document.createElement('div');c.className='col';c.innerHTML=`<header><h2>${escapeHtml(l)}</h2></header><div class="drop" data-lane="${escapeHtml(l)}"></div>`;columns.appendChild(c)});enableDnd()}
+function renderColumns(){
+  const b=currentBoard();
+  columns.innerHTML='';
+  if(!b){return;}
+  ensureLaneRegistry(b.lanes,b.id);
+  b.lanes.forEach(l=>{
+    const c=document.createElement('div');
+    c.className='col';
+    const laneLabel=escapeHtml(l);
+    c.innerHTML=`<header><h2>${laneLabel}</h2></header><div class="col-body"><div class="drop" data-lane="${laneLabel}"></div><div class="col-more hidden" data-lane="${laneLabel}" role="button" tabindex="0">Показать ещё 10 <span aria-hidden="true">↓</span></div></div>`;
+    columns.appendChild(c);
+    const drop=c.querySelector('.drop');
+    const more=c.querySelector('.col-more');
+    if(drop) drop.dataset.lane=l;
+    if(more) more.dataset.lane=l;
+  });
+  $$('.col-more',columns).forEach(btn=>{
+    const lane=btn.dataset.lane;
+    if(!lane)return;
+    btn.addEventListener('click',()=>increaseLaneLimit(lane));
+    btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();increaseLaneLimit(lane);}});
+  });
+  enableDnd();
+}
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>x.done||Number(x.progress||0)>=100).length;return[d,s.length]}
 
 function renderCards(){
-  const b=currentBoard(); const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const b=currentBoard();
+  if(!b)return;
+  const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
     const inSearch=!qv||(o.title.toLowerCase().includes(qv)||(o.orderNo||'').toLowerCase().includes(qv)||(o.customer||'').toLowerCase().includes(qv)||(o.stages||[]).some(s=>s.name.toLowerCase().includes(qv)));
     if(!inSearch)return; const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
   });
-  $$('.drop',columns).forEach(d=>d.innerHTML='');
 
   Object.entries(map).forEach(([lane,arr])=>{
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
-    if(!arr.length){const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p)}
-    arr.forEach(o=>{
+    if(!drop)return;
+    const moreBtn=$(`.col-more[data-lane="${CSS.escape(lane)}"]`,columns);
+    const prevScroll=drop.scrollTop;
+    drop.innerHTML='';
+    const limit=laneLimit(lane);
+    const visible=arr.slice(0,limit);
+    if(!visible.length){
+      const p=document.createElement('div');p.className='empty';p.textContent='Пусто';drop.appendChild(p);
+    }
+    visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
       const progress=calcAutoProgress(o.stages); const [doneCnt,totalCnt]=stagesDoneCount(o);
       const chips=document.createElement('div');chips.className='chips';
@@ -833,19 +899,83 @@ function renderCards(){
       card.addEventListener('mouseleave',hideTooltip);
       drop.appendChild(card);
     })
+    if(moreBtn){
+      if(arr.length>visible.length){moreBtn.classList.remove('hidden');}
+      else{moreBtn.classList.add('hidden');}
+    }
+    drop.scrollTop=prevScroll;
   });
   const total=b.orders.length; const active=b.orders.filter(x=>x.status!==b.lanes[b.lanes.length-1]).length;
   stats.textContent=`Всего: ${total} • Активных: ${active}`;
 }
 
+function computeDropReference(container,clientY){
+  const cards=Array.from(container.querySelectorAll('.card:not(.dragging)'));
+  for(const card of cards){
+    const rect=card.getBoundingClientRect();
+    if(clientY<rect.top+rect.height/2){
+      return card.dataset.id||null;
+    }
+  }
+  return null;
+}
+
+function moveOrderToLane(orderId,targetLane,beforeId){
+  const b=currentBoard();
+  if(!b)return false;
+  const list=b.orders;
+  const fromIndex=list.findIndex(o=>o.id===orderId);
+  if(fromIndex===-1)return false;
+  const order=list[fromIndex];
+  const originalLane=order.status;
+  const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
+  list.splice(fromIndex,1);
+  order.status=targetLane;
+  let insertIndex=list.length;
+  if(beforeId){
+    const idx=list.findIndex(o=>o.id===beforeId);
+    if(idx>=0){
+      insertIndex=idx;
+    }else{
+      beforeId=null;
+    }
+  }
+  if(!beforeId){
+    insertIndex=list.length;
+    for(let i=list.length-1;i>=0;i--){
+      if(list[i].status===targetLane){
+        insertIndex=i+1;
+        break;
+      }
+    }
+  }
+  list.splice(insertIndex,0,order);
+  let finalLaneIndex=0;
+  let seen=0;
+  for(const item of list){
+    if(item.status===targetLane){
+      if(item.id===orderId){
+        finalLaneIndex=seen;
+        break;
+      }
+      seen++;
+    }
+  }
+  const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  return changed;
+}
+
 function enableDnd(){
-  let draggingId=null;
-  columns.addEventListener('dragstart',e=>{const card=e.target.closest('.card');if(!card)return;draggingId=card.dataset.id;card.classList.add('dragging')});
-  columns.addEventListener('dragend',e=>{const card=e.target.closest('.card');if(card)card.classList.remove('dragging');draggingId=null});
+  draggingId=null;
+  if(!dndInitialized){
+    columns.addEventListener('dragstart',e=>{const card=e.target.closest('.card');if(!card)return;draggingId=card.dataset.id;card.classList.add('dragging')});
+    columns.addEventListener('dragend',e=>{const card=e.target.closest('.card');if(card)card.classList.remove('dragging');draggingId=null});
+    dndInitialized=true;
+  }
   $$('.drop',columns).forEach(d=>{
     d.addEventListener('dragover',e=>{e.preventDefault();d.style.outline='1px dashed #3a4a6b'});
     d.addEventListener('dragleave',()=>{d.style.outline='none'});
-    d.addEventListener('drop',()=>{d.style.outline='none';if(!draggingId)return;const b=currentBoard();const o=b.orders.find(x=>x.id===draggingId);o.status=d.dataset.lane;save('Перемещение заказа между статусами');renderCards()});
+    d.addEventListener('drop',e=>{e.preventDefault();d.style.outline='none';if(!draggingId)return;const lane=d.dataset.lane;if(!lane)return;const beforeId=computeDropReference(d,e.clientY);const changed=moveOrderToLane(draggingId,lane,beforeId);if(changed){save('Перемещение заказа между статусами');renderCards();}});
   });
 }
 

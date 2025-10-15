@@ -725,8 +725,11 @@ function createRequestId() {
 const SAVE_LOG_PREFIX = '[SaveService]';
 
 function logSaveEvent(level, message, context = {}) {
+  if (level !== 'warn' && level !== 'error') {
+    return;
+  }
   const payload = { ...context };
-  const log = level === 'error' ? console.error : level === 'warn' ? console.warn : console.info;
+  const log = level === 'error' ? console.error : console.warn;
   log(`${SAVE_LOG_PREFIX} ${message}`, payload);
 }
 
