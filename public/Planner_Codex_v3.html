@@ -3438,7 +3438,7 @@ function normalizePlannerMode(value){
 }
 
 function determinePlannerModeFallback(){
-  if(crmState && Array.isArray(crmState.boards) && crmState.boards.length){
+  if(hasCrmData()){
     return PLANNER_MODES.crm;
   }
   return PLANNER_MODES.csv;
@@ -3619,6 +3619,10 @@ function getActiveCrmBoard(){
   return board;
 }
 
+function hasCrmData(){
+  return !!(crmState && Array.isArray(crmState.boards) && crmState.boards.length);
+}
+
 function buildPlannerOrderFromCrm(crmOrder){
   if(!crmOrder || typeof crmOrder !== 'object') return null;
   const order = {
@@ -3749,7 +3753,7 @@ function mergeCrmOrderInto(target, source){
 
 function integrateCrmOrdersIntoAggregated(list, map, doneStageSet){
   const activeKeys = new Set();
-  if(!isCrmMode()) return activeKeys;
+  if(!hasCrmData()) return activeKeys;
   const board = getActiveCrmBoard();
   if(!board) return activeKeys;
   board.orders.forEach(crmOrder => {
@@ -3885,7 +3889,7 @@ function buildCrmStageTask(order, stageKey, segment, meta){
 }
 
 function buildCrmStageTasks(){
-  if(!isCrmMode()) return [];
+  if(!hasCrmData()) return [];
   if(!crmState || !Array.isArray(crmState.boards)) return [];
   const tasks = [];
   crmState.boards.forEach(board => {
@@ -3926,6 +3930,7 @@ function findCrmStageTaskForIdentity(identity, stage){
 }
 
 function purgeCrmTasksFromCaches(){
+  crmStageTasks = [];
   if(Array.isArray(allTasksFromState)){
     allTasksFromState = allTasksFromState.filter(task => !isCrmTask(task));
   }
@@ -3984,19 +3989,12 @@ function refreshCrmDerivedData(options={}){
     allowDuringInit = false
   } = options;
   if(!plannerStateReady && !allowDuringInit) return;
-  if(!isCrmMode()){
+  if(hasCrmData()){
+    crmStageTasks = buildCrmStageTasks();
+    injectCrmTasksIntoCaches();
+  }else{
     purgeCrmTasksFromCaches();
-    if(shouldRecompute) recompute();
-    if(rebuildOverview){
-      if(document.getElementById('process')?.value === OVERVIEW_STAGE){
-        renderOrdersOverviewTable();
-      }
-      rebuildAndRenderMasterRoute();
-    }
-    return;
   }
-  crmStageTasks = buildCrmStageTasks();
-  injectCrmTasksIntoCaches();
   if(shouldRecompute) recompute();
   if(rebuildOverview){
     if(document.getElementById('process')?.value === OVERVIEW_STAGE){
