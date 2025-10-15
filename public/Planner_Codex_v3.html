@@ -12195,9 +12195,15 @@ function persistNow(stageOverride, opts={}){
         }catch(_){ prev = null; }
       }
 
+      const curStageKey = typeof curStage === 'string' ? curStage.trim().toLowerCase() : '';
       if(prevTasks.length){
         const merged = new Map();
-        prevTasks.forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
+        prevTasks.forEach(task=>{
+          if(!task || !task.uid) return;
+          const taskStage = typeof task.stage === 'string' ? task.stage.trim().toLowerCase() : '';
+          if(taskStage && curStageKey && taskStage === curStageKey) return;
+          merged.set(task.uid, task);
+        });
         (stateObj.t || []).forEach(task=>{ if(task && task.uid) merged.set(task.uid, task); });
         stateObj.t = [...merged.values()];
       }
