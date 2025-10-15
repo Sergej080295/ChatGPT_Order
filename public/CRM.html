@@ -1119,7 +1119,13 @@ function openOrder(id=null){
   if(id){
     dlgTitle.textContent='Редактировать заказ'; const o=b.orders.find(x=>x.id===id); fillOrderForm(o,b);
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
-    deleteOrderBtn.style.display=''; deleteOrderBtn.onclick=()=>{if(!confirm('Удалить этот заказ?'))return;b.orders=b.orders.filter(x=>x.id!==o.id);save('Удаление заказа');renderCards();orderDlg.close()};
+    deleteOrderBtn.style.display='';
+    deleteOrderBtn.onclick=()=>{
+      if(!confirm('Удалить этот заказ?'))return;
+      handleOrderRemoval(o,b);
+      renderCards();
+      orderDlg.close();
+    };
   }else{
     dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES); window._editingOrigValues=null; deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
@@ -1396,10 +1402,11 @@ splitForm.addEventListener('submit',e=>{
   const serviceValueRaw=splitForm.serviceValue?.value??'';
   const serviceValue=serviceValueRaw===''?null:Number(serviceValueRaw);
   const stageRows=[...splitStagesTbody.querySelectorAll('tr')];
-  const stageSharePrefs=new Map();
+  const stageSharePrefs=[];
+  let hasAnyStageShare=false;
   (parent.stages||[]).forEach((st,i)=>{
     const row=stageRows[i];
-    if(!row||row.dataset.hourless==='1') return;
+    if(!row||row.dataset.hourless==='1'){stageSharePrefs[i]=null;return;}
     const pctEl=row.querySelector('input[data-kind="pct"]');
     const absEl=row.querySelector('input[data-kind="abs"]');
     const pctRaw=pctEl?pctEl.value.trim():'';
@@ -1408,9 +1415,8 @@ splitForm.addEventListener('submit',e=>{
     if(pctRaw!==''){const parsed=Number(pctRaw); if(Number.isFinite(parsed)&&parsed>=0&&parsed<=100) pct=parsed;}
     let abs=null;
     if(absRaw!==''){const parsed=Number(absRaw); if(Number.isFinite(parsed)&&parsed>=0) abs=parsed;}
-    if(pct!==null||abs!==null){stageSharePrefs.set(st.name,{pct,abs});}
+    if(pct!==null||abs!==null){stageSharePrefs[i]={pct,abs};hasAnyStageShare=true;}else{stageSharePrefs[i]=null;}
   });
-  const hasAnyStageShare=stageSharePrefs.size>0;
   if(!parent._origValues){parent._origValues=Object.fromEntries((parent.stages||[]).map(s=>[s.name,Number(s.value)||0]))}
   if(typeof parent._origPctUsed!=='number') parent._origPctUsed=0;
   if(typeof parent._origServiceTotal!=='number'){const initTotal=Number(parent.serviceTotal);parent._origServiceTotal=Number.isFinite(initTotal)?initTotal:0;}
@@ -1423,47 +1429,59 @@ splitForm.addEventListener('submit',e=>{
   const child=deepClone(parent); child.id=crypto.randomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
   child.orderNo=parent.orderNo+(splitForm.suffix.value||'-1'); child.createdAt=new Date().toISOString();
   child.partOfPct=hasAnyStageShare?null:basePct; child.restOfPct=null; child.done=false; child.progress=0; child.progressManual=true;
-  child.parentId=parent.id; child.isPart=true; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
+  child.parentId=parent.id; child.isPart=true; child.childIds=[]; child._origPctUsed=0; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
 
-  child.stages=(parent.stages||[]).map(st=>{
-    const initRaw=Number(parent._origValues?.[st.name]??st.value??0);
+  const stageShareResults=[];
+  child.stages=(parent.stages||[]).map((st,i)=>{
+    const normalized=normalizeStageName(st.name);
+    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    if(hourless){
+      stageShareResults[i]={share:0,current:Number(st.value??0)||0,hourless:true};
+      return {...st};
+    }
     const currRaw=Number(st.value??0);
-    const init=Number.isFinite(initRaw)?initRaw:0;
-    const curr=Number.isFinite(currRaw)?currRaw:0;
-    const pref=stageSharePrefs.get(st.name);
+    const current=Number.isFinite(currRaw)?currRaw:0;
+    const pref=stageSharePrefs[i];
     let childWant=0;
     if(pref&&pref.abs!==null){
-      childWant=Math.min(round(pref.abs), curr);
+      childWant=Math.min(round(pref.abs), current);
     } else if(pref&&pref.pct!==null){
-      childWant=Math.min(round(init*(pref.pct/100)), curr);
+      childWant=Math.min(round(current*(pref.pct/100)), current);
     } else if(hasAnyStageShare){
       childWant=0;
     } else {
-      childWant=Math.min(round(init*(basePct/100)), curr);
+      childWant=Math.min(round(current*(basePct/100)), current);
     }
-    return {...st,value:childWant};
+    stageShareResults[i]={share:childWant,current,hourless:false};
+    return {...st,value:childWant>0?childWant:''};
   });
-  parent.stages=(parent.stages||[]).map(st=>{
-    const initRaw=Number(parent._origValues?.[st.name]??st.value??0);
-    const currRaw=Number(st.value??0);
-    const init=Number.isFinite(initRaw)?initRaw:0;
-    const curr=Number.isFinite(currRaw)?currRaw:0;
-    const pref=stageSharePrefs.get(st.name);
-    let childWant=0;
-    if(pref&&pref.abs!==null){
-      childWant=Math.min(round(pref.abs), curr);
-    } else if(pref&&pref.pct!==null){
-      childWant=Math.min(round(init*(pref.pct/100)), curr);
-    } else if(hasAnyStageShare){
-      childWant=0;
-    } else {
-      childWant=Math.min(round(init*(basePct/100)), curr);
+  parent.stages=(parent.stages||[]).map((st,i)=>{
+    const res=stageShareResults[i];
+    if(!res||res.hourless){
+      return {...st};
     }
-    const parentVal=round(curr-childWant);
-    return {...st,value:parentVal};
+    const remaining=round(Math.max(0,(Number.isFinite(res.current)?res.current:Number(st.value??0)||0)-res.share));
+    return {...st,value:remaining>0?remaining:''};
   });
 
-  if(!hasAnyStageShare){const allowed=Math.max(0,100-parent._origPctUsed);const used=Math.min(allowed,basePct);child.partOfPct=used;parent._origPctUsed+=used;parent.restOfPct=Math.max(0,100-parent._origPctUsed);if(parent.restOfPct===0)parent.restOfPct=null}else{child.partOfPct=null;parent.restOfPct=null}
+  child._origValues=Object.fromEntries((child.stages||[]).map(s=>[s.name,Number(s.value)||0]));
+
+  const hasHourDistribution=stageShareResults.some(res=>res && !res.hourless && res.share>0);
+  if(!hasAnyStageShare){
+    if(hasHourDistribution){
+      const allowed=Math.max(0,100-parent._origPctUsed);
+      const used=Math.min(allowed,basePct);
+      child.partOfPct=used;
+      parent._origPctUsed+=used;
+      parent.restOfPct=Math.max(0,100-parent._origPctUsed);
+      if(parent.restOfPct===0)parent.restOfPct=null;
+    }else{
+      child.partOfPct=null;
+    }
+  }else{
+    child.partOfPct=null;
+    parent.restOfPct=null;
+  }
 
   const calculateServiceShare=()=>{
     if(effectiveServiceValue!==null){
@@ -1485,11 +1503,83 @@ splitForm.addEventListener('submit',e=>{
   const parentServiceRemaining=Number.isFinite(currentServiceTotal)?round(Math.max(0,currentServiceTotal-childService)):currentServiceTotal;
   child.serviceTotal=childService>0?childService:'';
   parent.serviceTotal=Number.isFinite(parentServiceRemaining)&&parentServiceRemaining>0?parentServiceRemaining:'';
+  child._origServiceTotal=Number(child.serviceTotal||0);
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
   b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
 });
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
+
+function recalcParentSplitMeta(parent, board){
+  if(!parent) return;
+  const ids=Array.isArray(parent.childIds)?parent.childIds.filter(Boolean):[];
+  if(!ids.length){
+    parent.childIds=[];
+    parent._origPctUsed=0;
+    parent.restOfPct=null;
+    return;
+  }
+  const orders=board?.orders||[];
+  let used=0;
+  let hasPart=false;
+  ids.forEach(id=>{
+    const child=orders.find(x=>x.id===id);
+    if(!child) return;
+    if(typeof child.partOfPct==='number'){used+=child.partOfPct;hasPart=true;}
+  });
+  parent._origPctUsed=round(used);
+  if(hasPart){
+    const rest=Math.max(0,round(100-used));
+    parent.restOfPct=rest>0?rest:null;
+  }else{
+    parent.restOfPct=null;
+  }
+}
+
+function mergeSuborderBack(parent, child, board){
+  if(!parent||!child) return;
+  const childStages=child.stages||[];
+  const childMap=new Map();
+  childStages.forEach(st=>{childMap.set(normalizeStageName(st.name||''),st);});
+  parent.stages=(parent.stages||[]).map(st=>{
+    const normalized=normalizeStageName(st.name);
+    if(HOURLESS_STAGE_NAMES.has(normalized)){
+      return {...st};
+    }
+    const childStage=childMap.get(normalized);
+    if(!childStage) return {...st};
+    const parentValRaw=Number(st.value??0);
+    const childValRaw=Number(childStage.value??0);
+    const parentVal=Number.isFinite(parentValRaw)?parentValRaw:0;
+    const childVal=Number.isFinite(childValRaw)?childValRaw:0;
+    const total=round(parentVal+childVal);
+    return {...st,value:total>0?total:''};
+  });
+  const parentServiceRaw=Number(parent.serviceTotal||0);
+  const childServiceRaw=Number(child.serviceTotal||0);
+  const mergedService=round((Number.isFinite(parentServiceRaw)?parentServiceRaw:0)+(Number.isFinite(childServiceRaw)?childServiceRaw:0));
+  parent.serviceTotal=mergedService>0?mergedService:'';
+  parent.childIds=(Array.isArray(parent.childIds)?parent.childIds.filter(id=>id!==child.id):[]);
+  if(!parent.childIds.length) parent.childIds=[];
+  recalcParentSplitMeta(parent, board);
+  computeOrderDatesFromStages(parent);
+  parent.progress=calcAutoProgress(parent.stages);
+}
+
+function handleOrderRemoval(order, board){
+  if(!order) return;
+  const b=board||currentBoard();
+  if(!b) return;
+  if(order.parentId){
+    const parent=b.orders.find(x=>x.id===order.parentId);
+    if(parent){
+      mergeSuborderBack(parent, order, b);
+    }
+  }
+  b.orders=b.orders.filter(x=>x.id!==order.id);
+  const summary=order.parentId?'Удаление подзаказа':'Удаление заказа';
+  save(summary);
+}
 
 /* TOP BAR & INIT */
 const addBoardBtn=$('#addBoardBtn');
