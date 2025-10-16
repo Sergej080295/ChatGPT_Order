@@ -37,17 +37,21 @@ const sseClients = new Set();
 let cachedSnapshot = null;
 let lastRevision = 0;
 let revisionColumnInfo = null;
-let ordersTableInfo = null;
 
 const PG_UNDEFINED_TABLE = '42P01';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
-
-const SHARED_BOOLEAN_PREF_KEYS = [
+const SNAPSHOT_CATEGORY_STATE = 'state';
+const SNAPSHOT_CATEGORY_META = 'meta';
+const GENERAL_SETTINGS_TABLE = 'planner_general_settings';
+const GENERAL_PREFERENCE_KEYS = [
   'autosaveOn',
-  'shiftOnProgress',
   'autoOptimizeOn',
-  'cascadeReadyOn'
+  'cascadeReadyOn',
+  'shiftOnProgress',
+  'priorityChangeLoggingOn',
+  'routeDateChangeLoggingOn',
+  'notificationsMuted'
 ];
 
 function normalizeWeakEtag(value) {
@@ -93,6 +97,257 @@ function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function cloneDeepPlain(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeepPlain(item));
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    Object.entries(value).forEach(([key, child]) => {
+      result[key] = cloneDeepPlain(child);
+    });
+    return result;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : new Date(time);
+  }
+  return value;
+}
+
+let cachedDefaultGeneralSettings = null;
+
+function normalizePreferenceValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const lowered = trimmed.toLowerCase();
+    if (['true', 'yes', 'on', 'y'].includes(lowered)) {
+      return true;
+    }
+    if (['false', 'no', 'off', 'n'].includes(lowered)) {
+      return false;
+    }
+    if (lowered === '1') {
+      return true;
+    }
+    if (lowered === '0') {
+      return false;
+    }
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric)) {
+      return numeric !== 0;
+    }
+    return null;
+  }
+  if (typeof value === 'bigint') {
+    return value !== 0n;
+  }
+  return Boolean(value);
+}
+
+function getDefaultGeneralSettings() {
+  if (!cachedDefaultGeneralSettings) {
+    const emptySnapshot = buildEmptySnapshot();
+    const defaultSettings = isPlainObject(emptySnapshot.meta) && isPlainObject(emptySnapshot.meta.settings)
+      ? cloneDeepPlain(emptySnapshot.meta.settings)
+      : {};
+    const defaultPreferences = {};
+    GENERAL_PREFERENCE_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(emptySnapshot, key)) {
+        defaultPreferences[key] = Boolean(emptySnapshot[key]);
+      } else if (isPlainObject(emptySnapshot.meta) && Object.prototype.hasOwnProperty.call(emptySnapshot.meta, key)) {
+        defaultPreferences[key] = Boolean(emptySnapshot.meta[key]);
+      } else if (Object.prototype.hasOwnProperty.call(defaultSettings, key)) {
+        defaultPreferences[key] = Boolean(defaultSettings[key]);
+      } else {
+        defaultPreferences[key] = false;
+      }
+    });
+    if (!Object.prototype.hasOwnProperty.call(defaultPreferences, 'notificationsMuted')) {
+      defaultPreferences.notificationsMuted = false;
+    }
+    cachedDefaultGeneralSettings = {
+      settings: defaultSettings,
+      preferences: defaultPreferences
+    };
+  }
+  return cloneDeepPlain(cachedDefaultGeneralSettings);
+}
+
+function extractGeneralSettingsForStorage(snapshot, meta = null) {
+  if (!isPlainObject(snapshot)) {
+    return { hasSettings: false, payload: null, meta: isPlainObject(meta) ? meta : null };
+  }
+
+  const workingMeta = isPlainObject(meta) ? cloneDeepPlain(meta) : null;
+  let settings = null;
+
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
+    const rootValue = snapshot.settings;
+    delete snapshot.settings;
+    if (isPlainObject(rootValue)) {
+      settings = rootValue;
+    } else if (rootValue === null || rootValue === undefined) {
+      settings = null;
+    }
+  }
+
+  if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
+    const metaValue = snapshot.meta.settings;
+    delete snapshot.meta.settings;
+    if (isPlainObject(metaValue)) {
+      settings = metaValue;
+    } else if (metaValue === null || metaValue === undefined) {
+      settings = null;
+    }
+  }
+
+  if (isPlainObject(workingMeta) && Object.prototype.hasOwnProperty.call(workingMeta, 'settings')) {
+    const storedValue = workingMeta.settings;
+    delete workingMeta.settings;
+    if (isPlainObject(storedValue)) {
+      settings = storedValue;
+    } else if (storedValue === null || storedValue === undefined) {
+      settings = null;
+    }
+  }
+
+  const preferences = {};
+  const preferenceSources = [
+    snapshot,
+    isPlainObject(snapshot.meta) ? snapshot.meta : null,
+    isPlainObject(workingMeta) ? workingMeta : null
+  ];
+
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    let valueFound = null;
+    preferenceSources.forEach((source) => {
+      if (!isPlainObject(source) || !Object.prototype.hasOwnProperty.call(source, key)) {
+        return;
+      }
+      const normalized = normalizePreferenceValue(source[key]);
+      if (normalized !== null) {
+        valueFound = normalized;
+      }
+      delete source[key];
+    });
+    if (valueFound !== null) {
+      preferences[key] = valueFound;
+    }
+  });
+
+  const payload = {};
+  if (settings === null) {
+    payload.settings = null;
+  } else if (isPlainObject(settings)) {
+    payload.settings = cloneDeepPlain(settings);
+  }
+  if (Object.keys(preferences).length) {
+    payload.preferences = preferences;
+  }
+
+  const hasSettings = Boolean(
+    (payload.settings && isPlainObject(payload.settings) && Object.keys(payload.settings).length)
+    || payload.settings === null
+    || Object.keys(preferences).length
+  );
+
+  return {
+    hasSettings,
+    payload: hasSettings ? payload : null,
+    meta: workingMeta
+  };
+}
+
+function applyGeneralSettingsToSnapshot(snapshot, generalSettings) {
+  if (!isPlainObject(snapshot)) {
+    return snapshot;
+  }
+
+  const defaults = getDefaultGeneralSettings();
+  const provided = isPlainObject(generalSettings) ? generalSettings : null;
+
+  const settingsSource = (() => {
+    if (provided && Object.prototype.hasOwnProperty.call(provided, 'settings')) {
+      const candidate = provided.settings;
+      if (isPlainObject(candidate)) {
+        return candidate;
+      }
+      return null;
+    }
+    if (provided) {
+      return provided;
+    }
+    return defaults.settings;
+  })();
+
+  const preferencesSource = (() => {
+    if (provided && Object.prototype.hasOwnProperty.call(provided, 'preferences')) {
+      const candidate = provided.preferences;
+      if (isPlainObject(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  })();
+
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+
+  const effectiveSettings = isPlainObject(settingsSource) ? settingsSource : defaults.settings;
+  snapshot.meta.settings = cloneDeepPlain(effectiveSettings);
+  snapshot.settings = cloneDeepPlain(effectiveSettings);
+
+  const effectivePreferences = { ...cloneDeepPlain(defaults.preferences) };
+  if (isPlainObject(preferencesSource)) {
+    Object.entries(preferencesSource).forEach(([key, value]) => {
+      const normalized = normalizePreferenceValue(value);
+      if (normalized !== null) {
+        effectivePreferences[key] = normalized;
+      }
+    });
+  } else if (provided && !Object.prototype.hasOwnProperty.call(provided, 'preferences')) {
+    GENERAL_PREFERENCE_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(provided, key)) {
+        const normalized = normalizePreferenceValue(provided[key]);
+        if (normalized !== null) {
+          effectivePreferences[key] = normalized;
+        }
+      }
+    });
+  }
+
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    const value = effectivePreferences[key];
+    if (typeof value === 'boolean') {
+      snapshot[key] = value;
+      snapshot.meta[key] = value;
+    }
+  });
+
+  if (typeof effectivePreferences.notificationsMuted === 'boolean') {
+    snapshot.notificationsMuted = effectivePreferences.notificationsMuted;
+    if (isPlainObject(snapshot.meta.settings)) {
+      snapshot.meta.settings.notificationsMuted = effectivePreferences.notificationsMuted;
+    }
+  }
+
+  return snapshot;
+}
+
 function parseDate(value) {
   if (!value) return null;
   if (value instanceof Date) {
@@ -110,16 +365,6 @@ function sanitizeString(value) {
 
 function computeSnapshotHash(stateString) {
   return crypto.createHash('sha1').update(stateString, 'utf8').digest('hex');
-}
-
-function normalizeStage(code) {
-  if (!code) return null;
-  return String(code).trim().toLowerCase();
-}
-
-function titleFromCode(code) {
-  if (!code) return '';
-  return code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function buildEmptySnapshot() {
@@ -197,7 +442,6 @@ function readMigrations() {
 }
 
 async function runMigrations() {
-  resetOrdersTableInfo();
   const client = await pool.connect();
   try {
     await ensureMigrationTable(client);
@@ -327,37 +571,17 @@ async function ensureMigrationRevision(client) {
 
 async function loadLatestSnapshot(runner) {
   const client = runner || pool;
-  const { rows } = await client.query(`
-    SELECT rev, snapshot, hash, meta
-      FROM planner_state_snapshots
-     ORDER BY rev DESC, created_at DESC
-     LIMIT 1
-  `);
+  const { rows } = await client.query(
+    'SELECT rev FROM planner_snapshots ORDER BY rev DESC, created_at DESC LIMIT 1'
+  );
   if (!rows.length) {
     return null;
   }
-  const row = rows[0];
-  const snapshotObj = parseJsonColumn(row.snapshot, {});
-  try {
-    const prefMap = await loadSharedPreferences(client);
-    if (prefMap && prefMap.size) {
-      applySharedPreferencesToSnapshot(snapshotObj, prefMap);
-    }
-    const autoweight = await loadAutoweightSettings(client);
-    normalizeExtraTimeSettings(snapshotObj, autoweight);
-  } catch (err) {
-    console.warn('Failed to merge shared preferences into snapshot', err);
+  const rev = Number(rows[0].rev || 0);
+  if (!Number.isFinite(rev) || rev <= 0) {
+    return null;
   }
-  const stateString = JSON.stringify(snapshotObj);
-  const hash = row.hash || computeSnapshotHash(stateString);
-  const rev = Number(row.rev || 0);
-  return {
-    rev,
-    snapshot: snapshotObj,
-    stateString,
-    hash,
-    meta: parseJsonColumn(row.meta, null)
-  };
+  return loadSnapshotRevision(client, rev);
 }
 
 async function getCachedSnapshot() {
@@ -371,6 +595,12 @@ async function getCachedSnapshot() {
     return cachedSnapshot;
   }
   const empty = buildEmptySnapshot();
+  try {
+    const storedSettings = await loadGeneralSettings();
+    applyGeneralSettingsToSnapshot(empty, storedSettings);
+  } catch (err) {
+    console.warn('Failed to hydrate default general settings', err);
+  }
   const stateString = JSON.stringify(empty);
   const hash = computeSnapshotHash(stateString);
   cachedSnapshot = { rev: 0, snapshot: empty, stateString, hash, meta: null };
@@ -428,11 +658,555 @@ function sanitizeMetaForStorage(meta) {
   return Object.keys(copy).length ? copy : null;
 }
 
+function valuesEqual(a, b) {
+  if (a === b) {
+    return true;
+  }
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      if (!valuesEqual(a[index], b[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!valuesEqual(a[key], b[key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function diffSnapshotValue(current, next) {
+  if (valuesEqual(current, next)) {
+    return undefined;
+  }
+  if (Array.isArray(current) && Array.isArray(next)) {
+    return next;
+  }
+  if (isPlainObject(current) && isPlainObject(next)) {
+    const diff = {};
+    const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+    for (const key of keys) {
+      const delta = diffSnapshotValue(
+        current ? current[key] : undefined,
+        next ? next[key] : undefined
+      );
+      if (delta !== undefined) {
+        diff[key] = delta;
+      }
+    }
+    return Object.keys(diff).length ? diff : undefined;
+  }
+  if (next === undefined) {
+    return null;
+  }
+  return next;
+}
+
+function buildSnapshotDiff(current, next) {
+  const delta = diffSnapshotValue(current || {}, next || {});
+  if (delta === undefined || delta === null) {
+    return null;
+  }
+  if (isPlainObject(delta) && !Object.keys(delta).length) {
+    return null;
+  }
+  return delta;
+}
+
 function computeEtag(hash) {
   const normalized = hash ? String(hash).trim() : '';
   if (!normalized) return null;
   return normalized.startsWith('W/') ? normalized : `W/"${normalized}"`;
 }
+
+function encodePathSegment(segment) {
+  if (segment === null || segment === undefined) {
+    return '';
+  }
+  return String(segment).replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function decodePathSegment(segment) {
+  if (!segment) {
+    return '';
+  }
+  return segment.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
+function normalizePrimitiveForStorage(value) {
+  if (value === null || value === undefined) {
+    return { type: 'null', text: null, numeric: null, boolean: null };
+  }
+  if (typeof value === 'boolean') {
+    return { type: 'boolean', text: null, numeric: null, boolean: value };
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return { type: 'string', text: String(value), numeric: null, boolean: null };
+    }
+    return { type: 'number', text: null, numeric: value, boolean: null };
+  }
+  if (typeof value === 'bigint') {
+    return { type: 'string', text: value.toString(), numeric: null, boolean: null };
+  }
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return { type: 'string', text: '', numeric: null, boolean: null };
+    }
+    return { type: 'string', text: value.toISOString(), numeric: null, boolean: null };
+  }
+  if (typeof value === 'string') {
+    return { type: 'string', text: value, numeric: null, boolean: null };
+  }
+  try {
+    return { type: 'string', text: JSON.stringify(value), numeric: null, boolean: null };
+  } catch (_err) {
+    return { type: 'string', text: String(value), numeric: null, boolean: null };
+  }
+}
+
+function flattenValueForStorage(value, path, rows, parentIsArray, ordinal) {
+  if (!path && !parentIsArray) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    rows.push({ path, type: 'array', ordinal: parentIsArray ? ordinal : 0, valueText: null, valueNumeric: null, valueBoolean: null });
+    value.forEach((item, index) => {
+      const childPath = path
+        ? `${path}/${encodePathSegment(index)}`
+        : encodePathSegment(index);
+      flattenValueForStorage(item, childPath, rows, true, index);
+    });
+    return;
+  }
+  if (isPlainObject(value)) {
+    rows.push({ path, type: 'object', ordinal: parentIsArray ? ordinal : 0, valueText: null, valueNumeric: null, valueBoolean: null });
+    Object.entries(value).forEach(([key, child]) => {
+      const childPath = path
+        ? `${path}/${encodePathSegment(key)}`
+        : encodePathSegment(key);
+      flattenValueForStorage(child, childPath, rows, false, 0);
+    });
+    return;
+  }
+  const normalized = normalizePrimitiveForStorage(value);
+  rows.push({
+    path,
+    type: normalized.type,
+    ordinal: parentIsArray ? ordinal : 0,
+    valueText: normalized.text,
+    valueNumeric: normalized.numeric,
+    valueBoolean: normalized.boolean
+  });
+}
+
+function flattenObjectForStorage(source) {
+  const rows = [];
+  if (!isPlainObject(source)) {
+    return rows;
+  }
+  Object.entries(source).forEach(([key, value]) => {
+    const path = encodePathSegment(key);
+    flattenValueForStorage(value, path, rows, false, 0);
+  });
+  return rows;
+}
+
+function finalizeStructure(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => finalizeStructure(entry === undefined ? null : entry));
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    Object.keys(value).forEach((key) => {
+      result[key] = finalizeStructure(value[key]);
+    });
+    return result;
+  }
+  return value === undefined ? null : value;
+}
+
+function buildObjectFromRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return {};
+  }
+  const valueMap = new Map();
+  valueMap.set('', { type: 'object', value: {} });
+
+  const sorted = rows
+    .slice()
+    .sort((a, b) => {
+      const depthA = a.path ? a.path.split('/').length : 0;
+      const depthB = b.path ? b.path.split('/').length : 0;
+      if (depthA !== depthB) {
+        return depthA - depthB;
+      }
+      if (a.path === b.path) {
+        return a.ordinal - b.ordinal;
+      }
+      return a.path < b.path ? -1 : 1;
+    });
+
+  sorted.forEach((row) => {
+    const path = row.path || '';
+    if (!path) {
+      if (row.value_type === 'array') {
+        valueMap.set('', { type: 'array', value: [] });
+      } else if (row.value_type === 'object') {
+        valueMap.set('', { type: 'object', value: {} });
+      }
+      return;
+    }
+    if (row.value_type === 'object') {
+      valueMap.set(path, { type: 'object', value: {} });
+    } else if (row.value_type === 'array') {
+      valueMap.set(path, { type: 'array', value: [] });
+    } else if (row.value_type === 'number') {
+      valueMap.set(path, { type: 'number', value: row.value_numeric });
+    } else if (row.value_type === 'boolean') {
+      valueMap.set(path, { type: 'boolean', value: row.value_boolean === null ? false : !!row.value_boolean });
+    } else if (row.value_type === 'null') {
+      valueMap.set(path, { type: 'null', value: null });
+    } else {
+      valueMap.set(path, { type: 'string', value: row.value_text == null ? '' : row.value_text });
+    }
+  });
+
+  const entries = Array.from(valueMap.entries()).sort((a, b) => {
+    const depthA = a[0] ? a[0].split('/').length : 0;
+    const depthB = b[0] ? b[0].split('/').length : 0;
+    return depthB - depthA;
+  });
+
+  entries.forEach(([path, entry]) => {
+    if (!path) {
+      return;
+    }
+    const segments = path.split('/');
+    const parentSegments = segments.slice(0, -1);
+    const keySegment = decodePathSegment(segments[segments.length - 1]);
+    const parentPath = parentSegments.join('/');
+    const parentEntry = valueMap.get(parentPath);
+    if (!parentEntry) {
+      return;
+    }
+    if (parentEntry.type === 'array') {
+      const index = Number(keySegment);
+      if (!Array.isArray(parentEntry.value)) {
+        parentEntry.value = [];
+      }
+      parentEntry.value[index] = entry.value;
+    } else if (isPlainObject(parentEntry.value)) {
+      parentEntry.value[keySegment] = entry.value;
+    }
+  });
+
+  const rootEntry = valueMap.get('');
+  return finalizeStructure(rootEntry ? rootEntry.value : {});
+}
+
+async function loadEntriesForCategory(runner, rev, category, paths = null) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  const params = [rev, category];
+  let sql = `
+    SELECT path, value_type, value_text, value_numeric, value_boolean, ordinal
+      FROM planner_snapshot_entries
+     WHERE rev = $1
+       AND category = $2
+  `;
+  if (Array.isArray(paths) && paths.length > 0) {
+    const offset = params.length;
+    const clauses = paths
+      .map((_, idx) => `(path = $${offset + idx + 1} OR path LIKE ($${offset + idx + 1} || '/%'))`)
+      .join(' OR ');
+    sql += ` AND (${clauses})`;
+    params.push(...paths);
+  }
+  sql += ' ORDER BY char_length(path), path, ordinal';
+  const { rows } = await executor.query(sql, params);
+  return rows;
+}
+
+async function loadSnapshotDataObject(runner, rev, paths = null) {
+  const rows = await loadEntriesForCategory(runner, rev, SNAPSHOT_CATEGORY_STATE, paths);
+  if (!rows.length) {
+    return {};
+  }
+  return buildObjectFromRows(rows);
+}
+
+async function loadSnapshotMetaObject(runner, rev) {
+  const rows = await loadEntriesForCategory(runner, rev, SNAPSHOT_CATEGORY_META);
+  if (!rows.length) {
+    return null;
+  }
+  const meta = buildObjectFromRows(rows);
+  return Object.keys(meta).length ? meta : null;
+}
+
+function sanitizeGeneralPreferences(preferences) {
+  if (!isPlainObject(preferences)) {
+    return null;
+  }
+  const sanitized = {};
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(preferences, key)) {
+      return;
+    }
+    const normalized = normalizePreferenceValue(preferences[key]);
+    if (normalized !== null) {
+      sanitized[key] = normalized;
+    }
+  });
+  return Object.keys(sanitized).length ? sanitized : null;
+}
+
+function sanitizeGeneralSettingsPayload(payload) {
+  if (!isPlainObject(payload)) {
+    return null;
+  }
+
+  let sanitizedSettings = null;
+  if (Object.prototype.hasOwnProperty.call(payload, 'settings')) {
+    if (payload.settings === null) {
+      sanitizedSettings = null;
+    } else {
+      const candidate = sanitizeMetaForStorage(payload.settings);
+      if (isPlainObject(candidate) && Object.keys(candidate).length) {
+        sanitizedSettings = candidate;
+      }
+    }
+  } else {
+    const candidate = sanitizeMetaForStorage(payload);
+    if (isPlainObject(candidate) && Object.keys(candidate).length) {
+      sanitizedSettings = candidate;
+    }
+  }
+
+  const sanitizedPreferences = sanitizeGeneralPreferences(payload.preferences);
+
+  if (sanitizedSettings === null && !sanitizedPreferences) {
+    return null;
+  }
+
+  return {
+    settings: sanitizedSettings,
+    preferences: sanitizedPreferences
+  };
+}
+
+async function persistGeneralSettings(client, payload, options = {}) {
+  const hasSettings = Boolean(options?.hasSettings);
+  if (!hasSettings) {
+    return;
+  }
+
+  const sanitizedPayload = sanitizeGeneralSettingsPayload(payload || {});
+  await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
+
+  if (!sanitizedPayload) {
+    return;
+  }
+
+  const combined = {};
+  if (sanitizedPayload.settings) {
+    Object.assign(combined, sanitizedPayload.settings);
+  }
+  if (sanitizedPayload.preferences) {
+    combined.preferences = sanitizedPayload.preferences;
+  }
+
+  if (!Object.keys(combined).length) {
+    return;
+  }
+
+  const rows = flattenObjectForStorage(combined);
+  const actorValue = options?.actor ? sanitizeString(options.actor) || null : null;
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, value_type, value_text, value_numeric, value_boolean, ordinal, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        row.path,
+        row.type,
+        row.valueText,
+        row.valueNumeric,
+        row.valueBoolean,
+        row.ordinal,
+        actorValue
+      ]
+    );
+  }
+}
+
+async function loadGeneralSettings(runner) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    const { rows } = await executor.query(
+      `SELECT path, value_type, value_text, value_numeric, value_boolean, ordinal
+         FROM ${GENERAL_SETTINGS_TABLE}
+        ORDER BY char_length(path), path, ordinal`
+    );
+    if (!rows.length) {
+      return null;
+    }
+    const preferenceRows = rows
+      .filter((row) => typeof row.path === 'string' && row.path.startsWith('preferences/'))
+      .map((row) => ({
+        ...row,
+        path: row.path.slice('preferences/'.length)
+      }));
+    const settingsRows = rows.filter((row) => !(typeof row.path === 'string' && row.path.startsWith('preferences/')));
+    const settings = buildObjectFromRows(settingsRows);
+    const preferences = buildObjectFromRows(preferenceRows);
+    const result = {};
+    if (isPlainObject(settings) && Object.keys(settings).length) {
+      result.settings = settings;
+    }
+    if (isPlainObject(preferences) && Object.keys(preferences).length) {
+      result.preferences = preferences;
+    }
+    if (Object.keys(result).length) {
+      return result;
+    }
+    return isPlainObject(settings) && Object.keys(settings).length ? settings : null;
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
+  const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
+  const workingSnapshot = cloneDeepPlain(snapshotSource);
+  const extraction = extractGeneralSettingsForStorage(workingSnapshot, meta);
+  const { hasSettings, payload, meta: cleanedMeta } = extraction;
+  const snapshotRows = flattenObjectForStorage(workingSnapshot);
+  await client.query(
+    `INSERT INTO planner_snapshots (rev, hash)
+     VALUES ($1,$2)
+     ON CONFLICT (rev) DO UPDATE
+       SET hash = EXCLUDED.hash,
+           created_at = NOW()` ,
+    [rev, hash]
+  );
+  await client.query(
+    'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
+    [rev, SNAPSHOT_CATEGORY_STATE]
+  );
+  for (const row of snapshotRows) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO planner_snapshot_entries (rev, category, path, value_type, value_text, value_numeric, value_boolean, ordinal)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        rev,
+        SNAPSHOT_CATEGORY_STATE,
+        row.path,
+        row.type,
+        row.valueText,
+        row.valueNumeric,
+        row.valueBoolean,
+        row.ordinal
+      ]
+    );
+  }
+
+  await persistGeneralSettings(client, payload, { hasSettings, actor: options?.actor || null });
+
+  await client.query(
+    'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
+    [rev, SNAPSHOT_CATEGORY_META]
+  );
+  if (isPlainObject(cleanedMeta)) {
+    const metaRows = flattenObjectForStorage(cleanedMeta);
+    for (const row of metaRows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO planner_snapshot_entries (rev, category, path, value_type, value_text, value_numeric, value_boolean, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          rev,
+          SNAPSHOT_CATEGORY_META,
+          row.path,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          row.ordinal
+        ]
+      );
+    }
+  }
+}
+
+async function loadSnapshotRevision(runner, rev) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  const { rows } = await executor.query(
+    'SELECT rev, hash FROM planner_snapshots WHERE rev = $1',
+    [rev]
+  );
+  if (!rows.length) {
+    return null;
+  }
+  const data = await loadSnapshotDataObject(executor, rev);
+  const meta = await loadSnapshotMetaObject(executor, rev);
+  const generalSettings = await loadGeneralSettings(executor);
+  const stateObject = isPlainObject(data) ? data : {};
+  applyGeneralSettingsToSnapshot(stateObject, generalSettings);
+  const stateString = JSON.stringify(stateObject);
+  const hash = rows[0].hash || computeSnapshotHash(stateString);
+  return {
+    rev: Number(rows[0].rev || rev),
+    snapshot: stateObject,
+    stateString,
+    hash,
+    meta
+  };
+}
+
+async function loadMetadataForRevisions(runner, revs) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  const unique = Array.from(new Set((revs || []).map((rev) => Number(rev)).filter((rev) => Number.isFinite(rev) && rev > 0)));
+  if (!unique.length) {
+    return new Map();
+  }
+  const { rows } = await executor.query(
+    `SELECT rev, path, value_type, value_text, value_numeric, value_boolean, ordinal
+       FROM planner_snapshot_entries
+      WHERE category = $1
+        AND rev = ANY($2::bigint[])
+      ORDER BY rev, char_length(path), path, ordinal`,
+    [SNAPSHOT_CATEGORY_META, unique]
+  );
+  const grouped = new Map();
+  rows.forEach((row) => {
+    const rev = Number(row.rev || 0);
+    if (!grouped.has(rev)) {
+      grouped.set(rev, []);
+    }
+    grouped.get(rev).push(row);
+  });
+  const result = new Map();
+  grouped.forEach((list, rev) => {
+    result.set(rev, buildObjectFromRows(list));
+  });
+  return result;
+}
+
 
 function normalizeRequestMeta(rawMeta) {
   const response = {
@@ -664,36 +1438,6 @@ function normalizeExtraTimeSettings(snapshot, override = null) {
   }
 }
 
-function serializeMeta(meta) {
-  const sanitized = sanitizeMetaForStorage(meta);
-  if (sanitized === null) {
-    return null;
-  }
-  try {
-    return JSON.stringify(sanitized);
-  } catch (err) {
-    console.warn('Failed to serialize snapshot meta, discarding meta payload', err);
-    return null;
-  }
-}
-
-async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta) {
-  const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
-  const metaJson = serializeMeta(meta);
-  const effectiveHash = hash || computeSnapshotHash(snapshotJson);
-
-  await client.query(
-    `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-     VALUES ($1,$2::jsonb,$3::jsonb,$4)
-     ON CONFLICT (rev) DO UPDATE
-       SET snapshot = EXCLUDED.snapshot,
-           meta = EXCLUDED.meta,
-           hash = EXCLUDED.hash,
-           created_at = NOW()` ,
-    [rev, snapshotJson, metaJson, effectiveHash]
-  );
-}
-
 async function runWithRevision(actor, source, note, handler) {
   const client = await pool.connect();
   try {
@@ -792,9 +1536,8 @@ async function persistSnapshotWithSql(options) {
   const effectiveHash = normalizedHash;
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-    await applySnapshotToSql(client, parsedSnapshot);
-    await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
-    return await loadLatestSnapshot(client);
+    await persistSnapshotData(client, nextRev, parsedSnapshot, effectiveHash, storedMeta, { actor });
+    return await loadSnapshotRevision(client, nextRev);
   });
 
   if (result && Number(result.rev || 0) === rev) {
@@ -810,926 +1553,20 @@ async function persistSnapshotWithSql(options) {
   };
 }
 
-function mapHistoryRow(row) {
-  const meta = parseJsonColumn(row.meta, null);
-  const summary = extractHistorySummary(meta);
+function mapHistoryRow(row, meta = null) {
+  const metaObj = isPlainObject(meta) ? meta : null;
+  const summary = extractHistorySummary(metaObj);
   return {
     rev: Number(row.rev || 0),
     hash: row.hash || null,
     etag: computeEtag(row.hash || null),
     createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    actor: row.actor || (meta && meta.actor ? meta.actor : null),
-    source: row.source || (meta && meta.source ? meta.source : null),
-    note: row.note || (meta && meta.note ? meta.note : null),
+    actor: row.actor || (metaObj && metaObj.actor ? metaObj.actor : null),
+    source: row.source || (metaObj && metaObj.source ? metaObj.source : null),
+    note: row.note || (metaObj && metaObj.note ? metaObj.note : null),
     summary: summary || null,
-    meta
+    meta: metaObj
   };
-}
-
-function parseInteger(value, fallback = null) {
-  if (value === null || value === undefined || value === '') {
-    return fallback;
-  }
-  const num = Number.parseInt(value, 10);
-  if (!Number.isFinite(num)) return fallback;
-  return num;
-}
-
-function resetOrdersTableInfo() {
-  ordersTableInfo = null;
-}
-
-async function getOrdersTableInfo(client, { forceReload = false } = {}) {
-  if (!forceReload && ordersTableInfo) {
-    return ordersTableInfo;
-  }
-
-  const { rows } = await client.query(`
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'orders'
-  `);
-
-  const columnSet = new Set(rows.map((row) => row.column_name));
-  ordersTableInfo = {
-    columns: columnSet,
-    has(column) {
-      return columnSet.has(column);
-    }
-  };
-
-  return ordersTableInfo;
-}
-
-function parseBoolean(value, fallback = false) {
-  if (value === null || value === undefined) return fallback;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value !== 0;
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-    if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  }
-  return fallback;
-}
-
-function parseJsonColumn(value, fallback = null) {
-  if (value === null || value === undefined) {
-    return fallback;
-  }
-  if (Buffer.isBuffer(value) || value instanceof Buffer) {
-    if (!value.length) return fallback;
-    try {
-      return JSON.parse(value.toString('utf8'));
-    } catch (_err) {
-      return fallback;
-    }
-  }
-  if (typeof value === 'object') {
-    if (value instanceof Date) {
-      return fallback;
-    }
-    try {
-      return JSON.parse(JSON.stringify(value));
-    } catch (_err) {
-      return fallback;
-    }
-  }
-  const text = String(value).trim();
-  if (!text) {
-    return fallback;
-  }
-  try {
-    return JSON.parse(text);
-  } catch (_err) {
-    return fallback;
-  }
-}
-
-function extractSharedPreferences(snapshot) {
-  if (!isPlainObject(snapshot)) {
-    return [];
-  }
-  const prefs = [];
-  for (const key of SHARED_BOOLEAN_PREF_KEYS) {
-    if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
-      prefs.push({ key, value: Boolean(snapshot[key]) });
-    }
-  }
-  return prefs;
-}
-
-async function syncSharedPreferences(client, snapshot) {
-  const prefs = extractSharedPreferences(snapshot);
-  try {
-    await client.query('DELETE FROM settings_shared_preferences');
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return;
-    }
-    throw err;
-  }
-
-  if (!prefs.length) {
-    return;
-  }
-
-  for (const pref of prefs) {
-    // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO settings_shared_preferences (pref_key, bool_value, updated_at)
-       VALUES ($1,$2,NOW())
-       ON CONFLICT (pref_key) DO UPDATE
-         SET bool_value = EXCLUDED.bool_value,
-             updated_at = NOW()` ,
-      [pref.key, pref.value]
-    );
-  }
-}
-
-async function loadSharedPreferences(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
-  try {
-    const { rows } = await executor.query(
-      'SELECT pref_key, bool_value FROM settings_shared_preferences'
-    );
-    const map = new Map();
-    rows.forEach((row) => {
-      if (row && row.pref_key) {
-        map.set(row.pref_key, Boolean(row.bool_value));
-      }
-    });
-    return map;
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return null;
-    }
-    throw err;
-  }
-}
-
-function applySharedPreferencesToSnapshot(snapshot, prefMap) {
-  if (!isPlainObject(snapshot) || !(prefMap instanceof Map) || prefMap.size === 0) {
-    return;
-  }
-  for (const key of SHARED_BOOLEAN_PREF_KEYS) {
-    if (prefMap.has(key)) {
-      snapshot[key] = Boolean(prefMap.get(key));
-    }
-  }
-}
-
-async function loadAutoweightSettings(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
-  try {
-    const { rows } = await executor.query(
-      'SELECT enabled, percent, minimum_hours FROM settings_autoweight WHERE id = 1'
-    );
-    if (!rows.length) {
-      return null;
-    }
-    const row = rows[0];
-    const percentRaw = row.percent === null || row.percent === undefined ? null : Number(row.percent);
-    const minimumRaw = row.minimum_hours === null || row.minimum_hours === undefined
-      ? null
-      : Number(row.minimum_hours);
-    const enabledRaw = row.enabled;
-    let enabled = null;
-    if (enabledRaw === null || enabledRaw === undefined) {
-      enabled = null;
-    } else if (typeof enabledRaw === 'boolean') {
-      enabled = enabledRaw;
-    } else if (typeof enabledRaw === 'number') {
-      enabled = enabledRaw !== 0;
-    } else if (typeof enabledRaw === 'string') {
-      const normalized = enabledRaw.trim().toLowerCase();
-      enabled = ['1', 't', 'true', 'yes', 'on'].includes(normalized);
-    } else {
-      enabled = Boolean(enabledRaw);
-    }
-    const percent = Number.isFinite(percentRaw)
-      ? Math.max(0, Math.round(percentRaw * 100) / 100)
-      : DEFAULT_EXTRA_PERCENT;
-    const minimum = Number.isFinite(minimumRaw)
-      ? Math.max(0, Math.round(minimumRaw * 100) / 100)
-      : DEFAULT_EXTRA_MINIMUM;
-    if (enabled === null) {
-      enabled = percent > 0 || minimum > 0;
-    }
-    return {
-      enabled,
-      percent,
-      minimum
-    };
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return null;
-    }
-    throw err;
-  }
-}
-
-function valuesEqual(a, b) {
-  if (a === b) {
-    return true;
-  }
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a.length !== b.length) {
-      return false;
-    }
-    for (let index = 0; index < a.length; index += 1) {
-      if (!valuesEqual(a[index], b[index])) {
-        return false;
-      }
-    }
-    return true;
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const key of keys) {
-      if (!valuesEqual(a[key], b[key])) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return false;
-}
-
-function diffSnapshotValue(current, next) {
-  if (valuesEqual(current, next)) {
-    return undefined;
-  }
-  if (Array.isArray(current) && Array.isArray(next)) {
-    return next;
-  }
-  if (isPlainObject(current) && isPlainObject(next)) {
-    const diff = {};
-    const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
-    for (const key of keys) {
-      const delta = diffSnapshotValue(
-        current ? current[key] : undefined,
-        next ? next[key] : undefined
-      );
-      if (delta !== undefined) {
-        diff[key] = delta;
-      }
-    }
-    return Object.keys(diff).length ? diff : undefined;
-  }
-  if (next === undefined) {
-    return null;
-  }
-  return next;
-}
-
-function buildSnapshotDiff(current, next) {
-  const delta = diffSnapshotValue(current || {}, next || {});
-  if (delta === undefined || delta === null) {
-    return null;
-  }
-  if (isPlainObject(delta) && !Object.keys(delta).length) {
-    return null;
-  }
-  return delta;
-}
-
-async function ensureSqlHydrated() {
-  let hasOrders = true;
-  try {
-    const { rows } = await pool.query('SELECT EXISTS (SELECT 1 FROM orders LIMIT 1) AS has_orders');
-    hasOrders = Boolean(rows[0]?.has_orders);
-  } catch (err) {
-    console.warn('Failed to probe orders table before hydration', err);
-    return;
-  }
-
-  if (hasOrders) {
-    return;
-  }
-
-  const latest = await loadLatestSnapshot();
-  if (!latest || !Number.isFinite(latest.rev) || latest.rev <= 0) {
-    return;
-  }
-
-  const hydrationMeta = sanitizeMetaForStorage({
-    actor: 'system',
-    source: 'startup-hydrate',
-    note: 'Автоматическое восстановление таблиц из последнего снимка',
-    hydratedFromRev: latest.rev,
-    baseRev: latest.rev,
-    previousMeta: latest.meta || undefined
-  }) || {
-    actor: 'system',
-    source: 'startup-hydrate',
-    hydratedFromRev: latest.rev,
-    baseRev: latest.rev
-  };
-
-  const requestId = createRequestId();
-  const startedAt = Date.now();
-  logSaveEvent('info', 'auto hydration started', { requestId, rev: latest.rev, hash: latest.hash || null });
-
-  try {
-    const persisted = await persistSnapshotWithSql({
-      actor: 'system',
-      source: 'startup-hydrate',
-      note: 'Автоматическое восстановление таблиц из снимка',
-      snapshot: latest.snapshot,
-      stateString: latest.stateString,
-      hash: latest.hash,
-      meta: hydrationMeta
-    });
-
-    cachedSnapshot = persisted;
-    const etag = computeEtag(persisted.hash);
-    if (etag) {
-      broadcastRevision({ rev: persisted.rev, hash: persisted.hash, etag });
-    }
-    const duration = Date.now() - startedAt;
-    logSaveEvent('info', 'auto hydration completed', {
-      requestId,
-      rev: persisted.rev,
-      hash: persisted.hash || null,
-      duration
-    });
-  } catch (err) {
-    logSaveEvent('error', 'auto hydration failed', { requestId, error: err?.message || String(err) });
-    console.error('Failed to hydrate normalized tables from snapshot', err);
-  }
-}
-
-function createOrderKeyResolver() {
-  const aliasToCanonical = new Map();
-  const canonicalToAliases = new Map();
-  let fallbackCounter = 0;
-
-  const registerAlias = (alias, canonical) => {
-    if (!alias) return;
-    aliasToCanonical.set(alias, canonical);
-    if (!canonicalToAliases.has(canonical)) {
-      canonicalToAliases.set(canonical, new Set());
-    }
-    canonicalToAliases.get(canonical).add(alias);
-  };
-
-  const mergeCanonicals = (source, target) => {
-    if (!source || !target || source === target) return;
-    const aliases = canonicalToAliases.get(source);
-    if (aliases) {
-      aliases.forEach((alias) => {
-        aliasToCanonical.set(alias, target);
-        if (!canonicalToAliases.has(target)) {
-          canonicalToAliases.set(target, new Set());
-        }
-        canonicalToAliases.get(target).add(alias);
-      });
-      canonicalToAliases.delete(source);
-    }
-    registerAlias(source, target);
-  };
-
-  return (task) => {
-    if (!task || typeof task !== 'object') {
-      return { key: null, merged: [] };
-    }
-
-    const identity = sanitizeString(task.orderIdentity);
-    const crmOrderId = sanitizeString(task.orderId || task.crmOrderId);
-    const numberPrimary = sanitizeString(task.orderNumber || task.number || task.orderNo);
-    const numberAlt = sanitizeString(task.orderIdNumber || task.orderRef);
-    const title = sanitizeString(task.orderTitle || task.title || task.orderName);
-    const customer = sanitizeString(task.orderCustomer);
-    const uid = sanitizeString(task.uid);
-
-    const aliases = [];
-    if (identity) aliases.push(`identity:${identity}`);
-    if (crmOrderId) aliases.push(`crm:${crmOrderId}`);
-    if (numberPrimary) aliases.push(`number:${numberPrimary}`);
-    if (numberAlt && numberAlt !== numberPrimary) aliases.push(`number:${numberAlt}`);
-    if (title && customer) aliases.push(`title:${title}::${customer}`);
-    if (title) aliases.push(`title:${title}`);
-    if (customer) aliases.push(`customer:${customer}`);
-    if (uid) aliases.push(`uid:${uid}`);
-
-    let canonical = null;
-    const seenCanonicals = new Set();
-    for (const alias of aliases) {
-      const existing = aliasToCanonical.get(alias);
-      if (existing) {
-        if (!canonical) {
-          canonical = existing;
-        }
-        seenCanonicals.add(existing);
-      }
-    }
-
-    if (!canonical) {
-      canonical = aliases.find((alias) => !alias.startsWith('uid:')) || aliases[0] || null;
-    }
-
-    if (!canonical) {
-      fallbackCounter += 1;
-      canonical = `generated:${fallbackCounter}`;
-    }
-
-    const merged = [];
-    seenCanonicals.forEach((seen) => {
-      if (seen !== canonical) {
-        merged.push(seen);
-        mergeCanonicals(seen, canonical);
-      }
-    });
-
-    aliases.forEach((alias) => registerAlias(alias, canonical));
-    registerAlias(canonical, canonical);
-
-    return { key: canonical, merged };
-  };
-}
-
-function mergeOrderRecords(target, source) {
-  if (!target) return source;
-  if (!source) return target;
-
-  const toDate = (value) => {
-    if (!value) return null;
-    if (value instanceof Date) {
-      return Number.isNaN(value.getTime()) ? null : value;
-    }
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
-  };
-
-  if (!target.crmOrderId && source.crmOrderId) target.crmOrderId = source.crmOrderId;
-  if (!target.number && source.number) target.number = source.number;
-  if (!target.customerName && source.customerName) target.customerName = source.customerName;
-  if (!target.status && source.status) target.status = source.status;
-  if (!target.title && source.title) target.title = source.title;
-  if (target.priority === null || target.priority === undefined) target.priority = source.priority ?? target.priority;
-  else if ((source.priority ?? null) !== null && (target.priority ?? null) === null) target.priority = source.priority;
-
-  if (!target.dueDate && source.dueDate) target.dueDate = source.dueDate;
-
-  const createdTarget = toDate(target.createdAt);
-  const createdSource = toDate(source.createdAt);
-  if (createdTarget && createdSource) {
-    target.createdAt = createdTarget < createdSource ? createdTarget : createdSource;
-  } else if (!createdTarget && createdSource) {
-    target.createdAt = createdSource;
-  }
-
-  const updatedTarget = toDate(target.updatedAt);
-  const updatedSource = toDate(source.updatedAt);
-  if (updatedTarget && updatedSource) {
-    target.updatedAt = updatedTarget > updatedSource ? updatedTarget : updatedSource;
-  } else if (!updatedTarget && updatedSource) {
-    target.updatedAt = updatedSource;
-  }
-
-  if (source.deleted) target.deleted = true;
-  const deletedSource = toDate(source.deletedAt);
-  const deletedTarget = toDate(target.deletedAt);
-  if (deletedSource && (!deletedTarget || deletedSource > deletedTarget)) {
-    target.deletedAt = deletedSource;
-  }
-
-  return target;
-}
-
-async function applySnapshotToSql(client, snapshot) {
-  const tasks = Array.isArray(snapshot.t) ? snapshot.t : [];
-  const done = Array.isArray(snapshot.done) ? snapshot.done : [];
-  const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
-
-  const resolveOrderKey = createOrderKeyResolver();
-
-  const parallelSet = new Set();
-  if (isPlainObject(snapshot.parallelByProc)) {
-    Object.keys(snapshot.parallelByProc).forEach((key) => {
-      const normalized = normalizeStage(key);
-      if (normalized) parallelSet.add(normalized);
-    });
-  }
-
-  await syncSharedPreferences(client, snapshot);
-
-  const processMap = new Map();
-  const ensureProcess = (code) => {
-    const normalized = normalizeStage(code);
-    if (!normalized) return null;
-    if (!processMap.has(normalized)) {
-      processMap.set(normalized, {
-        code: normalized,
-        name: titleFromCode(normalized),
-        isParallel: parallelSet.has(normalized),
-        id: null
-      });
-    }
-    return processMap.get(normalized);
-  };
-
-  tasks.forEach((task) => ensureProcess(task?.stage));
-  done.forEach((task) => ensureProcess(task?.stage));
-  if (isPlainObject(snapshot.capByProc)) {
-    Object.keys(snapshot.capByProc).forEach((code) => ensureProcess(code));
-  }
-  if (isPlainObject(snapshot.meta?.settings?.capacity)) {
-    Object.keys(snapshot.meta.settings.capacity).forEach((code) => ensureProcess(code));
-  }
-  if (isPlainObject(snapshot.meta?.settings?.crmStageMapping)) {
-    Object.values(snapshot.meta.settings.crmStageMapping).forEach((code) => ensureProcess(code));
-  }
-
-  await client.query('TRUNCATE order_process RESTART IDENTITY CASCADE');
-  await client.query('TRUNCATE orders RESTART IDENTITY CASCADE');
-  await client.query('TRUNCATE customers RESTART IDENTITY CASCADE');
-  await client.query('TRUNCATE processes RESTART IDENTITY CASCADE');
-  await client.query('TRUNCATE capacity_by_process');
-  await client.query('TRUNCATE settings_column_widths');
-  await client.query('TRUNCATE settings_mapping');
-  await client.query('TRUNCATE excluded_statuses');
-  await client.query('DELETE FROM settings_autoweight');
-  await client.query('DELETE FROM settings_journal');
-  await client.query('DELETE FROM settings_admin');
-
-  const processes = Array.from(processMap.values());
-  processes.sort((a, b) => a.code.localeCompare(b.code));
-  for (let index = 0; index < processes.length; index += 1) {
-    const stage = processes[index];
-    const { rows } = await client.query(
-      `INSERT INTO processes (code, name, position, has_hours, is_parallel, is_active)
-       VALUES ($1,$2,$3,TRUE,$4,TRUE)
-       RETURNING id`,
-      [stage.code, stage.name || stage.code, index, stage.isParallel]
-    );
-    stage.id = rows[0].id;
-  }
-
-  const customerNames = new Set();
-  const collectCustomer = (task) => {
-    if (!task) return;
-    const name = sanitizeString(task.orderCustomer);
-    if (name) customerNames.add(name);
-  };
-  tasks.forEach(collectCustomer);
-  done.forEach(collectCustomer);
-
-  const customerMap = new Map();
-  const sortedCustomers = Array.from(customerNames.values()).sort();
-  for (const name of sortedCustomers) {
-    const { rows } = await client.query(
-      'INSERT INTO customers (name) VALUES ($1) RETURNING id',
-      [name]
-    );
-    customerMap.set(name, rows[0].id);
-  }
-
-  const ordersInfo = await getOrdersTableInfo(client);
-
-  const orderData = new Map();
-  const ensureRecord = (key) => {
-    if (!key) return null;
-    if (orderData.has(key)) {
-      return orderData.get(key);
-    }
-    const record = {
-      key,
-      crmOrderId: null,
-      number: null,
-      customerName: null,
-      status: null,
-      deleted: false,
-      deletedAt: null,
-      createdAt: null,
-      updatedAt: null,
-      title: null,
-      priority: null,
-      dueDate: null
-    };
-    orderData.set(key, record);
-    return record;
-  };
-
-  const collectOrderData = (task, options = {}) => {
-    if (!task || typeof task !== 'object') return;
-    const resolution = resolveOrderKey(task);
-    const key = resolution.key;
-    if (!key) return;
-
-    if (Array.isArray(resolution.merged) && resolution.merged.length) {
-      for (const aliasKey of resolution.merged) {
-        if (!aliasKey || aliasKey === key) continue;
-        if (!orderData.has(aliasKey)) continue;
-        const aliasRecord = orderData.get(aliasKey);
-        orderData.delete(aliasKey);
-        const target = ensureRecord(key);
-        mergeOrderRecords(target, aliasRecord);
-      }
-    }
-
-    const existing = ensureRecord(key);
-    const crmOrderId = sanitizeString(task.orderId);
-    if (crmOrderId) existing.crmOrderId = existing.crmOrderId || crmOrderId;
-    const number = sanitizeString(task.orderNumber);
-    if (number) existing.number = existing.number || number;
-    const customerName = sanitizeString(task.orderCustomer);
-    if (customerName) existing.customerName = existing.customerName || customerName;
-    const title = sanitizeString(
-      task.orderTitle
-        || task.title
-        || task.orderName
-        || task.name
-        || task.project
-    );
-    if (title) {
-      existing.title = existing.title || title;
-    }
-    const status = sanitizeString(task.status) || sanitizeString(task.state);
-    if (status) existing.status = status;
-    const start = parseDate(task.startDate || task.start);
-    if (start && !existing.createdAt) existing.createdAt = start;
-    const end = parseDate(task.endDate || task.end);
-    if (end) existing.updatedAt = end;
-    const due = parseDate(task.orderDueDate || task.dueDate || task.deadline);
-    if (due && !existing.dueDate) {
-      existing.dueDate = due;
-    }
-    const priority = parseInteger(task.orderPriority ?? task.priority, null);
-    if (priority !== null && !Number.isNaN(priority)) {
-      existing.priority = existing.priority ?? priority;
-    }
-    if (options.isDone) {
-      existing.status = existing.status || 'done';
-      const doneAt = parseDate(task.doneMeta?.when || task.when || end || start);
-      if (doneAt) existing.updatedAt = doneAt;
-    }
-    if (options.deleted) {
-      existing.deleted = true;
-      const deletedAt = parseDate(task.when || task.end || task.endDate || task.startDate);
-      if (deletedAt) existing.deletedAt = deletedAt;
-    }
-    orderData.set(key, existing);
-  };
-
-  tasks.forEach((task) => collectOrderData(task));
-  done.forEach((task) => collectOrderData(task, { isDone: true }));
-  trash.forEach((task) => collectOrderData(task, { deleted: true }));
-
-  const orderIdMap = new Map();
-  let fallbackOrderCounter = 0;
-  for (const data of orderData.values()) {
-    const customerId = data.customerName ? customerMap.get(data.customerName) || null : null;
-    const createdAt = data.createdAt || new Date();
-    const updatedAt = data.updatedAt || createdAt;
-    let number = data.number || data.crmOrderId || data.title || null;
-    if (!number || (typeof number === 'string' && !number.trim())) {
-      number = data.key;
-    }
-    if (!number || (typeof number === 'string' && !number.trim())) {
-      fallbackOrderCounter += 1;
-      number = `order-${fallbackOrderCounter}`;
-    }
-    if (typeof number === 'string') {
-      const trimmed = number.trim();
-      number = trimmed || `order-${fallbackOrderCounter || 1}`;
-    }
-    const deletedAt = data.deleted ? (data.deletedAt || updatedAt) : null;
-    const title = data.title || number;
-    const priority = Number.isFinite(data.priority) ? data.priority : null;
-    const dueDate = data.dueDate || null;
-
-    const columns = [];
-    const values = [];
-    const placeholders = [];
-    let paramIndex = 1;
-    const addColumn = (column, value) => {
-      if (!ordersInfo.has(column)) return;
-      columns.push(column);
-      placeholders.push(`$${paramIndex}`);
-      values.push(value === undefined ? null : value);
-      paramIndex += 1;
-    };
-
-    addColumn('crm_order_id', data.crmOrderId || null);
-    addColumn('number', number);
-    addColumn('order_no', number);
-    addColumn('customer_id', customerId);
-    addColumn('status', data.status || null);
-    addColumn('title', title || null);
-    addColumn('client', data.customerName || null);
-    addColumn('priority', priority);
-    addColumn('due_date', dueDate);
-    addColumn('created_at', createdAt);
-    addColumn('updated_at', updatedAt);
-    addColumn('deleted_at', deletedAt);
-    addColumn('is_deleted', Boolean(data.deleted));
-
-    if (!columns.length) {
-      throw new Error('orders table has no known columns for insertion');
-    }
-
-    const sql = `INSERT INTO orders (${columns.join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING id`;
-    const { rows } = await client.query(sql, values);
-    orderIdMap.set(data.key, rows[0].id);
-  }
-
-  const seqByOrder = new Map();
-  const positionByProcess = new Map();
-  const insertTask = async (task, options = {}) => {
-    if (!task) return;
-    const resolution = resolveOrderKey(task);
-    const key = resolution.key;
-    if (!key) return;
-    const orderId = orderIdMap.get(key);
-    if (!orderId) return;
-    const process = ensureProcess(task.stage);
-    if (!process || !process.id) return;
-    const seq = seqByOrder.get(key) || 0;
-    seqByOrder.set(key, seq + 1);
-    const position = positionByProcess.get(process.code) || 0;
-    positionByProcess.set(process.code, position + 1);
-    const routeSeg = task.route && task.stage ? task.route[task.stage] : null;
-    const plannedStart = parseDate(task.startDate || routeSeg?.start);
-    const plannedEnd = parseDate(task.endDate || routeSeg?.end);
-    const actualStart = parseDate(routeSeg?.start);
-    const actualEnd = parseDate(routeSeg?.doneAt || task.doneMeta?.when || routeSeg?.end || task.when);
-    const progressRaw = Number(task.progress);
-    const progress = Number.isFinite(progressRaw) ? progressRaw : 0;
-    const isDone = options.isDone || Boolean(task.doneMeta?.when) || progress >= 100;
-    await client.query(
-      `INSERT INTO order_process (
-         order_id, process_id, seq, planned_start, planned_end,
-         actual_start, actual_end, progress, is_done,
-         position_index, hidden_by_state
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [
-        orderId,
-        process.id,
-        seq,
-        plannedStart,
-        plannedEnd,
-        actualStart,
-        actualEnd,
-        progress,
-        isDone,
-        position,
-        false
-      ]
-    );
-  };
-
-  for (const task of tasks) {
-    // eslint-disable-next-line no-await-in-loop
-    await insertTask(task, { isDone: false });
-  }
-  for (const task of done) {
-    // eslint-disable-next-line no-await-in-loop
-    await insertTask(task, { isDone: true });
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-  const capacitySource = isPlainObject(snapshot.capByProc)
-    ? snapshot.capByProc
-    : snapshot.meta?.settings?.capacity || {};
-  for (const [code, value] of Object.entries(capacitySource || {})) {
-    const process = ensureProcess(code);
-    if (!process || !process.id) continue;
-    const minutes = Number(value) * 60;
-    // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO capacity_by_process (process_id, day, minutes)
-       VALUES ($1,$2,$3)
-       ON CONFLICT (process_id, day) DO UPDATE SET minutes = EXCLUDED.minutes`,
-      [process.id, today, Number.isFinite(minutes) ? Math.round(minutes) : 0]
-    );
-  }
-
-  const settings = snapshot.meta?.settings || {};
-  const extra = settings.extraTime || {};
-  const percentRaw = Number(extra.percent);
-  const minimumRaw = Number(extra.minimum);
-  const percentValue = Number.isFinite(percentRaw)
-    ? Math.max(0, Math.round(percentRaw * 100) / 100)
-    : DEFAULT_EXTRA_PERCENT;
-  const minimumValue = Number.isFinite(minimumRaw)
-    ? Math.max(0, Math.round(minimumRaw * 100) / 100)
-    : DEFAULT_EXTRA_MINIMUM;
-  const extraEnabled = typeof extra.enabled === 'boolean'
-    ? extra.enabled
-    : (percentValue > 0 || minimumValue > 0);
-  if (!isPlainObject(settings.extraTime)) {
-    settings.extraTime = {};
-  }
-  settings.extraTime.percent = percentValue;
-  settings.extraTime.minimum = minimumValue;
-  await client.query(
-    `INSERT INTO settings_autoweight (id, enabled, percent, minimum_hours, updated_at)
-     VALUES (1,$1,$2,$3,NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET enabled = EXCLUDED.enabled,
-           percent = EXCLUDED.percent,
-           minimum_hours = EXCLUDED.minimum_hours,
-           updated_at = NOW()` ,
-    [extraEnabled, percentValue, minimumValue]
-  );
-
-  const logLimit = Number(settings.logLimit);
-  if (Number.isFinite(logLimit) && logLimit > 0) {
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,$1,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
-      [Math.round(logLimit)]
-    );
-  } else {
-    await client.query(
-      `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,50,NOW())
-       ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
-      [50]
-    );
-  }
-
-  if (isPlainObject(settings.tableColumns)) {
-    for (const [key, width] of Object.entries(settings.tableColumns)) {
-      const columnKey = sanitizeString(key);
-      if (!columnKey) continue;
-      const widthValue = parseInteger(width, null);
-      if (widthValue === null) continue;
-      // eslint-disable-next-line no-await-in-loop
-      await client.query(
-        `INSERT INTO settings_column_widths (column_key, width_px, updated_at)
-         VALUES ($1,$2,NOW())
-         ON CONFLICT (column_key) DO UPDATE SET width_px = EXCLUDED.width_px, updated_at = NOW()` ,
-        [columnKey, widthValue]
-      );
-    }
-  }
-
-  if (isPlainObject(settings.crmStageMapping)) {
-    for (const [crmStage, mappedProcess] of Object.entries(settings.crmStageMapping)) {
-      const stageKey = sanitizeString(crmStage);
-      if (!stageKey) continue;
-      const process = ensureProcess(mappedProcess);
-      const processId = process?.id || null;
-      // eslint-disable-next-line no-await-in-loop
-      await client.query(
-        `INSERT INTO settings_mapping (crm_stage, planner_process_id, is_ignored, updated_at)
-         VALUES ($1,$2,FALSE,NOW())
-         ON CONFLICT (crm_stage) DO UPDATE
-           SET planner_process_id = EXCLUDED.planner_process_id,
-               is_ignored = EXCLUDED.is_ignored,
-               updated_at = NOW()` ,
-        [stageKey, processId]
-      );
-    }
-  }
-
-  const adminSettings = settings.admin || {};
-  const allowForce = parseBoolean(adminSettings.allowForceOverwrite, false);
-  const snapshotRetention = parseInteger(adminSettings.snapshotRetention, 50);
-  let historyLimit = parseInteger(adminSettings.historyLimit, 50);
-  if (!Number.isFinite(historyLimit) || historyLimit <= 0) {
-    historyLimit = 50;
-  }
-  historyLimit = Math.max(1, Math.min(historyLimit, 500));
-  let historyDailyLimit = parseInteger(adminSettings.historyDailyLimit, 3);
-  if (!Number.isFinite(historyDailyLimit) || historyDailyLimit <= 0) {
-    historyDailyLimit = 3;
-  }
-  historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
-  await client.query(
-    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, updated_at)
-     VALUES (1,$1,$2,$3,$4,NOW())
-     ON CONFLICT (id) DO UPDATE
-       SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-           snapshot_retention = EXCLUDED.snapshot_retention,
-           history_limit = EXCLUDED.history_limit,
-           history_daily_limit = EXCLUDED.history_daily_limit,
-           updated_at = NOW()` ,
-    [
-      allowForce,
-      Number.isFinite(snapshotRetention) ? snapshotRetention : 50,
-      historyLimit,
-      historyDailyLimit
-    ]
-  );
-
-  const ignoredStatuses = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates : [];
-  for (const status of ignoredStatuses) {
-    const statusKey = sanitizeString(status);
-    if (!statusKey) continue;
-    // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO excluded_statuses (status_key, created_at)
-       VALUES ($1,NOW())
-       ON CONFLICT (status_key) DO NOTHING` ,
-      [statusKey]
-    );
-  }
-
 }
 
 app.get('/api/state', async (req, res) => {
@@ -1885,51 +1722,68 @@ app.get('/api/admin/history', async (req, res) => {
   const offsetRaw = Number.parseInt(req.query.offset, 10);
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
   const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
-  const actor = typeof req.query.actor === 'string' ? req.query.actor.trim() : '';
-  const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
-  const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
-  const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
+  const actorFilter = typeof req.query.actor === 'string' ? req.query.actor.trim().toLowerCase() : '';
+  const sourceFilter = typeof req.query.source === 'string' ? req.query.source.trim().toLowerCase() : '';
+  const fromRaw = typeof req.query.from === 'string' ? req.query.from.trim() : '';
+  const toRaw = typeof req.query.to === 'string' ? req.query.to.trim() : '';
 
   const conditions = [];
   const params = [];
 
-  if (actor) {
-    params.push(`%${actor.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.actor, s.meta->>'actor')) LIKE $${params.length})`);
-  }
+  const parseDate = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
 
-  if (source) {
-    params.push(`%${source.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.source, s.meta->>'source')) LIKE $${params.length})`);
-  }
+  const fromDate = parseDate(fromRaw);
+  const toDate = parseDate(toRaw);
 
-  if (from) {
-    params.push(new Date(from));
+  if (fromDate) {
+    params.push(fromDate);
     conditions.push(`s.created_at >= $${params.length}`);
   }
 
-  if (to) {
-    params.push(new Date(to));
+  if (toDate) {
+    params.push(toDate);
     conditions.push(`s.created_at <= $${params.length}`);
   }
 
-  params.push(limit);
-  params.push(offset);
-
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const fetchLimit = Math.max(offset + limit, limit) + 200;
+  params.push(fetchLimit);
 
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.hash, s.created_at, r.actor, r.source, r.note
+         FROM planner_snapshots AS s
          LEFT JOIN revisions AS r ON r.rev = s.rev
         ${whereClause}
         ORDER BY s.created_at DESC, s.rev DESC
-        LIMIT $${params.length - 1}
-        OFFSET $${params.length}`,
+        LIMIT $${params.length}` ,
       params
     );
-    const items = rows.map(mapHistoryRow);
+
+    const revs = rows.map((row) => Number(row.rev || 0));
+    const metaMap = await loadMetadataForRevisions(pool, revs);
+
+    const filtered = [];
+    rows.forEach((row) => {
+      const rev = Number(row.rev || 0);
+      const meta = metaMap.get(rev) || null;
+      const actorValue = (row.actor || (meta && meta.actor) || '').toString().toLowerCase();
+      const sourceValue = (row.source || (meta && meta.source) || '').toString().toLowerCase();
+      if (actorFilter && !actorValue.includes(actorFilter)) {
+        return;
+      }
+      if (sourceFilter && !sourceValue.includes(sourceFilter)) {
+        return;
+      }
+      filtered.push({ row, meta });
+    });
+
+    const paged = filtered.slice(offset, offset + limit);
+    const items = paged.map(({ row, meta }) => mapHistoryRow(row, meta));
     res.json({ items });
   } catch (err) {
     console.error('GET /api/admin/history failed', err);
@@ -1946,8 +1800,8 @@ app.get('/api/admin/history/:hash', async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, s.snapshot, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.hash, s.created_at, r.actor, r.source, r.note
+         FROM planner_snapshots AS s
          LEFT JOIN revisions AS r ON r.rev = s.rev
         WHERE s.hash = $1
         ORDER BY s.created_at DESC, s.rev DESC
@@ -1959,36 +1813,49 @@ app.get('/api/admin/history/:hash', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const meta = parseJsonColumn(row.meta, null);
-    const snapshot = parseJsonColumn(row.snapshot, null);
+    const rev = Number(row.rev || 0);
+    const stored = await loadSnapshotRevision(pool, rev);
+    if (!stored) {
+      res.status(404).json({ error: 'Snapshot not found' });
+      return;
+    }
+    const snapshot = stored.snapshot || {};
+    const meta = stored.meta || null;
+
     let baseRev = null;
     let baseHash = null;
     let baseSnapshot = {};
     try {
       const { rows: prevRows } = await pool.query(
-        `SELECT rev, hash, snapshot
-           FROM planner_state_snapshots
+        `SELECT rev, hash
+           FROM planner_snapshots
           WHERE rev < $1
           ORDER BY rev DESC
           LIMIT 1`,
-        [row.rev]
+        [rev]
       );
       if (prevRows.length) {
         baseRev = Number(prevRows[0].rev || 0) || null;
         baseHash = prevRows[0].hash || null;
-        baseSnapshot = parseJsonColumn(prevRows[0].snapshot, {}) || {};
+        if (baseRev) {
+          const previous = await loadSnapshotRevision(pool, baseRev);
+          if (previous && previous.snapshot) {
+            baseSnapshot = previous.snapshot;
+          }
+        }
       }
     } catch (err) {
       console.warn('Failed to load previous snapshot for diff', err);
     }
+
     const diff = buildSnapshotDiff(baseSnapshot || {}, snapshot || {});
     const actor = row.actor || (meta && meta.actor ? meta.actor : null);
     const source = row.source || (meta && meta.source ? meta.source : null);
     const note = row.note || (meta && meta.note ? meta.note : null);
-    const etag = computeEtag(row.hash || null);
+    const etag = computeEtag(stored.hash || null);
     res.json({
-      rev: Number(row.rev || 0),
-      hash: row.hash || null,
+      rev: stored.rev,
+      hash: stored.hash || null,
       etag,
       baseRev,
       baseHash,
@@ -2011,7 +1878,7 @@ app.delete('/api/admin/history', async (_req, res) => {
   try {
     const latest = await loadLatestSnapshot();
     if (!latest) {
-      const result = await pool.query('TRUNCATE planner_state_snapshots RESTART IDENTITY');
+      const result = await pool.query('TRUNCATE planner_snapshot_entries, planner_snapshots RESTART IDENTITY');
       const removed = Number(result?.rowCount) || 0;
       logSaveEvent('info', 'history cleared (no snapshots to keep)', { requestId, removed });
       res.json({ ok: true, removed, keptRev: null, keptHash: null });
@@ -2019,7 +1886,7 @@ app.delete('/api/admin/history', async (_req, res) => {
     }
 
     const result = await pool.query(
-      'DELETE FROM planner_state_snapshots WHERE rev <> $1',
+      'DELETE FROM planner_snapshots WHERE rev <> $1',
       [latest.rev]
     );
     const removed = Number(result?.rowCount) || 0;
@@ -2049,12 +1916,13 @@ app.post('/api/admin/snapshot', async (req, res) => {
       source,
       note: note || undefined
     });
+    const hash = latest.hash || computeSnapshotHash(latest.stateString || JSON.stringify(latest.snapshot || {}));
     const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-      await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, meta);
-      return await loadLatestSnapshot(client);
+      await persistSnapshotData(client, nextRev, latest.snapshot, hash, meta, { actor });
+      return await loadSnapshotRevision(client, nextRev);
     });
-    const stored = result || await loadLatestSnapshot();
-    const etag = computeEtag(stored?.hash || latest.hash);
+    const stored = result || (await loadSnapshotRevision(pool, rev));
+    const etag = computeEtag(stored?.hash || hash);
     if (etag) {
       res.set('ETag', etag);
     }
@@ -2068,11 +1936,11 @@ app.post('/api/admin/snapshot', async (req, res) => {
         rev,
         snapshot: latest.snapshot,
         stateString: latest.stateString,
-        hash: latest.hash,
+        hash,
         meta
       };
-      broadcastRevision({ rev, hash: latest.hash, etag });
-      res.status(201).json({ ok: true, rev, hash: latest.hash, etag });
+      broadcastRevision({ rev, hash, etag });
+      res.status(201).json({ ok: true, rev, hash, etag });
     }
   } catch (err) {
     console.error('POST /api/admin/snapshot failed', err);
@@ -2088,8 +1956,9 @@ app.post('/api/admin/rollback', async (req, res) => {
   }
   try {
     const { rows } = await pool.query(
-      `SELECT s.rev, s.snapshot, s.hash, s.meta, s.created_at
-         FROM planner_state_snapshots AS s
+      `SELECT s.rev, s.hash, s.created_at, r.actor, r.source, r.note
+         FROM planner_snapshots AS s
+         LEFT JOIN revisions AS r ON r.rev = s.rev
         WHERE s.hash = $1
         ORDER BY s.created_at DESC, s.rev DESC
         LIMIT 1`,
@@ -2100,7 +1969,13 @@ app.post('/api/admin/rollback', async (req, res) => {
       return;
     }
     const row = rows[0];
-    const snapshot = parseJsonColumn(row.snapshot, {});
+    const rev = Number(row.rev || 0);
+    const stored = await loadSnapshotRevision(pool, rev);
+    if (!stored) {
+      res.status(404).json({ error: 'Snapshot not found' });
+      return;
+    }
+    const snapshot = stored.snapshot || {};
     const stateString = JSON.stringify(snapshot);
     const hash = computeSnapshotHash(stateString);
     const actor = sanitizeString(req.body?.actor) || 'admin';
@@ -2110,8 +1985,8 @@ app.post('/api/admin/rollback', async (req, res) => {
       source: 'rollback',
       note: note || undefined,
       rollbackFrom: targetHash,
-      baseRev: Number(row.rev || 0),
-      previousMeta: parseJsonColumn(row.meta, null)
+      baseRev: stored.rev,
+      previousMeta: stored.meta || undefined
     });
 
     const requestId = createRequestId();
@@ -2164,7 +2039,6 @@ async function bootstrap() {
   await runMigrations();
   await getLatestRevision();
   await getCachedSnapshot();
-  await ensureSqlHydrated();
   app.listen(PORT, () => {
     console.log(`Planner SQL bridge listening on port ${PORT}`);
   });
