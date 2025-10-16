@@ -1074,11 +1074,91 @@ async function persistIgnoredStates(client, rev, ignored) {
   }
 }
 
+function sanitizeStageOrdersEntry(entry) {
+  if (!Array.isArray(entry) || entry.length < 1) {
+    return null;
+  }
+  const stage = parseOptionalString(entry[0]);
+  if (!stage) {
+    return null;
+  }
+  const rawList = entry.length > 1 ? entry[1] : [];
+  const uids = Array.isArray(rawList)
+    ? rawList.map((value) => parseOptionalString(value)).filter((value) => value !== null)
+    : [];
+  return { stage, uids };
+}
+
+function sanitizeLockedEntry(entry) {
+  const value = parseOptionalString(entry);
+  return value || null;
+}
+
 async function persistListEntries(client, rev, listKey, entries) {
   await client.query(`DELETE FROM ${TABLE_LIST_ENTRIES} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
   if (!Array.isArray(entries) || !entries.length) {
     return;
   }
+
+  if (listKey === 'locked') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const uid = sanitizeLockedEntry(entries[index]);
+      if (!uid) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+         VALUES ($1,$2,$3,$4,$5,$6)` ,
+        [rev, listKey, null, null, uid, index]
+      );
+    }
+    return;
+  }
+
+  if (listKey === 'orders') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const sanitized = sanitizeStageOrdersEntry(entries[index]);
+      if (!sanitized) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      const orderIdentity = sanitized.stage;
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id` ,
+        [rev, listKey, sanitized.stage, null, orderIdentity, index]
+      );
+      const entryId = rows[0]?.id;
+      if (!entryId) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      const attributeRows = flattenObjectForStorage({ stage: sanitized.stage, uids: sanitized.uids });
+      for (const row of attributeRows) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+          [
+            entryId,
+            row.path,
+            row.ordinal || 0,
+            row.type,
+            row.valueText,
+            row.valueNumeric,
+            row.valueBoolean,
+            null
+          ]
+        );
+      }
+    }
+    return;
+  }
+
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (!isPlainObject(entry)) {
@@ -1090,7 +1170,7 @@ async function persistListEntries(client, rev, listKey, entries) {
     const orderIdentity = parseOptionalString(entry.orderId || entry.orderNumber || entry.orderIdentity);
     // eslint-disable-next-line no-await-in-loop
     const { rows } = await client.query(
-      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
        VALUES ($1,$2,$3,$4,$5,$6)
        RETURNING id` ,
       [rev, listKey, parentOrderId, childOrderId, orderIdentity, index]
@@ -1104,7 +1184,7 @@ async function persistListEntries(client, rev, listKey, entries) {
     for (const row of attributeRows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
         [
           entryId,
@@ -1280,7 +1360,7 @@ async function loadRouteOverrides(executor, rev) {
 
 async function loadListEntries(executor, rev, listKey) {
   const { rows } = await executor.query(
-    `SELECT id, ordinal
+    `SELECT id, ordinal, parent_order_id, child_order_id, order_identity`
        FROM ${TABLE_LIST_ENTRIES}
       WHERE rev = $1 AND list_key = $2
       ORDER BY ordinal`,
@@ -1289,11 +1369,18 @@ async function loadListEntries(executor, rev, listKey) {
   if (!rows.length) {
     return [];
   }
+
+  if (listKey === 'locked') {
+    return rows
+      .map((row) => parseOptionalString(row.order_identity) || parseOptionalString(row.parent_order_id))
+      .filter((value) => value);
+  }
+
   const entryIds = rows.map((row) => row.id);
   const { rows: attrRows } = await executor.query(
-    `SELECT entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean
+    `SELECT entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean`
        FROM ${TABLE_LIST_ATTRIBUTES}
-      WHERE entry_id = ANY($1::bigint[])
+      WHERE entry_id = ANY($1::bigint[])`
       ORDER BY entry_id, char_length(attr_path), attr_path, ordinal`,
     [entryIds]
   );
@@ -1311,10 +1398,44 @@ async function loadListEntries(executor, rev, listKey) {
       ordinal: row.ordinal
     });
   });
+
+  if (listKey === 'orders') {
+    return rows
+      .map((row) => {
+        const attrs = grouped.get(row.id) || [];
+        const built = buildObjectFromRows(attrs);
+        const stage = parseOptionalString(built.stage)
+          || parseOptionalString(row.parent_order_id)
+          || parseOptionalString(row.order_identity);
+        if (!stage) {
+          return null;
+        }
+        const uidsSource = Array.isArray(built.uids) ? built.uids : [];
+        const uids = uidsSource
+          .map((value) => parseOptionalString(value))
+          .filter((value) => value);
+        return [stage, uids];
+      })
+      .filter((value) => Array.isArray(value) && value.length === 2);
+  }
+
   return rows.map((row) => {
     const attrs = grouped.get(row.id) || [];
     const built = buildObjectFromRows(attrs);
-    return isPlainObject(built) ? built : {};
+    if (isPlainObject(built) && Object.keys(built).length) {
+      return built;
+    }
+    const fallback = {};
+    if (row.parent_order_id) {
+      fallback.parentId = row.parent_order_id;
+    }
+    if (row.child_order_id) {
+      fallback.childId = row.child_order_id;
+    }
+    if (row.order_identity) {
+      fallback.orderId = row.order_identity;
+    }
+    return fallback;
   });
 }
 
