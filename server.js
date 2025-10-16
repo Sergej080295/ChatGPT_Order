@@ -532,6 +532,39 @@ async function ensurePlannerSnapshotsSchema(client) {
     )
   `);
   await runner.query(`
+    ALTER TABLE planner_state_snapshots
+      ADD COLUMN IF NOT EXISTS snapshot JSONB,
+      ADD COLUMN IF NOT EXISTS meta JSONB,
+      ADD COLUMN IF NOT EXISTS hash TEXT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
+  `);
+  await runner.query(`
+    UPDATE planner_state_snapshots
+       SET snapshot = '{}'::jsonb
+     WHERE snapshot IS NULL
+  `);
+  await runner.query(`
+    UPDATE planner_state_snapshots
+       SET created_at = NOW()
+     WHERE created_at IS NULL
+  `);
+  await runner.query(`
+    ALTER TABLE planner_state_snapshots
+      ALTER COLUMN snapshot SET NOT NULL
+  `);
+  await runner.query(`
+    ALTER TABLE planner_state_snapshots
+      ALTER COLUMN snapshot SET DEFAULT '{}'::jsonb
+  `);
+  await runner.query(`
+    ALTER TABLE planner_state_snapshots
+      ALTER COLUMN created_at SET NOT NULL
+  `);
+  await runner.query(`
+    ALTER TABLE planner_state_snapshots
+      ALTER COLUMN created_at SET DEFAULT NOW()
+  `);
+  await runner.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS planner_state_snapshots_rev_key
       ON planner_state_snapshots(rev)
   `);
