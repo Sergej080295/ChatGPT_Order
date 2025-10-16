@@ -742,8 +742,8 @@ body.overview-fs-active{overflow:hidden}
   <nav class="pc-nav" aria-label="Основные разделы">
     <a class="pc-nav__link" data-section="crm" href="/CRM.html">CRM</a>
     <a class="pc-nav__link" data-section="planner" href="/Planner_Codex_v3.html">Планировщик</a>
-    <a class="pc-nav__link" data-section="settings" href="#settings">Настройки</a>
-    <a class="pc-nav__link" data-section="journal" href="#journal">Журнал</a>
+    <a class="pc-nav__link" data-section="settings" data-action="open-settings" href="#settings">Настройки</a>
+    <a class="pc-nav__link" data-section="journal" data-action="open-log" href="#journal">Журнал</a>
   </nav>
   <div class="pc-header__actions">
     <button class="pc-icon-btn pc-theme-toggle" type="button" data-action="toggle-theme" aria-pressed="false" aria-label="Переключить тему">
@@ -804,13 +804,6 @@ body.overview-fs-active{overflow:hidden}
           </button>
         </div>
         <button id="saveBtn" class="pc-btn pc-btn--primary" type="button">Сохранить</button>
-        <button id="logBtn" class="pc-icon-btn" data-variant="ghost" type="button" title="Журнал" aria-label="Журнал">
-          <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false">
-            <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M5 4h12a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V6a2 2 0 0 1 2-2Z" />
-            <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M8 8h6M8 12h8" />
-          </svg>
-        </button>
-        <button id="settingsBtn" class="pc-icon-btn" data-variant="ghost" type="button" title="Настройки" aria-label="Настройки">⚙️</button>
       </div>
     </div>
     <div class="planner-toolbar__secondary">
@@ -14767,21 +14760,88 @@ function updateFreshnessUI(){
   if(manualEl) manualEl.textContent = manualFreshnessStr || '—';
 }
 
-function markLogAttention(){ $("#logBtn")?.classList.add('attn'); }
-function clearLogAttention(){ $("#logBtn")?.classList.remove('attn'); }
+function getActionTargets(action){
+  if(!action) return [];
+  return Array.from(document.querySelectorAll(`[data-action="${action}"]`));
+}
+
+function markLogAttention(){
+  getActionTargets('open-log').forEach(el => el.classList.add('pc-nav__link--alert'));
+}
+
+function clearLogAttention(){
+  getActionTargets('open-log').forEach(el => el.classList.remove('pc-nav__link--alert'));
+}
 
 function updateSettingsAttentionBadge(pendingCount){
-  const btn = document.getElementById('settingsBtn');
-  if(!btn) return;
   const active = Number(pendingCount) > 0;
-  btn.classList.toggle('has-alert', active);
-  if(active){
-    const baseTitle = btn.dataset.baseTitle || btn.title || 'Настройки';
-    btn.dataset.baseTitle = baseTitle;
-    btn.title = `${baseTitle} — требуется сопоставление стадий`;
-  }else if(btn.dataset.baseTitle){
-    btn.title = btn.dataset.baseTitle;
+  getActionTargets('open-settings').forEach(el => {
+    el.classList.toggle('pc-nav__link--alert', active);
+    if(active){
+      if(el.dataset.baseTitle === undefined){
+        el.dataset.baseTitle = el.getAttribute('title') || '';
+      }
+      const baseTitle = el.dataset.baseTitle || 'Настройки';
+      el.setAttribute('title', `${baseTitle} — требуется сопоставление стадий`);
+    }else if(el.dataset.baseTitle !== undefined){
+      const baseTitle = el.dataset.baseTitle;
+      if(baseTitle){
+        el.setAttribute('title', baseTitle);
+      }else{
+        el.removeAttribute('title');
+      }
+      delete el.dataset.baseTitle;
+    }
+  });
+}
+
+function openLogDialog(){
+  const dialog = $('#logDlg');
+  if(!dialog) return;
+  renderLogList();
+  clearLogAttention();
+  dialog.showModal();
+}
+
+function openSettingsDialog(){
+  const dialog = $('#settingsDlg');
+  if(!dialog) return;
+  const aliasInput = $('#userAlias');
+  if(aliasInput){
+    aliasInput.value = userAlias;
   }
+  const shiftBox = $('#shiftOnProgress');
+  if(shiftBox) shiftBox.checked = shiftOnProgress;
+  const autoBox = $('#autoOptimize');
+  if(autoBox) autoBox.checked = autoOptimizeOn;
+  const cascadeBox = $('#cascadeReady');
+  if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
+  const autosaveBox = $('#autosaveSetting');
+  if(autosaveBox) autosaveBox.checked = autosaveOn;
+  const logLimitField = $('#logLimitInput');
+  if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
+  const locBox = $('#storageLocal');
+  if(locBox) locBox.checked = enableLocalStore;
+  const remBox = $('#storageRemote');
+  if(remBox){
+    remBox.checked = enableRemoteStore;
+    remBox.disabled = !remoteBridge.hasRemote;
+    remBox.parentElement?.classList.toggle('muted', remBox.disabled);
+  }
+  const startStageSel = $('#startStagePreference');
+  if(startStageSel) startStageSel.value = getPreferredStartStage();
+  $$('input[name="accessMode"]').forEach(radio => {
+    radio.checked = radio.value === accessMode;
+  });
+  sharedSettingsEditing = true;
+  resetSharedSettingsDraft();
+  renderSystemSettingsUI();
+  renderAdminSettingsUI();
+  captureSharedSettingsSnapshot(true);
+  refreshDataModeIndicator();
+  refreshPlannerModeUI();
+  activateSettingsTab('personal');
+  dialog.showModal();
 }
 
 function recompute(){
@@ -14918,6 +14978,12 @@ function switchProcess(newProc){
     if(userCanEdit()) persistNow(prev);
   }
 
+  if(isCrmMode()){
+    try{
+      refreshCrmDerivedData({ recompute:false, rebuildOverview:false, allowDuringInit:true });
+    }catch(_err){ /* noop */ }
+  }
+
   if(newProc === OVERVIEW_STAGE){
     currentProc = newProc;
     const filterEl = $("#ordersOverviewFilter");
@@ -14958,6 +15024,15 @@ function switchProcess(newProc){
       purgeDoneFromStageCache(newProc, done);
     }
     tasks = active;
+  }
+
+  if(!tasks.length && isCrmMode()){
+    const fallback = Array.isArray(crmStageTasks)
+      ? crmStageTasks.filter(task => task && task.stage === newProc)
+      : [];
+    if(fallback.length){
+      tasks = fallback.map(cloneTaskRecord);
+    }
   }
 
   lockedUids = new Set();
@@ -15578,7 +15653,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
           alert('Изменения сохранены.');
           rebuildAndRenderMasterRoute();
         });
-        $('#logBtn').addEventListener('click', ()=>{ renderLogList(); clearLogAttention(); $('#logDlg').showModal(); });
         $('#logClose').addEventListener('click', ()=> $('#logDlg').close());
         $('#logClear').addEventListener('click', ()=>{
           if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -15604,6 +15678,12 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             });
           }
         });
+        getActionTargets('open-log').forEach(trigger => {
+          trigger.addEventListener('click', evt => {
+            evt?.preventDefault();
+            openLogDialog();
+          });
+        });
         $('#updateDetailsClose').addEventListener('click', ()=> $('#updateDetailsDlg').close());
         $('#conflictAcknowledge').addEventListener('click', ()=> $('#conflictDlg').close());
 
@@ -15618,45 +15698,12 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
           ovExitBtn.addEventListener('click', ()=> exitOverviewFullscreen());
         }
 
-        const settingsBtn = $('#settingsBtn');
-        if(settingsBtn){
-          settingsBtn.addEventListener('click', ()=>{
-            const aliasInput = $('#userAlias');
-            if(aliasInput){
-              aliasInput.value = userAlias;
-            }
-            const shiftBox = $('#shiftOnProgress');
-            if(shiftBox) shiftBox.checked = shiftOnProgress;
-            const autoBox = $('#autoOptimize');
-            if(autoBox) autoBox.checked = autoOptimizeOn;
-            const cascadeBox = $('#cascadeReady');
-            if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
-            const autosaveBox = $('#autosaveSetting');
-            if(autosaveBox) autosaveBox.checked = autosaveOn;
-            const logLimitField = $('#logLimitInput');
-            if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
-            const locBox = $('#storageLocal');
-            if(locBox) locBox.checked = enableLocalStore;
-            const remBox = $('#storageRemote');
-            if(remBox){
-              remBox.checked = enableRemoteStore;
-              remBox.disabled = !remoteBridge.hasRemote;
-              remBox.parentElement?.classList.toggle('muted', remBox.disabled);
-            }
-            const startStageSel = $('#startStagePreference');
-            if(startStageSel) startStageSel.value = getPreferredStartStage();
-            $$('input[name="accessMode"]').forEach(radio=>{ radio.checked = radio.value === accessMode; });
-            sharedSettingsEditing = true;
-            resetSharedSettingsDraft();
-            renderSystemSettingsUI();
-            renderAdminSettingsUI();
-            captureSharedSettingsSnapshot(true);
-            refreshDataModeIndicator();
-            refreshPlannerModeUI();
-            activateSettingsTab('personal');
-            $('#settingsDlg').showModal();
+        getActionTargets('open-settings').forEach(trigger => {
+          trigger.addEventListener('click', evt => {
+            evt?.preventDefault();
+            openSettingsDialog();
           });
-        }
+        });
         const settingsClose = $('#settingsClose');
         if(settingsClose){
           settingsClose.addEventListener('click', ()=> $('#settingsDlg').close());
@@ -15731,7 +15778,16 @@ document.addEventListener('DOMContentLoaded', ()=>{
   if(processSelect){
     processSelect.value = getPreferredStartStage();
   }
-  bootstrapState();
+  bootstrapState()
+    .then(() => {
+      const hash = window.location.hash;
+      if(hash === '#journal'){
+        openLogDialog();
+      }else if(hash === '#settings'){
+        openSettingsDialog();
+      }
+    })
+    .catch(err => console.error('bootstrapState failed', err));
 });
 </script>
 </body>

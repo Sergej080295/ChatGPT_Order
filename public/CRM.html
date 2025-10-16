@@ -819,6 +819,60 @@
     resize: vertical;
   }
 
+  .gridHead {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "title title service start"
+      "customer orderNo progress end";
+    gap: var(--pc-spacing-sm);
+    align-items: flex-end;
+  }
+
+  .gridHead > div {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .gridHead .title { grid-area: title; }
+  .gridHead .service { grid-area: service; }
+  .gridHead .start { grid-area: start; }
+  .gridHead .customer { grid-area: customer; }
+  .gridHead .orderNo { grid-area: orderNo; }
+  .gridHead .progressField { grid-area: progress; }
+  .gridHead .end { grid-area: end; }
+
+  .gridHead input {
+    width: 100%;
+  }
+
+  @media (max-width: 1023px) {
+    .gridHead {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-areas:
+        "title title"
+        "service start"
+        "customer customer"
+        "orderNo progress"
+        "end end";
+    }
+  }
+
+  @media (max-width: 640px) {
+    .gridHead {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas:
+        "title"
+        "service"
+        "start"
+        "customer"
+        "orderNo"
+        "progress"
+        "end";
+    }
+  }
+
   #orderForm details {
     grid-column: 1 / -1;
   }
@@ -1000,8 +1054,8 @@
   <nav class="pc-nav" aria-label="Основные разделы">
     <a class="pc-nav__link" data-section="crm" href="/CRM.html">CRM</a>
     <a class="pc-nav__link" data-section="planner" href="/Planner_Codex_v3.html">Планировщик</a>
-    <a class="pc-nav__link" data-section="settings" href="#settings">Настройки</a>
-    <a class="pc-nav__link" data-section="journal" href="#journal">Журнал</a>
+    <a class="pc-nav__link" data-section="settings" data-action="open-settings" href="#settings">Настройки</a>
+    <a class="pc-nav__link" data-section="journal" data-action="open-log" href="#journal">Журнал</a>
   </nav>
   <div class="pc-header__actions">
     <button class="pc-icon-btn pc-theme-toggle" type="button" data-action="toggle-theme" aria-pressed="false" aria-label="Переключить тему">
@@ -2379,6 +2433,22 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
 renderAll();
+
+document.querySelectorAll('[data-action="open-settings"]').forEach(link => {
+  link.addEventListener('click', evt => {
+    evt.preventDefault();
+    if(typeof openBoard === 'function'){
+      openBoard();
+    }
+  });
+});
+
+document.querySelectorAll('[data-action="open-log"]').forEach(link => {
+  link.addEventListener('click', evt => {
+    evt.preventDefault();
+    window.location.href = '/Planner_Codex_v3.html#journal';
+  });
+});
 
 /* hotkeys */
 document.addEventListener('keydown',e=>{
