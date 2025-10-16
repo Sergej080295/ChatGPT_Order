@@ -984,7 +984,7 @@ async function persistScalarValues(client, rev, snapshot) {
     // eslint-disable-next-line no-await-in-loop
     await client.query(
       `INSERT INTO ${TABLE_SCALARS} (rev, key, value_type, value_text, value_numeric, value_boolean, value_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)` ,
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [rev, key, normalized.type, normalized.text, normalized.numeric, normalized.boolean, null]
     );
   }
@@ -1003,7 +1003,7 @@ async function persistCapacity(client, rev, capacity) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_CAPACITY} (rev, process_code, minutes) VALUES ($1,$2,$3)` ,
+      `INSERT INTO ${TABLE_CAPACITY} (rev, process_code, minutes) VALUES ($1,$2,$3)`
       [rev, String(code), numeric]
     );
   }
@@ -1022,7 +1022,7 @@ async function persistParallel(client, rev, parallel) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_PARALLEL} (rev, process_code, is_parallel) VALUES ($1,$2,$3)` ,
+      `INSERT INTO ${TABLE_PARALLEL} (rev, process_code, is_parallel) VALUES ($1,$2,$3)`
       [rev, String(code), flag]
     );
   }
@@ -1049,7 +1049,7 @@ async function persistRouteOverrides(client, rev, overrides) {
     // eslint-disable-next-line no-await-in-loop
     await client.query(
       `INSERT INTO ${TABLE_ROUTE_OVERRIDES} (rev, parent_order_id, stage, start_at, end_at, source)
-       VALUES ($1,$2,$3,$4,$5,$6)` ,
+       VALUES ($1,$2,$3,$4,$5,$6)`
       [rev, parentOrderId, stage, startAt ? startAt.toISOString() : null, endAt ? endAt.toISOString() : null, source]
     );
   }
@@ -1068,7 +1068,7 @@ async function persistIgnoredStates(client, rev, ignored) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_IGNORED_STATES} (rev, state_key, ordinal) VALUES ($1,$2,$3)` ,
+      `INSERT INTO ${TABLE_IGNORED_STATES} (rev, state_key, ordinal) VALUES ($1,$2,$3)`
       [rev, key, index]
     );
   }
@@ -1109,8 +1109,8 @@ async function persistListEntries(client, rev, listKey, entries) {
       }
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
-         VALUES ($1,$2,$3,$4,$5,$6)` ,
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
         [rev, listKey, null, null, uid, index]
       );
     }
@@ -1127,7 +1127,7 @@ async function persistListEntries(client, rev, listKey, entries) {
       const orderIdentity = sanitized.stage;
       // eslint-disable-next-line no-await-in-loop
       const { rows } = await client.query(
-        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
          VALUES ($1,$2,$3,$4,$5,$6)
          RETURNING id` ,
         [rev, listKey, sanitized.stage, null, orderIdentity, index]
@@ -1141,8 +1141,8 @@ async function persistListEntries(client, rev, listKey, entries) {
       for (const row of attributeRows) {
         // eslint-disable-next-line no-await-in-loop
         await client.query(
-          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             entryId,
             row.path,
@@ -1170,7 +1170,7 @@ async function persistListEntries(client, rev, listKey, entries) {
     const orderIdentity = parseOptionalString(entry.orderId || entry.orderNumber || entry.orderIdentity);
     // eslint-disable-next-line no-await-in-loop
     const { rows } = await client.query(
-      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
        VALUES ($1,$2,$3,$4,$5,$6)
        RETURNING id` ,
       [rev, listKey, parentOrderId, childOrderId, orderIdentity, index]
@@ -1184,8 +1184,8 @@ async function persistListEntries(client, rev, listKey, entries) {
     for (const row of attributeRows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           entryId,
           row.path,
@@ -1211,7 +1211,7 @@ async function persistStructuredValues(client, table, rev, data) {
     // eslint-disable-next-line no-await-in-loop
     await client.query(
       `INSERT INTO ${table} (rev, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         rev,
         row.path,
@@ -1259,7 +1259,7 @@ async function persistMetaHistory(client, rev, history) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
         `INSERT INTO ${TABLE_META_HISTORY_ATTRS} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           entryId,
           row.path,
@@ -1360,7 +1360,7 @@ async function loadRouteOverrides(executor, rev) {
 
 async function loadListEntries(executor, rev, listKey) {
   const { rows } = await executor.query(
-    `SELECT id, ordinal, parent_order_id, child_order_id, order_identity`
+    `SELECT id, ordinal, parent_order_id, child_order_id, order_identity
        FROM ${TABLE_LIST_ENTRIES}
       WHERE rev = $1 AND list_key = $2
       ORDER BY ordinal`,
@@ -1378,9 +1378,9 @@ async function loadListEntries(executor, rev, listKey) {
 
   const entryIds = rows.map((row) => row.id);
   const { rows: attrRows } = await executor.query(
-    `SELECT entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean`
+    `SELECT entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean
        FROM ${TABLE_LIST_ATTRIBUTES}
-      WHERE entry_id = ANY($1::bigint[])`
+      WHERE entry_id = ANY($1::bigint[])
       ORDER BY entry_id, char_length(attr_path), attr_path, ordinal`,
     [entryIds]
   );
@@ -1680,7 +1680,7 @@ async function persistGeneralSettings(client, payload, options = {}) {
   if (sanitized.settings === null) {
     await client.query(
       `INSERT INTO ${TABLE_GENERAL_SETTINGS} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       ['', 0, 'null', null, null, null, null, actor]
     );
   } else if (isPlainObject(sanitized.settings)) {
@@ -1689,7 +1689,7 @@ async function persistGeneralSettings(client, payload, options = {}) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
         `INSERT INTO ${TABLE_GENERAL_SETTINGS} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           row.path,
           row.ordinal || 0,
@@ -1789,7 +1789,7 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta, options = 
      VALUES ($1,$2)
      ON CONFLICT (rev) DO UPDATE
        SET hash = EXCLUDED.hash,
-           created_at = NOW()` ,
+           created_at = NOW()`,
     [rev, hash]
   );
 
