@@ -44,6 +44,48 @@ const PG_UNDEFINED_TABLE = '42P01';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
 
+const CRM_STAGE_IGNORE = '__ignore__';
+const CRM_STAGE_DEFAULT_MAP = new Map([
+  ['подготовка в работу', 'draw'],
+  ['технологи: подготовка в работу', 'draw'],
+  ['техподготовка', 'draw'],
+  ['закупка', 'proc'],
+  ['покупка', 'proc'],
+  ['снабжение', 'proc'],
+  ['рубка', 'shear'],
+  ['резка', 'shear'],
+  ['лазер', 'laser'],
+  ['гибка', 'bend'],
+  ['сварка', 'weld'],
+  ['зенковка', 'mech'],
+  ['зенкование', 'mech'],
+  ['мехобработка', 'mech'],
+  ['мех.обработка', 'mech'],
+  ['мех. обработка', 'mech'],
+  ['мех-обработка', 'mech'],
+  ['мехобр', 'mech'],
+  ['мехобр.', 'mech'],
+  ['сверловка', 'mech'],
+  ['сверление', 'mech'],
+  ['сверл', 'mech'],
+  ['резьбонарезка', 'mech'],
+  ['резьба', 'mech'],
+  ['резьб', 'mech'],
+  ['пуклевка', 'mech'],
+  ['пукл', 'mech'],
+  ['заклепка', 'mech'],
+  ['заклеп', 'mech'],
+  ['кооперация', 'coop'],
+  ['кооп', 'coop'],
+  ['покраска', 'coop'],
+  ['цинкование (кооперация)', 'coop'],
+  ['цинкование', 'coop'],
+  ['упаковка', 'pack'],
+  ['отгрузка', 'ship']
+]);
+const CRM_PARALLEL_STAGES = new Set(['proc', 'shear', 'coop', 'pack', 'ship']);
+const CRM_TASK_PREFIX = 'crm-task::';
+
 const WRITE_CHANNELS = Object.freeze({
   CRM: 'crm',
   PLANNER: 'planner',
@@ -179,6 +221,250 @@ function normalizeChannelValue(value) {
     return WRITE_CHANNELS.SYSTEM;
   }
   return WRITE_CHANNELS.PLANNER;
+}
+
+function normalizeCrmStageLabel(value) {
+  return sanitizeString(value);
+}
+
+function normalizeCrmStageKey(value) {
+  const label = normalizeCrmStageLabel(value);
+  return label ? label.toLowerCase() : '';
+}
+
+function sanitizeCrmStageMapping(mapping) {
+  if (!isPlainObject(mapping)) {
+    return {};
+  }
+  const result = {};
+  Object.entries(mapping).forEach(([key, value]) => {
+    const normalizedKey = normalizeCrmStageKey(key);
+    if (!normalizedKey) return;
+    if (value === CRM_STAGE_IGNORE) {
+      result[normalizedKey] = CRM_STAGE_IGNORE;
+      return;
+    }
+    const stage = normalizeStage(value);
+    if (stage) {
+      result[normalizedKey] = stage;
+    }
+  });
+  return result;
+}
+
+function clampProgressValue(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  if (num < 0) return 0;
+  if (num > 100) return 100;
+  return Math.round(num);
+}
+
+function mapCrmStageName(label, customMap) {
+  const normalizedKey = normalizeCrmStageKey(label);
+  if (!normalizedKey) {
+    return null;
+  }
+  if (customMap && Object.prototype.hasOwnProperty.call(customMap, normalizedKey)) {
+    const mapped = customMap[normalizedKey];
+    if (mapped === CRM_STAGE_IGNORE) {
+      return null;
+    }
+    if (mapped) {
+      return normalizeStage(mapped);
+    }
+  }
+  const fallback = CRM_STAGE_DEFAULT_MAP.get(normalizedKey);
+  if (fallback) {
+    return fallback;
+  }
+  if (
+    normalizedKey.includes('кооп')
+    || normalizedKey.includes('кооперац')
+    || normalizedKey.includes('покрас')
+  ) {
+    return 'coop';
+  }
+  if (
+    normalizedKey.includes('мехобр')
+    || normalizedKey.includes('зенк')
+    || normalizedKey.includes('сверл')
+    || normalizedKey.includes('резьб')
+    || normalizedKey.includes('пукл')
+    || normalizedKey.includes('заклеп')
+  ) {
+    return 'mech';
+  }
+  return null;
+}
+
+function buildCrmTaskUid(orderInfo, stageInfo, stageKey) {
+  const parts = [
+    orderInfo.identity,
+    orderInfo.crmOrderId,
+    orderInfo.orderId,
+    orderInfo.orderNumber,
+    orderInfo.title,
+    stageInfo?.id,
+    stageInfo?.crmStageId,
+    stageInfo?.name,
+    stageKey
+  ].map((part) => sanitizeString(part)).filter(Boolean);
+  const base = parts.length ? parts.join('|') : `${stageKey}::${Math.random().toString(16).slice(2, 10)}`;
+  const hash = crypto.createHash('sha1').update(base, 'utf8').digest('hex').slice(0, 12);
+  return `${CRM_TASK_PREFIX}${hash}::${stageKey}`;
+}
+
+function deriveCrmTasksFromSnapshot(snapshot, { existingTasks = [] } = {}) {
+  if (!isPlainObject(snapshot?.crm) || !Array.isArray(snapshot.crm.boards)) {
+    return [];
+  }
+
+  const customMapping = sanitizeCrmStageMapping(snapshot?.meta?.settings?.crmStageMapping);
+  const existingKeys = new Set();
+  existingTasks.forEach((task) => {
+    if (!task) return;
+    const stageKey = normalizeStage(task.stage);
+    if (!stageKey) return;
+    const identity = sanitizeString(task.orderIdentity)
+      || sanitizeString(task.uid)
+      || sanitizeString(task.orderId)
+      || sanitizeString(task.orderNumber)
+      || sanitizeString(task.title)
+      || sanitizeString(task.orderTitle);
+    if (!identity) return;
+    existingKeys.add(`${identity}::${stageKey}`);
+  });
+
+  const tasks = [];
+
+  snapshot.crm.boards.forEach((board) => {
+    if (!board || !Array.isArray(board.orders)) return;
+    const boardId = sanitizeString(board.id);
+    const laneFallback = Array.isArray(board.lanes) && board.lanes.length
+      ? sanitizeString(board.lanes[0])
+      : '';
+    board.orders.forEach((order) => {
+      if (!order) return;
+      const identity = sanitizeString(order.orderIdentity)
+        || sanitizeString(order.id)
+        || sanitizeString(order.orderId)
+        || sanitizeString(order.orderNo)
+        || sanitizeString(order.title);
+      const orderNumber = sanitizeString(order.orderNumber)
+        || sanitizeString(order.orderNo)
+        || sanitizeString(order.orderId);
+      const orderCustomer = sanitizeString(order.orderCustomer)
+        || sanitizeString(order.customer);
+      const title = sanitizeString(order.title);
+      const parentId = sanitizeString(order.parentId);
+      const lane = sanitizeString(order.status) || sanitizeString(order.lane) || laneFallback;
+      const crmOrderId = sanitizeString(order.id) || sanitizeString(order.orderId);
+      const stageList = Array.isArray(order.stages) ? order.stages : [];
+
+      stageList.forEach((stageEntry) => {
+        if (!stageEntry) return;
+        const stageKey = mapCrmStageName(stageEntry.stageKey || stageEntry.name, customMapping);
+        if (!stageKey) return;
+        const dedupeKey = identity ? `${identity}::${stageKey}` : null;
+        if (dedupeKey && existingKeys.has(dedupeKey)) {
+          return;
+        }
+
+        const start = parseDate(stageEntry.start || stageEntry.startDate);
+        const end = parseDate(stageEntry.end || stageEntry.endDate);
+        const origStart = parseDate(stageEntry.originalStart || stageEntry.origStart);
+        const origEnd = parseDate(stageEntry.originalEnd || stageEntry.origEnd);
+        const doneAt = parseDate(stageEntry.doneAt);
+        const hoursRaw = Number(stageEntry.hours ?? stageEntry.value ?? 0);
+        const hours = CRM_PARALLEL_STAGES.has(stageKey)
+          ? 0
+          : (Number.isFinite(hoursRaw) && hoursRaw > 0 ? hoursRaw : 0);
+        const progress = clampProgressValue(
+          stageEntry.progress != null ? stageEntry.progress : (stageEntry.done ? 100 : 0)
+        );
+        const isDone = Boolean(stageEntry.done || stageEntry.isReady || progress >= 100);
+
+        const orderInfo = {
+          identity,
+          crmOrderId,
+          orderId: sanitizeString(order.orderId) || orderNumber || crmOrderId || identity || '',
+          orderNumber: orderNumber || '',
+          orderCustomer: orderCustomer || '',
+          title: title || '',
+          parentId: parentId || '',
+          boardId: boardId || '',
+          lane: lane || ''
+        };
+
+        const uid = buildCrmTaskUid(orderInfo, stageEntry, stageKey);
+        const task = {
+          uid,
+          orderId: orderInfo.orderId,
+          orderNumber: orderInfo.orderNumber,
+          orderCustomer: orderInfo.orderCustomer,
+          orderIdentity: orderInfo.identity || '',
+          orderTitle: orderInfo.title,
+          stage: stageKey,
+          parentId: orderInfo.parentId,
+          childId: '',
+          hours,
+          extraHours: 0,
+          startDate: start,
+          endDate: end,
+          startMissing: !start,
+          endMissing: !end,
+          state: orderInfo.lane,
+          status: isDone ? 'Готово (CRM)' : 'CRM',
+          useReserve: Boolean(stageEntry.useReserve),
+          progress,
+          origStartDate: origStart,
+          origEndDate: origEnd,
+          route: {
+            [stageKey]: {
+              hours,
+              start,
+              end,
+              ...(origStart ? { origStart } : {}),
+              ...(origEnd ? { origEnd } : {}),
+              ...(doneAt ? { doneAt } : {}),
+              ...(isDone ? { done: true } : {})
+            }
+          },
+          crmMeta: {
+            boardId: orderInfo.boardId,
+            crmOrderId,
+            orderId: orderInfo.orderId,
+            orderIdentity: orderInfo.identity || '',
+            stageKey,
+            stageId: stageEntry.id || stageEntry.crmStageId || '',
+            stageName: sanitizeString(stageEntry.name) || stageKey,
+            lane: orderInfo.lane
+          },
+          crmOrigin: true
+        };
+
+        if (isDone) {
+          const doneMoment = doneAt || end || start;
+          if (doneMoment) {
+            const doneDate = parseDate(doneMoment) || null;
+            if (doneDate) {
+              task.doneMeta = { when: doneDate, source: 'crm' };
+            }
+          }
+        }
+
+        if (dedupeKey) {
+          existingKeys.add(dedupeKey);
+        }
+        tasks.push(task);
+      });
+    });
+  });
+
+  return tasks;
 }
 
 function classifyWriteChannel({ channel = null, source = null } = {}) {
@@ -1769,7 +2055,9 @@ function mergeOrderRecords(target, source) {
 async function applySnapshotToSql(client, snapshot) {
   await ensurePlannerSettingsSchema(client);
   const previousWriteMode = await getCurrentWriteMode(client);
-  const tasks = Array.isArray(snapshot.t) ? snapshot.t : [];
+  const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
+  const crmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
+  const tasks = baseTasks.concat(crmTasks);
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
 
