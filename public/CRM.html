@@ -809,7 +809,7 @@
     color: var(--pc-text);
     padding: 0;
     box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
-    width: min(1040px, 96vw);
+    width: min(1120px, 96vw);
   }
 
   dialog#orderDlg::backdrop {
@@ -913,27 +913,53 @@
 
   .gridHead {
     display: grid;
-    grid-template-columns: minmax(0, 2.6fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-areas:
-      "title title service start"
-      "customer orderNo progress end";
-    gap: var(--pc-spacing-md);
-    align-items: flex-end;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    column-gap: var(--pc-spacing-lg);
+    row-gap: var(--pc-spacing-md);
+    align-items: flex-start;
   }
 
   .gridHead > div {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-width: 0;
   }
 
-  .gridHead .title { grid-area: title; }
-  .gridHead .service { grid-area: service; }
-  .gridHead .start { grid-area: start; }
-  .gridHead .customer { grid-area: customer; }
-  .gridHead .orderNo { grid-area: orderNo; }
-  .gridHead .progressField { grid-area: progress; }
-  .gridHead .end { grid-area: end; }
+  .gridHead .title {
+    grid-column: 1 / span 8;
+    grid-row: 1;
+  }
+
+  .gridHead .service {
+    grid-column: 9 / span 4;
+    grid-row: 1;
+  }
+
+  .gridHead .customer {
+    grid-column: 1 / span 6;
+    grid-row: 2;
+  }
+
+  .gridHead .orderNo {
+    grid-column: 7 / span 3;
+    grid-row: 2;
+  }
+
+  .gridHead .progressField {
+    grid-column: 10 / span 3;
+    grid-row: 2;
+  }
+
+  .gridHead .start {
+    grid-column: 1 / span 6;
+    grid-row: 3;
+  }
+
+  .gridHead .end {
+    grid-column: 7 / span 6;
+    grid-row: 3;
+  }
 
   .gridHead input:not([type="checkbox"]) {
     width: 100%;
@@ -963,27 +989,59 @@
 
   @media (max-width: 1023px) {
     .gridHead {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-areas:
-        "title title"
-        "service start"
-        "customer customer"
-        "orderNo progress"
-        "end end";
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+
+    .gridHead .title {
+      grid-column: 1 / span 6;
+      grid-row: 1;
+    }
+
+    .gridHead .service {
+      grid-column: 1 / span 3;
+      grid-row: 2;
+    }
+
+    .gridHead .start {
+      grid-column: 4 / span 3;
+      grid-row: 2;
+    }
+
+    .gridHead .customer {
+      grid-column: 1 / span 3;
+      grid-row: 3;
+    }
+
+    .gridHead .orderNo {
+      grid-column: 4 / span 3;
+      grid-row: 3;
+    }
+
+    .gridHead .progressField {
+      grid-column: 1 / span 3;
+      grid-row: 4;
+    }
+
+    .gridHead .end {
+      grid-column: 4 / span 3;
+      grid-row: 4;
     }
   }
 
   @media (max-width: 640px) {
     .gridHead {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-areas:
-        "title"
-        "service"
-        "start"
-        "customer"
-        "orderNo"
-        "progress"
-        "end";
+    }
+
+    .gridHead .title,
+    .gridHead .service,
+    .gridHead .customer,
+    .gridHead .orderNo,
+    .gridHead .progressField,
+    .gridHead .start,
+    .gridHead .end {
+      grid-column: 1 / -1;
+      grid-row: auto;
     }
   }
 
@@ -1271,7 +1329,7 @@
               <span class="note">Галочка «Готово» = 100% по переделу.</span>
             </div>
             <div class="right">
-              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary">+ Передел</button>
+              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Shift — выбрать из списка">+ Передел</button>
               <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost">🔁 Базовые</button>
               <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost">📋 Все</button>
             </div>
@@ -1888,7 +1946,14 @@ function handleOrderDoneChange(){
 }
 
 if(addStageBtn){
-  addStageBtn.addEventListener('click',e=>{e.preventDefault();showStagePicker(addStageBtn);});
+  addStageBtn.addEventListener('click',e=>{
+    e.preventDefault();
+    if(e.shiftKey||e.altKey||e.metaKey||e.ctrlKey){
+      showStagePicker(addStageBtn);
+      return;
+    }
+    appendStageByName('');
+  });
 }
 if(presetStagesBtn){
   presetStagesBtn.addEventListener('click',()=>applyStagePreset(DEFAULT_STAGES));
