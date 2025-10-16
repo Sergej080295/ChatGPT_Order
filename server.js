@@ -2116,7 +2116,7 @@ async function applySnapshotToSql(client, snapshot) {
   } else {
     await client.query(
       `INSERT INTO settings_journal (id, max_rows, updated_at)
-       VALUES (1,50,NOW())
+       VALUES (1,$1,NOW())
        ON CONFLICT (id) DO UPDATE SET max_rows = EXCLUDED.max_rows, updated_at = NOW()` ,
       [50]
     );
