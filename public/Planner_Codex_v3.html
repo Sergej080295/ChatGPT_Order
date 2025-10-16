@@ -11889,6 +11889,8 @@ function restoreState(json, opts={}){
       setCrmState(s.crm);
       modeScopedState = normalizeModeScopedState(s.modeScoped);
     }
+    const activeCrmBoardSnapshot = getActiveCrmBoard();
+    const hasCrmOrders = !!(activeCrmBoardSnapshot && Array.isArray(activeCrmBoardSnapshot.orders) && activeCrmBoardSnapshot.orders.length);
     const lockedSet = new Set(s.locked || []);
     const tAll = (s.t||[]).map(x=>{
       const rec = {
@@ -12050,9 +12052,12 @@ function restoreState(json, opts={}){
       : (typeof s.notificationsMuted === 'boolean' ? s.notificationsMuted : !!stateMeta.settings?.notificationsMuted);
     notificationsMuted = !!incomingNotificationsMuted;
 
-    const plannerModeCandidate = normalizePlannerMode(
+    let plannerModeCandidate = normalizePlannerMode(
       metaSettings.plannerMode || s.plannerMode || stateMeta.settings?.plannerMode || determinePlannerModeFallback()
     );
+    if(hasCrmOrders && plannerModeCandidate !== PLANNER_MODES.crm){
+      plannerModeCandidate = PLANNER_MODES.crm;
+    }
     plannerMode = plannerModeCandidate;
 
     const desiredSettingsStamp = preservedLocalColumns

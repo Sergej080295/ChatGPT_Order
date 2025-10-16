@@ -364,6 +364,8 @@
     display: inline-flex;
     gap: var(--pc-spacing-xs);
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .crm-toolbar__actions .pc-icon-btn svg {
@@ -371,17 +373,8 @@
     height: 18px;
   }
 
-  .crm-toolbar__search {
-    display: flex;
-    width: 100%;
-  }
-
   .crm-toolbar__stats {
     font-size: 13px;
-  }
-
-  #q {
-    width: 100%;
   }
 
   #columns {
@@ -389,8 +382,8 @@
   }
 
   .crm-kanban {
-    align-items: stretch;
-    padding-top: var(--pc-spacing-md);
+    align-items: flex-start;
+    padding: var(--pc-spacing-md);
     height: 100%;
   }
 
@@ -1075,9 +1068,6 @@
     </button>
     <div class="pc-avatar" aria-hidden="true">AP</div>
   </div>
-  <div class="pc-search">
-    <input id="q" class="pc-input" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
-  </div>
 </header>
 
 <section class="crm-toolbar">
@@ -1088,9 +1078,9 @@
           <label for="boardSelect">Доска</label>
           <select id="boardSelect" class="pc-select"></select>
         </div>
-        <span class="pc-badge crm-toolbar__stats" id="stats">—</span>
       </div>
       <div class="crm-toolbar__actions">
+        <span class="pc-badge crm-toolbar__stats" id="stats">—</span>
         <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button">+ Заказ</button>
         <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1302,7 +1292,7 @@ function currentBoard(){return state.boards.find(b=>b.id===state.currentBoardId)
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
-const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats'),q=$('#q');
+const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats');
 const LANE_PAGE_SIZE=10;
 const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
@@ -1385,11 +1375,10 @@ function collectStageIssues(stages){const seen=new Set();const result=[];(stages
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
-  const qv=q.value.trim().toLowerCase(); const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
-    const inSearch=!qv||(o.title.toLowerCase().includes(qv)||(o.orderNo||'').toLowerCase().includes(qv)||(o.customer||'').toLowerCase().includes(qv)||(o.stages||[]).some(s=>s.name.toLowerCase().includes(qv)));
-    if(!inSearch)return; const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
+    const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
   });
 
   Object.entries(map).forEach(([lane,arr])=>{
@@ -2107,7 +2096,6 @@ const editBoardBtn=$('#editBoardBtn');
 if(editBoardBtn){editBoardBtn.onclick=openBoard;}
 $('#newOrderBtn').onclick=()=>openOrder(null);
 boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
-q.oninput=()=>renderCards();
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
@@ -2276,6 +2264,10 @@ async function pushCrmToServer(){
     const now=new Date(nowIso);
     const nowLabel=now.toLocaleString();
     const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
+    const settingsRef = (meta.settings && typeof meta.settings==='object') ? meta.settings : (meta.settings = {});
+    if(settingsRef && typeof settingsRef==='object'){
+      settingsRef.plannerMode='crm';
+    }
     const versions=meta.versions || (meta.versions={});
     versions.crm=(Number(versions.crm)||0)+1;
     meta.lastAuthors=meta.lastAuthors || {};
@@ -2453,7 +2445,6 @@ document.querySelectorAll('[data-action="open-log"]').forEach(link => {
 /* hotkeys */
 document.addEventListener('keydown',e=>{
   if(e.key==='n'&&(e.ctrlKey||e.metaKey)){e.preventDefault();openOrder(null)}
-  if(e.key==='f'&&(e.ctrlKey||e.metaKey)){e.preventDefault();q.focus()}
 });
 </script>
 </body>
