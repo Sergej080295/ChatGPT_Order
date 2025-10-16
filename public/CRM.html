@@ -319,6 +319,17 @@
     }
   }
 
+  @media (max-width: 640px) {
+    .crm-toolbar__search-field {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .crm-toolbar__search-field button {
+      min-width: 100%;
+    }
+  }
+
   .crm-toolbar {
     margin: var(--pc-spacing-md) var(--pc-spacing-lg) 0;
     display: grid;
@@ -350,6 +361,7 @@
     align-items: center;
     gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
+    flex: 1 1 auto;
   }
 
   .crm-toolbar__board {
@@ -364,6 +376,41 @@
     color: var(--pc-text-muted);
     letter-spacing: 0.3px;
     text-transform: uppercase;
+  }
+
+  .crm-toolbar__search {
+    display: grid;
+    gap: 4px;
+    flex: 1 1 260px;
+    min-width: min(320px, 100%);
+  }
+
+  .crm-toolbar__search label {
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text-muted);
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+
+  .crm-toolbar__search-field {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-toolbar__search-field input {
+    flex: 1 1 auto;
+  }
+
+  .crm-toolbar__search-field button {
+    min-width: 40px;
+    align-self: stretch;
+  }
+
+  .crm-toolbar__search-field button[disabled] {
+    opacity: 0.4;
+    pointer-events: none;
   }
 
   .crm-toolbar__actions {
@@ -762,7 +809,7 @@
     color: var(--pc-text);
     padding: 0;
     box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
-    width: min(920px, 96vw);
+    width: min(1040px, 96vw);
   }
 
   dialog#orderDlg::backdrop {
@@ -866,11 +913,11 @@
 
   .gridHead {
     display: grid;
-    grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 2.6fr) minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
     grid-template-areas:
       "title title service start"
       "customer orderNo progress end";
-    gap: var(--pc-spacing-sm);
+    gap: var(--pc-spacing-md);
     align-items: flex-end;
   }
 
@@ -890,6 +937,28 @@
 
   .gridHead input:not([type="checkbox"]) {
     width: 100%;
+  }
+
+  .progress-expected-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .progress-expected-cell input {
+    flex: 1 1 120px;
+  }
+
+  .expected-indicator {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+    white-space: nowrap;
+  }
+
+  .expected-indicator.behind {
+    color: var(--pc-danger);
+    font-weight: var(--pc-font-weight-semibold);
   }
 
   @media (max-width: 1023px) {
@@ -1130,6 +1199,13 @@
           <label for="boardSelect">Доска</label>
           <select id="boardSelect" class="pc-select"></select>
         </div>
+        <div class="crm-toolbar__search" id="crmSearchRow">
+          <label for="orderSearchInput">Поиск</label>
+          <div class="crm-toolbar__search-field">
+            <input id="orderSearchInput" class="pc-input" type="search" placeholder="Поиск заказа" autocomplete="off" spellcheck="false" />
+            <button id="orderSearchClear" class="pc-btn pc-btn--ghost" type="button" aria-label="Очистить поиск" disabled>✕</button>
+          </div>
+        </div>
       </div>
       <div class="crm-toolbar__actions">
         <span class="pc-badge crm-toolbar__stats" id="stats">—</span>
@@ -1259,6 +1335,10 @@ const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка'
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+function normalizeSearchTerm(value){
+  if(value==null) return '';
+  return String(value).trim().toLowerCase();
+}
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
 const normalizeWriteMode=value=>{
@@ -1279,6 +1359,17 @@ const applyCrmWriteAccess=()=>{
   const newOrderBtn=$('#newOrderBtn');
   if(newOrderBtn){ newOrderBtn.disabled = !canWrite; }
 };
+
+const CRM_SEARCH_STORAGE_KEY='mini_crm_search_v1';
+let orderSearchRaw='';
+let orderSearchNormalized='';
+try{
+  const stored=localStorage.getItem(CRM_SEARCH_STORAGE_KEY);
+  if(typeof stored==='string'){
+    orderSearchRaw=stored;
+    orderSearchNormalized=normalizeSearchTerm(stored);
+  }
+}catch(_err){/* ignore */}
 
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
@@ -1419,18 +1510,116 @@ function renderColumns(){
   enableDnd();
 }
 
+function normalizeStageProgress(value){
+  if(typeof value==='number'){
+    return Number.isFinite(value)?Math.max(0,Math.min(100,value)):0;
+  }
+  if(typeof value==='string'){
+    const trimmed=value.trim();
+    if(!trimmed) return 0;
+    const normalized=trimmed.replace(/[%\s]+/g,'').replace(',', '.');
+    const parsed=Number(normalized);
+    if(Number.isFinite(parsed)){
+      return Math.max(0,Math.min(100,parsed));
+    }
+  }
+  return 0;
+}
+
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
-function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>x.done||Number(x.progress||0)>=100).length;return[d,s.length]}
+function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>{if(!x) return false;return x.done||normalizeStageProgress(x.progress)>=100;}).length;return[d,s.length]}
 function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
 function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
+
+function updateSearchUI(){
+  const input=document.getElementById('orderSearchInput');
+  if(input && input!==document.activeElement){
+    input.value=orderSearchRaw;
+  }
+  const clearBtn=document.getElementById('orderSearchClear');
+  if(clearBtn){
+    clearBtn.disabled=!orderSearchNormalized;
+  }
+  const row=document.getElementById('crmSearchRow');
+  if(row){
+    row.classList.toggle('has-value', !!orderSearchNormalized);
+  }
+}
+
+function setOrderSearch(value,{render=true,persist=true}={}){
+  const raw=value==null?'':String(value);
+  orderSearchRaw=raw;
+  orderSearchNormalized=normalizeSearchTerm(raw);
+  if(persist){
+    try{
+      if(orderSearchNormalized){
+        localStorage.setItem(CRM_SEARCH_STORAGE_KEY,orderSearchRaw);
+      }else{
+        localStorage.removeItem(CRM_SEARCH_STORAGE_KEY);
+      }
+    }catch(_err){/* ignore */}
+  }
+  updateSearchUI();
+  if(render){
+    renderCards();
+  }
+}
+
+function clearOrderSearch(){
+  setOrderSearch('',{render:true,persist:true});
+}
+
+function orderMatchesSearch(order){
+  if(!orderSearchNormalized) return true;
+  const term=orderSearchNormalized;
+  const base=[order?.title,order?.orderNo,order?.customer,order?.notes]
+    .filter(Boolean)
+    .map(v=>String(v).toLowerCase());
+  if(base.some(part=>part.includes(term))) return true;
+  if(Array.isArray(order?.stages)){
+    for(const st of order.stages){
+      if(st?.name && String(st.name).toLowerCase().includes(term)){
+        return true;
+      }
+    }
+  }
+  if(Array.isArray(order?.childIds) && order.childIds.length){
+    const children=order.childIds.join(' ').toLowerCase();
+    if(children.includes(term)) return true;
+  }
+  return false;
+}
 
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
   const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
+  const totalOrders=b.orders.length;
+  let filteredTotal=0;
+  let filteredActive=0;
+  let totalActive=0;
+  const fallbackLane=b.lanes[0]??null;
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
-    const lane=map[o.status]?o.status:b.lanes[0]; map[lane].push(o);
+    let lane=o.status;
+    if(!Object.prototype.hasOwnProperty.call(map,lane)){
+      lane=fallbackLane;
+    }
+    if(!Object.prototype.hasOwnProperty.call(map,lane)){
+      return;
+    }
+    if(!doneLane || lane!==doneLane){
+      totalActive++;
+    }
+    if(!orderMatchesSearch(o)){
+      return;
+    }
+    map[lane].push(o);
+    filteredTotal++;
+    if(!doneLane || lane!==doneLane){
+      filteredActive++;
+    }
   });
 
   Object.entries(map).forEach(([lane,arr])=>{
@@ -1469,7 +1658,12 @@ function renderCards(){
     }
     visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
-      const progress=calcAutoProgress(o.stages); const [doneCnt,totalCnt]=stagesDoneCount(o);
+      let progress=calcAutoProgress(o.stages);
+      const manualProgress=normalizeStageProgress(o.progress);
+      if(o.progressManual===true || !Array.isArray(o.stages) || !o.stages.length){
+        progress=manualProgress;
+      }
+      const [doneCnt,totalCnt]=stagesDoneCount(o);
       const chips=document.createElement('div');chips.className='chips';
       (o.stages||[]).forEach(st=>{if(st.value!==''&&st.value!==undefined&&st.value!==null){chips.appendChild(chip(`${escapeHtml(st.name)}: ${escapeHtml(st.value)}`))}});
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
@@ -1537,8 +1731,14 @@ function renderCards(){
       }
     }
   });
-  const total=b.orders.length; const active=b.orders.filter(x=>x.status!==b.lanes[b.lanes.length-1]).length;
-  stats.textContent=`Всего: ${total} • Активных: ${active}`;
+  if(stats){
+    if(orderSearchNormalized){
+      stats.textContent=`Совпадений: ${filteredTotal} • Активных: ${filteredActive}`;
+    }else{
+      stats.textContent=`Всего: ${totalOrders} • Активных: ${totalActive}`;
+    }
+  }
+  updateSearchUI();
 }
 
 function computeDropReference(container,clientY){
@@ -1652,6 +1852,60 @@ function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 /* ORDER DIALOG */
 const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),orderDone=$('#orderDone'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday');
 
+function handleDateTodayChange(){
+  if(!dateTodayChk || !dateTodayChk.checked) return;
+  if(!stagesTableBody) return;
+  const today=fmtDate(new Date());
+  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+    const s=tr.querySelector('[data-k="start"]');
+    const e=tr.querySelector('[data-k="end"]');
+    if(s && !s.value){
+      s.value=today;
+      applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');
+    }
+    if(e && !e.value){
+      e.value=today;
+      applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');
+    }
+  });
+  syncAutoDates();
+  updateAllStageExpectations();
+}
+
+function handleOrderDoneChange(){
+  if(!orderDone || !orderDone.checked) return;
+  if(!stagesTableBody) return;
+  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+    const done=tr.querySelector('[data-k="done"]');
+    const prog=tr.querySelector('[data-k="progress"]');
+    if(done) done.checked=true;
+    if(prog){
+      prog.value=100;
+    }
+  });
+  syncAutoProgress();
+  updateAllStageExpectations();
+}
+
+if(addStageBtn){
+  addStageBtn.addEventListener('click',e=>{e.preventDefault();showStagePicker(addStageBtn);});
+}
+if(presetStagesBtn){
+  presetStagesBtn.addEventListener('click',()=>applyStagePreset(DEFAULT_STAGES));
+}
+if(allStagesBtn){
+  allStagesBtn.addEventListener('click',()=>applyStagePreset(ALL_STAGE_PRESETS));
+}
+if(splitBtn){
+  splitBtn.addEventListener('click',()=>openSplitDialog());
+}
+if(dateTodayChk){
+  dateTodayChk.addEventListener('change',handleDateTodayChange);
+}
+if(orderDone){
+  orderDone.addEventListener('change',handleOrderDoneChange);
+}
+
 function openOrder(id=null){
   const b=currentBoard(); statusSel.innerHTML=''; b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)}); stagesTableBody.innerHTML='';
   if(id){
@@ -1668,12 +1922,6 @@ function openOrder(id=null){
     dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES); window._editingOrigValues=null; deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
   }
-  addStageBtn.onclick=()=>showStagePicker(addStageBtn);
-  presetStagesBtn.onclick=()=>applyStagePreset(DEFAULT_STAGES);
-  if(allStagesBtn){allStagesBtn.onclick=()=>applyStagePreset(ALL_STAGE_PRESETS);}
-  splitBtn.onclick=()=>openSplitDialog();
-  dateTodayChk.onchange=()=>{if(!dateTodayChk.checked)return;const today=fmtDate(new Date());stagesTableBody.querySelectorAll('tr').forEach(tr=>{const s=tr.querySelector('[data-k="start"]');const e=tr.querySelector('[data-k="end"]');if(s&& !s.value){s.value=today;applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');}if(e&&!e.value){e.value=today;applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');}});syncAutoDates();updateAllStageExpectations()};
-  orderDone.onchange=()=>{if(!orderDone.checked)return;stagesTableBody.querySelectorAll('tr').forEach(tr=>{const done=tr.querySelector('[data-k="done"]');const prog=tr.querySelector('[data-k="progress"]');if(done)done.checked=true;if(prog)prog.value=100});syncAutoProgress();updateAllStageExpectations()};
   orderDlg.showModal();
 }
 function closeOrder(){orderDlg.close()}
@@ -1756,11 +2004,12 @@ function appendStageRow(st){
   const nmNormalized=normalizeStageName(st.name);
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
   const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
+  const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
+    <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
     <td>${suppressValue?'<span class="muted">—</span>':`<div class="rowc" style="justify-content:center"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><small class="muted tag-mini" data-orig></small></div>`}</td>
@@ -1858,7 +2107,12 @@ function readStages(){
   })
 }
 
-function calcAutoProgress(stages){const s=stages||[];if(!s.length)return 0;const avg=s.reduce((a,x)=>a+(Number(x.progress||0)),0)/s.length;return Math.round(avg)}
+function calcAutoProgress(stages){
+  const s=stages||[];
+  if(!s.length)return 0;
+  const total=s.reduce((acc,stage)=>acc+normalizeStageProgress(stage?.progress),0);
+  return Math.round(total/s.length);
+}
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations()}
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
 
@@ -2150,6 +2404,20 @@ boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Перекл�
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+
+const orderSearchInput=document.getElementById('orderSearchInput');
+if(orderSearchInput){
+  if(orderSearchRaw && orderSearchInput.value!==orderSearchRaw){
+    orderSearchInput.value=orderSearchRaw;
+  }
+  orderSearchInput.addEventListener('input',e=>setOrderSearch(e.target.value,{persist:true}));
+  orderSearchInput.addEventListener('search',e=>setOrderSearch(e.target.value,{persist:true}));
+}
+const orderSearchClear=document.getElementById('orderSearchClear');
+if(orderSearchClear){
+  orderSearchClear.addEventListener('click',()=>clearOrderSearch());
+}
+updateSearchUI();
 
 /* === CRM ↔ Planner Sync === */
 const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
