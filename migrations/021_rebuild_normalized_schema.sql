@@ -22,9 +22,10 @@ DROP TABLE IF EXISTS general_settings CASCADE;
 
 DROP SEQUENCE IF EXISTS planner_state_list_entries_id_seq;
 DROP SEQUENCE IF EXISTS planner_meta_history_entries_id_seq;
-DROP SEQUENCE IF EXISTS revisions_rev_seq;
 
 DROP TABLE IF EXISTS revisions CASCADE;
+
+DROP SEQUENCE IF EXISTS revisions_rev_seq;
 
 CREATE SEQUENCE revisions_rev_seq
   INCREMENT BY 1
