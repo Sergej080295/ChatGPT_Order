@@ -1,6 +1,6 @@
 # Архитектура и проверка SQL-базы Planner
 
-## Версия схемы: 2024-07 (миграции `018_rebuild_snapshot_entries.sql` + `019_create_general_settings.sql`)
+## Версия схемы: 2024-07 (миграции `018_rebuild_snapshot_entries.sql`, `019_create_general_settings.sql`, `020_backfill_general_preferences.sql`)
 
 Комбинация миграций `018` и `019` полностью пересобирает SQL-хранилище планировщика. Скрипт `018`
 удаляет устаревшие таблицы/последовательности, создаёт заново `revisions`, `planner_snapshots` и
@@ -33,8 +33,11 @@
 - **`planner_general_settings`** — отдельная таблица для раздела «Общие настройки». Структура
   повторяет формат `planner_snapshot_entries`, но без привязки к ревизиям: ключ `path` (в формате
   JSON Pointer без префикса `meta/settings`), тип значения и представления для строк/чисел/булевых,
-  а также `ordinal` для массивов. Таблица заполняется либо миграцией `019`, либо сервером при каждом
-  сохранении снапшота, а в колонке `updated_by` фиксируется автор изменения.【F:migrations/019_create_general_settings.sql†L1-L33】【F:server.js†L734-L813】
+  а также `ordinal` для массивов. Пути вида `preferences/...` хранят булевые флаги из чекбоксов
+  («Автосохранение», «Автооптимизация», логирование изменений и т. д.), а остальные ключи соответствуют
+  объекту `meta.settings`, включая вложенный блок `admin`. Таблица заполняется миграциями `019` и `020`
+  (вторая переносит исторические флаги из `planner_snapshot_entries`) либо сервером при каждом сохранении;
+  в колонке `updated_by` фиксируется автор изменения.【F:migrations/019_create_general_settings.sql†L1-L33】【F:migrations/020_backfill_general_preferences.sql†L1-L36】【F:server.js†L934-L1043】
 
 ## 2. Поток записи и чтения снапшотов
 
@@ -43,9 +46,10 @@
    обработчик в транзакции. После фиксации ревизия кэшируется для SSE-уведомлений.【F:server.js†L697-L784】
 2. **Сохранение снимка.** `persistSnapshotData()` глубоко копирует объект состояния, вырезает из него
    `meta.settings`/`settings`, сериализует оставшиеся данные и записывает их в `planner_snapshots` и
-   `planner_snapshot_entries` (категории `state` и `meta`). Общие настройки передаются в
-   `persistGeneralSettings()`, которая полностью заменяет содержимое `planner_general_settings`, тем
-   самым гарантируя единственный источник правды без JSON-полей.【F:server.js†L734-L864】
+   `planner_snapshot_entries` (категории `state` и `meta`). Общие настройки и чекбоксы собираются в
+   объект `{ settings, preferences }` и передаются в `persistGeneralSettings()`, которая полностью
+   заменяет содержимое `planner_general_settings`, тем самым гарантируя единственный источник правды
+   без JSON-полей.【F:server.js†L934-L1043】
 3. **Чтение снапшота.** `loadSnapshotRevision()` загружает хеш из `planner_snapshots`, собирает
    структуру из таблицы `planner_snapshot_entries`, подтягивает текущие общие настройки из
    `planner_general_settings` и возвращает полноценный объект состояния (включая
@@ -61,7 +65,8 @@
 Выполните следующие шаги, чтобы убедиться, что новое хранение работает стабильно:
 
 1. **Миграции.** Запустите `npm run migrate` — в таблице `planner_schema_migrations` должны появиться
-   строки для `018_rebuild_snapshot_entries.sql` и `019_create_general_settings.sql`. Если база
+   строки для `018_rebuild_snapshot_entries.sql`, `019_create_general_settings.sql` и
+   `020_backfill_general_preferences.sql`. Если база
    пустая, в логе появится сообщение об успешном применении и создании ревизии для миграции.【F:server.js†L172-L227】
 2. **Проверка записи снапшота.** Сохраните изменения из интерфейса или выполните запрос `PUT /api/state`.
    Убедитесь, что в `planner_snapshots` появилась свежая строка, а в

@@ -44,6 +44,15 @@ const DEFAULT_EXTRA_MINIMUM = 0.25;
 const SNAPSHOT_CATEGORY_STATE = 'state';
 const SNAPSHOT_CATEGORY_META = 'meta';
 const GENERAL_SETTINGS_TABLE = 'planner_general_settings';
+const GENERAL_PREFERENCE_KEYS = [
+  'autosaveOn',
+  'autoOptimizeOn',
+  'cascadeReadyOn',
+  'shiftOnProgress',
+  'priorityChangeLoggingOn',
+  'routeDateChangeLoggingOn',
+  'notificationsMuted'
+];
 
 function normalizeWeakEtag(value) {
   if (!value || typeof value !== 'string') return null;
@@ -108,28 +117,84 @@ function cloneDeepPlain(value) {
 
 let cachedDefaultGeneralSettings = null;
 
+function normalizePreferenceValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const lowered = trimmed.toLowerCase();
+    if (['true', 'yes', 'on', 'y'].includes(lowered)) {
+      return true;
+    }
+    if (['false', 'no', 'off', 'n'].includes(lowered)) {
+      return false;
+    }
+    if (lowered === '1') {
+      return true;
+    }
+    if (lowered === '0') {
+      return false;
+    }
+    const numeric = Number(trimmed);
+    if (!Number.isNaN(numeric)) {
+      return numeric !== 0;
+    }
+    return null;
+  }
+  if (typeof value === 'bigint') {
+    return value !== 0n;
+  }
+  return Boolean(value);
+}
+
 function getDefaultGeneralSettings() {
   if (!cachedDefaultGeneralSettings) {
     const emptySnapshot = buildEmptySnapshot();
-    if (isPlainObject(emptySnapshot.meta) && isPlainObject(emptySnapshot.meta.settings)) {
-      cachedDefaultGeneralSettings = cloneDeepPlain(emptySnapshot.meta.settings);
-    } else {
-      cachedDefaultGeneralSettings = {};
+    const defaultSettings = isPlainObject(emptySnapshot.meta) && isPlainObject(emptySnapshot.meta.settings)
+      ? cloneDeepPlain(emptySnapshot.meta.settings)
+      : {};
+    const defaultPreferences = {};
+    GENERAL_PREFERENCE_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(emptySnapshot, key)) {
+        defaultPreferences[key] = Boolean(emptySnapshot[key]);
+      } else if (isPlainObject(emptySnapshot.meta) && Object.prototype.hasOwnProperty.call(emptySnapshot.meta, key)) {
+        defaultPreferences[key] = Boolean(emptySnapshot.meta[key]);
+      } else if (Object.prototype.hasOwnProperty.call(defaultSettings, key)) {
+        defaultPreferences[key] = Boolean(defaultSettings[key]);
+      } else {
+        defaultPreferences[key] = false;
+      }
+    });
+    if (!Object.prototype.hasOwnProperty.call(defaultPreferences, 'notificationsMuted')) {
+      defaultPreferences.notificationsMuted = false;
     }
+    cachedDefaultGeneralSettings = {
+      settings: defaultSettings,
+      preferences: defaultPreferences
+    };
   }
   return cloneDeepPlain(cachedDefaultGeneralSettings);
 }
 
-function extractGeneralSettingsForStorage(snapshot) {
+function extractGeneralSettingsForStorage(snapshot, meta = null) {
   if (!isPlainObject(snapshot)) {
-    return { hasSettings: false, settings: null };
+    return { hasSettings: false, payload: null, meta: isPlainObject(meta) ? meta : null };
   }
 
-  let hasSettings = false;
+  const workingMeta = isPlainObject(meta) ? cloneDeepPlain(meta) : null;
   let settings = null;
 
   if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
-    hasSettings = true;
     const rootValue = snapshot.settings;
     delete snapshot.settings;
     if (isPlainObject(rootValue)) {
@@ -140,7 +205,6 @@ function extractGeneralSettingsForStorage(snapshot) {
   }
 
   if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
-    hasSettings = true;
     const metaValue = snapshot.meta.settings;
     delete snapshot.meta.settings;
     if (isPlainObject(metaValue)) {
@@ -150,7 +214,61 @@ function extractGeneralSettingsForStorage(snapshot) {
     }
   }
 
-  return { hasSettings, settings };
+  if (isPlainObject(workingMeta) && Object.prototype.hasOwnProperty.call(workingMeta, 'settings')) {
+    const storedValue = workingMeta.settings;
+    delete workingMeta.settings;
+    if (isPlainObject(storedValue)) {
+      settings = storedValue;
+    } else if (storedValue === null || storedValue === undefined) {
+      settings = null;
+    }
+  }
+
+  const preferences = {};
+  const preferenceSources = [
+    snapshot,
+    isPlainObject(snapshot.meta) ? snapshot.meta : null,
+    isPlainObject(workingMeta) ? workingMeta : null
+  ];
+
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    let valueFound = null;
+    preferenceSources.forEach((source) => {
+      if (!isPlainObject(source) || !Object.prototype.hasOwnProperty.call(source, key)) {
+        return;
+      }
+      const normalized = normalizePreferenceValue(source[key]);
+      if (normalized !== null) {
+        valueFound = normalized;
+      }
+      delete source[key];
+    });
+    if (valueFound !== null) {
+      preferences[key] = valueFound;
+    }
+  });
+
+  const payload = {};
+  if (settings === null) {
+    payload.settings = null;
+  } else if (isPlainObject(settings)) {
+    payload.settings = cloneDeepPlain(settings);
+  }
+  if (Object.keys(preferences).length) {
+    payload.preferences = preferences;
+  }
+
+  const hasSettings = Boolean(
+    (payload.settings && isPlainObject(payload.settings) && Object.keys(payload.settings).length)
+    || payload.settings === null
+    || Object.keys(preferences).length
+  );
+
+  return {
+    hasSettings,
+    payload: hasSettings ? payload : null,
+    meta: workingMeta
+  };
 }
 
 function applyGeneralSettingsToSnapshot(snapshot, generalSettings) {
@@ -158,16 +276,74 @@ function applyGeneralSettingsToSnapshot(snapshot, generalSettings) {
     return snapshot;
   }
 
-  const settingsSource = isPlainObject(generalSettings)
-    ? generalSettings
-    : getDefaultGeneralSettings();
+  const defaults = getDefaultGeneralSettings();
+  const provided = isPlainObject(generalSettings) ? generalSettings : null;
+
+  const settingsSource = (() => {
+    if (provided && Object.prototype.hasOwnProperty.call(provided, 'settings')) {
+      const candidate = provided.settings;
+      if (isPlainObject(candidate)) {
+        return candidate;
+      }
+      return null;
+    }
+    if (provided) {
+      return provided;
+    }
+    return defaults.settings;
+  })();
+
+  const preferencesSource = (() => {
+    if (provided && Object.prototype.hasOwnProperty.call(provided, 'preferences')) {
+      const candidate = provided.preferences;
+      if (isPlainObject(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  })();
 
   if (!isPlainObject(snapshot.meta)) {
     snapshot.meta = {};
   }
 
-  snapshot.meta.settings = cloneDeepPlain(settingsSource);
-  snapshot.settings = cloneDeepPlain(settingsSource);
+  const effectiveSettings = isPlainObject(settingsSource) ? settingsSource : defaults.settings;
+  snapshot.meta.settings = cloneDeepPlain(effectiveSettings);
+  snapshot.settings = cloneDeepPlain(effectiveSettings);
+
+  const effectivePreferences = { ...cloneDeepPlain(defaults.preferences) };
+  if (isPlainObject(preferencesSource)) {
+    Object.entries(preferencesSource).forEach(([key, value]) => {
+      const normalized = normalizePreferenceValue(value);
+      if (normalized !== null) {
+        effectivePreferences[key] = normalized;
+      }
+    });
+  } else if (provided && !Object.prototype.hasOwnProperty.call(provided, 'preferences')) {
+    GENERAL_PREFERENCE_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(provided, key)) {
+        const normalized = normalizePreferenceValue(provided[key]);
+        if (normalized !== null) {
+          effectivePreferences[key] = normalized;
+        }
+      }
+    });
+  }
+
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    const value = effectivePreferences[key];
+    if (typeof value === 'boolean') {
+      snapshot[key] = value;
+      snapshot.meta[key] = value;
+    }
+  });
+
+  if (typeof effectivePreferences.notificationsMuted === 'boolean') {
+    snapshot.notificationsMuted = effectivePreferences.notificationsMuted;
+    if (isPlainObject(snapshot.meta.settings)) {
+      snapshot.meta.settings.notificationsMuted = effectivePreferences.notificationsMuted;
+    }
+  }
 
   return snapshot;
 }
@@ -778,20 +954,83 @@ async function loadSnapshotMetaObject(runner, rev) {
   return Object.keys(meta).length ? meta : null;
 }
 
-async function persistGeneralSettings(client, settings, options = {}) {
+function sanitizeGeneralPreferences(preferences) {
+  if (!isPlainObject(preferences)) {
+    return null;
+  }
+  const sanitized = {};
+  GENERAL_PREFERENCE_KEYS.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(preferences, key)) {
+      return;
+    }
+    const normalized = normalizePreferenceValue(preferences[key]);
+    if (normalized !== null) {
+      sanitized[key] = normalized;
+    }
+  });
+  return Object.keys(sanitized).length ? sanitized : null;
+}
+
+function sanitizeGeneralSettingsPayload(payload) {
+  if (!isPlainObject(payload)) {
+    return null;
+  }
+
+  let sanitizedSettings = null;
+  if (Object.prototype.hasOwnProperty.call(payload, 'settings')) {
+    if (payload.settings === null) {
+      sanitizedSettings = null;
+    } else {
+      const candidate = sanitizeMetaForStorage(payload.settings);
+      if (isPlainObject(candidate) && Object.keys(candidate).length) {
+        sanitizedSettings = candidate;
+      }
+    }
+  } else {
+    const candidate = sanitizeMetaForStorage(payload);
+    if (isPlainObject(candidate) && Object.keys(candidate).length) {
+      sanitizedSettings = candidate;
+    }
+  }
+
+  const sanitizedPreferences = sanitizeGeneralPreferences(payload.preferences);
+
+  if (sanitizedSettings === null && !sanitizedPreferences) {
+    return null;
+  }
+
+  return {
+    settings: sanitizedSettings,
+    preferences: sanitizedPreferences
+  };
+}
+
+async function persistGeneralSettings(client, payload, options = {}) {
   const hasSettings = Boolean(options?.hasSettings);
   if (!hasSettings) {
     return;
   }
 
+  const sanitizedPayload = sanitizeGeneralSettingsPayload(payload || {});
   await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
 
-  const sanitizedSettings = sanitizeMetaForStorage(settings);
-  if (!isPlainObject(sanitizedSettings) || !Object.keys(sanitizedSettings).length) {
+  if (!sanitizedPayload) {
     return;
   }
 
-  const rows = flattenObjectForStorage(sanitizedSettings);
+  const combined = {};
+  if (sanitizedPayload.settings) {
+    Object.assign(combined, sanitizedPayload.settings);
+  }
+  if (sanitizedPayload.preferences) {
+    combined.preferences = sanitizedPayload.preferences;
+  }
+
+  if (!Object.keys(combined).length) {
+    return;
+  }
+
+  const rows = flattenObjectForStorage(combined);
   const actorValue = options?.actor ? sanitizeString(options.actor) || null : null;
   for (const row of rows) {
     // eslint-disable-next-line no-await-in-loop
@@ -822,8 +1061,26 @@ async function loadGeneralSettings(runner) {
     if (!rows.length) {
       return null;
     }
-    const settings = buildObjectFromRows(rows);
-    return isPlainObject(settings) && Object.keys(settings).length ? settings : {};
+    const preferenceRows = rows
+      .filter((row) => typeof row.path === 'string' && row.path.startsWith('preferences/'))
+      .map((row) => ({
+        ...row,
+        path: row.path.slice('preferences/'.length)
+      }));
+    const settingsRows = rows.filter((row) => !(typeof row.path === 'string' && row.path.startsWith('preferences/')));
+    const settings = buildObjectFromRows(settingsRows);
+    const preferences = buildObjectFromRows(preferenceRows);
+    const result = {};
+    if (isPlainObject(settings) && Object.keys(settings).length) {
+      result.settings = settings;
+    }
+    if (isPlainObject(preferences) && Object.keys(preferences).length) {
+      result.preferences = preferences;
+    }
+    if (Object.keys(result).length) {
+      return result;
+    }
+    return isPlainObject(settings) && Object.keys(settings).length ? settings : null;
   } catch (err) {
     if (err && err.code === PG_UNDEFINED_TABLE) {
       return null;
@@ -835,7 +1092,8 @@ async function loadGeneralSettings(runner) {
 async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
   const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
   const workingSnapshot = cloneDeepPlain(snapshotSource);
-  const { hasSettings, settings } = extractGeneralSettingsForStorage(workingSnapshot);
+  const extraction = extractGeneralSettingsForStorage(workingSnapshot, meta);
+  const { hasSettings, payload, meta: cleanedMeta } = extraction;
   const snapshotRows = flattenObjectForStorage(workingSnapshot);
   await client.query(
     `INSERT INTO planner_snapshots (rev, hash)
@@ -867,14 +1125,14 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta, options = 
     );
   }
 
-  await persistGeneralSettings(client, settings, { hasSettings, actor: options?.actor || null });
+  await persistGeneralSettings(client, payload, { hasSettings, actor: options?.actor || null });
 
   await client.query(
     'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
     [rev, SNAPSHOT_CATEGORY_META]
   );
-  if (isPlainObject(meta)) {
-    const metaRows = flattenObjectForStorage(meta);
+  if (isPlainObject(cleanedMeta)) {
+    const metaRows = flattenObjectForStorage(cleanedMeta);
     for (const row of metaRows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
