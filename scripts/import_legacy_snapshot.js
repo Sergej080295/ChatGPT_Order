@@ -16,9 +16,61 @@ const pool = new Pool({
 
 const SNAPSHOT_CATEGORY_STATE = 'state';
 const SNAPSHOT_CATEGORY_META = 'meta';
+const GENERAL_SETTINGS_TABLE = 'planner_general_settings';
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneDeepPlain(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeepPlain(item));
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    Object.entries(value).forEach(([key, child]) => {
+      result[key] = cloneDeepPlain(child);
+    });
+    return result;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : new Date(time);
+  }
+  return value;
+}
+
+function extractGeneralSettingsForStorage(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return { hasSettings: false, settings: null };
+  }
+
+  let hasSettings = false;
+  let settings = null;
+
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
+    hasSettings = true;
+    const rootValue = snapshot.settings;
+    delete snapshot.settings;
+    if (isPlainObject(rootValue)) {
+      settings = rootValue;
+    } else if (rootValue === null || rootValue === undefined) {
+      settings = null;
+    }
+  }
+
+  if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
+    hasSettings = true;
+    const metaValue = snapshot.meta.settings;
+    delete snapshot.meta.settings;
+    if (isPlainObject(metaValue)) {
+      settings = metaValue;
+    } else if (metaValue === null || metaValue === undefined) {
+      settings = null;
+    }
+  }
+
+  return { hasSettings, settings };
 }
 
 function sanitizeMetaForStorage(meta) {
@@ -134,8 +186,44 @@ function flattenObjectForStorage(source) {
   return rows;
 }
 
-async function persistSnapshotData(client, rev, snapshot, hash, meta) {
-  const snapshotRows = flattenObjectForStorage(isPlainObject(snapshot) ? snapshot : {});
+async function persistGeneralSettings(client, settings, options = {}) {
+  const hasSettings = Boolean(options?.hasSettings);
+  if (!hasSettings) {
+    return;
+  }
+
+  await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
+
+  const sanitizedSettings = sanitizeMetaForStorage(settings);
+  if (!isPlainObject(sanitizedSettings) || !Object.keys(sanitizedSettings).length) {
+    return;
+  }
+
+  const rows = flattenObjectForStorage(sanitizedSettings);
+  const actorValue = options?.actor ? String(options.actor).trim() || null : null;
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, value_type, value_text, value_numeric, value_boolean, ordinal, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        row.path,
+        row.type,
+        row.valueText,
+        row.valueNumeric,
+        row.valueBoolean,
+        row.ordinal,
+        actorValue
+      ]
+    );
+  }
+}
+
+async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
+  const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
+  const workingSnapshot = cloneDeepPlain(snapshotSource);
+  const { hasSettings, settings } = extractGeneralSettingsForStorage(workingSnapshot);
+  const snapshotRows = flattenObjectForStorage(workingSnapshot);
   await client.query(
     `INSERT INTO planner_snapshots (rev, hash)
      VALUES ($1,$2)
@@ -187,6 +275,8 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta) {
       ]
     );
   }
+
+  await persistGeneralSettings(client, settings, { hasSettings, actor: options?.actor || null });
 }
 
 function computeSnapshotHash(stateString) {
@@ -266,7 +356,7 @@ async function main() {
       [rev, 'import-script', 'legacy-import', 'Initial import']
     );
     await client.query('SELECT set_config($1,$2,false)', ['app.rev', String(rev)]);
-    await persistSnapshotData(client, rev, snapshot, hash, meta);
+    await persistSnapshotData(client, rev, snapshot, hash, meta, { actor: 'import-script' });
     await client.query('COMMIT');
     console.log(`Snapshot imported as revision ${rev}`);
   } catch (err) {

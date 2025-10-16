@@ -43,6 +43,7 @@ const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
 const SNAPSHOT_CATEGORY_STATE = 'state';
 const SNAPSHOT_CATEGORY_META = 'meta';
+const GENERAL_SETTINGS_TABLE = 'planner_general_settings';
 
 function normalizeWeakEtag(value) {
   if (!value || typeof value !== 'string') return null;
@@ -85,6 +86,90 @@ function parseIfMatchHeader(value) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneDeepPlain(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneDeepPlain(item));
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    Object.entries(value).forEach(([key, child]) => {
+      result[key] = cloneDeepPlain(child);
+    });
+    return result;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : new Date(time);
+  }
+  return value;
+}
+
+let cachedDefaultGeneralSettings = null;
+
+function getDefaultGeneralSettings() {
+  if (!cachedDefaultGeneralSettings) {
+    const emptySnapshot = buildEmptySnapshot();
+    if (isPlainObject(emptySnapshot.meta) && isPlainObject(emptySnapshot.meta.settings)) {
+      cachedDefaultGeneralSettings = cloneDeepPlain(emptySnapshot.meta.settings);
+    } else {
+      cachedDefaultGeneralSettings = {};
+    }
+  }
+  return cloneDeepPlain(cachedDefaultGeneralSettings);
+}
+
+function extractGeneralSettingsForStorage(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return { hasSettings: false, settings: null };
+  }
+
+  let hasSettings = false;
+  let settings = null;
+
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
+    hasSettings = true;
+    const rootValue = snapshot.settings;
+    delete snapshot.settings;
+    if (isPlainObject(rootValue)) {
+      settings = rootValue;
+    } else if (rootValue === null || rootValue === undefined) {
+      settings = null;
+    }
+  }
+
+  if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
+    hasSettings = true;
+    const metaValue = snapshot.meta.settings;
+    delete snapshot.meta.settings;
+    if (isPlainObject(metaValue)) {
+      settings = metaValue;
+    } else if (metaValue === null || metaValue === undefined) {
+      settings = null;
+    }
+  }
+
+  return { hasSettings, settings };
+}
+
+function applyGeneralSettingsToSnapshot(snapshot, generalSettings) {
+  if (!isPlainObject(snapshot)) {
+    return snapshot;
+  }
+
+  const settingsSource = isPlainObject(generalSettings)
+    ? generalSettings
+    : getDefaultGeneralSettings();
+
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+
+  snapshot.meta.settings = cloneDeepPlain(settingsSource);
+  snapshot.settings = cloneDeepPlain(settingsSource);
+
+  return snapshot;
 }
 
 function parseDate(value) {
@@ -334,6 +419,12 @@ async function getCachedSnapshot() {
     return cachedSnapshot;
   }
   const empty = buildEmptySnapshot();
+  try {
+    const storedSettings = await loadGeneralSettings();
+    applyGeneralSettingsToSnapshot(empty, storedSettings);
+  } catch (err) {
+    console.warn('Failed to hydrate default general settings', err);
+  }
   const stateString = JSON.stringify(empty);
   const hash = computeSnapshotHash(stateString);
   cachedSnapshot = { rev: 0, snapshot: empty, stateString, hash, meta: null };
@@ -687,9 +778,65 @@ async function loadSnapshotMetaObject(runner, rev) {
   return Object.keys(meta).length ? meta : null;
 }
 
-async function persistSnapshotData(client, rev, snapshot, hash, meta) {
-  const safeSnapshot = isPlainObject(snapshot) ? snapshot : {};
-  const snapshotRows = flattenObjectForStorage(safeSnapshot);
+async function persistGeneralSettings(client, settings, options = {}) {
+  const hasSettings = Boolean(options?.hasSettings);
+  if (!hasSettings) {
+    return;
+  }
+
+  await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
+
+  const sanitizedSettings = sanitizeMetaForStorage(settings);
+  if (!isPlainObject(sanitizedSettings) || !Object.keys(sanitizedSettings).length) {
+    return;
+  }
+
+  const rows = flattenObjectForStorage(sanitizedSettings);
+  const actorValue = options?.actor ? sanitizeString(options.actor) || null : null;
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, value_type, value_text, value_numeric, value_boolean, ordinal, updated_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        row.path,
+        row.type,
+        row.valueText,
+        row.valueNumeric,
+        row.valueBoolean,
+        row.ordinal,
+        actorValue
+      ]
+    );
+  }
+}
+
+async function loadGeneralSettings(runner) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    const { rows } = await executor.query(
+      `SELECT path, value_type, value_text, value_numeric, value_boolean, ordinal
+         FROM ${GENERAL_SETTINGS_TABLE}
+        ORDER BY char_length(path), path, ordinal`
+    );
+    if (!rows.length) {
+      return null;
+    }
+    const settings = buildObjectFromRows(rows);
+    return isPlainObject(settings) && Object.keys(settings).length ? settings : {};
+  } catch (err) {
+    if (err && err.code === PG_UNDEFINED_TABLE) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
+  const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
+  const workingSnapshot = cloneDeepPlain(snapshotSource);
+  const { hasSettings, settings } = extractGeneralSettingsForStorage(workingSnapshot);
+  const snapshotRows = flattenObjectForStorage(workingSnapshot);
   await client.query(
     `INSERT INTO planner_snapshots (rev, hash)
      VALUES ($1,$2)
@@ -719,6 +866,8 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta) {
       ]
     );
   }
+
+  await persistGeneralSettings(client, settings, { hasSettings, actor: options?.actor || null });
 
   await client.query(
     'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
@@ -757,7 +906,9 @@ async function loadSnapshotRevision(runner, rev) {
   }
   const data = await loadSnapshotDataObject(executor, rev);
   const meta = await loadSnapshotMetaObject(executor, rev);
+  const generalSettings = await loadGeneralSettings(executor);
   const stateObject = isPlainObject(data) ? data : {};
+  applyGeneralSettingsToSnapshot(stateObject, generalSettings);
   const stateString = JSON.stringify(stateObject);
   const hash = rows[0].hash || computeSnapshotHash(stateString);
   return {
@@ -1127,7 +1278,7 @@ async function persistSnapshotWithSql(options) {
   const effectiveHash = normalizedHash;
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-    await persistSnapshotData(client, nextRev, parsedSnapshot, effectiveHash, storedMeta);
+    await persistSnapshotData(client, nextRev, parsedSnapshot, effectiveHash, storedMeta, { actor });
     return await loadSnapshotRevision(client, nextRev);
   });
 
@@ -1509,7 +1660,7 @@ app.post('/api/admin/snapshot', async (req, res) => {
     });
     const hash = latest.hash || computeSnapshotHash(latest.stateString || JSON.stringify(latest.snapshot || {}));
     const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-      await persistSnapshotData(client, nextRev, latest.snapshot, hash, meta);
+      await persistSnapshotData(client, nextRev, latest.snapshot, hash, meta, { actor });
       return await loadSnapshotRevision(client, nextRev);
     });
     const stored = result || (await loadSnapshotRevision(pool, rev));
