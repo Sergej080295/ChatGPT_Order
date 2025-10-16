@@ -3603,7 +3603,12 @@ function setCrmState(raw){
   const movedToTrash = handleCrmOrderRemovals(prevState, nextState);
   crmState = nextState;
   updateCrmBadge();
-  refreshCrmDerivedData({ recompute: false, rebuildOverview: plannerStateReady });
+  const ready = !!plannerStateReady;
+  refreshCrmDerivedData({
+    recompute: ready,
+    rebuildOverview: ready,
+    allowDuringInit: !ready
+  });
   try{
     const processSelect = document.getElementById('process');
     const currentStage = processSelect ? processSelect.value : currentProc;
