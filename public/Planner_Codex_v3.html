@@ -4028,7 +4028,27 @@ function refreshCrmDerivedData(options={}){
   }
   crmStageTasks = buildCrmStageTasks();
   injectCrmTasksIntoCaches();
-  if(shouldRecompute) recompute();
+  let stageHydrated = false;
+  if(plannerStateReady || allowDuringInit){
+    const activeStage = currentProc || document.getElementById('process')?.value || '';
+    if(activeStage && activeStage !== OVERVIEW_STAGE){
+      const stageCrmList = crmStageTasks.filter(task => task && task.stage === activeStage);
+      if(stageCrmList.length){
+        const showingStageCrm = Array.isArray(tasks)
+          && tasks.length
+          && tasks.every(task => isCrmTask(task) && task.stage === activeStage);
+        if(!showingStageCrm){
+          tasks = stageCrmList.map(cloneTaskRecord);
+          lockedUids = new Set();
+          stagesDirtyFromRoute.delete(activeStage);
+          sortBySavedOrder(tasks, activeStage);
+          rememberStageOrder(activeStage);
+          stageHydrated = true;
+        }
+      }
+    }
+  }
+  if(shouldRecompute || stageHydrated) recompute();
   if(rebuildOverview){
     if(document.getElementById('process')?.value === OVERVIEW_STAGE){
       renderOrdersOverviewTable();
