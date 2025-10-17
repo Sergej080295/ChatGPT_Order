@@ -3938,6 +3938,25 @@ function injectCrmTasksIntoCaches(){
   });
 }
 
+function ensureCrmStageCachesFresh(options={}){
+  if(!isCrmMode()) return;
+  const { forceRebuild=false } = options;
+  const needsRebuild = forceRebuild || !Array.isArray(crmStageTasks) || crmStageTasks.length === 0;
+  if(needsRebuild){
+    const rebuilt = buildCrmStageTasks();
+    if(Array.isArray(rebuilt)){
+      crmStageTasks = rebuilt;
+    }else if(forceRebuild){
+      crmStageTasks = [];
+    }
+  }
+  if(Array.isArray(crmStageTasks) && crmStageTasks.length){
+    injectCrmTasksIntoCaches();
+  }else if(forceRebuild){
+    purgeCrmTasksFromCaches();
+  }
+}
+
 function refreshCrmDerivedData(options={}){
   const {
     recompute: shouldRecompute = true,
@@ -10551,6 +10570,10 @@ let pendingRows=null;
 
 function collectStageTasksSnapshot(){
   const snapshot = new Map();
+  if(isCrmMode()){
+    const requireRebuild = !Array.isArray(allTasksFromState) || allTasksFromState.length === 0;
+    ensureCrmStageCachesFresh({ forceRebuild: requireRebuild });
+  }
   if(Array.isArray(allTasksFromState)){
     allTasksFromState.forEach(task=>{
       if(!task || !task.stage) return;
