@@ -50,12 +50,18 @@
 `parent_order_id` и `child_order_id` описывают пару «родитель → передел»,
 `order_identity` хранит удобный для поиска идентификатор, а
 `crm_order_id`/`crm_child_id` зарезервированы для прямой синхронизации с CRM.
+Дополнительно таблица содержит нормализованные колонки `uid`, `order_number`,
+`order_customer`, `order_title`, `stage`, `state`, `status`, `hours`,
+`extra_hours`, временные метки `start_at`, `end_at`, `orig_start_at`, `done_at`,
+флаги `use_reserve`, `locked` и числовой `progress`.
 
-Детальные свойства заказа разворачиваются в таблицу
+Детальные свойства заказа по-прежнему разворачиваются в таблицу
 `planner_state_order_attributes`, где каждая строка соответствует пути
 (`attr_path`) в исходном объекте и повторяет JSON Pointer-представление.
+Маршруты по операциям выделены в таблицу `planner_state_order_routes` с
+колонками `segment_key`, `hours`, `start_at`, `end_at`, `orig_start_at`, `done_at`.
 
-`planner_state_list_entries` теперь используется для служебных коллекций — карты
+`planner_state_list_entries` используется для служебных коллекций — карты
 этапов `orders`, списка блокировок и таблиц исключений/резервов. Для них
 сохраняется вспомогательная таблица `planner_state_list_entry_attributes`.
 
@@ -69,7 +75,7 @@
   таблицу атрибутов (для чисел используется столбец `value_numeric`).
 
 ### 2.4 Техническое `meta`
-- `planner_meta_values` — плоское хранение полей `meta` без истории и настроек.
+- `planner_meta_values` — плоское хранение полей `meta` без истории и настроек. Сюда попадает нормализованное `snapshot.meta`, а также блок `lastRequest` с контекстом последнего сохранения (актер, источник, дополнительные пометки).
 - `planner_meta_history_entries` — журнал изменений; основные поля (`actor`,
   `source`, `summary`, `event_time`) вынесены в отдельные колонки, детали — в
   таблицу атрибутов.

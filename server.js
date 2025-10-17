@@ -47,6 +47,7 @@ const TABLE_LIST_ENTRIES = 'planner_state_list_entries';
 const TABLE_LIST_ATTRIBUTES = 'planner_state_list_entry_attributes';
 const TABLE_ORDERS = 'planner_state_orders';
 const TABLE_ORDER_ATTRIBUTES = 'planner_state_order_attributes';
+const TABLE_ORDER_ROUTES = 'planner_state_order_routes';
 const TABLE_CAPACITY = 'planner_state_capacity';
 const TABLE_PARALLEL = 'planner_state_parallel';
 const TABLE_ROUTE_OVERRIDES = 'planner_state_route_overrides';
@@ -219,12 +220,13 @@ function getDefaultGeneralSettings() {
   return cloneDeepPlain(cachedDefaultGeneralSettings);
 }
 
-function extractGeneralSettingsForStorage(snapshot, meta = null) {
+function extractGeneralSettingsForStorage(snapshot) {
   if (!isPlainObject(snapshot)) {
-    return { hasSettings: false, payload: null, meta: isPlainObject(meta) ? meta : null };
+    return { hasSettings: false, payload: null, meta: null };
   }
 
-  const workingMeta = isPlainObject(meta) ? cloneDeepPlain(meta) : null;
+  const snapshotMetaSource = isPlainObject(snapshot.meta) ? snapshot.meta : null;
+  const workingMeta = snapshotMetaSource ? cloneDeepPlain(snapshotMetaSource) : null;
   let settings = null;
 
   if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
@@ -237,9 +239,9 @@ function extractGeneralSettingsForStorage(snapshot, meta = null) {
     }
   }
 
-  if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
-    const metaValue = snapshot.meta.settings;
-    delete snapshot.meta.settings;
+  if (snapshotMetaSource && Object.prototype.hasOwnProperty.call(snapshotMetaSource, 'settings')) {
+    const metaValue = snapshotMetaSource.settings;
+    delete snapshotMetaSource.settings;
     if (isPlainObject(metaValue)) {
       settings = metaValue;
     } else if (metaValue === null || metaValue === undefined) {
@@ -260,8 +262,8 @@ function extractGeneralSettingsForStorage(snapshot, meta = null) {
   const preferences = {};
   const preferenceSources = [
     snapshot,
-    isPlainObject(snapshot.meta) ? snapshot.meta : null,
-    isPlainObject(workingMeta) ? workingMeta : null
+    snapshotMetaSource,
+    workingMeta
   ];
 
   GENERAL_PREFERENCE_KEYS.forEach((key) => {
@@ -965,6 +967,46 @@ function parseOptionalString(value) {
   return null;
 }
 
+function parseOptionalNumber(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed.replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  return null;
+}
+
+function parseOptionalBoolean(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return normalizePreferenceValue(value);
+}
+
+function parseOptionalTimestamp(value) {
+  const date = parseDate(value);
+  return date ? date.toISOString() : null;
+}
+
 async function clearStateForRevision(client, rev) {
   await client.query(`DELETE FROM ${TABLE_SCALARS} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_CAPACITY} WHERE rev = $1`, [rev]);
@@ -1162,6 +1204,202 @@ function extractOrderIdentifiers(entry) {
   };
 }
 
+function extractOrderColumnValues(entry, identifiers) {
+  const uid = parseOptionalString(entry?.uid || entry?.childId || entry?.child_id || identifiers.childOrderId);
+  const orderNumber = parseOptionalString(entry?.orderNumber || entry?.orderNo || entry?.number);
+  const orderCustomer = parseOptionalString(entry?.orderCustomer || entry?.customer);
+  const orderTitle = parseOptionalString(entry?.orderTitle || entry?.title || entry?.name || identifiers.orderIdentity);
+  const stage = parseOptionalString(entry?.stage);
+  const state = parseOptionalString(entry?.state);
+  const status = parseOptionalString(entry?.status);
+  const hours = parseOptionalNumber(entry?.hours);
+  const extraHoursSource = entry?.extraHours !== undefined ? entry.extraHours : entry?.extra;
+  const extraHours = parseOptionalNumber(extraHoursSource);
+  const startAt = parseOptionalTimestamp(entry?.startDate || entry?.start);
+  const endAt = parseOptionalTimestamp(entry?.endDate || entry?.end);
+  const origStartAt = parseOptionalTimestamp(entry?.origStartDate || entry?.origStart || entry?.originalStart);
+  const doneMeta = isPlainObject(entry?.doneMeta) ? entry.doneMeta : null;
+  const doneAt = parseOptionalTimestamp(
+    doneMeta?.when
+      || entry?.doneAt
+      || entry?.when
+      || (isPlainObject(entry?.route) && stage ? entry.route[stage]?.doneAt : null)
+  );
+  const doneSource = parseOptionalString(doneMeta?.source || entry?.source);
+  const progress = parseOptionalNumber(entry?.progress);
+  const useReserveValue = parseOptionalBoolean(entry?.useReserve);
+  const lockedValue = parseOptionalBoolean(entry?.locked || (Array.isArray(entry?.lockedUsers) ? entry.lockedUsers.length > 0 : null));
+
+  return {
+    uid,
+    orderNumber,
+    orderCustomer,
+    orderTitle,
+    stage,
+    state,
+    status,
+    hours,
+    extraHours,
+    startAt,
+    endAt,
+    origStartAt,
+    doneAt,
+    doneSource,
+    progress,
+    useReserve: useReserveValue === null ? null : !!useReserveValue,
+    locked: lockedValue === null ? null : !!lockedValue
+  };
+}
+
+function extractRouteSegmentsForStorage(entry) {
+  if (!isPlainObject(entry) || !isPlainObject(entry.route)) {
+    return [];
+  }
+  const segments = [];
+  Object.entries(entry.route).forEach(([key, value]) => {
+    const segmentKey = parseOptionalString(key);
+    if (!segmentKey || !isPlainObject(value)) {
+      return;
+    }
+    const hours = parseOptionalNumber(value.hours);
+    const startAt = parseOptionalTimestamp(value.start);
+    const endAt = parseOptionalTimestamp(value.end);
+    const origStartAt = parseOptionalTimestamp(value.origStart || value.originalStart);
+    const doneAt = parseOptionalTimestamp(value.doneAt);
+    if (hours === null && !startAt && !endAt && !origStartAt && !doneAt) {
+      return;
+    }
+    segments.push({
+      key: segmentKey,
+      hours,
+      startAt,
+      endAt,
+      origStartAt,
+      doneAt
+    });
+  });
+  return segments;
+}
+
+function mergeRouteSegments(baseRoute, segments) {
+  const target = isPlainObject(baseRoute) ? { ...baseRoute } : {};
+  segments.forEach((segment) => {
+    const key = segment.key;
+    if (!key) {
+      return;
+    }
+    const existing = isPlainObject(target[key]) ? { ...target[key] } : {};
+    if (segment.hours !== null && segment.hours !== undefined && !Object.prototype.hasOwnProperty.call(existing, 'hours')) {
+      existing.hours = Number(segment.hours);
+    }
+    if (segment.startAt) {
+      const iso = new Date(segment.startAt).toISOString();
+      if (!existing.start) {
+        existing.start = iso;
+      }
+    }
+    if (segment.endAt) {
+      const iso = new Date(segment.endAt).toISOString();
+      if (!existing.end) {
+        existing.end = iso;
+      }
+    }
+    if (segment.origStartAt) {
+      const iso = new Date(segment.origStartAt).toISOString();
+      if (!existing.origStart) {
+        existing.origStart = iso;
+      }
+    }
+    if (segment.doneAt) {
+      const iso = new Date(segment.doneAt).toISOString();
+      if (!existing.doneAt) {
+        existing.doneAt = iso;
+      }
+    }
+    target[key] = existing;
+  });
+  return target;
+}
+
+function applyOrderColumnsToObject(row, baseEntry) {
+  const entry = isPlainObject(baseEntry) ? baseEntry : {};
+  const assign = (key, value) => {
+    if (value === null || value === undefined) {
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(entry, key)
+        || entry[key] === null
+        || entry[key] === undefined
+        || entry[key] === '') {
+      entry[key] = value;
+    }
+  };
+
+  assign('parentId', row.parent_order_id);
+  assign('childId', row.child_order_id);
+  assign('orderId', row.order_identity || row.child_order_id || row.parent_order_id);
+  assign('orderIdentity', row.order_identity || row.child_order_id || row.parent_order_id);
+  assign('crmOrderId', row.crm_order_id);
+  assign('crmChildId', row.crm_child_id);
+  assign('uid', row.uid || row.child_order_id || row.order_identity || row.parent_order_id);
+  assign('orderNumber', row.order_number);
+  assign('orderCustomer', row.order_customer);
+  assign('title', row.order_title);
+  assign('stage', row.stage);
+  assign('state', row.state);
+  assign('status', row.status);
+
+  if (row.hours !== null && row.hours !== undefined) {
+    assign('hours', Number(row.hours));
+  }
+  if (row.extra_hours !== null && row.extra_hours !== undefined) {
+    assign('extraHours', Number(row.extra_hours));
+    if (!Object.prototype.hasOwnProperty.call(entry, 'extra')) {
+      entry.extra = Number(row.extra_hours);
+    }
+  }
+  if (row.progress !== null && row.progress !== undefined) {
+    assign('progress', Number(row.progress));
+  }
+  if (row.use_reserve !== null) {
+    assign('useReserve', !!row.use_reserve);
+  }
+  if (row.locked !== null) {
+    assign('locked', !!row.locked);
+  }
+
+  const startIso = row.start_at ? new Date(row.start_at).toISOString() : '';
+  const endIso = row.end_at ? new Date(row.end_at).toISOString() : '';
+  const origStartIso = row.orig_start_at ? new Date(row.orig_start_at).toISOString() : '';
+  const doneIso = row.done_at ? new Date(row.done_at).toISOString() : '';
+
+  if (startIso) {
+    assign('startDate', startIso);
+    assign('start', startIso);
+  }
+  if (endIso) {
+    assign('endDate', endIso);
+    assign('end', endIso);
+  }
+  if (origStartIso) {
+    assign('origStartDate', origStartIso);
+    assign('origStart', origStartIso);
+  }
+  if (doneIso || row.done_source) {
+    if (!isPlainObject(entry.doneMeta)) {
+      entry.doneMeta = {};
+    }
+    if (doneIso && !entry.doneMeta.when) {
+      entry.doneMeta.when = doneIso;
+    }
+    if (row.done_source && !entry.doneMeta.source) {
+      entry.doneMeta.source = row.done_source;
+    }
+  }
+
+  return entry;
+}
+
 async function persistOrderEntries(client, rev, listKey, entries) {
   await client.query(`DELETE FROM ${TABLE_ORDERS} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
   if (!Array.isArray(entries) || !entries.length) {
@@ -1176,10 +1414,39 @@ async function persistOrderEntries(client, rev, listKey, entries) {
     }
 
     const identifiers = extractOrderIdentifiers(entry);
+    const columnValues = extractOrderColumnValues(entry, identifiers);
     // eslint-disable-next-line no-await-in-loop
     const { rows } = await client.query(
-      `INSERT INTO ${TABLE_ORDERS} (rev, list_key, parent_order_id, child_order_id, order_identity, crm_order_id, crm_child_id, ordinal)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO ${TABLE_ORDERS} (
+         rev,
+         list_key,
+         parent_order_id,
+         child_order_id,
+         order_identity,
+         crm_order_id,
+         crm_child_id,
+         uid,
+         order_number,
+         order_customer,
+         order_title,
+         stage,
+         state,
+         status,
+         hours,
+         extra_hours,
+         start_at,
+         end_at,
+         orig_start_at,
+         done_at,
+         done_source,
+         progress,
+         use_reserve,
+         locked,
+         ordinal
+       )
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24
+       )
        RETURNING id`,
       [
         rev,
@@ -1189,6 +1456,23 @@ async function persistOrderEntries(client, rev, listKey, entries) {
         identifiers.orderIdentity,
         identifiers.crmOrderId,
         identifiers.crmChildId,
+        columnValues.uid,
+        columnValues.orderNumber,
+        columnValues.orderCustomer,
+        columnValues.orderTitle,
+        columnValues.stage,
+        columnValues.state,
+        columnValues.status,
+        columnValues.hours,
+        columnValues.extraHours,
+        columnValues.startAt,
+        columnValues.endAt,
+        columnValues.origStartAt,
+        columnValues.doneAt,
+        columnValues.doneSource,
+        columnValues.progress,
+        columnValues.useReserve,
+        columnValues.locked,
         index
       ]
     );
@@ -1197,6 +1481,30 @@ async function persistOrderEntries(client, rev, listKey, entries) {
     if (!orderId) {
       // eslint-disable-next-line no-continue
       continue;
+    }
+
+    const routeSegments = extractRouteSegmentsForStorage(entry);
+    for (const segment of routeSegments) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_ORDER_ROUTES} (order_id, segment_key, hours, start_at, end_at, orig_start_at, done_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (order_id, segment_key) DO UPDATE
+           SET hours = EXCLUDED.hours,
+               start_at = EXCLUDED.start_at,
+               end_at = EXCLUDED.end_at,
+               orig_start_at = EXCLUDED.orig_start_at,
+               done_at = EXCLUDED.done_at`,
+        [
+          orderId,
+          segment.key,
+          segment.hours,
+          segment.startAt,
+          segment.endAt,
+          segment.origStartAt,
+          segment.doneAt
+        ]
+      );
     }
 
     const attributeRows = flattenObjectForStorage(entry);
@@ -1547,7 +1855,30 @@ async function loadRouteOverrides(executor, rev) {
 
 async function loadOrderEntries(executor, rev, listKey) {
   const { rows } = await executor.query(
-    `SELECT id, ordinal, parent_order_id, child_order_id, order_identity, crm_order_id, crm_child_id
+    `SELECT id,
+            ordinal,
+            parent_order_id,
+            child_order_id,
+            order_identity,
+            crm_order_id,
+            crm_child_id,
+            uid,
+            order_number,
+            order_customer,
+            order_title,
+            stage,
+            state,
+            status,
+            hours,
+            extra_hours,
+            start_at,
+            end_at,
+            orig_start_at,
+            done_at,
+            done_source,
+            progress,
+            use_reserve,
+            locked
        FROM ${TABLE_ORDERS}
       WHERE rev = $1 AND list_key = $2
       ORDER BY ordinal`,
@@ -1580,29 +1911,36 @@ async function loadOrderEntries(executor, rev, listKey) {
     });
   });
 
+  const { rows: routeRows } = await executor.query(
+    `SELECT order_id, segment_key, hours, start_at, end_at, orig_start_at, done_at
+       FROM ${TABLE_ORDER_ROUTES}
+      WHERE order_id = ANY($1::bigint[])`,
+    [orderIds]
+  );
+  const routeGrouped = new Map();
+  routeRows.forEach((row) => {
+    if (!routeGrouped.has(row.order_id)) {
+      routeGrouped.set(row.order_id, []);
+    }
+    routeGrouped.get(row.order_id).push({
+      key: parseOptionalString(row.segment_key),
+      hours: row.hours === null || row.hours === undefined ? null : Number(row.hours),
+      startAt: row.start_at || null,
+      endAt: row.end_at || null,
+      origStartAt: row.orig_start_at || null,
+      doneAt: row.done_at || null
+    });
+  });
+
   return rows.map((row) => {
     const attrs = grouped.get(row.id) || [];
     const built = buildObjectFromRows(attrs);
-    if (isPlainObject(built) && Object.keys(built).length) {
-      return built;
+    const hydrated = applyOrderColumnsToObject(row, built);
+    const segments = (routeGrouped.get(row.id) || []).filter((segment) => segment.key);
+    if (segments.length) {
+      hydrated.route = mergeRouteSegments(hydrated.route, segments);
     }
-    const fallback = {};
-    if (row.parent_order_id) {
-      fallback.parentId = row.parent_order_id;
-    }
-    if (row.child_order_id) {
-      fallback.childId = row.child_order_id;
-    }
-    if (row.order_identity) {
-      fallback.orderId = row.order_identity;
-    }
-    if (row.crm_order_id) {
-      fallback.crmOrderId = row.crm_order_id;
-    }
-    if (row.crm_child_id) {
-      fallback.crmChildId = row.crm_child_id;
-    }
-    return fallback;
+    return hydrated;
   });
 }
 
@@ -1939,15 +2277,15 @@ function sanitizeGeneralSettingsPayload(payload) {
 }
 
 async function persistGeneralSettings(client, payload, options = {}) {
-  await client.query(
-    `DELETE FROM ${TABLE_GENERAL_SETTINGS} WHERE scope = ANY($1::text[])`,
-    [[SETTINGS_SCOPE_GENERAL, SETTINGS_SCOPE_PREFERENCES]]
-  );
-
   const hasSettings = Boolean(options?.hasSettings);
   if (!hasSettings) {
     return;
   }
+
+  await client.query(
+    `DELETE FROM ${TABLE_GENERAL_SETTINGS} WHERE scope = ANY($1::text[])`,
+    [[SETTINGS_SCOPE_GENERAL, SETTINGS_SCOPE_PREFERENCES]]
+  );
 
   const actor = options?.actor || null;
   const sanitized = sanitizeGeneralSettingsPayload(payload);
@@ -2065,8 +2403,8 @@ async function loadGeneralSettings(runner) {
 async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
   const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
   const workingSnapshot = cloneDeepPlain(snapshotSource);
-  const extraction = extractGeneralSettingsForStorage(workingSnapshot, meta);
-  const { hasSettings, payload, meta: cleanedMeta } = extraction;
+  const extraction = extractGeneralSettingsForStorage(workingSnapshot);
+  const { hasSettings, payload, meta: snapshotMeta } = extraction;
 
   await client.query(
     `INSERT INTO ${TABLE_SNAPSHOTS} (rev, hash)
@@ -2115,14 +2453,29 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta, options = 
   delete workingSnapshot.routeOverrides;
   delete workingSnapshot.ignoredStates;
 
-  const sanitizedMeta = sanitizeMetaForStorage(cleanedMeta);
+  const sanitizedSnapshotMeta = sanitizeMetaForStorage(snapshotMeta);
+  let metaForStorage = null;
   let historyPayload = [];
-  if (isPlainObject(sanitizedMeta) && Array.isArray(sanitizedMeta.history)) {
-    historyPayload = sanitizedMeta.history.slice();
-    delete sanitizedMeta.history;
+  if (isPlainObject(sanitizedSnapshotMeta) && Object.keys(sanitizedSnapshotMeta).length) {
+    metaForStorage = { ...sanitizedSnapshotMeta };
+    if (Array.isArray(metaForStorage.history)) {
+      historyPayload = metaForStorage.history.slice();
+      delete metaForStorage.history;
+    }
+    if (!Object.keys(metaForStorage).length) {
+      metaForStorage = null;
+    }
   }
 
-  await persistStructuredValues(client, TABLE_META_VALUES, rev, sanitizedMeta);
+  const requestMetaSanitized = sanitizeMetaForStorage(meta);
+  if (isPlainObject(requestMetaSanitized) && Object.keys(requestMetaSanitized).length) {
+    if (!metaForStorage) {
+      metaForStorage = {};
+    }
+    metaForStorage.lastRequest = requestMetaSanitized;
+  }
+
+  await persistStructuredValues(client, TABLE_META_VALUES, rev, metaForStorage);
   await persistMetaHistory(client, rev, historyPayload);
 
   await persistGeneralSettings(client, payload, { hasSettings, actor: options?.actor || null });
@@ -2141,6 +2494,14 @@ async function loadSnapshotRevision(runner, rev) {
   const meta = await loadSnapshotMetaObject(executor, rev);
   const generalSettings = await loadGeneralSettings(executor);
   const stateObject = isPlainObject(data) ? data : {};
+  if (isPlainObject(meta)) {
+    const metaCopy = cloneDeepPlain(meta);
+    if (isPlainObject(stateObject.meta)) {
+      stateObject.meta = { ...stateObject.meta, ...metaCopy };
+    } else {
+      stateObject.meta = metaCopy || {};
+    }
+  }
   applyGeneralSettingsToSnapshot(stateObject, generalSettings);
   const stateString = JSON.stringify(stateObject);
   const hash = rows[0].hash || computeSnapshotHash(stateString);
