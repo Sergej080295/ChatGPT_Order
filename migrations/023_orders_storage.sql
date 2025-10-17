@@ -1,5 +1,12 @@
 BEGIN;
 
+-- Ensure the core snapshot table exists even if earlier migrations were partially applied.
+CREATE TABLE IF NOT EXISTS planner_state_snapshots (
+  rev BIGINT PRIMARY KEY REFERENCES revisions(rev) ON DELETE CASCADE,
+  hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS planner_state_orders (
   id BIGSERIAL PRIMARY KEY,
   rev BIGINT NOT NULL REFERENCES planner_state_snapshots(rev) ON DELETE CASCADE,
