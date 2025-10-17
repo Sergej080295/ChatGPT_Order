@@ -5522,10 +5522,48 @@ function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage=
     }
 
     const tasksForStage = stageMap?.get(stage) || [];
+    const detail = {};
     if(tasksForStage.length){
-      stageDetails[stage] = {
-        uids: tasksForStage.map(task => task.uid)
+      detail.uids = tasksForStage.map(task => task.uid);
+    }
+
+    const crmTaskWithMeta = tasksForStage.find(task => task && task.crmMeta && typeof task.crmMeta === 'object');
+    let crmMeta = crmTaskWithMeta ? { ...crmTaskWithMeta.crmMeta } : null;
+    if(!crmMeta){
+      const orderInfo = orderEntry?.order || {};
+      const orderCrm = orderInfo.crm && typeof orderInfo.crm === 'object' ? orderInfo.crm : {};
+      const candidate = {
+        boardId: orderCrm.boardId || orderCrm.crmBoardId || '',
+        crmOrderId: orderCrm.id || orderCrm.crmOrderId || '',
+        orderId: orderInfo.orderId || '',
+        orderIdentity: orderInfo.orderIdentity || orderEntry.key || '',
+        lane: orderCrm.lane || orderCrm.status || ''
       };
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageId') && seg.crmStageId !== undefined){
+        candidate.stageId = seg.crmStageId;
+      }
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageName') && seg.crmStageName){
+        candidate.stageName = seg.crmStageName;
+      }
+      candidate.stageKey = stage;
+      const hasMeaningfulMeta = Object.values(candidate).some(value => {
+        if(value === null || value === undefined) return false;
+        if(typeof value === 'string') return value.trim().length > 0;
+        return true;
+      });
+      if(hasMeaningfulMeta){
+        crmMeta = candidate;
+      }
+    }
+
+    if(crmMeta){
+      if(!crmMeta.stageKey) crmMeta.stageKey = stage;
+      if(!crmMeta.stageName) crmMeta.stageName = seg?.crmStageName || STAGE_TITLE[stage] || stage;
+      detail.crmMeta = crmMeta;
+    }
+
+    if(Object.keys(detail).length){
+      stageDetails[stage] = detail;
     }
 
     const metrics = metricsByStage && metricsByStage[stage]
@@ -5902,6 +5940,12 @@ function applyStageProgress(identity, stage, value, options={}){
     ? !!options.interactive
     : INTERACTIVE_PROGRESS_SOURCES.has(source);
   let completionMoment = new Date(defaultMoment);
+  const explicitCrmMetaRaw = options && typeof options.crmMeta === 'object' ? options.crmMeta : null;
+  const explicitCrmMeta = explicitCrmMetaRaw ? { ...explicitCrmMetaRaw } : null;
+  if(explicitCrmMeta){
+    if(!explicitCrmMeta.stageKey) explicitCrmMeta.stageKey = stage;
+    if(!explicitCrmMeta.stageName) explicitCrmMeta.stageName = STAGE_TITLE[stage] || stage;
+  }
   const progressBeforeMap = new Map();
   const progressAfterMap = new Map();
   const summaryRecords = new Map();
@@ -5912,6 +5956,17 @@ function applyStageProgress(identity, stage, value, options={}){
   const ensureCrmMeta = taskObj => {
     if(!taskObj) return null;
     if(taskObj.crmMeta && taskObj.crmMeta.stageKey){
+      return taskObj;
+    }
+    if(explicitCrmMeta){
+      const merged = { ...explicitCrmMeta };
+      if(taskObj.crmMeta && typeof taskObj.crmMeta === 'object'){
+        taskObj.crmMeta = { ...merged, ...taskObj.crmMeta };
+      }else{
+        taskObj.crmMeta = merged;
+      }
+      if(!taskObj.crmMeta.stageKey) taskObj.crmMeta.stageKey = stage;
+      if(!taskObj.crmMeta.stageName) taskObj.crmMeta.stageName = STAGE_TITLE[stage] || stage;
       return taskObj;
     }
     const fallback = crmReferenceTask || findCrmStageTaskForIdentity(identity, stage);
@@ -5935,8 +5990,36 @@ function applyStageProgress(identity, stage, value, options={}){
     return taskObj;
   };
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment, extraOptions={})=>{
-    const enriched = ensureCrmMeta(taskObj);
+    let enriched = ensureCrmMeta(taskObj);
+    if(!enriched && explicitCrmMeta){
+      enriched = ensureCrmMeta({
+        crmMeta: { ...explicitCrmMeta },
+        route: {}
+      });
+    }
     if(!enriched || !enriched.crmMeta) return;
+    if(!enriched.route || typeof enriched.route !== 'object'){
+      enriched.route = {};
+    }
+    if(doneFlag && doneMoment){
+      const doneDate = doneMoment instanceof Date ? doneMoment : new Date(doneMoment);
+      if(!Number.isNaN(doneDate.getTime())){
+        const seg = { ...(enriched.route[stage] || {}) };
+        seg.doneAt = doneDate;
+        enriched.route[stage] = seg;
+        enriched.doneMeta = {
+          ...(enriched.doneMeta || {}),
+          when: doneDate,
+          source: extraOptions.doneSource || source
+        };
+      }
+    }else if(!doneFlag && enriched.route[stage]){
+      const seg = { ...(enriched.route[stage]) };
+      if('doneAt' in seg){
+        delete seg.doneAt;
+        enriched.route[stage] = seg;
+      }
+    }
     const payload = buildCrmUpdateFromTask(enriched, stage, {
       progress: progressValue,
       done: !!doneFlag,
@@ -6000,6 +6083,23 @@ function applyStageProgress(identity, stage, value, options={}){
   });
 
   if(!uidSet.size){
+    if(explicitCrmMeta){
+      queueCrmUpdate(null, normalized, markDone, markDone ? completionMoment : null);
+      if(crmUpdates.length){
+        applyCrmProgressUpdates(crmUpdates);
+      }
+      updateDoneAttention();
+      updateStageSnapshotFromAggregated(stage);
+      rebuildAndRenderMasterRoute();
+      recompute();
+      const persistOptions = {
+        source,
+        stageOverride: stage,
+        force: options.force === true || interactive || markDone
+      };
+      persistMaybe('data', persistOptions);
+      return true;
+    }
     if(!options.silent) alert('Не удалось определить задачи для выбранного передела.');
     return false;
   }
@@ -6303,6 +6403,10 @@ function handleRouteStageToggle(stage, toggleEl){
   const stageTitle = STAGE_TITLE[stage] || stage;
   const hasTasks = (currentRouteContext.stageDetails?.[stage]?.uids || []).length > 0;
   const isDone = (currentRouteContext.doneStages || []).includes(stage);
+  const stageMeta = currentRouteContext.stageDetails?.[stage];
+  const crmMeta = stageMeta && stageMeta.crmMeta && typeof stageMeta.crmMeta === 'object'
+    ? stageMeta.crmMeta
+    : null;
   if(!hasTasks && !isDone){
     alert('Нет задач для изменения статуса этого передела.');
     return;
@@ -6315,7 +6419,8 @@ function handleRouteStageToggle(stage, toggleEl){
       : `Снять отметку готовности с передела «${stageTitle}»?`;
     if(!confirm(question)) return;
     const targetValue = shouldMarkDone ? 100 : 0;
-    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, { source:'route-dialog' })){
+    const progressOpts = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, progressOpts)){
       if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
         currentRouteContext.sourceTask.progress = targetValue;
       }
@@ -6337,7 +6442,8 @@ function handleRouteStageToggle(stage, toggleEl){
     alert('Введите число от 0 до 100.');
     return;
   }
-  if(applyStageProgress(currentRouteContext.identity, stage, value, { source:'route-dialog' })){
+  const options = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+  if(applyStageProgress(currentRouteContext.identity, stage, value, options)){
     if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
       currentRouteContext.sourceTask.progress = value;
     }
