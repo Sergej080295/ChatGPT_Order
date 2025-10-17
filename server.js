@@ -327,20 +327,41 @@ function deriveCrmTasksFromSnapshot(snapshot, { existingTasks = [] } = {}) {
   const customMapping = sanitizeCrmStageMapping(snapshot?.meta?.settings?.crmStageMapping);
   const existingKeys = new Set();
   existingTasks.forEach((task) => {
-    if (!task) return;
-    const stageKey = normalizeStage(task.stage);
-    if (!stageKey) return;
-    const identity = sanitizeString(task.orderIdentity)
-      || sanitizeString(task.uid)
-      || sanitizeString(task.orderId)
-      || sanitizeString(task.orderNumber)
-      || sanitizeString(task.title)
-      || sanitizeString(task.orderTitle);
-    if (!identity) return;
-    existingKeys.add(`${identity}::${stageKey}`);
+    const key = buildCrmTaskIdentityKey(task);
+    if (key) {
+      existingKeys.add(key);
+    }
   });
 
   const tasks = [];
+
+  const scoped = snapshot?.modeScoped?.crm;
+  if (isPlainObject(scoped) && Array.isArray(scoped.stageTasks)) {
+    scoped.stageTasks.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        return;
+      }
+      const stageKey = normalizeStage(entry[0]);
+      if (!stageKey) {
+        return;
+      }
+      const list = Array.isArray(entry[1]) ? entry[1] : [];
+      list.forEach((rawTask) => {
+        const task = buildTaskFromModeScopedEntry(rawTask, stageKey);
+        if (!task) {
+          return;
+        }
+        const key = buildCrmTaskIdentityKey(task);
+        if (key && existingKeys.has(key)) {
+          return;
+        }
+        tasks.push(task);
+        if (key) {
+          existingKeys.add(key);
+        }
+      });
+    });
+  }
 
   snapshot.crm.boards.forEach((board) => {
     if (!board || !Array.isArray(board.orders)) return;
@@ -587,6 +608,167 @@ function serializeTaskForModeState(task) {
     crmMeta: isPlainObject(task.crmMeta) ? cloneJson(task.crmMeta) : null,
     crmOrigin: Boolean(task.crmOrigin)
   };
+}
+
+function buildCrmTaskIdentityKey(task) {
+  if (!task) {
+    return null;
+  }
+  const stageKey = normalizeStage(task.stage || task.crmMeta?.stageKey || task.crmMeta?.stage || task.crmMeta?.stageName);
+  if (!stageKey) {
+    return null;
+  }
+  const identity = sanitizeString(task.orderIdentity)
+    || sanitizeString(task.crmMeta?.orderIdentity)
+    || sanitizeString(task.orderId)
+    || sanitizeString(task.orderNumber)
+    || sanitizeString(task.uid);
+  if (!identity) {
+    return null;
+  }
+  return `${identity}::${stageKey}`;
+}
+
+function buildTaskFromModeScopedEntry(raw, stageKeyHint = null) {
+  if (!isPlainObject(raw)) {
+    return null;
+  }
+
+  const normalizedStage = normalizeStage(stageKeyHint || raw.stage || raw.crmMeta?.stageKey || raw.crmMeta?.stage);
+  if (!normalizedStage) {
+    return null;
+  }
+
+  const parseMaybeDate = (value) => parseDate(value) || null;
+  const routeRaw = isPlainObject(raw.route) ? raw.route : {};
+  const stageRouteRaw = isPlainObject(routeRaw[normalizedStage]) ? routeRaw[normalizedStage] : {};
+
+  const identity = sanitizeString(raw.orderIdentity)
+    || sanitizeString(raw.crmMeta?.orderIdentity)
+    || sanitizeString(raw.orderId)
+    || sanitizeString(raw.orderNumber)
+    || sanitizeString(raw.uid);
+  const orderId = sanitizeString(raw.orderId)
+    || sanitizeString(raw.crmMeta?.orderId)
+    || identity
+    || '';
+  const orderNumber = sanitizeString(raw.orderNumber) || '';
+  const orderCustomer = sanitizeString(raw.orderCustomer) || '';
+
+  if (!identity && !orderId && !orderNumber) {
+    return null;
+  }
+
+  const hoursCandidate = Number(raw.hours);
+  const routeHours = Number(stageRouteRaw.hours);
+  const hours = Number.isFinite(hoursCandidate)
+    ? hoursCandidate
+    : (Number.isFinite(routeHours) ? routeHours : 0);
+
+  const startDate = parseMaybeDate(raw.startDate) || parseMaybeDate(stageRouteRaw.start);
+  const endDate = parseMaybeDate(raw.endDate) || parseMaybeDate(stageRouteRaw.end);
+  const origStartDate = parseMaybeDate(raw.origStartDate)
+    || parseMaybeDate(stageRouteRaw.origStart)
+    || parseMaybeDate(stageRouteRaw.originalStart);
+  const origEndDate = parseMaybeDate(raw.origEndDate)
+    || parseMaybeDate(stageRouteRaw.origEnd)
+    || parseMaybeDate(stageRouteRaw.originalEnd);
+  const doneAt = parseMaybeDate(raw.doneMeta?.when) || parseMaybeDate(stageRouteRaw.doneAt);
+
+  const progress = clampProgressValue(raw.progress);
+  const useReserve = raw.useReserve !== undefined
+    ? Boolean(raw.useReserve)
+    : Boolean(stageRouteRaw.useReserve);
+  const state = sanitizeString(raw.state) || sanitizeString(raw.crmMeta?.lane) || '';
+  const status = sanitizeString(raw.status) || (progress >= 100 ? 'Готово (CRM)' : 'CRM');
+
+  const crmMeta = isPlainObject(raw.crmMeta) ? cloneJson(raw.crmMeta) : {};
+  if (!crmMeta.stageKey) {
+    crmMeta.stageKey = normalizedStage;
+  }
+  if (!crmMeta.stageName && status) {
+    crmMeta.stageName = status;
+  }
+  if (!crmMeta.orderId && orderId) {
+    crmMeta.orderId = orderId;
+  }
+  if (!crmMeta.orderIdentity && identity) {
+    crmMeta.orderIdentity = identity;
+  }
+
+  const task = {
+    uid: sanitizeString(raw.uid) || `${CRM_TASK_PREFIX}${identity || orderId || Math.random().toString(16).slice(2, 10)}::${normalizedStage}`,
+    orderId: orderId || '',
+    orderNumber,
+    orderCustomer,
+    orderIdentity: identity || '',
+    stage: normalizedStage,
+    childId: sanitizeString(raw.childId) || '',
+    parentId: sanitizeString(raw.parentId) || '',
+    hours,
+    extraHours: Number(raw.extraHours) || 0,
+    startDate,
+    endDate,
+    startMissing: startDate ? Boolean(raw.startMissing) : true,
+    endMissing: endDate ? Boolean(raw.endMissing) : true,
+    state,
+    status,
+    useReserve,
+    progress,
+    origStartDate,
+    origEndDate,
+    route: {},
+    crmMeta,
+    crmOrigin: true
+  };
+
+  if (doneAt) {
+    task.doneMeta = {
+      when: doneAt,
+      source: sanitizeString(raw.doneMeta?.source) || 'crm'
+    };
+  }
+
+  const primarySeg = {
+    hours,
+    start: startDate,
+    end: endDate
+  };
+  if (origStartDate) primarySeg.origStart = origStartDate;
+  if (origEndDate) primarySeg.origEnd = origEndDate;
+  if (doneAt) primarySeg.doneAt = doneAt;
+  if (useReserve) primarySeg.useReserve = true;
+  if (progress >= 100) primarySeg.done = true;
+  task.route[normalizedStage] = primarySeg;
+
+  PLANNER_STAGE_CODES.forEach((code) => {
+    if (code === normalizedStage) {
+      return;
+    }
+    const segRaw = routeRaw[code];
+    if (!isPlainObject(segRaw)) {
+      return;
+    }
+    const segHours = Number(segRaw.hours);
+    const segStart = parseMaybeDate(segRaw.start);
+    const segEnd = parseMaybeDate(segRaw.end);
+    const segOrigStart = parseMaybeDate(segRaw.origStart || segRaw.originalStart);
+    const segOrigEnd = parseMaybeDate(segRaw.origEnd || segRaw.originalEnd);
+    const segDoneAt = parseMaybeDate(segRaw.doneAt);
+    const segment = {
+      hours: Number.isFinite(segHours) ? segHours : 0,
+      start: segStart,
+      end: segEnd
+    };
+    if (segOrigStart) segment.origStart = segOrigStart;
+    if (segOrigEnd) segment.origEnd = segOrigEnd;
+    if (segDoneAt) segment.doneAt = segDoneAt;
+    if (segRaw.useReserve) segment.useReserve = true;
+    if (segRaw.done || segRaw.isDone) segment.done = true;
+    task.route[code] = segment;
+  });
+
+  return task;
 }
 
 function ensureCrmModeScoped(snapshot, tasksInput = []) {
