@@ -3298,6 +3298,37 @@ function mapCrmStageName(name){
   return resolved;
 }
 
+function resolveCrmStageKey(stage){
+  if(!stage || typeof stage !== 'object') return '';
+  const normalizeCandidate = value => {
+    if(value == null) return '';
+    return String(value).trim().toLowerCase();
+  };
+  const directCandidates = [
+    stage.stageKey,
+    stage.crmStageKey,
+    stage.stage_code,
+    stage.stageCode,
+    stage.stage,
+    stage.code,
+    stage.key
+  ];
+  for(const candidate of directCandidates){
+    const normalized = normalizeCandidate(candidate);
+    if(normalized && STAGES.includes(normalized)){
+      return normalized;
+    }
+  }
+  const nameCandidates = [stage.name, stage.stageName, stage.title, stage.label, stage.displayName];
+  for(const candidate of nameCandidates){
+    const resolved = mapCrmStageName(candidate);
+    if(resolved){
+      return resolved;
+    }
+  }
+  return '';
+}
+
 function clampCrmProgress(value){
   const num = Number(value);
   if(!Number.isFinite(num)) return 0;
@@ -3310,7 +3341,8 @@ function normalizeCrmStage(stage){
   if(!name) return null;
   const result = { ...stage };
   result.name = name;
-  result.stageKey = mapCrmStageName(name);
+  const resolvedKey = resolveCrmStageKey(stage);
+  result.stageKey = resolvedKey || mapCrmStageName(name);
   result.done = !!stage.done;
   result.progress = clampCrmProgress(stage.progress);
   result.start = typeof stage.start === 'string' ? stage.start : '';
@@ -3502,7 +3534,7 @@ function pushRemovedCrmOrderToTrash(board, order, when){
   let added = false;
   stageList.forEach((stage, idx) => {
     if(!stage) return;
-    const stageKey = stage.stageKey || mapCrmStageName(stage.name);
+    const stageKey = resolveCrmStageKey(stage);
     if(!stageKey) return;
     const segment = plannerOrder.stages?.[stageKey];
     if(!segment) return;
@@ -3649,7 +3681,7 @@ function buildPlannerOrderFromCrm(crmOrder){
   const stageList = Array.isArray(crmOrder.stages) ? crmOrder.stages : [];
   stageList.forEach(stage => {
     if(!stage) return;
-    const stageKey = stage.stageKey || mapCrmStageName(stage.name);
+    const stageKey = resolveCrmStageKey(stage);
     if(!stageKey) return;
     const segment = {};
     const start = safeDateValue(stage.start);
@@ -4194,10 +4226,10 @@ function detachCrmStageFromTask(task){
   if(!located) return null;
   const { order, board } = located;
   if(!Array.isArray(order?.stages)) return null;
-  const stageKey = meta.stageKey || mapCrmStageName(meta.stageName || '');
+  const stageKey = resolveCrmStageKey(meta) || mapCrmStageName(meta.stageName || '');
   const index = order.stages.findIndex(stage => {
     if(!stage) return false;
-    const key = stage.stageKey || mapCrmStageName(stage.name);
+    const key = resolveCrmStageKey(stage);
     return key === stageKey;
   });
   if(index < 0) return null;
@@ -4251,7 +4283,7 @@ function applyCrmProgressUpdates(updates){
     const targetOrder = located.order;
     if(!Array.isArray(targetOrder.stages)) targetOrder.stages = [];
     let stageRecord = targetOrder.stages.find(stage => {
-      const key = stage?.stageKey || mapCrmStageName(stage?.name);
+      const key = stage ? resolveCrmStageKey(stage) : '';
       return key === stageKey;
     });
     if(!stageRecord){

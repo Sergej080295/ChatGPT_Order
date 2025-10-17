@@ -159,6 +159,7 @@ function readSnapshotFromSql() {
     normalizeSnapshotCollections(parsed);
     ensureModeScopedState(parsed);
     ensureLocalStorageMetadata(parsed);
+    mergeCrmTasksIntoSnapshot(parsed);
     const stateString = safeSerializeSnapshot(parsed);
     const hash = row.hash || computeSnapshotHash(stateString);
     const meta = safeParseJson(row.meta_json, null);
@@ -507,9 +508,48 @@ function mapCrmStageName(label, customMap) {
     || normalizedKey.includes('резьб')
     || normalizedKey.includes('пукл')
     || normalizedKey.includes('заклеп')
+    || normalizedKey.includes('механо')
   ) {
     return 'mech';
   }
+  return null;
+}
+
+function resolveCrmStageKey(entry, customMap) {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const directCandidates = [
+    entry.stageKey,
+    entry.crmStageKey,
+    entry.stage_code,
+    entry.stageCode,
+    entry.stage,
+    entry.code,
+    entry.key
+  ];
+  for (const candidate of directCandidates) {
+    const normalized = normalizeStage(candidate);
+    if (normalized && PLANNER_STAGE_CODES.includes(normalized)) {
+      return normalized;
+    }
+  }
+
+  const nameCandidates = [
+    entry.name,
+    entry.stageName,
+    entry.title,
+    entry.label,
+    entry.displayName
+  ];
+  for (const candidate of nameCandidates) {
+    const resolved = mapCrmStageName(candidate, customMap);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
   return null;
 }
 
@@ -600,7 +640,7 @@ function deriveCrmTasksFromSnapshot(snapshot, { existingTasks = [] } = {}) {
 
       stageList.forEach((stageEntry) => {
         if (!stageEntry) return;
-        const stageKey = mapCrmStageName(stageEntry.stageKey || stageEntry.name, customMapping);
+        const stageKey = resolveCrmStageKey(stageEntry, customMapping);
         if (!stageKey) return;
         const dedupeKey = identity ? `${identity}::${stageKey}` : null;
         if (dedupeKey && existingKeys.has(dedupeKey)) {
