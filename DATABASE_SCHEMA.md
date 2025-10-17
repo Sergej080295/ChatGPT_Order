@@ -15,7 +15,8 @@
 | Признак параллельности операций   | `planner_state_parallel`                  |
 | Перекрытия по этапам              | `planner_state_route_overrides`           |
 | Скрытые статусы                   | `planner_state_ignored_states`            |
-| Списки заказов/элементов          | `planner_state_list_entries` + `..._attributes` |
+| Заказы и их атрибуты              | `planner_state_orders` + `..._attributes`       |
+| Прочие списки/служебные массивы   | `planner_state_list_entries` + `..._attributes` |
 | CRM-секции                        | `planner_state_crm_values`                |
 | Раздел `modeScoped`               | `planner_state_mode_scoped_values`        |
 | Техническое `meta`                | `planner_meta_values`                     |
@@ -43,12 +44,20 @@
   `parentId::stage`.
 - `planner_state_ignored_states` — список скрытых статусов.
 
-### 2.3 Списки и сущности
-`planner_state_list_entries` содержит строки для массивов (`t`, `done`, `trash`,
-`exc`, `res`, а также вспомогательных списков). Каждая запись хранит
-идентификаторы родительского/дочернего заказа и позицию в списке. Детальные
-свойства лежат в `planner_state_list_entry_attributes`, где структура
-разворачивается по JSON Pointer аналогично прежним `planner_snapshot_entries`.
+### 2.3 Заказы и списки
+`planner_state_orders` содержит по строке на каждый заказ из рабочих списков
+(`t`, `done`, `trash`). Колонка `list_key` фиксирует источник, поля
+`parent_order_id` и `child_order_id` описывают пару «родитель → передел»,
+`order_identity` хранит удобный для поиска идентификатор, а
+`crm_order_id`/`crm_child_id` зарезервированы для прямой синхронизации с CRM.
+
+Детальные свойства заказа разворачиваются в таблицу
+`planner_state_order_attributes`, где каждая строка соответствует пути
+(`attr_path`) в исходном объекте и повторяет JSON Pointer-представление.
+
+`planner_state_list_entries` теперь используется для служебных коллекций — карты
+этапов `orders`, списка блокировок и таблиц исключений/резервов. Для них
+сохраняется вспомогательная таблица `planner_state_list_entry_attributes`.
 
 - `orders` записывается как упорядоченный список пар «этап → массив UID». Сам
   этап дублируется в колонке `parent_order_id`, а массив UID хранится в

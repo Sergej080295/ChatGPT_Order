@@ -22,6 +22,8 @@ const TABLE_ROUTE_OVERRIDES = 'planner_state_route_overrides';
 const TABLE_IGNORED_STATES = 'planner_state_ignored_states';
 const TABLE_LIST_ENTRIES = 'planner_state_list_entries';
 const TABLE_LIST_ATTRIBUTES = 'planner_state_list_entry_attributes';
+const TABLE_ORDERS = 'planner_state_orders';
+const TABLE_ORDER_ATTRIBUTES = 'planner_state_order_attributes';
 const TABLE_META_VALUES = 'planner_meta_values';
 const TABLE_META_HISTORY = 'planner_meta_history_entries';
 const TABLE_META_HISTORY_ATTRS = 'planner_meta_history_entry_attributes';
@@ -39,7 +41,8 @@ const GENERAL_PREFERENCE_KEYS = [
   'routeDateChangeLoggingOn',
   'notificationsMuted'
 ];
-const STATE_LIST_KEYS = ['orders', 't', 'done', 'trash', 'exc', 'res', 'locked'];
+const ORDER_LIST_KEYS = ['t', 'done', 'trash'];
+const STATE_LIST_KEYS = ['orders', 'exc', 'res', 'locked'];
 const STATE_SCALAR_KEYS = [
   'process',
   'filter',
@@ -347,6 +350,7 @@ async function clearStateForRevision(client, rev) {
   await client.query(`DELETE FROM ${TABLE_PARALLEL} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_ROUTE_OVERRIDES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_IGNORED_STATES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_ORDERS} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_LIST_ENTRIES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_META_VALUES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_META_HISTORY} WHERE rev = $1`, [rev]);
@@ -479,6 +483,127 @@ function sanitizeStageOrdersEntry(entry) {
 function sanitizeLockedEntry(entry) {
   const value = parseOptionalString(entry);
   return value || null;
+}
+
+function extractOrderIdentifiers(entry) {
+  if (!isPlainObject(entry)) {
+    return {
+      parentOrderId: null,
+      childOrderId: null,
+      orderIdentity: null,
+      crmOrderId: null,
+      crmChildId: null
+    };
+  }
+
+  const parentOrderId = parseOptionalString(
+    entry.parentId
+      || entry.parent_id
+      || entry.parentOrderId
+      || entry.parent_order_id
+      || entry.parent
+  );
+  const childOrderId = parseOptionalString(
+    entry.childId
+      || entry.child_id
+      || entry.childOrderId
+      || entry.child_order_id
+      || entry.uid
+      || entry.id
+  );
+  const orderIdentity = parseOptionalString(
+    entry.orderIdentity
+      || entry.orderId
+      || entry.order_id
+      || entry.orderNumber
+      || entry.order_number
+      || entry.id
+      || entry.uid
+      || childOrderId
+      || parentOrderId
+  );
+  const crmOrderId = parseOptionalString(
+    entry.crmOrderId
+      || entry.crm_order_id
+      || entry.crmParentId
+      || entry.crm_parent_id
+      || entry.crmOrder
+      || entry.crmId
+  );
+  const crmChildId = parseOptionalString(
+    entry.crmChildId
+      || entry.crm_child_id
+      || entry.crmChild
+      || entry.crm_child
+      || entry.crmChildOrderId
+      || entry.crm_child_order_id
+  );
+
+  return {
+    parentOrderId,
+    childOrderId,
+    orderIdentity,
+    crmOrderId,
+    crmChildId
+  };
+}
+
+async function persistOrderEntries(client, rev, listKey, entries) {
+  await client.query(`DELETE FROM ${TABLE_ORDERS} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+  if (!Array.isArray(entries) || !entries.length) {
+    return;
+  }
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!isPlainObject(entry)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const identifiers = extractOrderIdentifiers(entry);
+    // eslint-disable-next-line no-await-in-loop
+    const { rows } = await client.query(
+      `INSERT INTO ${TABLE_ORDERS} (rev, list_key, parent_order_id, child_order_id, order_identity, crm_order_id, crm_child_id, ordinal)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id`,
+      [
+        rev,
+        listKey,
+        identifiers.parentOrderId,
+        identifiers.childOrderId,
+        identifiers.orderIdentity,
+        identifiers.crmOrderId,
+        identifiers.crmChildId,
+        index
+      ]
+    );
+
+    const orderId = rows[0]?.id;
+    if (!orderId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const attributeRows = flattenObjectForStorage(entry);
+    for (const row of attributeRows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_ORDER_ATTRIBUTES} (order_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          orderId,
+          row.path,
+          row.ordinal || 0,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          null
+        ]
+      );
+    }
+  }
 }
 
 async function persistListEntries(client, rev, listKey, entries) {
@@ -858,6 +983,13 @@ async function persistSnapshotData(client, rev, snapshot, hash, meta, options = 
   await persistParallel(client, rev, workingSnapshot.parallelByProc);
   await persistRouteOverrides(client, rev, workingSnapshot.routeOverrides);
   await persistIgnoredStates(client, rev, workingSnapshot.ignoredStates);
+
+  for (const listKey of ORDER_LIST_KEYS) {
+    const items = Array.isArray(workingSnapshot[listKey]) ? workingSnapshot[listKey] : [];
+    // eslint-disable-next-line no-await-in-loop
+    await persistOrderEntries(client, rev, listKey, items);
+    delete workingSnapshot[listKey];
+  }
 
   for (const listKey of STATE_LIST_KEYS) {
     const items = Array.isArray(workingSnapshot[listKey]) ? workingSnapshot[listKey] : [];
