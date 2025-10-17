@@ -2986,6 +2986,17 @@ function applyModeScopedState(mode){
     });
   });
   allTasksFromState = aggregated;
+  if(key === PLANNER_MODES.crm){
+    const freshCrmTasks = [];
+    stageMap.forEach(list => {
+      list.forEach(task => {
+        if(task && isCrmTask(task)){
+          freshCrmTasks.push(cloneTaskRecord(task));
+        }
+      });
+    });
+    crmStageTasks = freshCrmTasks;
+  }
   const currentStage = document.getElementById('process')?.value || currentProc || OVERVIEW_STAGE;
   if(currentStage && currentStage !== OVERVIEW_STAGE){
     const stageTasks = stageMap.get(currentStage) || [];
@@ -10569,23 +10580,115 @@ function renderDeltaDialog(diffByStage, currentByStage){
 let pendingRows=null;
 
 function collectStageTasksSnapshot(){
-  const snapshot = new Map();
-  if(isCrmMode()){
-    const requireRebuild = !Array.isArray(allTasksFromState) || allTasksFromState.length === 0;
-    ensureCrmStageCachesFresh({ forceRebuild: requireRebuild });
-  }
+  const stageMaps = new Map();
+  const existingOrders = ordersByStage instanceof Map ? ordersByStage : new Map();
+
+  const register = (rawTask, options={}) => {
+    if(!rawTask) return;
+    const stageKeyRaw = rawTask.stage || rawTask?.crmMeta?.stageKey || '';
+    const stageKey = typeof stageKeyRaw === 'string' ? stageKeyRaw.trim().toLowerCase() : '';
+    if(!stageKey) return;
+    const uidRaw = rawTask.uid || rawTask?.payload?.uid || '';
+    const uid = typeof uidRaw === 'string' ? uidRaw.trim() : '';
+    if(!uid) return;
+    if(!stageMaps.has(stageKey)){
+      stageMaps.set(stageKey, new Map());
+    }
+    const stageMap = stageMaps.get(stageKey);
+    const copy = cloneTaskRecord(rawTask);
+    copy.stage = stageKey;
+    const prefer = options.prefer === true;
+    if(stageMap.has(uid)){
+      if(prefer){
+        stageMap.set(uid, copy);
+      }else{
+        const existing = stageMap.get(uid);
+        const existingIsCrm = isCrmTask(existing);
+        const copyIsCrm = isCrmTask(copy);
+        if(copyIsCrm && !existingIsCrm){
+          stageMap.set(uid, copy);
+        }else if(!copyIsCrm && existingIsCrm){
+          // keep CRM версию, чтобы не потерять данные из Планировщика
+        }else{
+          stageMap.set(uid, copy);
+        }
+      }
+    }else{
+      stageMap.set(uid, copy);
+    }
+  };
+
   if(Array.isArray(allTasksFromState)){
-    allTasksFromState.forEach(task=>{
-      if(!task || !task.stage) return;
-      if(!snapshot.has(task.stage)) snapshot.set(task.stage, []);
-      snapshot.get(task.stage).push(cloneTaskRecord(task));
+    allTasksFromState.forEach(task => register(task));
+  }
+
+  const currentStageRaw = document.getElementById('process')?.value || currentProc || '';
+  const currentStage = typeof currentStageRaw === 'string' ? currentStageRaw.trim().toLowerCase() : '';
+  if(Array.isArray(tasks) && tasks.length){
+    tasks.forEach(task => {
+      if(!task) return;
+      const enriched = task.stage ? task : { ...task, stage: currentStage };
+      register(enriched, { prefer:true });
     });
   }
-  const curStage = $("#process")?.value || currentProc || 'bend';
-  const currentList = tasks.map(cloneTaskRecord).filter(Boolean);
-  snapshot.set(curStage, currentList);
-  STAGES.forEach(stage=>{ if(!snapshot.has(stage)) snapshot.set(stage, []); });
-  return snapshot;
+
+  let crmSources = [];
+  if(isCrmMode()){
+    try{
+      const rebuilt = buildCrmStageTasks();
+      if(Array.isArray(rebuilt)){
+        crmSources = rebuilt;
+      }
+    }catch(_err){
+      crmSources = [];
+    }
+    if(crmSources.length){
+      crmSources.forEach(task => register(task));
+    }
+  }
+
+  const nextSnapshot = new Map();
+  const nextOrders = new Map();
+  const collectForStage = (stageKey) => {
+    if(!stageKey) return;
+    const stageMap = stageMaps.get(stageKey) || new Map();
+    const savedOrder = Array.isArray(existingOrders.get(stageKey)) ? existingOrders.get(stageKey) : [];
+    const indexMap = new Map(savedOrder.map((uid, idx) => [uid, idx]));
+    const sorted = Array.from(stageMap.values()).sort((a, b) => {
+      const left = indexMap.has(a.uid) ? indexMap.get(a.uid) : Number.MAX_SAFE_INTEGER;
+      const right = indexMap.has(b.uid) ? indexMap.get(b.uid) : Number.MAX_SAFE_INTEGER;
+      if(left === right){
+        const leftUid = typeof a.uid === 'string' ? a.uid : '';
+        const rightUid = typeof b.uid === 'string' ? b.uid : '';
+        return leftUid.localeCompare(rightUid);
+      }
+      return left - right;
+    });
+    nextSnapshot.set(stageKey, sorted.map(cloneTaskRecord));
+    nextOrders.set(stageKey, sorted.map(task => task.uid));
+  };
+
+  STAGES.forEach(stage => collectForStage(stage));
+  stageMaps.forEach((_map, stageKey) => {
+    if(nextSnapshot.has(stageKey)) return;
+    collectForStage(stageKey);
+  });
+
+  ordersByStage = nextOrders;
+
+  if(isCrmMode()){
+    const aggregatedCrm = [];
+    nextSnapshot.forEach(list => {
+      list.forEach(task => {
+        if(isCrmTask(task)){
+          aggregatedCrm.push(cloneTaskRecord(task));
+        }
+      });
+    });
+    crmStageTasks = aggregatedCrm;
+  }
+
+  return nextSnapshot;
 }
 
 async function importFile(file){
