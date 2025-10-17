@@ -2478,7 +2478,9 @@ async function persistSnapshotWithSql(options) {
     snapshot,
     stateString = null,
     hash = null,
-    meta = null
+    meta = null,
+    skipIfUnchanged = false,
+    currentSnapshot = null
   } = options || {};
 
   let parsedSnapshot = null;
@@ -2521,6 +2523,21 @@ async function persistSnapshotWithSql(options) {
   const serialized = safeSerializeSnapshot(parsedSnapshot);
   const storedMeta = sanitizeMetaForStorage(meta);
   const normalizedHash = computeSnapshotHash(serialized);
+
+  if (skipIfUnchanged && currentSnapshot && Number(currentSnapshot.rev || 0) > 0) {
+    const currentHash = currentSnapshot.hash || null;
+    const currentSanitizedMeta = sanitizeMetaForStorage(currentSnapshot.meta || null);
+    if (currentHash && currentHash === normalizedHash && valuesEqual(currentSanitizedMeta, storedMeta)) {
+      return {
+        rev: currentSnapshot.rev,
+        snapshot: currentSnapshot.snapshot,
+        stateString: currentSnapshot.stateString,
+        hash: currentSnapshot.hash,
+        meta: currentSnapshot.meta || null,
+        didPersist: false
+      };
+    }
+  }
   if (hash && hash !== normalizedHash) {
     logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: normalizedHash, provided: hash });
   }
@@ -2532,7 +2549,7 @@ async function persistSnapshotWithSql(options) {
   });
 
   if (result && Number(result.rev || 0) === rev) {
-    return result;
+    return { ...result, didPersist: true };
   }
 
   return {
@@ -2540,7 +2557,8 @@ async function persistSnapshotWithSql(options) {
     snapshot: parsedSnapshot,
     stateString: serialized,
     hash: effectiveHash,
-    meta: storedMeta
+    meta: storedMeta,
+    didPersist: true
   };
 }
 
@@ -2641,7 +2659,9 @@ app.put('/api/state', async (req, res) => {
       snapshot,
       stateString,
       hash,
-      meta: storedMeta
+      meta: storedMeta,
+      skipIfUnchanged: true,
+      currentSnapshot: current
     });
 
     const etag = computeEtag(latest.hash);
@@ -2652,8 +2672,19 @@ app.put('/api/state', async (req, res) => {
 
     cachedSnapshot = latest;
 
-    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
     const duration = Date.now() - startedAt;
+    if (latest.didPersist === false) {
+      logSaveEvent('info', 'save skipped (no changes detected)', {
+        requestId,
+        rev: latest.rev,
+        hash: latest.hash || null,
+        duration
+      });
+      res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, unchanged: true });
+      return;
+    }
+
+    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
     logSaveEvent('info', 'save completed', {
       requestId,
       rev: latest.rev,
