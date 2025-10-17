@@ -806,6 +806,7 @@ async function buildSnapshotFromDatabase(client) {
   applyBaseSnapshot(snapshot, basePayload);
 
   const boardRows = await queryRowsSafe(
+    runner,
     'SELECT id, name, lanes, position, payload FROM crm_boards ORDER BY position ASC, id ASC'
   );
   const boards = [];
@@ -825,6 +826,7 @@ async function buildSnapshotFromDatabase(client) {
   }
 
   const orderRows = await queryRowsSafe(
+    runner,
     'SELECT order_key, board_id, payload, position FROM crm_orders_meta ORDER BY board_id ASC, position ASC, order_key ASC'
   );
   if (!boards.length && orderRows.rows.length) {
@@ -861,6 +863,7 @@ async function buildSnapshotFromDatabase(client) {
   }
 
   const taskRows = await queryRowsSafe(
+    runner,
     'SELECT uid, is_done, payload FROM planner_tasks_payload ORDER BY is_done ASC, sort_index ASC, uid ASC'
   );
   for (const row of taskRows.rows) {
@@ -873,7 +876,10 @@ async function buildSnapshotFromDatabase(client) {
     }
   }
 
-  const stageRows = await queryRowsSafe('SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC');
+  const stageRows = await queryRowsSafe(
+    runner,
+    'SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC'
+  );
   snapshot.orders = stageRows.rows.map((row) => [row.stage_code, Array.isArray(row.order_uids) ? row.order_uids : []]);
 
   mergeCrmTasksIntoSnapshot(snapshot);
