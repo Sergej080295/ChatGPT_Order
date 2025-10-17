@@ -1178,11 +1178,11 @@ body.overview-fs-active{overflow:hidden}
     <div class="settings-panel" data-settings-panel="admin">
       <div class="settings-admin-panel" id="adminSettingsPanel">
         <div class="admin-settings-grid">
-          <label>Хранить последних N снимков
-            <input id="adminHistoryLimit" class="pc-input" type="number" min="1" max="500" step="1" />
+          <label>Хранить последних N снимков (недоступно)
+            <input id="adminHistoryLimit" class="pc-input" type="number" min="1" max="500" step="1" disabled />
           </label>
-          <label>Снимков на день (N)
-            <input id="adminHistoryDailyLimit" class="pc-input" type="number" min="1" max="100" step="1" />
+          <label>Снимков на день (недоступно)
+            <input id="adminHistoryDailyLimit" class="pc-input" type="number" min="1" max="100" step="1" disabled />
           </label>
           <label>Запись данных
             <select id="adminWriteMode" class="pc-select">
@@ -1197,25 +1197,26 @@ body.overview-fs-active{overflow:hidden}
           </label>
         </div>
         <div class="admin-settings-actions">
-          <button id="adminSnapshotBtn" class="pc-btn pc-btn--ghost pc-btn--sm" type="button">Создать снимок сейчас</button>
-          <button id="adminSnapshotsClearBtn" class="pc-btn pc-btn--ghost pc-btn--sm" type="button">Очистить снимки</button>
+          <button id="adminSnapshotBtn" class="pc-btn pc-btn--ghost pc-btn--sm" type="button" disabled>Создать снимок сейчас</button>
+          <button id="adminSnapshotsClearBtn" class="pc-btn pc-btn--ghost pc-btn--sm" type="button" disabled>Очистить снимки</button>
           <button id="adminSaveBtn" class="pc-btn pc-btn--primary pc-btn--sm" type="button">Сохранить</button>
         </div>
       </div>
       <div class="admin-history-section">
         <div class="admin-history-toolbar">
-          <input id="historyFilterActor" class="pc-input" type="text" placeholder="Пользователь" />
-          <input id="historyFilterSource" class="pc-input" type="text" placeholder="Источник" />
-          <input id="historyFilterFrom" class="pc-input" type="date" />
-          <input id="historyFilterTo" class="pc-input" type="date" />
-          <button id="historyFilterApply" class="pc-btn pc-btn--secondary pc-btn--sm" type="button">Обновить</button>
-          <button id="historyFilterReset" class="pc-btn pc-btn--ghost pc-btn--sm" type="button">Сброс</button>
+          <input id="historyFilterActor" class="pc-input" type="text" placeholder="Пользователь" disabled />
+          <input id="historyFilterSource" class="pc-input" type="text" placeholder="Источник" disabled />
+          <input id="historyFilterFrom" class="pc-input" type="date" disabled />
+          <input id="historyFilterTo" class="pc-input" type="date" disabled />
+          <button id="historyFilterApply" class="pc-btn pc-btn--secondary pc-btn--sm" type="button" disabled>Обновить</button>
+          <button id="historyFilterReset" class="pc-btn pc-btn--ghost pc-btn--sm" type="button" disabled>Сброс</button>
         </div>
+        <div class="admin-history-empty" style="margin-bottom:12px;">Хранилище снимков отключено на сервере. Настройки ниже сохранены для совместимости.</div>
         <div class="admin-history-list" id="adminHistoryList">
-          <div class="admin-history-empty">История ещё не загружена.</div>
+          <div class="admin-history-empty">Хранилище снимков отключено.</div>
         </div>
         <div class="admin-history-footer">
-          <button id="historyLoadMore" class="pc-btn pc-btn--ghost pc-btn--sm" type="button">Загрузить ещё</button>
+          <button id="historyLoadMore" class="pc-btn pc-btn--ghost pc-btn--sm" type="button" disabled>Загрузить ещё</button>
         </div>
       </div>
     </div>
@@ -2696,6 +2697,9 @@ let adminHistoryState = {
   filters: { actor:'', source:'', from:'', to:'' }
 };
 let adminHistoryLoading = false;
+const ADMIN_HISTORY_DISABLED = true;
+const SNAPSHOT_STORAGE_DISABLED = true;
+let adminHistoryNoticeShown = false;
 const adminHistoryCache = new Map();
 const encounteredCrmStages = new Map();
 let pendingCrmMappingRender = false;
@@ -13804,13 +13808,25 @@ function renderAdminSettingsUI(){
   const hasAdminDirty = sharedSettingsDirtyKeys.has('admin');
   const limitInput = document.getElementById('adminHistoryLimit');
   if(limitInput){
-    limitInput.value = String(source.historyLimit);
-    limitInput.disabled = !canEdit;
+    if(ADMIN_HISTORY_DISABLED){
+      limitInput.value = '';
+      limitInput.placeholder = 'История отключена';
+      limitInput.disabled = true;
+    }else{
+      limitInput.value = String(source.historyLimit);
+      limitInput.disabled = !canEdit;
+    }
   }
   const dailyInput = document.getElementById('adminHistoryDailyLimit');
   if(dailyInput){
-    dailyInput.value = String(source.historyDailyLimit);
-    dailyInput.disabled = !canEdit;
+    if(ADMIN_HISTORY_DISABLED){
+      dailyInput.value = '';
+      dailyInput.placeholder = 'История отключена';
+      dailyInput.disabled = true;
+    }else{
+      dailyInput.value = String(source.historyDailyLimit);
+      dailyInput.disabled = !canEdit;
+    }
   }
   const writeModeSelect = document.getElementById('adminWriteMode');
   if(writeModeSelect){
@@ -13829,7 +13845,13 @@ function renderAdminSettingsUI(){
   }
   const snapshotBtn = document.getElementById('adminSnapshotBtn');
   if(snapshotBtn){
-    snapshotBtn.disabled = !canEdit;
+    snapshotBtn.disabled = true;
+    snapshotBtn.title = 'Создание снимков отключено на сервере';
+  }
+  const snapshotClearBtn = document.getElementById('adminSnapshotsClearBtn');
+  if(snapshotClearBtn){
+    snapshotClearBtn.disabled = true;
+    snapshotClearBtn.title = 'История снимков отключена на сервере';
   }
 }
 
@@ -13881,6 +13903,7 @@ function formatHistorySummary(summary){
 }
 
 function applyAdminFiltersFromForm(){
+  if(ADMIN_HISTORY_DISABLED) return;
   const actorInput = document.getElementById('historyFilterActor');
   const sourceInput = document.getElementById('historyFilterSource');
   const fromInput = document.getElementById('historyFilterFrom');
@@ -13894,6 +13917,7 @@ function applyAdminFiltersFromForm(){
 }
 
 function resetAdminHistoryFilters(){
+  if(ADMIN_HISTORY_DISABLED) return;
   const actorInput = document.getElementById('historyFilterActor');
   const sourceInput = document.getElementById('historyFilterSource');
   const fromInput = document.getElementById('historyFilterFrom');
@@ -13909,98 +13933,36 @@ function renderAdminHistoryList(){
   const list = document.getElementById('adminHistoryList');
   if(!list) return;
   list.innerHTML = '';
-  if(adminHistoryLoading && adminHistoryState.items.length === 0){
-    const loading = document.createElement('div');
-    loading.className = 'admin-history-empty';
-    loading.textContent = 'Загрузка…';
-    list.appendChild(loading);
-  }else if(adminHistoryState.items.length === 0){
-    const empty = document.createElement('div');
-    empty.className = 'admin-history-empty';
-    empty.textContent = 'По текущим условиям ничего не найдено.';
-    list.appendChild(empty);
-  }else{
-    const canEdit = userCanEdit();
-    adminHistoryState.items.forEach((item)=>{
-      const card = document.createElement('div');
-      card.className = 'admin-history-item';
-
-      const meta = document.createElement('div');
-      meta.className = 'admin-history-meta';
-      const when = document.createElement('span');
-      when.textContent = formatHistoryTimestamp(item.createdAt);
-      meta.appendChild(when);
-      const hashLabel = document.createElement('span');
-      hashLabel.textContent = `Хэш: ${shortenHash(item.hash || '')}`;
-      meta.appendChild(hashLabel);
-      const actorSpan = document.createElement('span');
-      actorSpan.textContent = `Пользователь: ${item.actor ? item.actor : '—'}`;
-      meta.appendChild(actorSpan);
-      const sourceSpan = document.createElement('span');
-      sourceSpan.textContent = `Источник: ${item.source ? item.source : '—'}`;
-      meta.appendChild(sourceSpan);
-      card.appendChild(meta);
-
-      const summary = document.createElement('div');
-      summary.className = 'admin-history-summary';
-      summary.textContent = formatHistorySummary(item.summary || item.note || null);
-      card.appendChild(summary);
-
-      const actions = document.createElement('div');
-      actions.className = 'admin-history-actions';
-
-      const viewBtn = document.createElement('button');
-      viewBtn.className = 'btn small ghost';
-      viewBtn.type = 'button';
-      viewBtn.textContent = 'Просмотр';
-      viewBtn.dataset.action = 'view';
-      viewBtn.dataset.hash = item.hash;
-      actions.appendChild(viewBtn);
-
-      const downloadBtn = document.createElement('button');
-      downloadBtn.className = 'btn small ghost';
-      downloadBtn.type = 'button';
-      downloadBtn.textContent = 'Скачать';
-      downloadBtn.dataset.action = 'download';
-      downloadBtn.dataset.hash = item.hash;
-      actions.appendChild(downloadBtn);
-
-      const copyBtn = document.createElement('button');
-      copyBtn.className = 'btn small ghost';
-      copyBtn.type = 'button';
-      copyBtn.textContent = 'Копировать хэш';
-      copyBtn.dataset.action = 'copy';
-      copyBtn.dataset.hash = item.hash;
-      actions.appendChild(copyBtn);
-
-      const rollbackBtn = document.createElement('button');
-      rollbackBtn.className = 'btn small';
-      rollbackBtn.type = 'button';
-      rollbackBtn.textContent = 'Откатиться';
-      rollbackBtn.dataset.action = 'rollback';
-      rollbackBtn.dataset.hash = item.hash;
-      rollbackBtn.disabled = !canEdit;
-      actions.appendChild(rollbackBtn);
-
-      card.appendChild(actions);
-      list.appendChild(card);
-    });
-  }
+  const empty = document.createElement('div');
+  empty.className = 'admin-history-empty';
+  empty.textContent = 'Хранилище снимков отключено на сервере.';
+  list.appendChild(empty);
 
   const loadMoreBtn = document.getElementById('historyLoadMore');
   if(loadMoreBtn){
-    loadMoreBtn.disabled = adminHistoryLoading || !adminHistoryState.hasMore;
-    loadMoreBtn.style.display = adminHistoryState.items.length === 0 ? 'none' : (adminHistoryState.hasMore ? '' : 'none');
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.style.display = 'none';
   }
 }
 
 function ensureAdminHistoryLoaded(){
-  if(adminHistoryState.items.length === 0 && !adminHistoryLoading){
-    fetchAdminHistory({ reset:true });
+  renderAdminHistoryList();
+  if(ADMIN_HISTORY_DISABLED && !adminHistoryNoticeShown){
+    adminHistoryNoticeShown = true;
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Хранилище снимков отключено на сервере.', tone:'info' });
+    }
   }
 }
 
 async function fetchAdminHistory({ reset = false } = {}){
+  if(ADMIN_HISTORY_DISABLED){
+    adminHistoryLoading = false;
+    adminHistoryState.items = [];
+    adminHistoryState.hasMore = false;
+    renderAdminHistoryList();
+    return { items: [] };
+  }
   if(adminHistoryLoading) return;
   adminHistoryLoading = true;
   const list = document.getElementById('adminHistoryList');
@@ -14071,6 +14033,12 @@ function handleAdminSettingsChange(event){
 function handleHistoryListClick(event){
   const button = event.target && event.target.closest('button[data-action]');
   if(!button) return;
+  if(ADMIN_HISTORY_DISABLED){
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'История снимков отключена на сервере.', tone:'info' });
+    }
+    return;
+  }
   const hash = button.dataset.hash;
   const action = button.dataset.action;
   if(!hash) return;
@@ -14086,6 +14054,9 @@ function handleHistoryListClick(event){
 }
 
 async function fetchHistoryDetail(hash){
+  if(ADMIN_HISTORY_DISABLED){
+    throw new Error('history-disabled');
+  }
   if(adminHistoryCache.has(hash)){
     return adminHistoryCache.get(hash);
   }
@@ -14099,6 +14070,12 @@ async function fetchHistoryDetail(hash){
 }
 
 async function openHistoryDetail(hash){
+  if(ADMIN_HISTORY_DISABLED){
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Просмотр снимков отключён.', tone:'info' });
+    }
+    return;
+  }
   try{
     const detail = await fetchHistoryDetail(hash);
     const dialog = document.getElementById('historyViewDlg');
@@ -14145,6 +14122,12 @@ async function openHistoryDetail(hash){
 }
 
 async function downloadHistorySnapshot(hash){
+  if(ADMIN_HISTORY_DISABLED){
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Скачивание снимков отключено.', tone:'info' });
+    }
+    return;
+  }
   try{
     const detail = await fetchHistoryDetail(hash);
     const payload = JSON.stringify(detail.state ?? null, null, 2);
@@ -14167,6 +14150,12 @@ async function downloadHistorySnapshot(hash){
 }
 
 async function copyHistoryHash(hash){
+  if(ADMIN_HISTORY_DISABLED){
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Хранилище снимков отключено.', tone:'info' });
+    }
+    return;
+  }
   try{
     const value = typeof hash === 'string' ? hash : '';
     if(!value){
@@ -14185,57 +14174,20 @@ async function copyHistoryHash(hash){
 }
 
 async function handleAdminSnapshotsClear(){
-  if(!userCanEdit()){
-    notifyReadOnly();
-    return;
-  }
-  if(!window.confirm('Очистить сохранённые снимки (кроме актуального)?')){
-    return;
-  }
-  const button = document.getElementById('adminSnapshotsClearBtn');
-  const originalLabel = button ? button.textContent : '';
-  if(button){
-    button.disabled = true;
-    button.textContent = 'Очищаем…';
-  }
-  try{
-    const res = await fetch('/api/admin/history', {
-      method:'DELETE',
-      headers:{ 'Accept':'application/json' }
-    });
-    const text = await res.text().catch(()=> '');
-    let payload = {};
-    if(text){
-      try{ payload = JSON.parse(text); }
-      catch(_err){ payload = {}; }
-    }
-    if(!res.ok){
-      const message = payload?.error || `HTTP ${res.status}`;
-      throw new Error(message);
-    }
-    adminHistoryCache.clear();
-    adminHistoryState.items = [];
-    adminHistoryState.offset = 0;
-    adminHistoryState.hasMore = true;
-    renderAdminHistoryList();
-    fetchAdminHistory({ reset:true });
-    if(typeof showToast === 'function'){
-      showToast({ title:'История', message:'Снимки очищены.', tone:'success' });
-    }
-  }catch(err){
-    console.warn('history clear failed', err);
-    if(typeof showToast === 'function'){
-      showToast({ title:'История', message:`Не удалось очистить снимки (${err.message || err}).`, tone:'error' });
-    }
-  }finally{
-    if(button){
-      button.disabled = false;
-      button.textContent = originalLabel || 'Очистить снимки';
-    }
+  if(typeof showToast === 'function'){
+    showToast({ title:'История', message:'Хранилище снимков отключено на сервере.', tone:'info' });
+  }else{
+    alert('Хранилище снимков отключено на сервере.');
   }
 }
 
 async function handleHistoryRollback(hash){
+  if(ADMIN_HISTORY_DISABLED){
+    if(typeof showToast === 'function'){
+      showToast({ title:'История', message:'Откат по снимкам отключён.', tone:'info' });
+    }
+    return;
+  }
   if(!userCanEdit()){
     notifyReadOnly();
     return;
@@ -14273,34 +14225,17 @@ async function handleHistoryRollback(hash){
 }
 
 async function handleAdminSnapshotRequest(){
-  if(!userCanEdit()){
-    notifyReadOnly();
-    return;
-  }
-  const note = window.prompt('Комментарий к снимку (необязательно)', '') || '';
-  try{
-    const res = await fetch('/api/admin/snapshot', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-      body: JSON.stringify({ note: note.trim() ? note.trim() : undefined, actor: userAlias || 'admin' })
-    });
-    if(!res.ok){
-      const detail = await res.text().catch(()=> '');
-      throw new Error(detail || `HTTP ${res.status}`);
-    }
-    if(typeof showToast === 'function'){
-      showToast({ title:'Снимок создан', message:'Текущий снимок добавлен в историю.', tone:'success' });
-    }
-    fetchAdminHistory({ reset:true });
-  }catch(err){
-    console.warn('snapshot failed', err);
-    if(typeof showToast === 'function'){
-      showToast({ title:'История', message:`Не удалось создать снимок: ${err.message || err}`, tone:'error' });
-    }
+  if(typeof showToast === 'function'){
+    showToast({ title:'Снимки', message:'Создание снимков отключено на сервере.', tone:'info' });
+  }else{
+    alert('Создание снимков отключено на сервере.');
   }
 }
 
 function handleAdminHistoryEvent(payload){
+  if(ADMIN_HISTORY_DISABLED){
+    return;
+  }
   if(!payload || typeof payload !== 'object') return;
   const hash = typeof payload.hash === 'string' ? payload.hash : '';
   if(!hash) return;

@@ -516,6 +516,368 @@ function mergeCrmTasksIntoSnapshot(snapshot) {
   return { tasks, crmTasks };
 }
 
+function cloneJson(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_err) {
+    if (Array.isArray(value)) {
+      return value.slice();
+    }
+    if (isPlainObject(value)) {
+      return { ...value };
+    }
+    return value;
+  }
+}
+
+function extractBaseState(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return {};
+  }
+  const base = {};
+  const copy = (key, fallback) => {
+    if (snapshot[key] === undefined) {
+      if (fallback !== undefined) {
+        base[key] = fallback;
+      }
+      return;
+    }
+    base[key] = cloneJson(snapshot[key]);
+  };
+
+  copy('routeOverrides', []);
+  copy('trash', []);
+  copy('exc', []);
+  copy('res', []);
+  copy('process', 'bend');
+  copy('capByProc', {});
+  copy('parallelByProc', {});
+  copy('filter', '');
+  copy('locked', []);
+  copy('freshness', '');
+  copy('freshnessCsv', '');
+  copy('freshnessManual', '');
+  copy('lastImportTime', '');
+  copy('lastManualTime', '');
+  copy('autosaveOn', true);
+  copy('autoOptimizeOn', true);
+  copy('cascadeReadyOn', true);
+  copy('priorityChangeLoggingOn', false);
+  copy('routeDateChangeLoggingOn', false);
+  copy('notificationsMuted', false);
+  copy('shiftOnProgress', true);
+  copy('ignoredStates', []);
+  copy('meta', {});
+  copy('modeScoped', {});
+
+  const crm = snapshot.crm && typeof snapshot.crm === 'object' ? snapshot.crm : {};
+  base.crm = {
+    currentBoardId: crm.currentBoardId || null
+  };
+
+  return base;
+}
+
+function applyBaseSnapshot(target, base) {
+  if (!isPlainObject(base) || !isPlainObject(target)) {
+    return;
+  }
+
+  const assignArray = (key) => {
+    if (Array.isArray(base[key])) {
+      target[key] = base[key].map((item) => cloneJson(item));
+    }
+  };
+
+  const assignObject = (key) => {
+    if (isPlainObject(base[key])) {
+      target[key] = cloneJson(base[key]);
+    }
+  };
+
+  const assignValue = (key) => {
+    if (base[key] !== undefined) {
+      target[key] = cloneJson(base[key]);
+    }
+  };
+
+  assignArray('routeOverrides');
+  assignArray('trash');
+  assignArray('exc');
+  assignArray('res');
+  assignArray('locked');
+  assignArray('ignoredStates');
+
+  assignObject('capByProc');
+  assignObject('parallelByProc');
+  assignObject('meta');
+  assignObject('modeScoped');
+
+  assignValue('process');
+  assignValue('filter');
+  assignValue('freshness');
+  assignValue('freshnessCsv');
+  assignValue('freshnessManual');
+  assignValue('lastImportTime');
+  assignValue('lastManualTime');
+  assignValue('autosaveOn');
+  assignValue('autoOptimizeOn');
+  assignValue('cascadeReadyOn');
+  assignValue('priorityChangeLoggingOn');
+  assignValue('routeDateChangeLoggingOn');
+  assignValue('notificationsMuted');
+  assignValue('shiftOnProgress');
+
+  if (isPlainObject(base.crm)) {
+    if (!isPlainObject(target.crm)) {
+      target.crm = { boards: [], currentBoardId: null };
+    }
+    if (base.crm.currentBoardId) {
+      target.crm.currentBoardId = base.crm.currentBoardId;
+    }
+  }
+}
+
+async function savePlannerDerivedState(client, snapshot, {
+  tasks = [],
+  done = [],
+  resolveOrderKey = null,
+  orderIdMap = null
+} = {}) {
+  const runner = client || pool;
+  const resolver = typeof resolveOrderKey === 'function' ? resolveOrderKey : createOrderKeyResolver();
+  const orderMap = orderIdMap instanceof Map ? orderIdMap : new Map();
+
+  await runner.query('DELETE FROM crm_boards');
+  await runner.query('DELETE FROM crm_orders_meta');
+  await runner.query('DELETE FROM planner_tasks_payload');
+  await runner.query('DELETE FROM planner_stage_orders');
+  await runner.query('DELETE FROM planner_misc_state WHERE key = $1', ['base']);
+
+  const boards = Array.isArray(snapshot?.crm?.boards) ? snapshot.crm.boards : [];
+  const boardInsertSql = `
+    INSERT INTO crm_boards (id, name, lanes, position, payload, updated_at)
+    VALUES ($1,$2,$3,$4,$5::jsonb,NOW())
+  `;
+  const boardMap = new Map();
+
+  for (let index = 0; index < boards.length; index += 1) {
+    const boardRaw = boards[index];
+    if (!isPlainObject(boardRaw)) continue;
+    const boardId = sanitizeString(boardRaw.id) || `crm-board-${index + 1}`;
+    const boardName = sanitizeString(boardRaw.name) || `Доска ${index + 1}`;
+    const lanes = Array.isArray(boardRaw.lanes)
+      ? boardRaw.lanes.map((lane) => sanitizeString(lane) || '').filter(Boolean)
+      : [];
+    const payload = cloneJson(boardRaw) || {};
+    payload.id = boardId;
+    payload.name = boardName;
+    payload.lanes = lanes.slice();
+    payload.orders = [];
+
+    // eslint-disable-next-line no-await-in-loop
+    await runner.query(boardInsertSql, [boardId, boardName, lanes, index, JSON.stringify(payload)]);
+    boardMap.set(boardId, { id: boardId, index });
+  }
+
+  const orders = [];
+  for (const board of boards) {
+    if (!isPlainObject(board)) continue;
+    const boardId = sanitizeString(board.id) || Array.from(boardMap.keys())[0] || 'crm-board-1';
+    const orderList = Array.isArray(board.orders) ? board.orders : [];
+    for (let position = 0; position < orderList.length; position += 1) {
+      const order = orderList[position];
+      if (!isPlainObject(order)) continue;
+      const resolution = resolver(order) || {};
+      const canonicalKey = resolution.key
+        || sanitizeString(order.orderIdentity)
+        || sanitizeString(order.id)
+        || sanitizeString(order.orderId)
+        || sanitizeString(order.orderNo)
+        || `${boardId}:${position + 1}`;
+      if (!canonicalKey) continue;
+      orders.push({
+        key: canonicalKey,
+        boardId,
+        crmOrderId: sanitizeString(order.id)
+          || sanitizeString(order.crmOrderId)
+          || sanitizeString(order.orderId)
+          || null,
+        position,
+        payload: cloneJson(order)
+      });
+    }
+  }
+
+  const orderInsertSql = `
+    INSERT INTO crm_orders_meta (order_key, order_id, board_id, crm_order_id, position, payload, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW())
+  `;
+  for (const entry of orders) {
+    const dbOrderId = orderMap.get(entry.key) || null;
+    // eslint-disable-next-line no-await-in-loop
+    await runner.query(orderInsertSql, [
+      entry.key,
+      dbOrderId,
+      entry.boardId,
+      entry.crmOrderId,
+      entry.position,
+      JSON.stringify(entry.payload)
+    ]);
+  }
+
+  const taskInsertSql = `
+    INSERT INTO planner_tasks_payload (uid, order_key, stage_code, is_done, sort_index, payload, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW())
+  `;
+  let sortIndex = 0;
+  const storeTask = async (task, isDone) => {
+    if (!isPlainObject(task)) return;
+    const uid = sanitizeString(task.uid) || `task-${sortIndex + 1}`;
+    const stageCode = normalizeStage(task.stage);
+    const resolution = resolver(task) || {};
+    const payload = cloneJson(task);
+    // eslint-disable-next-line no-await-in-loop
+    await runner.query(taskInsertSql, [
+      uid,
+      resolution.key || null,
+      stageCode,
+      Boolean(isDone),
+      sortIndex,
+      JSON.stringify(payload)
+    ]);
+    sortIndex += 1;
+  };
+
+  for (const task of tasks) {
+    // eslint-disable-next-line no-await-in-loop
+    await storeTask(task, false);
+  }
+  for (const task of done) {
+    // eslint-disable-next-line no-await-in-loop
+    await storeTask(task, true);
+  }
+
+  const stageEntries = Array.isArray(snapshot?.orders) ? snapshot.orders : [];
+  const stageInsertSql = `
+    INSERT INTO planner_stage_orders (stage_code, order_uids, updated_at)
+    VALUES ($1,$2,NOW())
+  `;
+  for (const entry of stageEntries) {
+    if (!Array.isArray(entry) || entry.length < 2) continue;
+    const stageCode = normalizeStage(entry[0]);
+    if (!stageCode) continue;
+    const uidList = Array.isArray(entry[1])
+      ? entry[1].map((uid) => (uid == null ? null : String(uid))).filter(Boolean)
+      : [];
+    // eslint-disable-next-line no-await-in-loop
+    await runner.query(stageInsertSql, [stageCode, uidList]);
+  }
+
+  const baseState = extractBaseState(snapshot);
+  await runner.query(
+    `INSERT INTO planner_misc_state (key, payload, updated_at)
+      VALUES ('base', $1::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET payload = EXCLUDED.payload,
+            updated_at = NOW()` ,
+    [JSON.stringify(baseState)]
+  );
+}
+
+async function getLatestRevision(client) {
+  const runner = client || pool;
+  const { rows } = await runner.query('SELECT COALESCE(MAX(rev), 0) AS rev FROM revisions');
+  return Number(rows[0]?.rev || 0);
+}
+
+async function buildSnapshotFromDatabase(client) {
+  const runner = client || pool;
+  await ensurePlannerSettingsSchema(runner);
+
+  const baseRow = await runner.query('SELECT payload FROM planner_misc_state WHERE key = $1', ['base']);
+  const basePayload = baseRow.rows.length ? parseJsonColumn(baseRow.rows[0].payload, {}) : {};
+
+  const snapshot = buildEmptySnapshot();
+  applyBaseSnapshot(snapshot, basePayload);
+
+  const boardRows = await runner.query(
+    'SELECT id, name, lanes, position, payload FROM crm_boards ORDER BY position ASC, id ASC'
+  );
+  const boards = [];
+  const boardMap = new Map();
+
+  for (const row of boardRows.rows) {
+    const payload = parseJsonColumn(row.payload, {});
+    const board = cloneJson(payload) || {};
+    board.id = sanitizeString(row.id) || board.id || `crm-board-${boards.length + 1}`;
+    board.name = sanitizeString(row.name) || board.name || 'Список заказов';
+    board.lanes = Array.isArray(row.lanes)
+      ? row.lanes.map((lane) => (lane == null ? '' : String(lane)))
+      : Array.isArray(board.lanes) ? board.lanes : [];
+    board.orders = [];
+    boards.push(board);
+    boardMap.set(board.id, board);
+  }
+
+  const orderRows = await runner.query(
+    'SELECT order_key, board_id, payload, position FROM crm_orders_meta ORDER BY board_id ASC, position ASC, order_key ASC'
+  );
+  if (!boards.length && orderRows.rows.length) {
+    const fallback = {
+      id: 'crm-board-1',
+      name: 'Список заказов',
+      lanes: [],
+      orders: []
+    };
+    boards.push(fallback);
+    boardMap.set(fallback.id, fallback);
+    if (!snapshot.crm.currentBoardId) {
+      snapshot.crm.currentBoardId = fallback.id;
+    }
+  }
+
+  for (const row of orderRows.rows) {
+    const payload = parseJsonColumn(row.payload, null);
+    if (!payload) continue;
+    const boardId = sanitizeString(row.board_id)
+      || payload.boardId
+      || snapshot.crm.currentBoardId
+      || (boards[0]?.id ?? null);
+    const board = boardMap.get(boardId);
+    if (!board) {
+      continue;
+    }
+    board.orders.push(cloneJson(payload));
+  }
+
+  snapshot.crm.boards = boards;
+  if (!snapshot.crm.currentBoardId && boards.length) {
+    snapshot.crm.currentBoardId = boards[0].id;
+  }
+
+  const taskRows = await runner.query(
+    'SELECT uid, is_done, payload FROM planner_tasks_payload ORDER BY is_done ASC, sort_index ASC, uid ASC'
+  );
+  for (const row of taskRows.rows) {
+    const payload = parseJsonColumn(row.payload, null);
+    if (!payload) continue;
+    if (row.is_done) {
+      snapshot.done.push(payload);
+    } else {
+      snapshot.t.push(payload);
+    }
+  }
+
+  const stageRows = await runner.query('SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC');
+  snapshot.orders = stageRows.rows.map((row) => [row.stage_code, Array.isArray(row.order_uids) ? row.order_uids : []]);
+
+  return snapshot;
+}
+
 function classifyWriteChannel({ channel = null, source = null } = {}) {
   const explicit = normalizeChannelValue(channel);
   if (explicit) {
@@ -587,7 +949,7 @@ function buildEmptySnapshot() {
         extraTime: { percent: DEFAULT_EXTRA_PERCENT, minimum: DEFAULT_EXTRA_MINIMUM },
         crmStageMapping: {},
         logLimit: 50,
-        admin: { allowForceOverwrite: false, snapshotRetention: 50, writeMode: DEFAULT_WRITE_MODE },
+        admin: { allowForceOverwrite: false, writeMode: DEFAULT_WRITE_MODE },
         updatedAt: ''
       },
       ignoredStates: [],
@@ -644,9 +1006,6 @@ async function ensurePlannerSettingsSchema(client) {
     CREATE TABLE IF NOT EXISTS settings_admin (
       id SMALLINT PRIMARY KEY DEFAULT 1,
       allow_force_overwrite BOOLEAN NOT NULL DEFAULT FALSE,
-      snapshot_retention INTEGER NOT NULL DEFAULT 50,
-      history_limit INTEGER NOT NULL DEFAULT 50,
-      history_daily_limit INTEGER NOT NULL DEFAULT 3,
       write_mode TEXT NOT NULL DEFAULT 'both',
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -655,9 +1014,6 @@ async function ensurePlannerSettingsSchema(client) {
     CREATE TABLE IF NOT EXISTS settings_admin_hist (
       id SMALLINT,
       allow_force_overwrite BOOLEAN,
-      snapshot_retention INTEGER,
-      history_limit INTEGER,
-      history_daily_limit INTEGER,
       write_mode TEXT,
       updated_at TIMESTAMPTZ,
       rev BIGINT NOT NULL REFERENCES revisions(rev),
@@ -666,28 +1022,22 @@ async function ensurePlannerSettingsSchema(client) {
     )
   `);
   await runner.query(
-    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_limit INTEGER'
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
+    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN'
   );
   await runner.query(
     "ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS write_mode TEXT"
   );
   await runner.query(
-    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_limit INTEGER'
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS history_daily_limit INTEGER'
+    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN'
   );
   await runner.query(
     "ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS write_mode TEXT"
   );
   await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN history_limit SET DEFAULT 50'
+    'ALTER TABLE settings_admin ALTER COLUMN allow_force_overwrite SET DEFAULT FALSE'
   );
   await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET DEFAULT 3'
+    'UPDATE settings_admin SET allow_force_overwrite = FALSE WHERE allow_force_overwrite IS NULL'
   );
   await runner.query(
     "UPDATE settings_admin SET write_mode = 'both' WHERE write_mode IS NULL OR write_mode NOT IN ('crm','planner','both')"
@@ -700,18 +1050,6 @@ async function ensurePlannerSettingsSchema(client) {
   );
   await runner.query(
     'ALTER TABLE settings_admin ALTER COLUMN updated_at SET DEFAULT NOW()'
-  );
-  await runner.query(
-    'UPDATE settings_admin SET history_limit = 50 WHERE history_limit IS NULL'
-  );
-  await runner.query(
-    'UPDATE settings_admin SET history_daily_limit = 3 WHERE history_daily_limit IS NULL'
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN history_limit SET NOT NULL'
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN history_daily_limit SET NOT NULL'
   );
 
   await runner.query(`
@@ -852,61 +1190,6 @@ async function ensurePlannerSettingsSchema(client) {
   }
 
   settingsSchemaEnsured = true;
-}
-
-async function ensurePlannerSnapshotsSchema(client) {
-  const runner = client || pool;
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS planner_state_snapshots (
-      id BIGSERIAL PRIMARY KEY,
-      rev BIGINT NOT NULL REFERENCES revisions(rev) ON DELETE CASCADE,
-      snapshot JSONB NOT NULL,
-      meta JSONB,
-      hash TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    ALTER TABLE planner_state_snapshots
-      ADD COLUMN IF NOT EXISTS snapshot JSONB,
-      ADD COLUMN IF NOT EXISTS meta JSONB,
-      ADD COLUMN IF NOT EXISTS hash TEXT,
-      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
-  `);
-  await runner.query(`
-    UPDATE planner_state_snapshots
-       SET snapshot = '{}'::jsonb
-     WHERE snapshot IS NULL
-  `);
-  await runner.query(`
-    UPDATE planner_state_snapshots
-       SET created_at = NOW()
-     WHERE created_at IS NULL
-  `);
-  await runner.query(`
-    ALTER TABLE planner_state_snapshots
-      ALTER COLUMN snapshot SET NOT NULL
-  `);
-  await runner.query(`
-    ALTER TABLE planner_state_snapshots
-      ALTER COLUMN snapshot SET DEFAULT '{}'::jsonb
-  `);
-  await runner.query(`
-    ALTER TABLE planner_state_snapshots
-      ALTER COLUMN created_at SET NOT NULL
-  `);
-  await runner.query(`
-    ALTER TABLE planner_state_snapshots
-      ALTER COLUMN created_at SET DEFAULT NOW()
-  `);
-  await runner.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS planner_state_snapshots_rev_key
-      ON planner_state_snapshots(rev)
-  `);
-  await runner.query(`
-    CREATE INDEX IF NOT EXISTS planner_state_snapshots_created_idx
-      ON planner_state_snapshots(created_at DESC)
-  `);
 }
 
 function readMigrations() {
@@ -1054,18 +1337,7 @@ async function ensureMigrationRevision(client) {
 async function loadLatestSnapshot(runner) {
   const client = runner || pool;
   await ensurePlannerSettingsSchema(client);
-  await ensurePlannerSnapshotsSchema(client);
-  const { rows } = await client.query(`
-    SELECT rev, snapshot, hash, meta
-      FROM planner_state_snapshots
-     ORDER BY rev DESC, created_at DESC
-     LIMIT 1
-  `);
-  if (!rows.length) {
-    return null;
-  }
-  const row = rows[0];
-  const snapshotObj = parseJsonColumn(row.snapshot, {});
+  const snapshotObj = await buildSnapshotFromDatabase(client);
   try {
     const prefMap = await loadSharedPreferences(client);
     if (prefMap && prefMap.size) {
@@ -1073,19 +1345,18 @@ async function loadLatestSnapshot(runner) {
     }
     const autoweight = await loadAutoweightSettings(client);
     normalizeExtraTimeSettings(snapshotObj, autoweight);
-    mergeCrmTasksIntoSnapshot(snapshotObj);
   } catch (err) {
     console.warn('Failed to merge shared preferences into snapshot', err);
   }
-  const stateString = JSON.stringify(snapshotObj);
-  const hash = row.hash || computeSnapshotHash(stateString);
-  const rev = Number(row.rev || 0);
+  const stateString = safeSerializeSnapshot(snapshotObj);
+  const hash = computeSnapshotHash(stateString);
+  const rev = await getLatestRevision(client);
   return {
     rev,
     snapshot: snapshotObj,
     stateString,
     hash,
-    meta: parseJsonColumn(row.meta, null)
+    meta: null
   };
 }
 
@@ -1308,19 +1579,6 @@ function extractSnapshotPayload(body) {
   throw new Error('Unsupported snapshot payload');
 }
 
-function extractHistorySummary(meta) {
-  if (!isPlainObject(meta)) return null;
-  if (typeof meta.summary === 'string' && meta.summary.trim()) return meta.summary.trim();
-  if (typeof meta.note === 'string' && meta.note.trim()) return meta.note.trim();
-  if (isPlainObject(meta.diff) && typeof meta.diff.summary === 'string' && meta.diff.summary.trim()) {
-    return meta.diff.summary.trim();
-  }
-  if (typeof meta.changeType === 'string' && meta.changeType.trim()) {
-    return meta.changeType.trim();
-  }
-  return null;
-}
-
 function safeSerializeSnapshot(snapshot, stateString = null) {
   if (typeof stateString === 'string') {
     const trimmed = stateString.trim();
@@ -1445,37 +1703,6 @@ function normalizeSnapshotCollections(snapshot) {
   }
 }
 
-function serializeMeta(meta) {
-  const sanitized = sanitizeMetaForStorage(meta);
-  if (sanitized === null) {
-    return null;
-  }
-  try {
-    return JSON.stringify(sanitized);
-  } catch (err) {
-    console.warn('Failed to serialize snapshot meta, discarding meta payload', err);
-    return null;
-  }
-}
-
-async function insertSnapshotRow(client, rev, snapshot, stateString, hash, meta) {
-  await ensurePlannerSnapshotsSchema(client);
-  const snapshotJson = safeSerializeSnapshot(snapshot, stateString);
-  const metaJson = serializeMeta(meta);
-  const effectiveHash = hash || computeSnapshotHash(snapshotJson);
-
-  await client.query(
-    `INSERT INTO planner_state_snapshots (rev, snapshot, meta, hash)
-     VALUES ($1,$2::jsonb,$3::jsonb,$4)
-     ON CONFLICT (rev) DO UPDATE
-       SET snapshot = EXCLUDED.snapshot,
-           meta = EXCLUDED.meta,
-           hash = EXCLUDED.hash,
-           created_at = NOW()` ,
-    [rev, snapshotJson, metaJson, effectiveHash]
-  );
-}
-
 async function runWithRevision(actor, source, note, handler) {
   const client = await pool.connect();
   try {
@@ -1578,41 +1805,24 @@ async function persistSnapshotWithSql(options) {
   let serialized = serializedBefore;
   let effectiveHash = hashBefore;
 
-  const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
+  const { rev } = await runWithRevision(actor, source, note, async (client) => {
     await ensurePlannerSettingsSchema(client);
-    await applySnapshotToSql(client, parsedSnapshot);
+    const applyResult = await applySnapshotToSql(client, parsedSnapshot);
     serialized = safeSerializeSnapshot(parsedSnapshot);
     effectiveHash = computeSnapshotHash(serialized);
-    await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
-    return await loadLatestSnapshot(client);
+    await savePlannerDerivedState(client, parsedSnapshot, applyResult);
+    return null;
   });
 
-  if (result && Number(result.rev || 0) === rev) {
-    return result;
-  }
+  invalidateCache();
+  const latest = await getCachedSnapshot();
 
   return {
-    rev,
-    snapshot: parsedSnapshot,
-    stateString: serialized,
-    hash: effectiveHash,
+    rev: latest.rev || rev,
+    snapshot: latest.snapshot,
+    stateString: latest.stateString,
+    hash: latest.hash,
     meta: storedMeta
-  };
-}
-
-function mapHistoryRow(row) {
-  const meta = parseJsonColumn(row.meta, null);
-  const summary = extractHistorySummary(meta);
-  return {
-    rev: Number(row.rev || 0),
-    hash: row.hash || null,
-    etag: computeEtag(row.hash || null),
-    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    actor: row.actor || (meta && meta.actor ? meta.actor : null),
-    source: row.source || (meta && meta.source ? meta.source : null),
-    note: row.note || (meta && meta.note ? meta.note : null),
-    summary: summary || null,
-    meta
   };
 }
 
@@ -1903,70 +2113,7 @@ function buildSnapshotDiff(current, next) {
 }
 
 async function ensureSqlHydrated() {
-  let hasOrders = true;
-  try {
-    const { rows } = await pool.query('SELECT EXISTS (SELECT 1 FROM orders LIMIT 1) AS has_orders');
-    hasOrders = Boolean(rows[0]?.has_orders);
-  } catch (err) {
-    console.warn('Failed to probe orders table before hydration', err);
-    return;
-  }
-
-  if (hasOrders) {
-    return;
-  }
-
-  const latest = await loadLatestSnapshot();
-  if (!latest || !Number.isFinite(latest.rev) || latest.rev <= 0) {
-    return;
-  }
-
-  const hydrationMeta = sanitizeMetaForStorage({
-    actor: 'system',
-    source: 'startup-hydrate',
-    note: 'Автоматическое восстановление таблиц из последнего снимка',
-    hydratedFromRev: latest.rev,
-    baseRev: latest.rev,
-    previousMeta: latest.meta || undefined
-  }) || {
-    actor: 'system',
-    source: 'startup-hydrate',
-    hydratedFromRev: latest.rev,
-    baseRev: latest.rev
-  };
-
-  const requestId = createRequestId();
-  const startedAt = Date.now();
-  logSaveEvent('info', 'auto hydration started', { requestId, rev: latest.rev, hash: latest.hash || null });
-
-  try {
-    const persisted = await persistSnapshotWithSql({
-      actor: 'system',
-      source: 'startup-hydrate',
-      note: 'Автоматическое восстановление таблиц из снимка',
-      snapshot: latest.snapshot,
-      stateString: latest.stateString,
-      hash: latest.hash,
-      meta: hydrationMeta,
-      channel: WRITE_CHANNELS.SYSTEM
-    });
-
-    cachedSnapshot = persisted;
-    const etag = computeEtag(persisted.hash);
-    if (etag) {
-      broadcastRevision({ rev: persisted.rev, hash: persisted.hash, etag });
-    }
-    const duration = Date.now() - startedAt;
-    logSaveEvent('info', 'auto hydration completed', {
-      requestId,
-      rev: persisted.rev,
-      hash: persisted.hash || null,
-      duration
-    });
-  } catch (err) {
-    logSaveEvent('error', 'auto hydration failed', { requestId, error: err?.message || String(err) });
-    console.error('Failed to hydrate normalized tables from snapshot', err);
-  }
+  // Snapshot hydration disabled; state is derived directly from SQL tables.
 }
 
 function createOrderKeyResolver() {
@@ -2501,36 +2648,20 @@ async function applySnapshotToSql(client, snapshot) {
 
   const adminSettings = settings.admin || {};
   const allowForce = parseBoolean(adminSettings.allowForceOverwrite, false);
-  const snapshotRetention = parseInteger(adminSettings.snapshotRetention, 50);
-  let historyLimit = parseInteger(adminSettings.historyLimit, 50);
-  if (!Number.isFinite(historyLimit) || historyLimit <= 0) {
-    historyLimit = 50;
-  }
-  historyLimit = Math.max(1, Math.min(historyLimit, 500));
-  let historyDailyLimit = parseInteger(adminSettings.historyDailyLimit, 3);
-  if (!Number.isFinite(historyDailyLimit) || historyDailyLimit <= 0) {
-    historyDailyLimit = 3;
-  }
-  historyDailyLimit = Math.max(1, Math.min(historyDailyLimit, historyLimit));
   const writeMode = normalizeWriteMode(adminSettings.writeMode || previousWriteMode);
   await client.query(
-    `INSERT INTO settings_admin (id, allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, write_mode, updated_at)
-     VALUES (1,$1,$2,$3,$4,$5,NOW())
+    `INSERT INTO settings_admin (id, allow_force_overwrite, write_mode, updated_at)
+     VALUES (1,$1,$2,NOW())
      ON CONFLICT (id) DO UPDATE
        SET allow_force_overwrite = EXCLUDED.allow_force_overwrite,
-           snapshot_retention = EXCLUDED.snapshot_retention,
-           history_limit = EXCLUDED.history_limit,
-           history_daily_limit = EXCLUDED.history_daily_limit,
            write_mode = EXCLUDED.write_mode,
            updated_at = NOW()` ,
     [
       allowForce,
-      Number.isFinite(snapshotRetention) ? snapshotRetention : 50,
-      historyLimit,
-      historyDailyLimit,
       writeMode
     ]
   );
+
 
   const ignoredStatuses = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates : [];
   for (const status of ignoredStatuses) {
@@ -2545,6 +2676,7 @@ async function applySnapshotToSql(client, snapshot) {
     );
   }
 
+  return { tasks, done, trash, resolveOrderKey, orderIdMap };
 }
 
 app.get('/api/state', async (req, res) => {
@@ -2721,278 +2853,26 @@ app.get('/api/events', async (req, res) => {
   });
 });
 
-app.get('/api/admin/history', async (req, res) => {
-  const limitRaw = Number.parseInt(req.query.limit, 10);
-  const offsetRaw = Number.parseInt(req.query.offset, 10);
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
-  const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
-  const actor = typeof req.query.actor === 'string' ? req.query.actor.trim() : '';
-  const source = typeof req.query.source === 'string' ? req.query.source.trim() : '';
-  const from = typeof req.query.from === 'string' ? req.query.from.trim() : '';
-  const to = typeof req.query.to === 'string' ? req.query.to.trim() : '';
-
-  const conditions = [];
-  const params = [];
-
-  if (actor) {
-    params.push(`%${actor.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.actor, s.meta->>'actor')) LIKE $${params.length})`);
-  }
-
-  if (source) {
-    params.push(`%${source.toLowerCase()}%`);
-    conditions.push(`(LOWER(COALESCE(r.source, s.meta->>'source')) LIKE $${params.length})`);
-  }
-
-  if (from) {
-    params.push(new Date(from));
-    conditions.push(`s.created_at >= $${params.length}`);
-  }
-
-  if (to) {
-    params.push(new Date(to));
-    conditions.push(`s.created_at <= $${params.length}`);
-  }
-
-  params.push(limit);
-  params.push(offset);
-
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  try {
-    const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
-         LEFT JOIN revisions AS r ON r.rev = s.rev
-        ${whereClause}
-        ORDER BY s.created_at DESC, s.rev DESC
-        LIMIT $${params.length - 1}
-        OFFSET $${params.length}`,
-      params
-    );
-    const items = rows.map(mapHistoryRow);
-    res.json({ items });
-  } catch (err) {
-    console.error('GET /api/admin/history failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+app.get('/api/admin/history', (req, res) => {
+  res.json({ items: [] });
 });
 
-app.get('/api/admin/history/:hash', async (req, res) => {
-  const hash = typeof req.params.hash === 'string' ? req.params.hash.trim() : '';
-  if (!hash) {
-    res.status(400).json({ error: 'Invalid hash' });
-    return;
-  }
-
-  try {
-    const { rows } = await pool.query(
-      `SELECT s.rev, s.hash, s.created_at, s.meta, s.snapshot, r.actor, r.source, r.note
-         FROM planner_state_snapshots AS s
-         LEFT JOIN revisions AS r ON r.rev = s.rev
-        WHERE s.hash = $1
-        ORDER BY s.created_at DESC, s.rev DESC
-        LIMIT 1`,
-      [hash]
-    );
-    if (!rows.length) {
-      res.status(404).json({ error: 'Snapshot not found' });
-      return;
-    }
-    const row = rows[0];
-    const meta = parseJsonColumn(row.meta, null);
-    const snapshot = parseJsonColumn(row.snapshot, null);
-    let baseRev = null;
-    let baseHash = null;
-    let baseSnapshot = {};
-    try {
-      const { rows: prevRows } = await pool.query(
-        `SELECT rev, hash, snapshot
-           FROM planner_state_snapshots
-          WHERE rev < $1
-          ORDER BY rev DESC
-          LIMIT 1`,
-        [row.rev]
-      );
-      if (prevRows.length) {
-        baseRev = Number(prevRows[0].rev || 0) || null;
-        baseHash = prevRows[0].hash || null;
-        baseSnapshot = parseJsonColumn(prevRows[0].snapshot, {}) || {};
-      }
-    } catch (err) {
-      console.warn('Failed to load previous snapshot for diff', err);
-    }
-    const diff = buildSnapshotDiff(baseSnapshot || {}, snapshot || {});
-    const actor = row.actor || (meta && meta.actor ? meta.actor : null);
-    const source = row.source || (meta && meta.source ? meta.source : null);
-    const note = row.note || (meta && meta.note ? meta.note : null);
-    const etag = computeEtag(row.hash || null);
-    res.json({
-      rev: Number(row.rev || 0),
-      hash: row.hash || null,
-      etag,
-      baseRev,
-      baseHash,
-      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-      actor,
-      source,
-      note,
-      meta,
-      state: snapshot,
-      diff: diff || null
-    });
-  } catch (err) {
-    console.error('GET /api/admin/history/:hash failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+app.get('/api/admin/history/:hash', (req, res) => {
+  res.status(404).json({ error: 'History disabled' });
 });
 
-app.delete('/api/admin/history', async (_req, res) => {
-  const requestId = createRequestId();
-  try {
-    const latest = await loadLatestSnapshot();
-    if (!latest) {
-      const result = await pool.query('TRUNCATE planner_state_snapshots RESTART IDENTITY');
-      const removed = Number(result?.rowCount) || 0;
-      logSaveEvent('info', 'history cleared (no snapshots to keep)', { requestId, removed });
-      res.json({ ok: true, removed, keptRev: null, keptHash: null });
-      return;
-    }
-
-    const result = await pool.query(
-      'DELETE FROM planner_state_snapshots WHERE rev <> $1',
-      [latest.rev]
-    );
-    const removed = Number(result?.rowCount) || 0;
-    logSaveEvent('info', 'history cleared', {
-      requestId,
-      removed,
-      keptRev: latest.rev,
-      keptHash: latest.hash || null
-    });
-    res.json({ ok: true, removed, keptRev: latest.rev, keptHash: latest.hash || null });
-  } catch (err) {
-    logSaveEvent('error', 'history clear failed', { requestId, error: err?.message || String(err) });
-    console.error('DELETE /api/admin/history failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+app.delete('/api/admin/history', (_req, res) => {
+  res.status(410).json({ error: 'History storage disabled' });
 });
 
-app.post('/api/admin/snapshot', async (req, res) => {
-  try {
-    const actor = sanitizeString(req.body?.actor) || 'admin';
-    const note = sanitizeString(req.body?.note) || null;
-    const source = 'manual-snapshot';
-    const latest = await getCachedSnapshot();
-    const meta = sanitizeMetaForStorage({
-      ...(latest.meta || {}),
-      actor,
-      source,
-      note: note || undefined,
-      channel: WRITE_CHANNELS.ADMIN
-    });
-    const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
-      await insertSnapshotRow(client, nextRev, latest.snapshot, latest.stateString, latest.hash, meta);
-      return await loadLatestSnapshot(client);
-    });
-    const stored = result || await loadLatestSnapshot();
-    const etag = computeEtag(stored?.hash || latest.hash);
-    if (etag) {
-      res.set('ETag', etag);
-    }
-    res.set('Cache-Control', 'no-store');
-    if (stored) {
-      cachedSnapshot = stored;
-      broadcastRevision({ rev: stored.rev, hash: stored.hash, etag });
-      res.status(201).json({ ok: true, rev: stored.rev, hash: stored.hash, etag });
-    } else {
-      cachedSnapshot = {
-        rev,
-        snapshot: latest.snapshot,
-        stateString: latest.stateString,
-        hash: latest.hash,
-        meta
-      };
-      broadcastRevision({ rev, hash: latest.hash, etag });
-      res.status(201).json({ ok: true, rev, hash: latest.hash, etag });
-    }
-  } catch (err) {
-    console.error('POST /api/admin/snapshot failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+app.post('/api/admin/snapshot', (_req, res) => {
+  res.status(410).json({ error: 'Snapshot storage disabled' });
 });
 
-app.post('/api/admin/rollback', async (req, res) => {
-  const targetHash = sanitizeString(req.body?.targetHash);
-  if (!targetHash) {
-    res.status(400).json({ error: 'targetHash is required' });
-    return;
-  }
-  try {
-    const { rows } = await pool.query(
-      `SELECT s.rev, s.snapshot, s.hash, s.meta, s.created_at
-         FROM planner_state_snapshots AS s
-        WHERE s.hash = $1
-        ORDER BY s.created_at DESC, s.rev DESC
-        LIMIT 1`,
-      [targetHash]
-    );
-    if (!rows.length) {
-      res.status(404).json({ error: 'Snapshot not found' });
-      return;
-    }
-    const row = rows[0];
-    const snapshot = parseJsonColumn(row.snapshot, {});
-    const stateString = JSON.stringify(snapshot);
-    const hash = computeSnapshotHash(stateString);
-    const actor = sanitizeString(req.body?.actor) || 'admin';
-    const note = sanitizeString(req.body?.note) || null;
-    const rollbackMeta = sanitizeMetaForStorage({
-      actor,
-      source: 'rollback',
-      note: note || undefined,
-      rollbackFrom: targetHash,
-      baseRev: Number(row.rev || 0),
-      previousMeta: parseJsonColumn(row.meta, null),
-      channel: WRITE_CHANNELS.ADMIN
-    });
-
-    const requestId = createRequestId();
-    const startedAt = Date.now();
-    logSaveEvent('info', 'rollback started', { requestId, actor, hash: targetHash });
-
-    const latest = await persistSnapshotWithSql({
-      actor,
-      source: 'rollback',
-      note,
-      snapshot,
-      stateString,
-      hash,
-      meta: rollbackMeta,
-      channel: WRITE_CHANNELS.ADMIN
-    });
-
-    const etag = computeEtag(latest.hash);
-    if (etag) {
-      res.set('ETag', etag);
-    }
-    res.set('Cache-Control', 'no-store');
-    cachedSnapshot = latest;
-    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
-    const duration = Date.now() - startedAt;
-    logSaveEvent('info', 'rollback completed', {
-      requestId,
-      rev: latest.rev,
-      hash: latest.hash || null,
-      duration
-    });
-    res.json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
-  } catch (err) {
-    logSaveEvent('error', 'rollback failed', { error: err?.message || String(err) });
-    console.error('POST /api/admin/rollback failed', err);
-    res.status(500).json({ error: 'Internal Server Error' });
-  }
+app.post('/api/admin/rollback', (_req, res) => {
+  res.status(410).json({ error: 'Rollback disabled' });
 });
+
 
 app.use(express.static(PUBLIC_DIR, { index: 'Planner_Codex_v3.html' }));
 

@@ -10,9 +10,12 @@
 * **`activity_log`** — журнал админских операций (импортов, откатов). Связан внешним ключом с `revisions` и индексирован по колонке `rev` для быстрых выборок истории.【F:migrations/003_full_sql_schema.sql†L232-L249】
 * **`*_hist`** — исторические таблицы для всех основных сущностей. Универсальный триггер `generic_history_trigger()` копирует строку в соответствующую `_hist`-таблицу, используя ревизию из параметра `app.rev`; функция `ensure_current_revision()` гарантирует, что ревизия установлена перед вставкой.【F:migrations/003_full_sql_schema.sql†L250-L314】
 
-### 1.2 Снимки планировщика
-* **`planner_state_snapshots`** — хранит JSONB-снимок планировщика, метаданные, хеш и ссылку на ревизию. Индексы по `rev` и `created_at` позволяют быстро находить свежую запись и историю изменений.【F:migrations/012_restore_planner_state_snapshots.sql†L3-L14】
-* При сохранении сервер сериализует снимок через `safeSerializeSnapshot()` и `serializeMeta()` и обновляет/вставляет строку в таблицу одним `INSERT ... ON CONFLICT`, чтобы ревизия всегда содержала актуальные данные и хеш.【F:server.js†L680-L694】
+### 1.2 CRM и вспомогательные таблицы интерфейса
+* **`crm_boards`** — отражает конфигурацию CRM-досок (название, список колонок, порядок). Таблица заполняется заново при каждом сохранении состояния из UI и используется при восстановлении снапшота из SQL.【F:migrations/018_remove_snapshot_storage.sql†L52-L67】【F:server.js†L606-L647】
+* **`crm_orders_meta`** — хранит метаданные карточек CRM (ключ, позиция, JSON-представление заказа). Связана с `orders` и помогает восстанавливать привязку заказов к доскам и lane при построении состояния для клиента.【F:migrations/018_remove_snapshot_storage.sql†L69-L82】【F:server.js†L648-L704】
+* **`planner_tasks_payload`** — кеширует JSON-описание задач и их порядок для канбана (как активных, так и выполненных). Позволяет загружать UI без пересчёта маршрута напрямую из таблиц `order_process`.【F:migrations/018_remove_snapshot_storage.sql†L84-L96】【F:server.js†L705-L741】【F:server.js†L816-L858】
+* **`planner_stage_orders`** — сохраняет порядок карточек по стадиям (список uid), чтобы доски планировщика повторяли порядок, выставленный пользователями, при каждом запуске сервера.【F:migrations/018_remove_snapshot_storage.sql†L98-L105】【F:server.js†L742-L772】
+* **`planner_misc_state`** — компактное хранилище базовых настроек (режим, фильтры, флаги UI). Используется для объединения с данными CRM и таблицами маршрутов при сборке снапшота для клиентов.【F:migrations/018_remove_snapshot_storage.sql†L107-L113】【F:server.js†L773-L785】
 
 ### 1.3 Справочники процессов, клиентов и мощностей
 * **`processes`** — список переделов. Для каждой записи хранятся `code`, человекочитаемое название, порядковый номер, признаки «часовой/параллельный/активный». Таблица наполняется заново из снимка при каждом сохранении, порядок определяется сортировкой кодов и сохраняется в поле `position`.【F:migrations/003_full_sql_schema.sql†L93-L117】【F:server.js†L1320-L1367】
@@ -26,7 +29,7 @@
 * **Исторические таблицы `orders_hist`, `order_process_hist`, `capacity_by_process_hist`** фиксируют состояние при каждой ревизии и позволяют откатывать изменения или анализировать историю по времени.【F:migrations/003_full_sql_schema.sql†L221-L274】
 
 ### 1.5 Настройки и пользовательские списки
-* **`settings_admin` / `settings_admin_hist`** — глобальные параметры (разрешение форс-перезаписи, срок хранения снимков, лимиты журнала и режим записи данных `write_mode`: `crm`, `planner` или `both`). Миграция `013` добавила поля `history_limit` и `history_daily_limit`, а `017` закрепила колонку `write_mode`. История автоматически пополняется триггером при каждом изменении.【F:migrations/013_settings_admin_limits.sql†L1-L47】【F:migrations/017_settings_write_mode.sql†L1-L24】【F:server.js†L1700-L1716】
+* **`settings_admin` / `settings_admin_hist`** — глобальные параметры (разрешение форс-перезаписи и режим записи данных `write_mode`: `crm`, `planner` или `both`). Схема больше не содержит лимитов по истории, поэтому сервер игнорирует старые поля из снапшотов и сохраняет только актуальные флаги.【F:migrations/018_remove_snapshot_storage.sql†L8-L38】【F:server.js†L1666-L1708】
 * **`settings_journal`** — хранит лимит записей журнала. Обновляется при изменении настройки «Количество записей в журнале» и фиксируется в истории `settings_journal_hist`.【F:migrations/003_full_sql_schema.sql†L125-L135】【F:server.js†L1677-L1689】
 * **`settings_column_widths`** — пользовательские ширины колонок таблицы заказов; после очистки таблицы сервер пересоздаёт значения из текущих настроек и журналирует изменения в `settings_column_widths_hist`.【F:migrations/003_full_sql_schema.sql†L135-L143】【F:server.js†L1655-L1668】
 * **`settings_mapping`** — сопоставление стадий CRM и переделов планировщика (`planner_process_id`) с флагом игнорирования. Таблица используется для автоматической маршрутизации заказов при импорте из CRM.【F:migrations/003_full_sql_schema.sql†L143-L153】【F:server.js†L1670-L1676】
@@ -41,28 +44,31 @@
 ## 3. Поток обработки `PUT /api/state`
 1. Клиент собирает снимок состояния (заказы, настройки, CRM) и отправляет на `/api/state`. Сервер рассчитывает SHA‑1 хеш и анализирует метаданные (`actor`, `source`, `concurrency`).【F:server.js†L1732-L1756】
 2. Если хеш из клиента отличается от актуального и не запрошено `forceOverwrite`, сервер просто пишет предупреждение, но не блокирует сохранение — последние изменения всегда побеждают, чтобы правки из планировщика не откатывались из-за параллельных сессий.【F:server.js†L1758-L1766】
-3. `persistSnapshotWithSql()` запускает `applySnapshotToSql()`, который пересобирает все нормализованные таблицы (переделы, заказы, маршрут, настройки). Для заказов используется резолвер ключей `createOrderKeyResolver()`, чтобы гарантировать наличие номера/названия даже у неполных карточек и избежать нарушений ограничений NOT NULL.【F:server.js†L738-L795】【F:server.js†L1180-L1499】
-4. После успешной транзакции `insertSnapshotRow()` обновляет JSON-снимок в `planner_state_snapshots`, сервер обновляет кэш и рассылает SSE-событие с новой ревизией и ETag.【F:server.js†L680-L708】【F:server.js†L1785-L1841】
+3. `persistSnapshotWithSql()` запускает `applySnapshotToSql()`, который пересобирает все нормализованные таблицы (переделы, заказы, маршрут, настройки) и одновременно готовит данные для вспомогательных таблиц CRM. Для заказов используется резолвер ключей `createOrderKeyResolver()`, чтобы гарантировать наличие номера/названия даже у неполных карточек и избежать нарушений ограничений NOT NULL.【F:server.js†L1704-L1839】
+4. После успешной транзакции `savePlannerDerivedState()` записывает состояние в таблицы `crm_boards`, `crm_orders_meta`, `planner_tasks_payload`, `planner_stage_orders` и `planner_misc_state`, сервер обновляет кэш `cachedSnapshot` и рассылает SSE-событие с новой ревизией и ETag.【F:server.js†L644-L789】【F:server.js†L1842-L1903】
 
-## 4. Автоматическая гидратация нормализованных таблиц
-При старте `bootstrap()` запускает миграции и кэширует последний снимок. Если таблица `orders` пуста (например, после восстановления базы), `ensureSqlHydrated()` разворачивает последний JSON-снимок в нормализованные таблицы в рамках новой ревизии и логирует результат, чтобы UI сразу увидел актуальные данные без ручного импорта.【F:server.js†L199-L215】【F:server.js†L110-L148】【F:server.js†L1108-L1147】
+## 4. Инициализация при запуске
+При старте `bootstrap()` выполняет миграции, загружает последнюю ревизию и собирает актуальный снапшот напрямую из SQL-таблиц через `buildSnapshotFromDatabase()`. Дополнительной «гидратации» больше нет: если база содержит данные, UI получает их сразу; если таблицы пустые, возвращается минимальный пустой снапшот без попытки восстановиться из JSON-хранилища.【F:server.js†L1284-L1362】【F:server.js†L2888-L2935】
 
 ## 5. Проверка работы базы данных
 1. **Миграции.** Выполните `npm run migrate`. В `planner_schema_migrations` появятся строки для всех файлов `migrations/*.sql`.
-2. **Автогидратация.** После `npm start` проверьте логи на наличие `auto hydration completed` и убедитесь, что `SELECT COUNT(*) FROM orders;` возвращает значение > 0.
+2. **Инициализация.** После `npm start` убедитесь, что сервер выводит `Planner SQL bridge listening on port …`, а `SELECT COUNT(*) FROM orders;` возвращает актуальные данные. Если база пуста, UI получит пустой список без попыток восстановиться из JSON.
 3. **Общие настройки.** Измените параметры в разделе «Общие/Администрирование», нажмите «Применить» и выполните запросы:
    ```sql
-  SELECT allow_force_overwrite, snapshot_retention, history_limit, history_daily_limit, write_mode FROM settings_admin;
+  SELECT allow_force_overwrite, write_mode FROM settings_admin;
    SELECT pref_key, bool_value FROM settings_shared_preferences ORDER BY pref_key;
    SELECT column_key, width_px FROM settings_column_widths ORDER BY column_key;
    SELECT crm_stage, planner_process_id, is_ignored FROM settings_mapping ORDER BY crm_stage;
    SELECT status_key FROM excluded_statuses ORDER BY status_key;
    SELECT max_rows FROM settings_journal;
    SELECT percent, minimum_hours FROM settings_autoweight;
+  SELECT id, name, lanes FROM crm_boards ORDER BY position;
+  SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code;
+  SELECT uid, stage_code, is_done FROM planner_tasks_payload ORDER BY sort_index;
    ```
-   В `planner_state_snapshots` должна появиться новая строка с обновлённым `meta.settings`.
+   Таблицы CRM (`crm_boards`, `crm_orders_meta`) и вспомогательные таблицы (`planner_stage_orders`, `planner_tasks_payload`) должны обновиться.
 4. **Маршрут заказа.** Отметьте готовность передела или измените часы в любом процессе и убедитесь, что `orders`, `order_process` и их `_hist`-таблицы получили свежие записи.
-5. **История.** Запросите последние ревизии: `SELECT rev, hash, created_at FROM planner_state_snapshots ORDER BY created_at DESC LIMIT 5;` — каждая операция сохранения должна добавлять новую строку.
+5. **Ревизии.** Запросите последние ревизии: `SELECT rev, actor, source, note, created_at FROM revisions ORDER BY created_at DESC LIMIT 5;` — каждая операция сохранения должна добавлять новую строку.
 6. **Синхронизация клиентов.** Откройте планировщик в двух окнах. После изменения на одном клиенте второй должен получить SSE-событие и обновлённые данные без перезагрузки.
 
 ## 6. Почему изменения из планировщика могут не появиться в SQL, а из CRM — сохраняются
