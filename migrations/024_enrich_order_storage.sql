@@ -55,8 +55,8 @@ WITH attr_values AS (
     MAX(CASE WHEN attr_path IN ('doneMeta/source','source') THEN value_text END) AS done_source,
     MAX(CASE WHEN attr_path = 'progress' AND value_numeric IS NOT NULL THEN value_numeric END) AS progress_numeric,
     MAX(CASE WHEN attr_path = 'progress' AND value_numeric IS NULL AND value_text ~ '^-?\\d+(?:\\.\\d+)?$' THEN value_text::numeric END) AS progress_text_numeric,
-    MAX(CASE WHEN attr_path = 'useReserve' THEN value_boolean END) AS use_reserve_bool,
-    MAX(CASE WHEN attr_path = 'locked' THEN value_boolean END) AS locked_bool
+    bool_or(value_boolean) FILTER (WHERE attr_path = 'useReserve') AS use_reserve_bool,
+    bool_or(value_boolean) FILTER (WHERE attr_path = 'locked') AS locked_bool
   FROM planner_state_order_attributes
   GROUP BY order_id
 )
