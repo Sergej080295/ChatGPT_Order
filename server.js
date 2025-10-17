@@ -17,6 +17,8 @@ const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true
 const PGPOOL_MAX = Number.parseInt(process.env.PGPOOL_MAX || '10', 10);
 const PGPOOL_IDLE = Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10);
 
+const STAGE_KEYS = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
@@ -54,6 +56,18 @@ function computeHash(input) {
 function computeEtag(hash) {
   if (!hash) return null;
   return `W/"${hash}"`;
+}
+
+function clonePlain(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (err) {
+    console.warn('Failed to clone plain value', err);
+    return value;
+  }
 }
 
 function safeJsonStringify(value, fallback = '{}') {
@@ -414,6 +428,163 @@ function normalizeSnapshotCollections(snapshot) {
   }
 
   return output;
+}
+
+function createEmptyModeScopedSnapshot() {
+  return {
+    exceptions: [],
+    reserves: [],
+    routeOverrides: [],
+    orders: [],
+    locked: [],
+    ignored: [],
+    stageFilters: {},
+    stageTasks: [],
+    done: [],
+    trash: [],
+    lastRows: null,
+    csvFreshness: '',
+    manualFreshness: '',
+    lastImportTime: '',
+    lastManualTime: ''
+  };
+}
+
+function ensureModeScopedConsistency(snapshot, tasks, stageSequences) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return snapshot;
+  }
+
+  const modeScoped = snapshot.modeScoped && typeof snapshot.modeScoped === 'object'
+    ? { ...snapshot.modeScoped }
+    : {};
+  const existingCrm = modeScoped.crm && typeof modeScoped.crm === 'object'
+    ? { ...modeScoped.crm }
+    : createEmptyModeScopedSnapshot();
+
+  const normalizedStageSequences = Array.isArray(stageSequences) ? stageSequences : [];
+  const stageIdsByStage = new Map();
+  const stageOrderIndex = new Map();
+  const encounteredStages = new Set();
+
+  normalizedStageSequences.forEach(({ stage, ids }) => {
+    const normalizedStage = normalizeStage(stage);
+    if (!normalizedStage) {
+      return;
+    }
+    const sanitizedIds = Array.isArray(ids)
+      ? ids.map((id) => sanitizeString(id)).filter(Boolean)
+      : [];
+    stageIdsByStage.set(normalizedStage, sanitizedIds);
+    const indexMap = new Map();
+    sanitizedIds.forEach((uid, idx) => {
+      indexMap.set(uid, idx);
+    });
+    stageOrderIndex.set(normalizedStage, indexMap);
+    encounteredStages.add(normalizedStage);
+  });
+
+  const stageTaskMap = new Map();
+  (Array.isArray(tasks) ? tasks : []).forEach((task) => {
+    if (!task || task.bucket !== 't') {
+      return;
+    }
+    const normalizedStage = normalizeStage(task.stage) || normalizeStage(task?.payload?.stage);
+    if (!normalizedStage) {
+      return;
+    }
+    const payload = clonePlain(task.payload) || {};
+    const uid = sanitizeString(payload.uid || task.uid);
+    if (!uid) {
+      return;
+    }
+    payload.uid = uid;
+    if (!payload.stage) {
+      payload.stage = normalizedStage;
+    }
+    encounteredStages.add(normalizedStage);
+    if (!stageTaskMap.has(normalizedStage)) {
+      stageTaskMap.set(normalizedStage, []);
+    }
+    stageTaskMap.get(normalizedStage).push(payload);
+  });
+
+  const orderedStages = [];
+  STAGE_KEYS.forEach((stage) => {
+    if (encounteredStages.has(stage) || stageTaskMap.has(stage)) {
+      orderedStages.push(stage);
+      encounteredStages.delete(stage);
+    }
+  });
+  Array.from(encounteredStages).sort().forEach((stage) => {
+    if (!orderedStages.includes(stage)) {
+      orderedStages.push(stage);
+    }
+  });
+
+  const stageEntries = orderedStages.map((stage) => {
+    const tasksForStage = stageTaskMap.get(stage) || [];
+    const indexMap = stageOrderIndex.get(stage);
+    if (indexMap) {
+      tasksForStage.sort((a, b) => {
+        const left = indexMap.get(sanitizeString(a.uid)) ?? Number.MAX_SAFE_INTEGER;
+        const right = indexMap.get(sanitizeString(b.uid)) ?? Number.MAX_SAFE_INTEGER;
+        if (left === right) {
+          return sanitizeString(a.uid).localeCompare(sanitizeString(b.uid));
+        }
+        return left - right;
+      });
+    } else {
+      tasksForStage.sort((a, b) => sanitizeString(a.uid).localeCompare(sanitizeString(b.uid)));
+    }
+    return [stage, tasksForStage];
+  });
+
+  const ordersEntries = stageEntries.map(([stage, list]) => {
+    const existingOrder = stageIdsByStage.get(stage);
+    if (existingOrder && existingOrder.length) {
+      return [stage, existingOrder];
+    }
+    const derivedOrder = list.map((item) => sanitizeString(item.uid)).filter(Boolean);
+    return [stage, derivedOrder];
+  });
+
+  existingCrm.stageTasks = stageEntries;
+  existingCrm.orders = ordersEntries;
+
+  if (!Array.isArray(existingCrm.exceptions)) existingCrm.exceptions = [];
+  if (!Array.isArray(existingCrm.reserves)) existingCrm.reserves = [];
+  if (!Array.isArray(existingCrm.routeOverrides)) existingCrm.routeOverrides = [];
+  if (!Array.isArray(existingCrm.locked)) {
+    existingCrm.locked = Array.isArray(snapshot.locked) ? snapshot.locked.slice() : [];
+  }
+  if (!Array.isArray(existingCrm.ignored)) existingCrm.ignored = [];
+  if (!existingCrm.stageFilters || typeof existingCrm.stageFilters !== 'object') {
+    existingCrm.stageFilters = {};
+  }
+  existingCrm.done = clonePlain(Array.isArray(snapshot.done) ? snapshot.done : existingCrm.done);
+  existingCrm.trash = clonePlain(Array.isArray(snapshot.trash) ? snapshot.trash : existingCrm.trash);
+
+  modeScoped.crm = existingCrm;
+  snapshot.modeScoped = modeScoped;
+  return snapshot;
+}
+
+function hasCrmStageTasks(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return false;
+  }
+  const stageTasks = snapshot?.modeScoped?.crm?.stageTasks;
+  if (!Array.isArray(stageTasks)) {
+    return false;
+  }
+  return stageTasks.some((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      return false;
+    }
+    const [, tasks] = entry;
+    return Array.isArray(tasks) && tasks.length > 0;
+  });
 }
 
 function readMigrations() {
@@ -877,6 +1048,8 @@ function assembleSnapshot(baseSnapshot, boards, orders, tasks, stageSequences) {
 
   snapshot.orders = stageSequences.map((entry) => [entry.stage, entry.ids]);
 
+  ensureModeScopedConsistency(snapshot, tasks, stageSequences);
+
   return snapshot;
 }
 
@@ -894,10 +1067,47 @@ async function loadSnapshotFromDatabase() {
     const baseRow = await client.query('SELECT payload FROM pc_settings WHERE key = $1', ['snapshot_base']);
     const boardsRow = await client.query('SELECT payload FROM pc_settings WHERE key = $1', ['crm_boards']);
     const hashRow = await client.query('SELECT payload FROM pc_settings WHERE key = $1', ['snapshot_hash']);
+    const fullRow = await client.query('SELECT payload FROM pc_settings WHERE key = $1', ['snapshot_full']);
 
-    const baseSnapshot = baseRow.rows.length
+    let baseSnapshot = baseRow.rows.length
       ? safeJsonParse(baseRow.rows[0].payload, buildEmptySnapshot())
       : buildEmptySnapshot();
+    const fullSnapshot = fullRow.rows.length
+      ? safeJsonParse(fullRow.rows[0].payload, null)
+      : null;
+
+    if ((!baseRow.rows.length || !hasCrmStageTasks(baseSnapshot)) && fullSnapshot && typeof fullSnapshot === 'object') {
+      if (!hasCrmStageTasks(baseSnapshot) && hasCrmStageTasks(fullSnapshot)) {
+        baseSnapshot.modeScoped = clonePlain(fullSnapshot.modeScoped || {});
+      }
+      if ((!Array.isArray(baseSnapshot.done) || baseSnapshot.done.length === 0) && Array.isArray(fullSnapshot.done)) {
+        baseSnapshot.done = clonePlain(fullSnapshot.done);
+      }
+      if ((!Array.isArray(baseSnapshot.trash) || baseSnapshot.trash.length === 0) && Array.isArray(fullSnapshot.trash)) {
+        baseSnapshot.trash = clonePlain(fullSnapshot.trash);
+      }
+      if ((!Array.isArray(baseSnapshot.exc) || baseSnapshot.exc.length === 0) && Array.isArray(fullSnapshot.exc)) {
+        baseSnapshot.exc = clonePlain(fullSnapshot.exc);
+      }
+      if ((!Array.isArray(baseSnapshot.res) || baseSnapshot.res.length === 0) && Array.isArray(fullSnapshot.res)) {
+        baseSnapshot.res = clonePlain(fullSnapshot.res);
+      }
+      if ((!Array.isArray(baseSnapshot.locked) || baseSnapshot.locked.length === 0) && Array.isArray(fullSnapshot.locked)) {
+        baseSnapshot.locked = clonePlain(fullSnapshot.locked);
+      }
+      if ((!Array.isArray(baseSnapshot.routeOverrides) || baseSnapshot.routeOverrides.length === 0)
+        && Array.isArray(fullSnapshot.routeOverrides)) {
+        baseSnapshot.routeOverrides = clonePlain(fullSnapshot.routeOverrides);
+      }
+      if ((!Array.isArray(baseSnapshot.orders) || baseSnapshot.orders.length === 0) && Array.isArray(fullSnapshot.orders)) {
+        baseSnapshot.orders = clonePlain(fullSnapshot.orders);
+      }
+      if (!baseSnapshot.meta || typeof baseSnapshot.meta !== 'object') {
+        baseSnapshot.meta = clonePlain(fullSnapshot.meta || {});
+      } else if (fullSnapshot.meta && typeof fullSnapshot.meta === 'object') {
+        baseSnapshot.meta = { ...fullSnapshot.meta, ...baseSnapshot.meta };
+      }
+    }
     const boards = boardsRow.rows.length
       ? safeJsonParse(boardsRow.rows[0].payload, [])
       : [];
@@ -1229,6 +1439,7 @@ async function persistSnapshotWithSql({ snapshot, stateString }) {
 
     await upsertSetting(client, 'snapshot_base', storage.baseSnapshot);
     await upsertSetting(client, 'crm_boards', storage.boards);
+    await upsertSetting(client, 'snapshot_full', normalizedState);
     await upsertSetting(client, 'snapshot_hash', { hash });
 
     const revResult = await client.query('INSERT INTO pc_revisions (hash) VALUES ($1) RETURNING rev', [hash]);
