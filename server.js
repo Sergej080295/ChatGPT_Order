@@ -534,6 +534,129 @@ function cloneJson(value) {
   }
 }
 
+function isEmptyArray(value) {
+  return !Array.isArray(value) || value.length === 0;
+}
+
+function isEmptyObject(value) {
+  if (!isPlainObject(value)) {
+    return true;
+  }
+  return Object.keys(value).length === 0;
+}
+
+function mergeDeepMissing(target, source) {
+  if (!isPlainObject(source)) {
+    return isPlainObject(target) ? target : {};
+  }
+  const result = isPlainObject(target) ? { ...target } : {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) {
+      continue;
+    }
+    if (result[key] === undefined || result[key] === null) {
+      result[key] = cloneJson(value);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      if (isEmptyArray(result[key]) && !isEmptyArray(value)) {
+        result[key] = cloneJson(value);
+      }
+      continue;
+    }
+    if (isPlainObject(value)) {
+      result[key] = mergeDeepMissing(result[key], value);
+    }
+  }
+  return result;
+}
+
+function applyFallbackSnapshot(target, fallback) {
+  if (!isPlainObject(target) || !isPlainObject(fallback)) {
+    return;
+  }
+
+  if (isEmptyArray(target.t) && Array.isArray(fallback.t) && !isEmptyArray(fallback.t)) {
+    target.t = cloneJson(fallback.t);
+  }
+  if (isEmptyArray(target.done) && Array.isArray(fallback.done) && !isEmptyArray(fallback.done)) {
+    target.done = cloneJson(fallback.done);
+  }
+  if (isEmptyArray(target.trash) && Array.isArray(fallback.trash) && !isEmptyArray(fallback.trash)) {
+    target.trash = cloneJson(fallback.trash);
+  }
+  if (isEmptyArray(target.exc) && Array.isArray(fallback.exc) && !isEmptyArray(fallback.exc)) {
+    target.exc = cloneJson(fallback.exc);
+  }
+  if (isEmptyArray(target.res) && Array.isArray(fallback.res) && !isEmptyArray(fallback.res)) {
+    target.res = cloneJson(fallback.res);
+  }
+  if (isEmptyArray(target.routeOverrides)
+      && Array.isArray(fallback.routeOverrides)
+      && !isEmptyArray(fallback.routeOverrides)) {
+    target.routeOverrides = cloneJson(fallback.routeOverrides);
+  }
+  if (isEmptyArray(target.orders) && Array.isArray(fallback.orders) && !isEmptyArray(fallback.orders)) {
+    target.orders = cloneJson(fallback.orders);
+  }
+  if (isEmptyArray(target.locked) && Array.isArray(fallback.locked) && !isEmptyArray(fallback.locked)) {
+    target.locked = cloneJson(fallback.locked);
+  }
+  if (isEmptyArray(target.ignoredStates)
+      && Array.isArray(fallback.ignoredStates)
+      && !isEmptyArray(fallback.ignoredStates)) {
+    target.ignoredStates = cloneJson(fallback.ignoredStates);
+  }
+
+  if (!target.process && fallback.process) {
+    target.process = fallback.process;
+  }
+  if (!target.filter && fallback.filter) {
+    target.filter = fallback.filter;
+  }
+  if (!target.freshness && fallback.freshness) {
+    target.freshness = fallback.freshness;
+  }
+  if (!target.freshnessCsv && fallback.freshnessCsv) {
+    target.freshnessCsv = fallback.freshnessCsv;
+  }
+  if (!target.freshnessManual && fallback.freshnessManual) {
+    target.freshnessManual = fallback.freshnessManual;
+  }
+  if (!target.lastImportTime && fallback.lastImportTime) {
+    target.lastImportTime = fallback.lastImportTime;
+  }
+  if (!target.lastManualTime && fallback.lastManualTime) {
+    target.lastManualTime = fallback.lastManualTime;
+  }
+
+  if (!isPlainObject(target.meta) || isEmptyObject(target.meta)) {
+    target.meta = {};
+  }
+  if (isPlainObject(fallback.meta)) {
+    target.meta = mergeDeepMissing(target.meta, fallback.meta);
+  }
+
+  if (!isPlainObject(target.modeScoped) && isPlainObject(fallback.modeScoped)) {
+    target.modeScoped = cloneJson(fallback.modeScoped);
+  }
+
+  if (!isPlainObject(target.crm)) {
+    target.crm = { boards: [], currentBoardId: null };
+  }
+  if (isEmptyArray(target.crm.boards)
+      && isPlainObject(fallback.crm)
+      && Array.isArray(fallback.crm.boards)
+      && !isEmptyArray(fallback.crm.boards)) {
+    target.crm.boards = cloneJson(fallback.crm.boards);
+  }
+  if (!target.crm.currentBoardId
+      && isPlainObject(fallback.crm)
+      && fallback.crm.currentBoardId) {
+    target.crm.currentBoardId = fallback.crm.currentBoardId;
+  }
+}
+
 function extractBaseState(snapshot) {
   if (!isPlainObject(snapshot)) {
     return {};
@@ -787,6 +910,16 @@ async function savePlannerDerivedState(client, snapshot, {
             updated_at = NOW()` ,
     [JSON.stringify(baseState)]
   );
+
+  const fallbackSnapshot = cloneJson(snapshot) || {};
+  await runner.query(
+    `INSERT INTO planner_misc_state (key, payload, updated_at)
+      VALUES ('full', $1::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE
+        SET payload = EXCLUDED.payload,
+            updated_at = NOW()` ,
+    [JSON.stringify(fallbackSnapshot)]
+  );
 }
 
 async function getLatestRevision(client) {
@@ -801,9 +934,14 @@ async function buildSnapshotFromDatabase(client) {
 
   const baseRow = await queryRowsSafe(runner, 'SELECT payload FROM planner_misc_state WHERE key = $1', ['base']);
   const basePayload = baseRow.rows.length ? parseJsonColumn(baseRow.rows[0].payload, {}) : {};
+  const fullRow = await queryRowsSafe(runner, 'SELECT payload FROM planner_misc_state WHERE key = $1', ['full']);
+  const fallbackPayload = fullRow.rows.length ? parseJsonColumn(fullRow.rows[0].payload, null) : null;
 
   const snapshot = buildEmptySnapshot();
   applyBaseSnapshot(snapshot, basePayload);
+  if (fallbackPayload) {
+    applyFallbackSnapshot(snapshot, fallbackPayload);
+  }
 
   const boardRows = await queryRowsSafe(
     runner,
@@ -857,30 +995,51 @@ async function buildSnapshotFromDatabase(client) {
     board.orders.push(cloneJson(payload));
   }
 
-  snapshot.crm.boards = boards;
-  if (!snapshot.crm.currentBoardId && boards.length) {
-    snapshot.crm.currentBoardId = boards[0].id;
+  if (boards.length) {
+    snapshot.crm.boards = boards;
+  } else if (!Array.isArray(snapshot.crm?.boards)) {
+    snapshot.crm.boards = [];
+  }
+  if (!snapshot.crm.currentBoardId && snapshot.crm.boards.length) {
+    snapshot.crm.currentBoardId = snapshot.crm.boards[0].id;
   }
 
   const taskRows = await queryRowsSafe(
     runner,
     'SELECT uid, is_done, payload FROM planner_tasks_payload ORDER BY is_done ASC, sort_index ASC, uid ASC'
   );
+  const activeTasks = [];
+  const doneTasks = [];
   for (const row of taskRows.rows) {
     const payload = parseJsonColumn(row.payload, null);
     if (!payload) continue;
     if (row.is_done) {
-      snapshot.done.push(payload);
+      doneTasks.push(payload);
     } else {
-      snapshot.t.push(payload);
+      activeTasks.push(payload);
     }
+  }
+
+  if (activeTasks.length) {
+    snapshot.t = activeTasks;
+  } else if (!Array.isArray(snapshot.t)) {
+    snapshot.t = [];
+  }
+  if (doneTasks.length) {
+    snapshot.done = doneTasks;
+  } else if (!Array.isArray(snapshot.done)) {
+    snapshot.done = [];
   }
 
   const stageRows = await queryRowsSafe(
     runner,
     'SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC'
   );
-  snapshot.orders = stageRows.rows.map((row) => [row.stage_code, Array.isArray(row.order_uids) ? row.order_uids : []]);
+  if (stageRows.rows.length) {
+    snapshot.orders = stageRows.rows.map((row) => [row.stage_code, Array.isArray(row.order_uids) ? row.order_uids : []]);
+  } else if (!Array.isArray(snapshot.orders)) {
+    snapshot.orders = [];
+  }
 
   mergeCrmTasksIntoSnapshot(snapshot);
 
