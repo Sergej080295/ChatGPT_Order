@@ -65,8 +65,22 @@ function safeJsonStringify(value, fallback = '{}') {
   }
 }
 
-function safeJsonParse(text, fallback = null) {
-  if (!text || typeof text !== 'string') {
+function safeJsonParse(value, fallback = null) {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_err) {
+      return value;
+    }
+  }
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const text = value.trim();
+  if (!text) {
     return fallback;
   }
   try {
@@ -74,6 +88,252 @@ function safeJsonParse(text, fallback = null) {
   } catch (_err) {
     return fallback;
   }
+}
+
+function toNullableString(value) {
+  const text = sanitizeString(value);
+  return text ? text : null;
+}
+
+function normalizeNumber(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed
+      .replace(/%/g, '')
+      .replace(/\s+/g, '')
+      .replace(',', '.');
+    const match = normalized.match(/[-+]?\d+(?:\.\d+)?/);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number.parseFloat(match[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizePercent(value) {
+  const num = normalizeNumber(value);
+  return num === null ? null : num;
+}
+
+function numbersEqual(a, b) {
+  const left = normalizeNumber(a);
+  const right = normalizeNumber(b);
+  if (left === null && right === null) {
+    return true;
+  }
+  if (left === null || right === null) {
+    return false;
+  }
+  return Math.abs(left - right) < 0.0001;
+}
+
+function getDeep(record, path) {
+  if (!record || typeof record !== 'object') {
+    return undefined;
+  }
+  if (!path) {
+    return undefined;
+  }
+  const parts = Array.isArray(path) ? path : String(path).split('.');
+  let current = record;
+  for (const rawPart of parts) {
+    const part = rawPart && rawPart.toString ? rawPart.toString() : rawPart;
+    if (!part) {
+      return undefined;
+    }
+    if (current && typeof current === 'object' && part in current) {
+      current = current[part];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+function pickField(record, keys) {
+  if (!Array.isArray(keys)) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = getDeep(record, key);
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === 'string' && value.trim() === '') {
+      continue;
+    }
+    return value;
+  }
+  return null;
+}
+
+function extractOrderMetadata(payload) {
+  const record = payload && typeof payload === 'object' ? payload : {};
+  const meta = {};
+  meta.crmOrderId = toNullableString(
+    pickField(record, [
+      'crmOrderId',
+      'crm_id',
+      'orderId',
+      'order_id',
+      'id',
+      'uid',
+      'identity',
+      'orderIdentity'
+    ])
+  );
+  meta.orderNumber = toNullableString(
+    pickField(record, ['orderNumber', 'number', 'orderNo', 'docNumber', 'code', 'order_code'])
+  );
+  meta.title = toNullableString(
+    pickField(record, ['orderTitle', 'title', 'name', 'subject', 'orderName', 'displayTitle'])
+  );
+  meta.customer = toNullableString(
+    pickField(record, [
+      'customer',
+      'client',
+      'company',
+      'organization',
+      'customerName',
+      'clientName',
+      'buyer'
+    ])
+  );
+  meta.status = toNullableString(
+    pickField(record, ['status', 'state', 'orderStatus', 'stage', 'stageName', 'stageTitle'])
+  );
+  meta.priority = toNullableString(pickField(record, ['priority', 'orderPriority', 'importance']));
+  meta.dueDate = toNullableString(
+    pickField(record, [
+      'dueDate',
+      'deadline',
+      'finishPlan',
+      'finishDatePlan',
+      'endDatePlan',
+      'expectedDate',
+      'due',
+      'deadlineDate'
+    ])
+  );
+  meta.plannedStart = toNullableString(
+    pickField(record, [
+      'plannedStart',
+      'startPlan',
+      'startDatePlan',
+      'datePlanStart',
+      'planStart',
+      'plannedStartDate',
+      'startPlanned'
+    ])
+  );
+  meta.plannedFinish = toNullableString(
+    pickField(record, [
+      'plannedFinish',
+      'finishPlan',
+      'finishDatePlan',
+      'datePlanFinish',
+      'planFinish',
+      'plannedFinishDate',
+      'finishPlanned'
+    ])
+  );
+  meta.readyPercent = normalizePercent(
+    pickField(record, [
+      'readyPercent',
+      'progress',
+      'ready',
+      'completeness',
+      'donePercent',
+      'percentComplete',
+      'completion'
+    ])
+  );
+  meta.manager = toNullableString(
+    pickField(record, ['manager', 'responsible', 'owner', 'assignee', 'responsibleName'])
+  );
+  meta.updatedBy = toNullableString(pickField(record, ['updatedBy', 'lastEditor', 'modifiedBy', 'changedBy']));
+  meta.updatedText = toNullableString(
+    pickField(record, ['updatedAt', 'modifiedAt', 'updated', 'lastUpdate', 'timestamp'])
+  );
+  return meta;
+}
+
+function extractTaskMetadata(payload) {
+  const record = payload && typeof payload === 'object' ? payload : {};
+  const meta = {};
+  meta.crmOrderId = toNullableString(
+    pickField(record, ['crmOrderId', 'orderId', 'order_id', 'orderIdentity', 'identity', 'id'])
+  );
+  meta.orderNumber = toNullableString(
+    pickField(record, ['orderNumber', 'number', 'orderNo', 'docNumber', 'code', 'order_code'])
+  );
+  meta.stageName = toNullableString(
+    pickField(record, ['stageName', 'stageTitle', 'stage', 'name', 'displayStage', 'operation'])
+  );
+  meta.status = toNullableString(pickField(record, ['status', 'state', 'taskStatus', 'stageStatus']));
+  meta.priority = toNullableString(pickField(record, ['priority', 'taskPriority', 'importance']));
+  meta.executor = toNullableString(
+    pickField(record, ['executor', 'performer', 'assignee', 'worker', 'responsible', 'operator'])
+  );
+  meta.plannedStart = toNullableString(
+    pickField(record, [
+      'planStart',
+      'plannedStart',
+      'startPlan',
+      'startPlanDate',
+      'plannedStartDate',
+      'planStartDate',
+      'startPlanned'
+    ])
+  );
+  meta.plannedFinish = toNullableString(
+    pickField(record, [
+      'planFinish',
+      'plannedFinish',
+      'finishPlan',
+      'finishPlanDate',
+      'plannedFinishDate',
+      'planFinishDate',
+      'finishPlanned'
+    ])
+  );
+  meta.actualStart = toNullableString(
+    pickField(record, ['factStart', 'actualStart', 'startFact', 'startActual', 'startedAt'])
+  );
+  meta.actualFinish = toNullableString(
+    pickField(record, ['factFinish', 'actualFinish', 'finishFact', 'finishActual', 'finishedAt'])
+  );
+  meta.dueDate = toNullableString(
+    pickField(record, ['dueDate', 'deadline', 'finishDate', 'expectedDate', 'due', 'deadlineDate'])
+  );
+  meta.expectedPercent = normalizePercent(
+    pickField(record, ['expectedPercent', 'planPercent', 'targetPercent', 'plannedPercent'])
+  );
+  meta.progressPercent = normalizePercent(
+    pickField(record, [
+      'progress',
+      'readyPercent',
+      'donePercent',
+      'percentComplete',
+      'completion',
+      'factPercent'
+    ])
+  );
+  return meta;
 }
 
 function buildEmptySnapshot() {
@@ -235,6 +495,22 @@ async function ensureCoreSchema(client) {
     )
   `);
   await client.query(`
+    ALTER TABLE pc_orders
+      ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
+      ADD COLUMN IF NOT EXISTS order_number TEXT,
+      ADD COLUMN IF NOT EXISTS title TEXT,
+      ADD COLUMN IF NOT EXISTS customer TEXT,
+      ADD COLUMN IF NOT EXISTS status TEXT,
+      ADD COLUMN IF NOT EXISTS priority TEXT,
+      ADD COLUMN IF NOT EXISTS due_date TEXT,
+      ADD COLUMN IF NOT EXISTS planned_start TEXT,
+      ADD COLUMN IF NOT EXISTS planned_finish TEXT,
+      ADD COLUMN IF NOT EXISTS ready_percent NUMERIC,
+      ADD COLUMN IF NOT EXISTS manager TEXT,
+      ADD COLUMN IF NOT EXISTS updated_by TEXT,
+      ADD COLUMN IF NOT EXISTS updated_text TEXT
+  `);
+  await client.query(`
     CREATE TABLE IF NOT EXISTS pc_order_tasks (
       uid TEXT PRIMARY KEY,
       order_uid TEXT,
@@ -246,8 +522,28 @@ async function ensureCoreSchema(client) {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await client.query(`
+    ALTER TABLE pc_order_tasks
+      ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
+      ADD COLUMN IF NOT EXISTS order_number TEXT,
+      ADD COLUMN IF NOT EXISTS stage_name TEXT,
+      ADD COLUMN IF NOT EXISTS status TEXT,
+      ADD COLUMN IF NOT EXISTS priority TEXT,
+      ADD COLUMN IF NOT EXISTS executor TEXT,
+      ADD COLUMN IF NOT EXISTS planned_start TEXT,
+      ADD COLUMN IF NOT EXISTS planned_finish TEXT,
+      ADD COLUMN IF NOT EXISTS actual_start TEXT,
+      ADD COLUMN IF NOT EXISTS actual_finish TEXT,
+      ADD COLUMN IF NOT EXISTS due_date TEXT,
+      ADD COLUMN IF NOT EXISTS expected_percent NUMERIC,
+      ADD COLUMN IF NOT EXISTS progress_percent NUMERIC
+  `);
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_bucket_idx ON pc_order_tasks(bucket)');
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_order_idx ON pc_order_tasks(order_uid)');
+  await client.query('CREATE INDEX IF NOT EXISTS pc_orders_crm_order_idx ON pc_orders(crm_order_id)');
+  await client.query('CREATE INDEX IF NOT EXISTS pc_orders_number_idx ON pc_orders(order_number)');
+  await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_stage_idx ON pc_order_tasks(stage_code)');
+  await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_crm_idx ON pc_order_tasks(crm_order_id)');
   await client.query(`
     CREATE TABLE IF NOT EXISTS pc_stage_sequences (
       stage_code TEXT PRIMARY KEY,
@@ -421,16 +717,14 @@ function extractStorageParts(snapshot) {
 
     laneOrders.forEach((order, orderIndex) => {
       const uid = resolveOrderUid(order, orders.length + 1);
-      if (order && typeof order === 'object') {
-        order.uid = uid;
-      }
+      const payload = order && typeof order === 'object' ? { ...order, uid } : { uid };
       const keySource = {
         uid,
-        orderId: order?.orderId || order?.crmOrderId,
-        orderNumber: order?.orderNumber || order?.number,
-        orderTitle: order?.orderTitle || order?.title,
-        orderCustomer: order?.orderCustomer || order?.customer,
-        orderIdentity: order?.orderIdentity || order?.identity
+        orderId: payload.orderId || payload.crmOrderId,
+        orderNumber: payload.orderNumber || payload.number,
+        orderTitle: payload.orderTitle || payload.title,
+        orderCustomer: payload.orderCustomer || payload.customer,
+        orderIdentity: payload.orderIdentity || payload.identity
       };
       const resolution = resolveKey(keySource);
       if (resolution.key) {
@@ -439,12 +733,14 @@ function extractStorageParts(snapshot) {
           resolution.merged.forEach((alias) => orderKeyToUid.set(alias, uid));
         }
       }
+      const meta = extractOrderMetadata(payload);
       orders.push({
         uid,
         boardId,
         laneId: sanitizeString(order?.laneId || order?.lane || null) || null,
         position: orderIndex,
-        payload: order || {}
+        payload,
+        meta
       });
     });
   });
@@ -462,26 +758,26 @@ function extractStorageParts(snapshot) {
     const list = Array.isArray(normalized[key]) ? normalized[key] : [];
     list.forEach((task, index) => {
       const uid = resolveTaskUid(task, tasks.length + 1);
-      if (task && typeof task === 'object') {
-        task.uid = uid;
-      }
+      const payload = task && typeof task === 'object' ? { ...task, uid } : { uid };
       const keySource = {
         uid,
-        orderId: task?.orderId || task?.crmOrderId,
-        orderNumber: task?.orderNumber || task?.number,
-        orderTitle: task?.orderTitle || task?.title,
-        orderCustomer: task?.orderCustomer || task?.customer,
-        orderIdentity: task?.orderIdentity || task?.identity
+        orderId: payload.orderId || payload.crmOrderId,
+        orderNumber: payload.orderNumber || payload.number,
+        orderTitle: payload.orderTitle || payload.title,
+        orderCustomer: payload.orderCustomer || payload.customer,
+        orderIdentity: payload.orderIdentity || payload.identity
       };
       const resolution = resolveKey(keySource);
       const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
+      const meta = extractTaskMetadata(payload);
       tasks.push({
         uid,
         orderUid,
         stage: normalizeStage(task?.stage),
         bucket: key,
         position: index,
-        payload: task || {}
+        payload,
+        meta
       });
     });
   }
@@ -607,27 +903,186 @@ async function loadSnapshotFromDatabase() {
       : [];
 
     const ordersRes = await client.query(
-      'SELECT uid, board_id, lane_id, position, payload FROM pc_orders'
+      `SELECT uid, board_id, lane_id, position, payload,
+              crm_order_id, order_number, title, customer, status, priority,
+              due_date, planned_start, planned_finish, ready_percent,
+              manager, updated_by, updated_text
+         FROM pc_orders`
     );
-    const orders = ordersRes.rows.map((row) => ({
-      uid: sanitizeString(row.uid),
-      boardId: sanitizeString(row.board_id),
-      laneId: sanitizeString(row.lane_id || null) || null,
-      position: Number(row.position) || 0,
-      payload: safeJsonParse(row.payload, {})
-    }));
+    const orders = [];
+    const orderUpdates = [];
+    for (const row of ordersRes.rows) {
+      const payload = safeJsonParse(row.payload, {});
+      const meta = extractOrderMetadata(payload);
+      const storedCrmId = toNullableString(row.crm_order_id);
+      const storedNumber = toNullableString(row.order_number);
+      const storedTitle = toNullableString(row.title);
+      const storedCustomer = toNullableString(row.customer);
+      const storedStatus = toNullableString(row.status);
+      const storedPriority = toNullableString(row.priority);
+      const storedDue = toNullableString(row.due_date);
+      const storedPlanStart = toNullableString(row.planned_start);
+      const storedPlanFinish = toNullableString(row.planned_finish);
+      const storedManager = toNullableString(row.manager);
+      const storedUpdatedBy = toNullableString(row.updated_by);
+      const storedUpdatedText = toNullableString(row.updated_text);
+      const storedReady = row.ready_percent;
+      const readyPercent = meta.readyPercent ?? null;
+      const needsUpdate =
+        storedCrmId !== (meta.crmOrderId || null) ||
+        storedNumber !== (meta.orderNumber || null) ||
+        storedTitle !== (meta.title || null) ||
+        storedCustomer !== (meta.customer || null) ||
+        storedStatus !== (meta.status || null) ||
+        storedPriority !== (meta.priority || null) ||
+        storedDue !== (meta.dueDate || null) ||
+        storedPlanStart !== (meta.plannedStart || null) ||
+        storedPlanFinish !== (meta.plannedFinish || null) ||
+        !numbersEqual(storedReady, readyPercent) ||
+        storedManager !== (meta.manager || null) ||
+        storedUpdatedBy !== (meta.updatedBy || null) ||
+        storedUpdatedText !== (meta.updatedText || null);
+      if (needsUpdate) {
+        orderUpdates.push([
+          meta.crmOrderId || null,
+          meta.orderNumber || null,
+          meta.title || null,
+          meta.customer || null,
+          meta.status || null,
+          meta.priority || null,
+          meta.dueDate || null,
+          meta.plannedStart || null,
+          meta.plannedFinish || null,
+          readyPercent,
+          meta.manager || null,
+          meta.updatedBy || null,
+          meta.updatedText || null,
+          sanitizeString(row.uid)
+        ]);
+      }
+      orders.push({
+        uid: sanitizeString(row.uid),
+        boardId: sanitizeString(row.board_id),
+        laneId: sanitizeString(row.lane_id || null) || null,
+        position: Number(row.position) || 0,
+        payload
+      });
+    }
+
+    for (const params of orderUpdates) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `UPDATE pc_orders
+            SET crm_order_id = $1,
+                order_number = $2,
+                title = $3,
+                customer = $4,
+                status = $5,
+                priority = $6,
+                due_date = $7,
+                planned_start = $8,
+                planned_finish = $9,
+                ready_percent = $10,
+                manager = $11,
+                updated_by = $12,
+                updated_text = $13,
+                updated_at = NOW()
+          WHERE uid = $14`,
+        params
+      );
+    }
 
     const tasksRes = await client.query(
-      'SELECT uid, order_uid, stage_code, bucket, position, payload FROM pc_order_tasks'
+      `SELECT uid, order_uid, stage_code, bucket, position, payload,
+              crm_order_id, order_number, stage_name, status, priority, executor,
+              planned_start, planned_finish, actual_start, actual_finish,
+              due_date, expected_percent, progress_percent
+         FROM pc_order_tasks`
     );
-    const tasks = tasksRes.rows.map((row) => ({
-      uid: sanitizeString(row.uid),
-      orderUid: sanitizeString(row.order_uid || null) || null,
-      stage: normalizeStage(row.stage_code),
-      bucket: sanitizeString(row.bucket) || 't',
-      position: Number(row.position) || 0,
-      payload: safeJsonParse(row.payload, {})
-    }));
+    const tasks = [];
+    const taskUpdates = [];
+    for (const row of tasksRes.rows) {
+      const payload = safeJsonParse(row.payload, {});
+      const meta = extractTaskMetadata(payload);
+      const storedCrmId = toNullableString(row.crm_order_id);
+      const storedNumber = toNullableString(row.order_number);
+      const storedStageName = toNullableString(row.stage_name);
+      const storedStatus = toNullableString(row.status);
+      const storedPriority = toNullableString(row.priority);
+      const storedExecutor = toNullableString(row.executor);
+      const storedPlanStart = toNullableString(row.planned_start);
+      const storedPlanFinish = toNullableString(row.planned_finish);
+      const storedActualStart = toNullableString(row.actual_start);
+      const storedActualFinish = toNullableString(row.actual_finish);
+      const storedDue = toNullableString(row.due_date);
+      const storedExpected = row.expected_percent;
+      const storedProgress = row.progress_percent;
+      const expectedPercent = meta.expectedPercent ?? null;
+      const progressPercent = meta.progressPercent ?? null;
+      const needsUpdate =
+        storedCrmId !== (meta.crmOrderId || null) ||
+        storedNumber !== (meta.orderNumber || null) ||
+        storedStageName !== (meta.stageName || null) ||
+        storedStatus !== (meta.status || null) ||
+        storedPriority !== (meta.priority || null) ||
+        storedExecutor !== (meta.executor || null) ||
+        storedPlanStart !== (meta.plannedStart || null) ||
+        storedPlanFinish !== (meta.plannedFinish || null) ||
+        storedActualStart !== (meta.actualStart || null) ||
+        storedActualFinish !== (meta.actualFinish || null) ||
+        storedDue !== (meta.dueDate || null) ||
+        !numbersEqual(storedExpected, expectedPercent) ||
+        !numbersEqual(storedProgress, progressPercent);
+      if (needsUpdate) {
+        taskUpdates.push([
+          meta.crmOrderId || null,
+          meta.orderNumber || null,
+          meta.stageName || null,
+          meta.status || null,
+          meta.priority || null,
+          meta.executor || null,
+          meta.plannedStart || null,
+          meta.plannedFinish || null,
+          meta.actualStart || null,
+          meta.actualFinish || null,
+          meta.dueDate || null,
+          expectedPercent,
+          progressPercent,
+          sanitizeString(row.uid)
+        ]);
+      }
+      tasks.push({
+        uid: sanitizeString(row.uid),
+        orderUid: sanitizeString(row.order_uid || null) || null,
+        stage: normalizeStage(row.stage_code),
+        bucket: sanitizeString(row.bucket) || 't',
+        position: Number(row.position) || 0,
+        payload
+      });
+    }
+
+    for (const params of taskUpdates) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `UPDATE pc_order_tasks
+            SET crm_order_id = $1,
+                order_number = $2,
+                stage_name = $3,
+                status = $4,
+                priority = $5,
+                executor = $6,
+                planned_start = $7,
+                planned_finish = $8,
+                actual_start = $9,
+                actual_finish = $10,
+                due_date = $11,
+                expected_percent = $12,
+                progress_percent = $13,
+                updated_at = NOW()
+          WHERE uid = $14`,
+        params
+      );
+    }
 
     const stageRes = await client.query('SELECT stage_code, task_uids FROM pc_stage_sequences');
     const stageSequences = stageRes.rows.map((row) => ({
@@ -693,18 +1148,71 @@ async function persistSnapshotWithSql({ snapshot, stateString }) {
     await client.query('DELETE FROM pc_stage_sequences');
 
     for (const order of storage.orders) {
+      const meta = order.meta || extractOrderMetadata(order.payload);
       await client.query(
-        `INSERT INTO pc_orders (uid, board_id, lane_id, position, payload, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5::jsonb,NOW(),NOW())`,
-        [order.uid, order.boardId, order.laneId, order.position, JSON.stringify(order.payload ?? {})]
+        `INSERT INTO pc_orders (
+           uid, board_id, lane_id, position, payload,
+           crm_order_id, order_number, title, customer, status, priority,
+           due_date, planned_start, planned_finish, ready_percent,
+           manager, updated_by, updated_text,
+           created_at, updated_at
+         )
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NOW(),NOW())`,
+        [
+          order.uid,
+          order.boardId,
+          order.laneId,
+          order.position,
+          JSON.stringify(order.payload ?? {}),
+          meta?.crmOrderId || null,
+          meta?.orderNumber || null,
+          meta?.title || null,
+          meta?.customer || null,
+          meta?.status || null,
+          meta?.priority || null,
+          meta?.dueDate || null,
+          meta?.plannedStart || null,
+          meta?.plannedFinish || null,
+          meta?.readyPercent ?? null,
+          meta?.manager || null,
+          meta?.updatedBy || null,
+          meta?.updatedText || null
+        ]
       );
     }
 
     for (const task of storage.tasks) {
+      const meta = task.meta || extractTaskMetadata(task.payload);
       await client.query(
-        `INSERT INTO pc_order_tasks (uid, order_uid, stage_code, bucket, position, payload, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW(),NOW())`,
-        [task.uid, task.orderUid, task.stage, task.bucket, task.position, JSON.stringify(task.payload ?? {})]
+        `INSERT INTO pc_order_tasks (
+           uid, order_uid, stage_code, bucket, position, payload,
+           crm_order_id, order_number, stage_name, status, priority, executor,
+           planned_start, planned_finish, actual_start, actual_finish,
+           due_date, expected_percent, progress_percent,
+           created_at, updated_at
+         )
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),NOW())`,
+        [
+          task.uid,
+          task.orderUid,
+          task.stage,
+          task.bucket,
+          task.position,
+          JSON.stringify(task.payload ?? {}),
+          meta?.crmOrderId || null,
+          meta?.orderNumber || null,
+          meta?.stageName || null,
+          meta?.status || null,
+          meta?.priority || null,
+          meta?.executor || null,
+          meta?.plannedStart || null,
+          meta?.plannedFinish || null,
+          meta?.actualStart || null,
+          meta?.actualFinish || null,
+          meta?.dueDate || null,
+          meta?.expectedPercent ?? null,
+          meta?.progressPercent ?? null
+        ]
       );
     }
 

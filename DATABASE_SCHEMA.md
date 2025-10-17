@@ -28,6 +28,11 @@
 * `lane_id` — идентификатор колонки/листа внутри доски (может быть `NULL`).
 * `position` — индекс карточки в колонке.
 * `payload` — JSONB с полным описанием карточки (клиент, прогресс, метки и т.д.).
+* `crm_order_id`, `order_number` — основные идентификаторы заказа из CRM.
+* `title`, `customer`, `status`, `priority` — текстовые атрибуты для быстрых выборок.
+* `due_date`, `planned_start`, `planned_finish` — сроки из маршрута (хранятся как текст в исходном формате).
+* `ready_percent` — числовой прогресс готовности, приводится к `NUMERIC`.
+* `manager`, `updated_by`, `updated_text` — ответственные и сведения об обновлении.
 * `created_at`, `updated_at` — временные метки.
 
 ### 1.4 `pc_order_tasks`
@@ -39,6 +44,10 @@
 * `bucket` — список, в котором находится задача (`t`, `done`, `trash`, `exc`, `res`).
 * `position` — индекс внутри списка.
 * `payload` — JSONB с данными задачи.
+* `crm_order_id`, `order_number` — идентификаторы исходного заказа.
+* `stage_name`, `status`, `priority`, `executor` — основные атрибуты карточки передела.
+* `planned_start`, `planned_finish`, `actual_start`, `actual_finish`, `due_date` — сроки задачи в текстовом формате.
+* `expected_percent`, `progress_percent` — плановый и фактический прогресс (NUMERIC).
 * `created_at`, `updated_at` — временные метки.
 
 Индексы `pc_order_tasks_bucket_idx` и `pc_order_tasks_order_idx` ускоряют выборки по списку и заказу.
@@ -73,7 +82,7 @@
 
 ## 4. Проверка работоспособности
 
-1. **Миграции.** Запустите `npm run migrate` и убедитесь, что таблица `planner_schema_migrations` содержит запись `019_rebuild_core_storage.sql`.
+1. **Миграции.** Запустите `npm run migrate` и убедитесь, что таблица `planner_schema_migrations` содержит записи `019_rebuild_core_storage.sql` и `020_expand_core_storage.sql`.
 2. **Сохранение настроек.** Измените параметры в CRM/Планировщике, нажмите «Сохранить» и выполните запросы:
    ```sql
    SELECT * FROM pc_settings ORDER BY key;
