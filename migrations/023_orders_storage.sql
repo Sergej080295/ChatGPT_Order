@@ -7,6 +7,22 @@ CREATE TABLE IF NOT EXISTS planner_state_snapshots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+INSERT INTO planner_state_snapshots (rev, hash, created_at)
+SELECT r.rev,
+       CONCAT('backfill-', r.rev) AS hash,
+       COALESCE(r.created_at, NOW())
+  FROM revisions AS r
+ WHERE NOT EXISTS (
+         SELECT 1
+           FROM planner_state_snapshots AS existing
+          WHERE existing.rev = r.rev
+       )
+   AND EXISTS (
+         SELECT 1
+           FROM planner_state_list_entries AS e
+          WHERE e.rev = r.rev
+       );
+
 CREATE TABLE IF NOT EXISTS planner_state_orders (
   id BIGSERIAL PRIMARY KEY,
   rev BIGINT NOT NULL REFERENCES planner_state_snapshots(rev) ON DELETE CASCADE,
