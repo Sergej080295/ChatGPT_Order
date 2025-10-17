@@ -1420,7 +1420,14 @@ async function savePlannerDerivedState(client, snapshot, {
   let sortIndex = 0;
   const storeTask = async (task, isDone) => {
     if (!isPlainObject(task)) return;
-    const uid = sanitizeString(task.uid) || `task-${sortIndex + 1}`;
+    const rawUid = sanitizeString(task.uid);
+    const isCrmTask = Boolean(task.crmOrigin)
+      || (rawUid ? rawUid.startsWith(CRM_TASK_PREFIX) : false)
+      || Boolean(task.crmMeta && task.crmMeta.stageKey);
+    if (isCrmTask) {
+      return;
+    }
+    const uid = rawUid || `task-${sortIndex + 1}`;
     const stageCode = normalizeStage(task.stage);
     const resolution = resolver(task) || {};
     const payload = cloneJson(task);
@@ -1575,6 +1582,13 @@ async function buildSnapshotFromDatabase(client) {
   for (const row of taskRows.rows) {
     const payload = parseJsonColumn(row.payload, null);
     if (!payload) continue;
+    const uid = sanitizeString(payload.uid);
+    const isCrmTask = Boolean(payload.crmOrigin)
+      || (uid ? uid.startsWith(CRM_TASK_PREFIX) : false)
+      || Boolean(payload.crmMeta && payload.crmMeta.stageKey);
+    if (isCrmTask) {
+      continue;
+    }
     if (row.is_done) {
       doneTasks.push(payload);
     } else {
@@ -1582,16 +1596,8 @@ async function buildSnapshotFromDatabase(client) {
     }
   }
 
-  if (activeTasks.length) {
-    snapshot.t = activeTasks;
-  } else if (!Array.isArray(snapshot.t)) {
-    snapshot.t = [];
-  }
-  if (doneTasks.length) {
-    snapshot.done = doneTasks;
-  } else if (!Array.isArray(snapshot.done)) {
-    snapshot.done = [];
-  }
+  snapshot.t = activeTasks;
+  snapshot.done = doneTasks;
 
   const stageRows = await queryRowsSafe(
     runner,
