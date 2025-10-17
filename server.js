@@ -121,6 +121,7 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
 const CRM_PARALLEL_STAGES = new Set(['proc', 'shear', 'coop', 'pack', 'ship']);
 const CRM_TASK_PREFIX = 'crm-task::';
 const PLANNER_STAGE_CODES = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
+const MODE_SCOPED_KEYS = Object.freeze(['csv', 'crm']);
 
 const WRITE_CHANNELS = Object.freeze({
   CRM: 'crm',
@@ -1712,8 +1713,121 @@ function isWriteChannelAllowed(writeMode, channel) {
   return true;
 }
 
-function buildEmptySnapshot() {
+function buildEmptyModeScopedSnapshot() {
   return {
+    exceptions: [],
+    reserves: [],
+    routeOverrides: [],
+    orders: [],
+    locked: [],
+    ignored: [],
+    stageFilters: {},
+    stageTasks: [],
+    done: [],
+    trash: [],
+    lastRows: null,
+    csvFreshness: '',
+    manualFreshness: '',
+    lastImportTime: '',
+    lastManualTime: ''
+  };
+}
+
+function cloneModeScopedArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const cloned = cloneJson(value);
+  return Array.isArray(cloned) ? cloned : [];
+}
+
+function sanitizeModeStageFilters(value) {
+  if (!isPlainObject(value)) {
+    return {};
+  }
+  const normalized = {};
+  for (const [stage, filter] of Object.entries(value)) {
+    const stageKey = sanitizeString(stage);
+    if (!stageKey) continue;
+    if (filter === null || filter === undefined) {
+      normalized[stageKey] = '';
+      continue;
+    }
+    normalized[stageKey] = typeof filter === 'string' ? filter : String(filter);
+  }
+  return normalized;
+}
+
+function ensureModeScopedState(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+  if (!isPlainObject(snapshot.modeScoped)) {
+    snapshot.modeScoped = {};
+  }
+  const sourceMap = snapshot.modeScoped;
+  const normalized = {};
+  for (const key of MODE_SCOPED_KEYS) {
+    const source = sourceMap[key];
+    const target = buildEmptyModeScopedSnapshot();
+    if (source && typeof source === 'object') {
+      target.exceptions = cloneModeScopedArray(source.exceptions);
+      target.reserves = cloneModeScopedArray(source.reserves);
+      target.routeOverrides = cloneModeScopedArray(source.routeOverrides);
+      target.orders = cloneModeScopedArray(source.orders);
+      target.locked = cloneModeScopedArray(source.locked);
+      target.ignored = cloneModeScopedArray(source.ignored);
+      target.stageFilters = sanitizeModeStageFilters(source.stageFilters);
+      target.stageTasks = cloneModeScopedArray(source.stageTasks);
+      target.done = cloneModeScopedArray(source.done);
+      target.trash = cloneModeScopedArray(source.trash);
+      if (Array.isArray(source.lastRows) || isPlainObject(source.lastRows)) {
+        const cloned = cloneJson(source.lastRows);
+        if (Array.isArray(cloned) || isPlainObject(cloned)) {
+          target.lastRows = cloned;
+        }
+      }
+      if (typeof source.csvFreshness === 'string') {
+        target.csvFreshness = source.csvFreshness;
+      }
+      if (typeof source.manualFreshness === 'string') {
+        target.manualFreshness = source.manualFreshness;
+      }
+      if (typeof source.lastImportTime === 'string') {
+        target.lastImportTime = source.lastImportTime;
+      }
+      if (typeof source.lastManualTime === 'string') {
+        target.lastManualTime = source.lastManualTime;
+      }
+    }
+    normalized[key] = target;
+  }
+  for (const [extraKey, value] of Object.entries(sourceMap)) {
+    if (!MODE_SCOPED_KEYS.includes(extraKey)) {
+      normalized[extraKey] = cloneJson(value);
+    }
+  }
+  snapshot.modeScoped = normalized;
+}
+
+function ensureLocalStorageMetadata(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+  if (!isPlainObject(snapshot.meta.storage)) {
+    snapshot.meta.storage = {};
+  }
+  snapshot.meta.storage.local = true;
+  snapshot.meta.storage.remote = false;
+  snapshot.meta.storage.remotePreferred = false;
+  snapshot.meta.storage.mode = 'local';
+}
+
+function buildEmptySnapshot() {
+  const snapshot = {
     routeOverrides: [],
     t: [],
     done: [],
@@ -1757,10 +1871,13 @@ function buildEmptySnapshot() {
         updatedAt: ''
       },
       ignoredStates: [],
-      storage: { local: false, remote: true, remotePreferred: true, mode: 'remote' }
+      storage: { local: true, remote: false, remotePreferred: false, mode: 'local' }
     },
     modeScoped: {}
   };
+  ensureModeScopedState(snapshot);
+  ensureLocalStorageMetadata(snapshot);
+  return snapshot;
 }
 
 async function ensureMigrationTable(client) {
@@ -1918,6 +2035,8 @@ async function loadLatestSnapshot() {
     }
     normalizeExtraTimeSettings(snapshotObj);
     normalizeSnapshotCollections(snapshotObj);
+    ensureModeScopedState(snapshotObj);
+    ensureLocalStorageMetadata(snapshotObj);
     const stateString = safeSerializeSnapshot(snapshotObj, stored.stateString);
     const hash = stored.hash || computeSnapshotHash(stateString);
     const rev = Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
@@ -2368,6 +2487,8 @@ async function persistSnapshotWithSql(options) {
 
   normalizeExtraTimeSettings(parsedSnapshot);
   normalizeSnapshotCollections(parsedSnapshot);
+  ensureModeScopedState(parsedSnapshot);
+  ensureLocalStorageMetadata(parsedSnapshot);
 
   const storedMeta = sanitizeMetaForStorage(meta);
 
