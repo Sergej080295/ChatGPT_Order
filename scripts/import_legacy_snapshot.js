@@ -545,6 +545,67 @@ async function persistListEntries(client, rev, listKey, entries) {
     return;
   }
 
+  if (listKey === 'exc' || listKey === 'res') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      let key = null;
+      let value = null;
+
+      if (Array.isArray(entry) && entry.length >= 1) {
+        key = parseOptionalString(entry[0]);
+        value = entry.length > 1 ? entry[1] : null;
+      } else if (isPlainObject(entry)) {
+        key = parseOptionalString(entry.key || entry.id || entry.name);
+        if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          value = entry.value;
+        } else if (Object.prototype.hasOwnProperty.call(entry, 'hours')) {
+          value = entry.hours;
+        } else {
+          value = { ...entry };
+        }
+      }
+
+      if (!key) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [rev, listKey, key, null, key, index]
+      );
+      const entryId = rows[0]?.id;
+      if (!entryId) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      const attributeValue = isPlainObject(value) ? value : { value };
+      const attributeRows = flattenObjectForStorage(attributeValue);
+      for (const row of attributeRows) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+          [
+            entryId,
+            row.path,
+            row.ordinal || 0,
+            row.type,
+            row.valueText,
+            row.valueNumeric,
+            row.valueBoolean,
+            null
+          ]
+        );
+      }
+    }
+    return;
+  }
+
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
     if (!isPlainObject(entry)) {
