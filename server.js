@@ -463,6 +463,59 @@ async function ensureMigrationTable(client) {
   `);
 }
 
+async function ensureRevisionInfrastructure(runner) {
+  const client = runner || pool;
+  const { rows } = await client.query("SELECT to_regclass('public.revisions') AS oid");
+  const hasRevisionsTable = rows.length > 0 && rows[0].oid !== null;
+
+  await client.query('CREATE SEQUENCE IF NOT EXISTS revisions_rev_seq');
+
+  if (!hasRevisionsTable) {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS revisions (
+        id BIGSERIAL PRIMARY KEY,
+        rev BIGINT NOT NULL DEFAULT nextval('revisions_rev_seq'),
+        current_rev BIGINT NOT NULL DEFAULT currval('revisions_rev_seq'),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        actor TEXT,
+        source TEXT,
+        note TEXT
+      )
+    `);
+    await client.query(`ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS revisions_rev_unique_idx ON revisions (rev)`);
+    revisionColumnInfo = null;
+  } else {
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS revisions_rev_unique_idx ON revisions (rev)`);
+    const { rows: defaultRows } = await client.query(`
+      SELECT column_default
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'revisions'
+         AND column_name = 'rev'
+    `);
+    const defaultValue = defaultRows.length ? defaultRows[0].column_default || '' : '';
+    if (!defaultValue.includes('revisions_rev_seq')) {
+      await client.query(`ALTER TABLE revisions ALTER COLUMN rev SET DEFAULT nextval('revisions_rev_seq')`);
+    }
+    try {
+      await client.query(`ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev`);
+    } catch (err) {
+      if (err?.code !== '42704' && err?.code !== '42P16' && err?.code !== '42P01') {
+        throw err;
+      }
+    }
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS planner_state_snapshots (
+      rev BIGINT PRIMARY KEY REFERENCES revisions(rev) ON DELETE CASCADE,
+      hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
 function readMigrations() {
   if (!fs.existsSync(MIGRATIONS_DIR)) {
     return [];
@@ -480,6 +533,7 @@ async function runMigrations() {
   const client = await pool.connect();
   try {
     await ensureMigrationTable(client);
+    await ensureRevisionInfrastructure(client);
     const migrations = readMigrations();
     for (const migration of migrations) {
       const { rows } = await client.query('SELECT 1 FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
@@ -505,6 +559,7 @@ async function runMigrations() {
 
 async function getLatestRevision(client) {
   const runner = client || pool;
+  await ensureRevisionInfrastructure(runner);
   const { rows } = await runner.query('SELECT COALESCE(MAX(rev), 0) AS rev FROM revisions');
   const rev = rows.length > 0 ? Number(rows[0].rev || 0) : 0;
   lastRevision = Math.max(lastRevision, rev);
