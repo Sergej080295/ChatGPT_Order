@@ -496,8 +496,8 @@ function mergeCrmTasksIntoSnapshot(snapshot) {
   }
 
   const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
-  const crmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
-  const tasks = crmTasks.length ? baseTasks.concat(crmTasks) : baseTasks.slice();
+  const derivedCrmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
+  const tasks = derivedCrmTasks.length ? baseTasks.concat(derivedCrmTasks) : baseTasks.slice();
 
   if (Array.isArray(snapshot.t)) {
     snapshot.t = tasks;
@@ -537,6 +537,8 @@ function mergeCrmTasksIntoSnapshot(snapshot) {
   snapshot.orders = Array.from(mergedOrderMap.entries());
 
   ensureCrmModeScoped(snapshot, tasks);
+
+  const crmTasks = tasks.filter((task) => isCrmTaskRecord(task));
 
   return { tasks, crmTasks };
 }
@@ -608,6 +610,24 @@ function serializeTaskForModeState(task) {
     crmMeta: isPlainObject(task.crmMeta) ? cloneJson(task.crmMeta) : null,
     crmOrigin: Boolean(task.crmOrigin)
   };
+}
+
+function isCrmTaskRecord(task) {
+  if (!task) {
+    return false;
+  }
+  if (task.crmOrigin) {
+    return true;
+  }
+  if (isPlainObject(task.crmMeta)) {
+    return Boolean(
+      task.crmMeta.stageKey
+      || task.crmMeta.stage
+      || task.crmMeta.stageName
+      || task.crmMeta.crmOrderId
+    );
+  }
+  return false;
 }
 
 function buildCrmTaskIdentityKey(task) {
@@ -1418,16 +1438,15 @@ async function savePlannerDerivedState(client, snapshot, {
     VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW())
   `;
   let sortIndex = 0;
+  const seenTaskUids = new Set();
   const storeTask = async (task, isDone) => {
     if (!isPlainObject(task)) return;
     const rawUid = sanitizeString(task.uid);
-    const isCrmTask = Boolean(task.crmOrigin)
-      || (rawUid ? rawUid.startsWith(CRM_TASK_PREFIX) : false)
-      || Boolean(task.crmMeta && task.crmMeta.stageKey);
-    if (isCrmTask) {
+    const uid = rawUid || `task-${sortIndex + 1}`;
+    if (seenTaskUids.has(uid)) {
       return;
     }
-    const uid = rawUid || `task-${sortIndex + 1}`;
+    seenTaskUids.add(uid);
     const stageCode = normalizeStage(task.stage);
     const resolution = resolver(task) || {};
     const payload = cloneJson(task);
@@ -1582,13 +1601,6 @@ async function buildSnapshotFromDatabase(client) {
   for (const row of taskRows.rows) {
     const payload = parseJsonColumn(row.payload, null);
     if (!payload) continue;
-    const uid = sanitizeString(payload.uid);
-    const isCrmTask = Boolean(payload.crmOrigin)
-      || (uid ? uid.startsWith(CRM_TASK_PREFIX) : false)
-      || Boolean(payload.crmMeta && payload.crmMeta.stageKey);
-    if (isCrmTask) {
-      continue;
-    }
     if (row.is_done) {
       doneTasks.push(payload);
     } else {
