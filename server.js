@@ -1003,7 +1003,7 @@ async function persistCapacity(client, rev, capacity) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_CAPACITY} (rev, process_code, minutes) VALUES ($1,$2,$3)`
+      `INSERT INTO ${TABLE_CAPACITY} (rev, process_code, minutes) VALUES ($1,$2,$3)`,
       [rev, String(code), numeric]
     );
   }
@@ -1022,7 +1022,7 @@ async function persistParallel(client, rev, parallel) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_PARALLEL} (rev, process_code, is_parallel) VALUES ($1,$2,$3)`
+      `INSERT INTO ${TABLE_PARALLEL} (rev, process_code, is_parallel) VALUES ($1,$2,$3)`,
       [rev, String(code), flag]
     );
   }
@@ -1049,7 +1049,7 @@ async function persistRouteOverrides(client, rev, overrides) {
     // eslint-disable-next-line no-await-in-loop
     await client.query(
       `INSERT INTO ${TABLE_ROUTE_OVERRIDES} (rev, parent_order_id, stage, start_at, end_at, source)
-       VALUES ($1,$2,$3,$4,$5,$6)`
+       VALUES ($1,$2,$3,$4,$5,$6)`,
       [rev, parentOrderId, stage, startAt ? startAt.toISOString() : null, endAt ? endAt.toISOString() : null, source]
     );
   }
@@ -1068,7 +1068,7 @@ async function persistIgnoredStates(client, rev, ignored) {
     }
     // eslint-disable-next-line no-await-in-loop
     await client.query(
-      `INSERT INTO ${TABLE_IGNORED_STATES} (rev, state_key, ordinal) VALUES ($1,$2,$3)`
+      `INSERT INTO ${TABLE_IGNORED_STATES} (rev, state_key, ordinal) VALUES ($1,$2,$3)`,
       [rev, key, index]
     );
   }
@@ -1246,7 +1246,7 @@ async function persistMetaHistory(client, rev, history) {
     const { rows } = await client.query(
       `INSERT INTO ${TABLE_META_HISTORY} (rev, ordinal, actor, source, note, summary, event_time)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING id` ,
+       RETURNING id`,
       [rev, index, actor, source, note, summary, when ? when.toISOString() : null]
     );
     const entryId = rows[0]?.id;
@@ -1713,7 +1713,7 @@ async function persistGeneralSettings(client, payload, options = {}) {
          ON CONFLICT (key) DO UPDATE
            SET value = EXCLUDED.value,
                updated_at = NOW(),
-               updated_by = EXCLUDED.updated_by` ,
+               updated_by = EXCLUDED.updated_by`,
         [key, Boolean(value), actor]
       );
     }

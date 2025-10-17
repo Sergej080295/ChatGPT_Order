@@ -495,8 +495,8 @@ async function persistListEntries(client, rev, listKey, entries) {
       }
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
-         VALUES ($1,$2,$3,$4,$5,$6)` ,
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
         [rev, listKey, null, null, uid, index]
       );
     }
@@ -513,9 +513,9 @@ async function persistListEntries(client, rev, listKey, entries) {
       const orderIdentity = sanitized.stage;
       // eslint-disable-next-line no-await-in-loop
       const { rows } = await client.query(
-        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
          VALUES ($1,$2,$3,$4,$5,$6)
-         RETURNING id` ,
+         RETURNING id`,
         [rev, listKey, sanitized.stage, null, orderIdentity, index]
       );
       const entryId = rows[0]?.id;
@@ -527,8 +527,8 @@ async function persistListEntries(client, rev, listKey, entries) {
       for (const row of attributeRows) {
         // eslint-disable-next-line no-await-in-loop
         await client.query(
-          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             entryId,
             row.path,
@@ -556,9 +556,9 @@ async function persistListEntries(client, rev, listKey, entries) {
     const orderIdentity = parseOptionalString(entry.orderId || entry.orderNumber || entry.orderIdentity);
     // eslint-disable-next-line no-await-in-loop
     const { rows } = await client.query(
-      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)`
+      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
        VALUES ($1,$2,$3,$4,$5,$6)
-       RETURNING id` ,
+       RETURNING id`,
       [rev, listKey, parentOrderId, childOrderId, orderIdentity, index]
     );
     const entryId = rows[0]?.id;
@@ -570,8 +570,8 @@ async function persistListEntries(client, rev, listKey, entries) {
     for (const row of attributeRows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)`
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           entryId,
           row.path,
