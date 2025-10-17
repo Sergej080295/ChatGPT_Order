@@ -2037,8 +2037,8 @@ async function loadLatestSnapshot() {
     normalizeSnapshotCollections(snapshotObj);
     ensureModeScopedState(snapshotObj);
     ensureLocalStorageMetadata(snapshotObj);
-    const stateString = safeSerializeSnapshot(snapshotObj, stored.stateString);
-    const hash = stored.hash || computeSnapshotHash(stateString);
+    const stateString = safeSerializeSnapshot(snapshotObj);
+    const hash = computeSnapshotHash(stateString);
     const rev = Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
     return {
       rev,
