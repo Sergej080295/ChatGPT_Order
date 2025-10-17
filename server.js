@@ -3595,12 +3595,27 @@ app.put('/api/state', async (req, res) => {
         && expectedHash
         && currentHash
         && expectedHash !== currentHash) {
-      logSaveEvent('warn', 'save conflict ignored (last write wins)', {
+      const latestEtag = computeEtag(currentHash);
+      logSaveEvent('warn', 'save rejected due to hash mismatch', {
         requestId,
         expectedHash,
         currentHash,
         rev: current?.rev || 0
       });
+      if (latestEtag) {
+        res.set('ETag', latestEtag);
+      }
+      res.set('Cache-Control', 'no-store');
+      res.status(412).json({
+        error: 'Conflict',
+        message: 'Snapshot hash mismatch',
+        expectedHash: currentHash,
+        providedHash: expectedHash,
+        currentHash,
+        rev: current?.rev || 0,
+        etag: latestEtag || null
+      });
+      return;
     }
 
     const actor = normalizedMeta.actor || requestMeta?.actor || requestMeta?.user || 'planner-ui';
