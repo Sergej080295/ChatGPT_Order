@@ -3280,17 +3280,27 @@ function mapCrmStageName(name){
   const customStage = STAGES.includes(rawCustom) ? rawCustom : '';
   let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || '';
   if(!fallback){
-    if(normalized.includes('кооп') || normalized.includes('кооперац') || normalized.includes('покрас')){
+    const includesAny = (...parts)=> parts.some(part=> normalized.includes(part));
+    if(includesAny('кооп','кооперац','покрас','цинк','анод','галван')){
       fallback = 'coop';
-    }else if(
-      normalized.includes('мехобр')
-      || normalized.includes('зенк')
-      || normalized.includes('сверл')
-      || normalized.includes('резьб')
-      || normalized.includes('пукл')
-      || normalized.includes('заклеп')
-    ){
+    }else if(includesAny('мехобр','зенк','сверл','резьб','пукл','заклеп','механо','фрез','токар')){
       fallback = 'mech';
+    }else if(includesAny('гиб','bend','изгиб')){
+      fallback = 'bend';
+    }else if(includesAny('лазер','laser')){
+      fallback = 'laser';
+    }else if(includesAny('свар','weld')){
+      fallback = 'weld';
+    }else if(includesAny('подгот','техпод','технолог','планир')){
+      fallback = 'draw';
+    }else if(includesAny('закуп','покуп','снабж','постав','proc')){
+      fallback = 'proc';
+    }else if(includesAny('рубк','резк','гильот','штамп','отрез','раскро')){
+      fallback = 'shear';
+    }else if(includesAny('упаков','упак','комплект','тара','pack')){
+      fallback = 'pack';
+    }else if(includesAny('отгруз','отправ','достав','ship','shipment','экспед')){
+      fallback = 'ship';
     }
   }
   const resolved = customStage || fallback;

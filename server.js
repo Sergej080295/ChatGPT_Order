@@ -494,23 +494,40 @@ function mapCrmStageName(label, customMap) {
   if (fallback) {
     return fallback;
   }
-  if (
-    normalizedKey.includes('кооп')
-    || normalizedKey.includes('кооперац')
-    || normalizedKey.includes('покрас')
-  ) {
+
+  const includesAny = (...parts) => parts.some((part) => normalizedKey.includes(part));
+
+  if (includesAny('кооп', 'кооперац', 'покрас', 'цинк', 'анод', 'галван')) {
     return 'coop';
   }
   if (
-    normalizedKey.includes('мехобр')
-    || normalizedKey.includes('зенк')
-    || normalizedKey.includes('сверл')
-    || normalizedKey.includes('резьб')
-    || normalizedKey.includes('пукл')
-    || normalizedKey.includes('заклеп')
-    || normalizedKey.includes('механо')
+    includesAny('мехобр', 'зенк', 'сверл', 'резьб', 'пукл', 'заклеп', 'механо', 'фрез', 'токар')
   ) {
     return 'mech';
+  }
+  if (includesAny('гиб', 'bend', 'изгиб')) {
+    return 'bend';
+  }
+  if (includesAny('лазер', 'laser')) {
+    return 'laser';
+  }
+  if (includesAny('свар', 'weld')) {
+    return 'weld';
+  }
+  if (includesAny('подгот', 'техпод', 'технолог', 'планир')) {
+    return 'draw';
+  }
+  if (includesAny('закуп', 'покуп', 'снабж', 'постав', 'proc')) {
+    return 'proc';
+  }
+  if (includesAny('рубк', 'резк', 'гильот', 'штамп', 'отрез', 'раскро')) {
+    return 'shear';
+  }
+  if (includesAny('упаков', 'упак', 'комплект', 'тара', 'pack')) {
+    return 'pack';
+  }
+  if (includesAny('отгруз', 'отправ', 'достав', 'ship', 'shipment', 'экспед')) {
+    return 'ship';
   }
   return null;
 }
