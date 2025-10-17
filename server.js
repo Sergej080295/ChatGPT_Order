@@ -86,6 +86,7 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
 ]);
 const CRM_PARALLEL_STAGES = new Set(['proc', 'shear', 'coop', 'pack', 'ship']);
 const CRM_TASK_PREFIX = 'crm-task::';
+const PLANNER_STAGE_CODES = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
 
 const WRITE_CHANNELS = Object.freeze({
   CRM: 'crm',
@@ -514,7 +515,161 @@ function mergeCrmTasksIntoSnapshot(snapshot) {
 
   snapshot.orders = Array.from(mergedOrderMap.entries());
 
+  ensureCrmModeScoped(snapshot, tasks);
+
   return { tasks, crmTasks };
+}
+
+function toIsoString(value) {
+  const date = parseDate(value);
+  if (!date) return '';
+  return date.toISOString();
+}
+
+function serializeRouteSegmentForMode(seg) {
+  if (!seg || typeof seg !== 'object') {
+    return null;
+  }
+  return {
+    hours: Number(seg.hours) || 0,
+    start: toIsoString(seg.start || null),
+    end: toIsoString(seg.end || null),
+    origStart: toIsoString(seg.origStart || seg.originalStart || null),
+    origEnd: toIsoString(seg.origEnd || seg.originalEnd || null),
+    doneAt: toIsoString(seg.doneAt || null)
+  };
+}
+
+function serializeTaskForModeState(task) {
+  if (!task || typeof task !== 'object') {
+    return null;
+  }
+  const route = isPlainObject(task.route) ? task.route : {};
+  const stageKey = normalizeStage(task.stage || task.crmMeta?.stageKey || task.crmMeta?.stage || task.crmMeta?.stageName) || '';
+  const doneMeta = task.doneMeta && task.doneMeta.when
+    ? { when: toIsoString(task.doneMeta.when), source: sanitizeString(task.doneMeta.source) || '' }
+    : null;
+  return {
+    uid: task.uid == null ? '' : String(task.uid),
+    orderId: sanitizeString(task.orderId) || '',
+    orderNumber: sanitizeString(task.orderNumber) || '',
+    orderCustomer: sanitizeString(task.orderCustomer) || '',
+    orderIdentity: sanitizeString(task.orderIdentity) || '',
+    stage: stageKey,
+    childId: sanitizeString(task.childId) || '',
+    parentId: sanitizeString(task.parentId) || '',
+    hours: Number(task.hours) || 0,
+    extraHours: Number(task.extraHours) || 0,
+    startDate: toIsoString(task.startDate || null),
+    endDate: toIsoString(task.endDate || null),
+    startMissing: Boolean(task.startMissing),
+    endMissing: Boolean(task.endMissing),
+    state: sanitizeString(task.state) || '',
+    status: sanitizeString(task.status) || '',
+    useReserve: Boolean(task.useReserve),
+    progress: clampProgressValue(task.progress),
+    origStartDate: toIsoString(task.origStartDate || null),
+    origEndDate: toIsoString(task.origEndDate || null),
+    route: {
+      laser: serializeRouteSegmentForMode(route.laser),
+      bend: serializeRouteSegmentForMode(route.bend),
+      draw: serializeRouteSegmentForMode(route.draw),
+      weld: serializeRouteSegmentForMode(route.weld),
+      mech: serializeRouteSegmentForMode(route.mech),
+      proc: serializeRouteSegmentForMode(route.proc),
+      shear: serializeRouteSegmentForMode(route.shear),
+      pack: serializeRouteSegmentForMode(route.pack),
+      ship: serializeRouteSegmentForMode(route.ship)
+    },
+    locked: Boolean(task.locked),
+    hiddenByState: Boolean(task.hiddenByState),
+    doneMeta,
+    crmMeta: isPlainObject(task.crmMeta) ? cloneJson(task.crmMeta) : null,
+    crmOrigin: Boolean(task.crmOrigin)
+  };
+}
+
+function ensureCrmModeScoped(snapshot, tasksInput = []) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+
+  const tasks = Array.isArray(tasksInput) ? tasksInput : [];
+  if (!tasks.length && !isPlainObject(snapshot.modeScoped?.crm)) {
+    return;
+  }
+
+  if (!isPlainObject(snapshot.modeScoped)) {
+    snapshot.modeScoped = {};
+  }
+
+  const scoped = isPlainObject(snapshot.modeScoped.crm) ? { ...snapshot.modeScoped.crm } : {};
+  const crmTasks = tasks.filter((task) => task && (task.crmOrigin || isPlainObject(task.crmMeta)));
+
+  if (crmTasks.length) {
+    const stageMap = new Map();
+    crmTasks.forEach((task) => {
+      const stageKey = normalizeStage(task.stage || task.crmMeta?.stageKey || task.crmMeta?.stage || task.crmMeta?.stageName);
+      if (!stageKey) return;
+      const serialized = serializeTaskForModeState(task);
+      if (!serialized) return;
+      if (!stageMap.has(stageKey)) stageMap.set(stageKey, []);
+      stageMap.get(stageKey).push(serialized);
+    });
+
+    const stageTasks = [];
+    PLANNER_STAGE_CODES.forEach((stage) => {
+      if (stageMap.has(stage)) {
+        stageTasks.push([stage, stageMap.get(stage)]);
+        stageMap.delete(stage);
+      }
+    });
+    stageMap.forEach((list, stage) => {
+      stageTasks.push([stage, list]);
+    });
+    scoped.stageTasks = stageTasks;
+  } else if (!Array.isArray(scoped.stageTasks)) {
+    scoped.stageTasks = [];
+  }
+
+  if (Array.isArray(snapshot.orders) && snapshot.orders.length) {
+    scoped.orders = snapshot.orders.map((entry) => {
+      const stage = normalizeStage(entry && entry[0]);
+      const list = Array.isArray(entry && entry[1])
+        ? entry[1].map((uid) => (uid == null ? '' : String(uid)))
+        : [];
+      return [stage || (entry && entry[0]) || '', list];
+    });
+  } else if (!Array.isArray(scoped.orders)) {
+    scoped.orders = PLANNER_STAGE_CODES.map((stage) => [stage, []]);
+  }
+
+  if (!Array.isArray(scoped.exceptions)) {
+    scoped.exceptions = Array.isArray(snapshot.exc) ? cloneJson(snapshot.exc) : [];
+  }
+  if (!Array.isArray(scoped.reserves)) {
+    scoped.reserves = Array.isArray(snapshot.res) ? cloneJson(snapshot.res) : [];
+  }
+  if (!Array.isArray(scoped.locked)) {
+    scoped.locked = Array.isArray(snapshot.locked) ? snapshot.locked.slice() : [];
+  }
+  if (!Array.isArray(scoped.ignored)) {
+    scoped.ignored = Array.isArray(snapshot.ignoredStates) ? snapshot.ignoredStates.slice() : [];
+  }
+  if (!scoped.csvFreshness && snapshot.freshnessCsv) {
+    scoped.csvFreshness = snapshot.freshnessCsv;
+  }
+  if (!scoped.manualFreshness && snapshot.freshnessManual) {
+    scoped.manualFreshness = snapshot.freshnessManual;
+  }
+  if (!scoped.lastImportTime && snapshot.lastImportTime) {
+    scoped.lastImportTime = snapshot.lastImportTime;
+  }
+  if (!scoped.lastManualTime && snapshot.lastManualTime) {
+    scoped.lastManualTime = snapshot.lastManualTime;
+  }
+
+  snapshot.modeScoped.crm = scoped;
 }
 
 function cloneJson(value) {
@@ -765,6 +920,178 @@ function applyBaseSnapshot(target, base) {
   }
 }
 
+function ensureCrmOrderStagesArray(order) {
+  if (!isPlainObject(order)) {
+    return [];
+  }
+  if (Array.isArray(order.stages)) {
+    return order.stages;
+  }
+  if (order.stages && typeof order.stages === 'object') {
+    const values = Object.values(order.stages).filter(Boolean).map((value) => (
+      isPlainObject(value) ? value : { value }
+    ));
+    order.stages = values;
+    return order.stages;
+  }
+  order.stages = [];
+  return order.stages;
+}
+
+function assignIfChanged(target, key, value) {
+  if (!target) {
+    return false;
+  }
+  const prev = target[key];
+  if (prev === value) {
+    return false;
+  }
+  if (prev == null && value === undefined) {
+    return false;
+  }
+  target[key] = value;
+  return true;
+}
+
+function recomputeCrmOrderAggregates(order) {
+  if (!isPlainObject(order)) {
+    return;
+  }
+  const stages = ensureCrmOrderStagesArray(order);
+  const starts = [];
+  const ends = [];
+  let progressSum = 0;
+  let progressCount = 0;
+  let allDone = stages.length > 0;
+
+  stages.forEach((stage) => {
+    if (!stage || typeof stage !== 'object') {
+      allDone = false;
+      return;
+    }
+    const start = parseDate(stage.start || stage.startDate);
+    if (start) {
+      starts.push(start);
+    }
+    const end = parseDate(stage.end || stage.endDate);
+    if (end) {
+      ends.push(end);
+    }
+    const progress = clampProgressValue(stage.progress);
+    if (Number.isFinite(progress)) {
+      progressSum += progress;
+      progressCount += 1;
+    }
+    const stageDone = stage.done || progress >= 100;
+    if (!stageDone) {
+      allDone = false;
+    }
+  });
+
+  if (starts.length) {
+    starts.sort((a, b) => a - b);
+    assignIfChanged(order, 'start', starts[0].toISOString());
+  }
+  if (ends.length) {
+    ends.sort((a, b) => a - b);
+    assignIfChanged(order, 'end', ends[ends.length - 1].toISOString());
+  }
+
+  if (progressCount > 0) {
+    const avg = Math.round(progressSum / progressCount);
+    assignIfChanged(order, 'progress', avg);
+  }
+
+  if (allDone) {
+    assignIfChanged(order, 'done', true);
+  } else if (order.done) {
+    assignIfChanged(order, 'done', false);
+  }
+
+  assignIfChanged(order, 'progressManual', true);
+  assignIfChanged(order, 'updatedAt', new Date().toISOString());
+}
+
+function updateCrmOrderFromTask(order, task) {
+  if (!isPlainObject(order) || !task) {
+    return false;
+  }
+  const stageKey = normalizeStage(task.stage || task.crmMeta?.stageKey || task.crmMeta?.stage || task.crmMeta?.stageName);
+  if (!stageKey) {
+    return false;
+  }
+
+  const stages = ensureCrmOrderStagesArray(order);
+  let stageEntry = null;
+  for (const entry of stages) {
+    const entryKey = normalizeStage(entry?.stageKey || entry?.crmStageKey || entry?.name);
+    if (entryKey && entryKey === stageKey) {
+      stageEntry = entry;
+      break;
+    }
+  }
+
+  if (!stageEntry) {
+    stageEntry = {
+      stageKey,
+      crmStageKey: stageKey,
+      name: task.crmMeta?.stageName || titleFromCode(stageKey),
+      id: task.crmMeta?.stageId || null,
+      crmStageId: task.crmMeta?.stageId || null,
+      done: false,
+      progress: 0
+    };
+    stages.push(stageEntry);
+  }
+
+  let changed = false;
+  const routeSeg = task.stage ? (isPlainObject(task.route) ? task.route[stageKey] : null) : null;
+  const startCandidate = routeSeg?.start || task.startDate;
+  const endCandidate = routeSeg?.end || task.endDate;
+  const origStartCandidate = routeSeg?.origStart || routeSeg?.originalStart || task.origStartDate;
+  const origEndCandidate = routeSeg?.origEnd || routeSeg?.originalEnd || task.origEndDate;
+  const doneAtCandidate = routeSeg?.doneAt || task.doneMeta?.when;
+
+  if (assignIfChanged(stageEntry, 'start', startCandidate ? toIsoString(startCandidate) : '')) changed = true;
+  if (assignIfChanged(stageEntry, 'end', endCandidate ? toIsoString(endCandidate) : '')) changed = true;
+  if (assignIfChanged(stageEntry, 'originalStart', origStartCandidate ? toIsoString(origStartCandidate) : '')) changed = true;
+  if (assignIfChanged(stageEntry, 'originalEnd', origEndCandidate ? toIsoString(origEndCandidate) : '')) changed = true;
+  if (assignIfChanged(stageEntry, 'doneAt', doneAtCandidate ? toIsoString(doneAtCandidate) : '')) changed = true;
+
+  const hours = Number.isFinite(Number(task.hours)) ? Number(task.hours) : Number(routeSeg?.hours);
+  if (Number.isFinite(hours)) {
+    if (assignIfChanged(stageEntry, 'hours', hours)) changed = true;
+    if (assignIfChanged(stageEntry, 'value', hours)) changed = true;
+  }
+
+  if (assignIfChanged(stageEntry, 'useReserve', Boolean(task.useReserve || routeSeg?.useReserve))) changed = true;
+
+  const progress = clampProgressValue(task.progress != null ? task.progress : stageEntry.progress);
+  if (assignIfChanged(stageEntry, 'progress', progress)) changed = true;
+
+  const isDone = progress >= 100 || Boolean(task.doneMeta?.when) || Boolean(task.done) || Boolean(routeSeg?.done);
+  if (assignIfChanged(stageEntry, 'done', isDone)) changed = true;
+
+  if (task.crmMeta && task.crmMeta.stageId && assignIfChanged(stageEntry, 'crmStageId', task.crmMeta.stageId)) changed = true;
+  if (task.crmMeta && task.crmMeta.stageName && assignIfChanged(stageEntry, 'name', task.crmMeta.stageName)) changed = true;
+
+  return changed;
+}
+
+function syncCrmOrderReference(target, source) {
+  if (!isPlainObject(target) || !isPlainObject(source)) {
+    return;
+  }
+  for (const key of Object.keys(target)) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      delete target[key];
+    }
+  }
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = Array.isArray(value) || isPlainObject(value) ? cloneJson(value) : value;
+  }
+}
+
 async function savePlannerDerivedState(client, snapshot, {
   tasks = [],
   done = [],
@@ -831,12 +1158,52 @@ async function savePlannerDerivedState(client, snapshot, {
           || sanitizeString(order.orderId)
           || null,
         position,
-        payload: cloneJson(order)
+        payload: cloneJson(order),
+        sourceRef: order
       };
       if (ordersByKey.has(canonicalKey)) {
         ordersByKey.delete(canonicalKey);
       }
       ordersByKey.set(canonicalKey, entry);
+    }
+  }
+
+  const orderEntryByKey = new Map();
+  for (const entry of ordersByKey.values()) {
+    orderEntryByKey.set(entry.key, entry);
+  }
+
+  const crmRelevantTasks = [];
+  if (Array.isArray(tasks) && tasks.length) {
+    crmRelevantTasks.push(...tasks);
+  }
+  if (Array.isArray(done) && done.length) {
+    crmRelevantTasks.push(...done);
+  }
+
+  const dirtyOrderKeys = new Set();
+  for (const task of crmRelevantTasks) {
+    if (!task) continue;
+    const resolution = resolver(task) || {};
+    const key = resolution.key;
+    if (!key) continue;
+    const entry = orderEntryByKey.get(key);
+    if (!entry || !isPlainObject(entry.payload)) continue;
+    if (!updateCrmOrderFromTask(entry.payload, task)) continue;
+    dirtyOrderKeys.add(key);
+  }
+
+  if (dirtyOrderKeys.size) {
+    dirtyOrderKeys.forEach((key) => {
+      const entry = orderEntryByKey.get(key);
+      if (!entry || !isPlainObject(entry.payload)) return;
+      recomputeCrmOrderAggregates(entry.payload);
+      if (isPlainObject(entry.sourceRef)) {
+        syncCrmOrderReference(entry.sourceRef, entry.payload);
+      }
+    });
+    if (isPlainObject(snapshot.crm)) {
+      assignIfChanged(snapshot.crm, 'updatedAt', new Date().toISOString());
     }
   }
 
@@ -911,6 +1278,8 @@ async function savePlannerDerivedState(client, snapshot, {
     // eslint-disable-next-line no-await-in-loop
     await runner.query(stageInsertSql, [stageCode, uidList]);
   }
+
+  ensureCrmModeScoped(snapshot, Array.isArray(snapshot.t) ? snapshot.t : tasks);
 
   const baseState = extractBaseState(snapshot);
   await runner.query(
@@ -2449,6 +2818,7 @@ async function applySnapshotToSql(client, snapshot) {
   await ensurePlannerSettingsSchema(client);
   const previousWriteMode = await getCurrentWriteMode(client);
   const { tasks } = mergeCrmTasksIntoSnapshot(snapshot);
+  ensureCrmModeScoped(snapshot, tasks);
 
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
