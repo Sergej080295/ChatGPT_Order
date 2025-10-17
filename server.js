@@ -755,7 +755,7 @@ function ensureModeScopedConsistency(snapshot, tasks, stageSequences) {
 
   const stageTaskMap = new Map();
   (Array.isArray(tasks) ? tasks : []).forEach((task) => {
-    if (!task || task.bucket !== 't') {
+    if (!task || (task.bucket !== 't' && task.bucket !== 'crm_stage')) {
       return;
     }
     const normalizedStage = normalizeStage(task.stage) || normalizeStage(task?.payload?.stage);
