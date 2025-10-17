@@ -28,7 +28,8 @@ const TABLE_META_HISTORY_ATTRS = 'planner_meta_history_entry_attributes';
 const TABLE_CRM_VALUES = 'planner_state_crm_values';
 const TABLE_MODE_VALUES = 'planner_state_mode_scoped_values';
 const GENERAL_SETTINGS_TABLE = 'planner_settings';
-const GENERAL_PREFERENCES_TABLE = 'planner_preferences';
+const SETTINGS_SCOPE_GENERAL = 'general';
+const SETTINGS_SCOPE_PREFERENCES = 'preferences';
 const GENERAL_PREFERENCE_KEYS = [
   'autosaveOn',
   'autoOptimizeOn',
@@ -774,8 +775,10 @@ function sanitizeGeneralSettingsPayload(payload) {
 }
 
 async function persistGeneralSettings(client, payload, options = {}) {
-  await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
-  await client.query(`DELETE FROM ${GENERAL_PREFERENCES_TABLE}`);
+  await client.query(
+    `DELETE FROM ${GENERAL_SETTINGS_TABLE} WHERE scope = ANY($1::text[])`,
+    [[SETTINGS_SCOPE_GENERAL, SETTINGS_SCOPE_PREFERENCES]]
+  );
 
   const hasSettings = Boolean(options?.hasSettings);
   if (!hasSettings) {
@@ -790,18 +793,19 @@ async function persistGeneralSettings(client, payload, options = {}) {
 
   if (sanitized.settings === null) {
     await client.query(
-      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
-      ['', 0, 'null', null, null, null, null, actor]
+      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [SETTINGS_SCOPE_GENERAL, '', 0, 'null', null, null, null, null, actor]
     );
   } else if (isPlainObject(sanitized.settings)) {
     const rows = flattenObjectForStorage(sanitized.settings);
     for (const row of rows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+        `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
+          SETTINGS_SCOPE_GENERAL,
           row.path,
           row.ordinal || 0,
           row.type,
@@ -819,13 +823,14 @@ async function persistGeneralSettings(client, payload, options = {}) {
     for (const [key, value] of Object.entries(sanitized.preferences)) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${GENERAL_PREFERENCES_TABLE} (key, value, updated_by)
-         VALUES ($1,$2,$3)
-         ON CONFLICT (key) DO UPDATE
-           SET value = EXCLUDED.value,
+        `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,0,'boolean',NULL,NULL,$3,NULL,$4)
+         ON CONFLICT (scope, path, ordinal) DO UPDATE
+           SET value_boolean = EXCLUDED.value_boolean,
+               value_type = EXCLUDED.value_type,
                updated_at = NOW(),
-               updated_by = EXCLUDED.updated_by` ,
-        [key, Boolean(value), actor]
+               updated_by = EXCLUDED.updated_by`,
+        [SETTINGS_SCOPE_PREFERENCES, key, Boolean(value), actor]
       );
     }
   }

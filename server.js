@@ -55,7 +55,8 @@ const TABLE_META_HISTORY_ATTRS = 'planner_meta_history_entry_attributes';
 const TABLE_CRM_VALUES = 'planner_state_crm_values';
 const TABLE_MODE_VALUES = 'planner_state_mode_scoped_values';
 const TABLE_GENERAL_SETTINGS = 'planner_settings';
-const TABLE_GENERAL_PREFERENCES = 'planner_preferences';
+const SETTINGS_SCOPE_GENERAL = 'general';
+const SETTINGS_SCOPE_PREFERENCES = 'preferences';
 const GENERAL_PREFERENCE_KEYS = [
   'autosaveOn',
   'autoOptimizeOn',
@@ -1749,8 +1750,10 @@ function sanitizeGeneralSettingsPayload(payload) {
 }
 
 async function persistGeneralSettings(client, payload, options = {}) {
-  await client.query(`DELETE FROM ${TABLE_GENERAL_SETTINGS}`);
-  await client.query(`DELETE FROM ${TABLE_GENERAL_PREFERENCES}`);
+  await client.query(
+    `DELETE FROM ${TABLE_GENERAL_SETTINGS} WHERE scope = ANY($1::text[])`,
+    [[SETTINGS_SCOPE_GENERAL, SETTINGS_SCOPE_PREFERENCES]]
+  );
 
   const hasSettings = Boolean(options?.hasSettings);
   if (!hasSettings) {
@@ -1765,18 +1768,19 @@ async function persistGeneralSettings(client, payload, options = {}) {
 
   if (sanitized.settings === null) {
     await client.query(
-      `INSERT INTO ${TABLE_GENERAL_SETTINGS} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      ['', 0, 'null', null, null, null, null, actor]
+      `INSERT INTO ${TABLE_GENERAL_SETTINGS} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [SETTINGS_SCOPE_GENERAL, '', 0, 'null', null, null, null, null, actor]
     );
   } else if (isPlainObject(sanitized.settings)) {
     const rows = flattenObjectForStorage(sanitized.settings);
     for (const row of rows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_GENERAL_SETTINGS} (path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        `INSERT INTO ${TABLE_GENERAL_SETTINGS} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
+          SETTINGS_SCOPE_GENERAL,
           row.path,
           row.ordinal || 0,
           row.type,
@@ -1794,13 +1798,14 @@ async function persistGeneralSettings(client, payload, options = {}) {
     for (const [key, value] of Object.entries(sanitized.preferences)) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_GENERAL_PREFERENCES} (key, value, updated_by)
-         VALUES ($1,$2,$3)
-         ON CONFLICT (key) DO UPDATE
-           SET value = EXCLUDED.value,
+        `INSERT INTO ${TABLE_GENERAL_SETTINGS} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,0,'boolean',NULL,NULL,$3,NULL,$4)
+         ON CONFLICT (scope, path, ordinal) DO UPDATE
+           SET value_boolean = EXCLUDED.value_boolean,
+               value_type = EXCLUDED.value_type,
                updated_at = NOW(),
                updated_by = EXCLUDED.updated_by`,
-        [key, Boolean(value), actor]
+        [SETTINGS_SCOPE_PREFERENCES, key, Boolean(value), actor]
       );
     }
   }
@@ -1812,11 +1817,15 @@ async function loadGeneralSettings(runner) {
     const { rows: settingRows } = await executor.query(
       `SELECT path, ordinal, value_type, value_text, value_numeric, value_boolean
          FROM ${TABLE_GENERAL_SETTINGS}
-        ORDER BY char_length(path), path, ordinal`
+        WHERE scope = $1
+        ORDER BY char_length(path), path, ordinal`,
+      [SETTINGS_SCOPE_GENERAL]
     );
     const { rows: preferenceRows } = await executor.query(
-      `SELECT key, value
-         FROM ${TABLE_GENERAL_PREFERENCES}`
+      `SELECT path, value_boolean
+         FROM ${TABLE_GENERAL_SETTINGS}
+        WHERE scope = $1`,
+      [SETTINGS_SCOPE_PREFERENCES]
     );
 
     if (!settingRows.length && !preferenceRows.length) {
@@ -1839,7 +1848,7 @@ async function loadGeneralSettings(runner) {
 
     const preferences = {};
     preferenceRows.forEach((row) => {
-      preferences[row.key] = !!row.value;
+      preferences[row.path] = !!row.value_boolean;
     });
 
     const result = {};
