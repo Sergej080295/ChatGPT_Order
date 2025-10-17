@@ -6,18 +6,73 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
+const Database = require('better-sqlite3');
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
+const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
+
+let sqlite = null;
+
+function getDatabase() {
+  if (sqlite) {
+    return sqlite;
+  }
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  sqlite = new Database(SQLITE_FILE);
+  sqlite.pragma('journal_mode = WAL');
+  sqlite.pragma('foreign_keys = ON');
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS snapshots (
+      rev INTEGER PRIMARY KEY,
+      hash TEXT,
+      state_json TEXT NOT NULL,
+      meta_json TEXT,
+      actor TEXT,
+      source TEXT,
+      note TEXT,
+      channel TEXT,
+      saved_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS kv_store (
+      key TEXT PRIMARY KEY,
+      value_json TEXT,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  return sqlite;
+}
 
 const pool = {
   async connect() {
-    throw new Error('SQL storage is disabled');
+    return {
+      async query(sql, params = []) {
+        const db = getDatabase();
+        const statement = db.prepare(sql);
+        if (/^\s*select/i.test(sql)) {
+          const rows = statement.all(params);
+          return { rows };
+        }
+        const info = statement.run(params);
+        return { rowCount: info.changes || 0 };
+      },
+      async release() {
+        /* no-op for sqlite */
+      }
+    };
   },
-  async query() {
-    throw new Error('SQL storage is disabled');
+  async query(sql, params = []) {
+    const db = getDatabase();
+    const statement = db.prepare(sql);
+    if (/^\s*select/i.test(sql)) {
+      const rows = statement.all(params);
+      return { rows };
+    }
+    const info = statement.run(params);
+    return { rowCount: info.changes || 0 };
   },
   on() {
     // no-op
@@ -72,6 +127,127 @@ async function writeLocalStateFile(payload) {
   const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
   await fsp.writeFile(tmpPath, serialized, 'utf8');
   await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+}
+
+function safeParseJson(text, fallback = null) {
+  if (typeof text !== 'string') {
+    return fallback;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_err) {
+    return fallback;
+  }
+}
+
+function readSnapshotFromSql() {
+  try {
+    const db = getDatabase();
+    const row = db
+      .prepare(
+        'SELECT rev, hash, state_json, meta_json, actor, source, note, channel, saved_at FROM snapshots ORDER BY rev DESC LIMIT 1'
+      )
+      .get();
+    if (!row) {
+      return null;
+    }
+    const parsed = safeParseJson(row.state_json, null);
+    if (!isPlainObject(parsed)) {
+      return null;
+    }
+    normalizeExtraTimeSettings(parsed);
+    normalizeSnapshotCollections(parsed);
+    ensureModeScopedState(parsed);
+    ensureLocalStorageMetadata(parsed);
+    const stateString = safeSerializeSnapshot(parsed);
+    const hash = row.hash || computeSnapshotHash(stateString);
+    const meta = safeParseJson(row.meta_json, null);
+    return {
+      rev: Number(row.rev) || 0,
+      snapshot: parsed,
+      stateString,
+      hash,
+      meta: isPlainObject(meta) ? meta : null,
+      savedAt: row.saved_at || null,
+      savedBy: {
+        actor: row.actor || null,
+        source: row.source || null,
+        note: row.note || null,
+        channel: row.channel || null
+      }
+    };
+  } catch (err) {
+    console.warn('Failed to read snapshot from sqlite storage', err);
+    return null;
+  }
+}
+
+function writeSnapshotToSql(record) {
+  try {
+    const db = getDatabase();
+    const metaJson = record.meta ? JSON.stringify(record.meta) : null;
+    const savedAt = record.savedAt || new Date().toISOString();
+    db.prepare(
+      `INSERT INTO snapshots (rev, hash, state_json, meta_json, actor, source, note, channel, saved_at)
+       VALUES (@rev,@hash,@state_json,@meta_json,@actor,@source,@note,@channel,@saved_at)
+       ON CONFLICT(rev) DO UPDATE SET
+         hash = excluded.hash,
+         state_json = excluded.state_json,
+         meta_json = excluded.meta_json,
+         actor = excluded.actor,
+         source = excluded.source,
+         note = excluded.note,
+         channel = excluded.channel,
+         saved_at = excluded.saved_at`
+    ).run({
+      rev: record.rev,
+      hash: record.hash || null,
+      state_json: record.stateString || JSON.stringify(record.snapshot || {}),
+      meta_json: metaJson,
+      actor: record.savedBy?.actor || null,
+      source: record.savedBy?.source || null,
+      note: record.savedBy?.note || null,
+      channel: record.savedBy?.channel || null,
+      saved_at: savedAt
+    });
+
+    db.prepare(
+      `INSERT INTO kv_store (key, value_json, updated_at)
+       VALUES (@key,@value_json,@updated_at)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+    ).run({
+      key: 'latest_snapshot',
+      value_json: JSON.stringify({
+        rev: record.rev,
+        hash: record.hash || null,
+        meta: record.meta || null,
+        savedAt,
+        savedBy: record.savedBy || null
+      }),
+      updated_at: savedAt
+    });
+  } catch (err) {
+    console.error('Failed to write snapshot to sqlite storage', err);
+    throw err;
+  }
+}
+
+function readLatestSnapshotMetadata() {
+  try {
+    const db = getDatabase();
+    const row = db.prepare('SELECT value_json FROM kv_store WHERE key = ?').get('latest_snapshot');
+    if (!row) {
+      return null;
+    }
+    const parsed = safeParseJson(row.value_json, null);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return parsed;
+  } catch (err) {
+    console.warn('Failed to read snapshot metadata from sqlite storage', err);
+    return null;
+  }
 }
 
 const PG_UNDEFINED_TABLE = '42P01';
@@ -1553,6 +1729,17 @@ async function getLatestRevision() {
     }
     return lastRevision;
   }
+  const meta = readLatestSnapshotMetadata();
+  const metaRev = meta && Number.isFinite(Number(meta.rev)) ? Number(meta.rev) : 0;
+  if (Number.isFinite(metaRev) && metaRev > 0) {
+    lastRevision = Math.max(lastRevision, metaRev);
+    return lastRevision;
+  }
+  const sqlRecord = readSnapshotFromSql();
+  if (sqlRecord && Number.isFinite(Number(sqlRecord.rev))) {
+    lastRevision = Math.max(lastRevision, Number(sqlRecord.rev));
+    return lastRevision;
+  }
   const stored = await readLocalStateFile();
   const revValue = stored && Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
   if (Number.isFinite(revValue)) {
@@ -1821,9 +2008,9 @@ function ensureLocalStorageMetadata(snapshot) {
     snapshot.meta.storage = {};
   }
   snapshot.meta.storage.local = true;
-  snapshot.meta.storage.remote = false;
-  snapshot.meta.storage.remotePreferred = false;
-  snapshot.meta.storage.mode = 'local';
+  snapshot.meta.storage.remote = true;
+  snapshot.meta.storage.remotePreferred = true;
+  snapshot.meta.storage.mode = 'hybrid';
 }
 
 function buildEmptySnapshot() {
@@ -1930,7 +2117,13 @@ function readMigrations() {
 }
 
 async function runMigrations() {
-  console.log('SQL migrations disabled: using local-only storage');
+  try {
+    getDatabase();
+    console.log(`SQLite storage ready at ${SQLITE_FILE}`);
+  } catch (err) {
+    console.error('Failed to initialize sqlite storage', err);
+    throw err;
+  }
 }
 
 async function loadRevisionColumnInfo(runner) {
@@ -2027,6 +2220,29 @@ async function ensureMigrationRevision(client) {
 }
 
 async function loadLatestSnapshot() {
+  const fromSql = readSnapshotFromSql();
+  if (fromSql) {
+    try {
+      const currentFile = await readLocalStateFile();
+      const fileRev = Number.isFinite(Number(currentFile?.rev)) ? Number(currentFile.rev) : 0;
+      const fileHash = currentFile?.hash || null;
+      if (fileRev !== fromSql.rev || fileHash !== fromSql.hash) {
+        await writeLocalStateFile({
+          rev: fromSql.rev,
+          snapshot: fromSql.snapshot,
+          stateString: fromSql.stateString,
+          hash: fromSql.hash,
+          meta: fromSql.meta,
+          savedAt: fromSql.savedAt || new Date().toISOString(),
+          savedBy: fromSql.savedBy || null
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to synchronize local snapshot file from sqlite', err);
+    }
+    return fromSql;
+  }
+
   const stored = await readLocalStateFile();
   if (stored && typeof stored === 'object') {
     let snapshotObj = stored.snapshot;
@@ -2040,13 +2256,21 @@ async function loadLatestSnapshot() {
     const stateString = safeSerializeSnapshot(snapshotObj);
     const hash = computeSnapshotHash(stateString);
     const rev = Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
-    return {
+    const record = {
       rev,
       snapshot: snapshotObj,
       stateString,
       hash,
-      meta: stored.meta && typeof stored.meta === 'object' ? stored.meta : null
+      meta: stored.meta && typeof stored.meta === 'object' ? stored.meta : null,
+      savedAt: stored.savedAt || new Date().toISOString(),
+      savedBy: isPlainObject(stored.savedBy) ? stored.savedBy : null
     };
+    try {
+      writeSnapshotToSql(record);
+    } catch (err) {
+      console.warn('Failed to hydrate sqlite from existing local snapshot file', err);
+    }
+    return record;
   }
   const empty = buildEmptySnapshot();
   const stateString = JSON.stringify(empty);
@@ -2517,6 +2741,7 @@ async function persistSnapshotWithSql(options) {
     }
   };
 
+  writeSnapshotToSql(record);
   await writeLocalStateFile(record);
 
   cachedSnapshot = {
@@ -2524,7 +2749,9 @@ async function persistSnapshotWithSql(options) {
     snapshot: parsedSnapshot,
     stateString: serialized,
     hash: effectiveHash,
-    meta: storedMeta
+    meta: storedMeta,
+    savedAt: record.savedAt,
+    savedBy: record.savedBy
   };
   lastRevision = nextRev;
 
@@ -2717,7 +2944,23 @@ function buildSnapshotDiff(current, next) {
 }
 
 async function ensureSqlHydrated() {
-  // No-op in local storage mode.
+  const snapshot = await getCachedSnapshot();
+  if (!snapshot || !isPlainObject(snapshot.snapshot)) {
+    return;
+  }
+  try {
+    writeSnapshotToSql({
+      rev: Number(snapshot.rev) || lastRevision || 0,
+      snapshot: snapshot.snapshot,
+      stateString: snapshot.stateString,
+      hash: snapshot.hash,
+      meta: snapshot.meta || null,
+      savedAt: snapshot.savedAt || new Date().toISOString(),
+      savedBy: snapshot.savedBy || null
+    });
+  } catch (err) {
+    console.warn('Failed to ensure sqlite hydration from cached snapshot', err);
+  }
 }
 
 function createOrderKeyResolver() {
@@ -3495,7 +3738,7 @@ async function bootstrap() {
   await getCachedSnapshot();
   await ensureSqlHydrated();
   app.listen(PORT, () => {
-    console.log(`Planner local storage server listening on port ${PORT}`);
+    console.log(`Planner hybrid storage server listening on port ${PORT}`);
   });
 }
 
