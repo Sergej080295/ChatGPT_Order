@@ -12370,7 +12370,8 @@ function persistNow(stageOverride, opts={}){
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
     sharedContext=null,
     forceRemote=false,
-    confirmRemote=false
+    confirmRemote=false,
+    forcePersist=null
   } = opts;
   const normalizedSettingsMeta = settingsMeta && typeof settingsMeta === 'object' ? clonePlain(settingsMeta) : null;
   const confirmAfterRemoteSave = async (resultMeta={})=>{
@@ -12568,10 +12569,12 @@ function persistNow(stageOverride, opts={}){
 
   const forceRemoteWrite = forceRemote === true
     || (force && forceRemote !== false && source !== 'system');
+  const forcePersistRequest = forcePersist === true
+    || (forcePersist !== false && forceRemoteWrite);
   const shouldPushRemote = remoteBridge.hasRemote && (remoteSyncEnabled() || forceRemoteWrite);
 
   if(shouldPushRemote){
-    pushPromise = remoteBridge.push(payload, {
+    const metaPayload = {
       stage: targetStageLabel,
       diff: combinedDiff,
       version:null,
@@ -12583,7 +12586,9 @@ function persistNow(stageOverride, opts={}){
       ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
       time: nowStr,
       changeType
-    })
+    };
+    if(forcePersistRequest) metaPayload.forcePersist = true;
+    pushPromise = remoteBridge.push(payload, metaPayload)
       .then(async rawResult=>{
         const normalized=normalizeRemoteSaveResult(rawResult);
         setDataMode('remote');
@@ -12991,7 +12996,7 @@ function persistNow(stageOverride, opts={}){
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
-        pushPromise = remoteBridge.push(payload, {
+        const metaPayload = {
           stage:remoteStage,
           diff:remoteDiff,
           version:remoteVersion,
@@ -13004,7 +13009,9 @@ function persistNow(stageOverride, opts={}){
           time: nowStr,
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
           ...remoteExtras
-        })
+        };
+        if(forcePersistRequest) metaPayload.forcePersist = true;
+        pushPromise = remoteBridge.push(payload, metaPayload)
           .then(async rawResult=>{
             const normalized=normalizeRemoteSaveResult(rawResult);
             setDataMode('remote');
@@ -15591,7 +15598,7 @@ function wireHandlers(){
       if(!userCanEdit()){ notifyReadOnly(); return; }
       setBusy(true);
       try{
-        const result = await persistNow(undefined,{force:true, forceRemote:true, confirmRemote:true});
+        const result = await persistNow(undefined,{force:true, forceRemote:true, confirmRemote:true, forcePersist:true});
         if(result && typeof result==='object'){
           if(result.ok && result.persisted){
             if(typeof showToast==='function'){

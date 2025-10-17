@@ -2622,6 +2622,7 @@ function normalizeRequestMeta(rawMeta) {
     note: null,
     summary: null,
     meta: null,
+    forcePersist: false,
     concurrency: {
       baseHash: null,
       baseEtag: null,
@@ -2633,6 +2634,10 @@ function normalizeRequestMeta(rawMeta) {
   }
 
   const working = { ...rawMeta };
+
+  if (working.forcePersist === true || working.forcePersist === 'true') {
+    response.forcePersist = true;
+  }
 
   if (working.forceOverwrite === true || working.force === true) {
     response.concurrency.forceOverwrite = true;
@@ -2656,6 +2661,7 @@ function normalizeRequestMeta(rawMeta) {
   delete working.forceOverwrite;
   delete working.force;
   delete working.ifMatch;
+  delete working.forcePersist;
 
   const actor = sanitizeString(working.actor || working.user || working.username || working.owner);
   const source = sanitizeString(working.source || working.changeType || working.stage || working.reason);
@@ -3076,7 +3082,7 @@ app.put('/api/state', async (req, res) => {
       stateString,
       hash,
       meta: storedMeta,
-      skipIfUnchanged: true,
+      skipIfUnchanged: !normalizedMeta.forcePersist,
       currentSnapshot: current
     });
 
