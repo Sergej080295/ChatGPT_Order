@@ -2478,6 +2478,9 @@ async function bootstrapState(){
   }else{
     const st = $("#process").value;
     currentProc = st;
+    if(st && st !== OVERVIEW_STAGE){
+      lastNonOverviewProc = st;
+    }
     adjustUIForProcess(st);
     const prefs = loadUiPreferences();
     applyUiPreferences(prefs);
@@ -3186,6 +3189,7 @@ enableRemoteStore = remoteBridge.hasRemote && remotePreferenceRequested;
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
+let lastNonOverviewProc = 'bend';
 let orderSearchRaw = '';
 let orderSearchNormalized = '';
 const stagesDirtyFromRoute = new Set();
@@ -6856,6 +6860,25 @@ const STAGE_CLASS = {
   pack:'stage-pack',
   ship:'stage-ship'
 };
+
+function resolveProcessFallback(){
+  if(currentProc && currentProc !== OVERVIEW_STAGE && STAGES.includes(currentProc)){
+    return currentProc;
+  }
+  if(lastNonOverviewProc && STAGES.includes(lastNonOverviewProc)){
+    return lastNonOverviewProc;
+  }
+  if(Array.isArray(allTasksFromState) && allTasksFromState.length){
+    const candidate = STAGES.find(stage => allTasksFromState.some(task => task && task.stage === stage));
+    if(candidate){
+      lastNonOverviewProc = candidate;
+      return candidate;
+    }
+  }
+  const defaultStage = STAGES[0] || 'bend';
+  lastNonOverviewProc = defaultStage;
+  return defaultStage;
+}
 
 function normalizeStartStage(value){
   if(typeof value !== 'string') return OVERVIEW_STAGE;
@@ -10799,11 +10822,19 @@ function buildStateObject(){
     mode: currentDataOrigin
   };
 
+  const processValue = (()=>{
+    const raw = $("#process").value;
+    if(raw && raw !== OVERVIEW_STAGE){
+      return raw;
+    }
+    return resolveProcessFallback();
+  })();
+
   return {
     routeOverrides: ro,
     t, done, trash: trashArr, exc, res,
 
-    process: $("#process").value,
+    process: processValue,
     capByProc: capOut,
     parallelByProc: parallelOut,
     filter: $("#ganttFilter").value,
@@ -12170,6 +12201,18 @@ function restoreState(json, opts={}){
       $("#process").value = desiredProcess;
     }
     currentProc = $("#process").value;
+    if(currentProc && currentProc !== OVERVIEW_STAGE && STAGES.includes(currentProc)){
+      lastNonOverviewProc = currentProc;
+    }else{
+      const fallbackStage = resolveProcessFallback();
+      if(!currentProc){
+        $("#process").value = fallbackStage;
+        currentProc = fallbackStage;
+      }
+      if(fallbackStage && STAGES.includes(fallbackStage)){
+        lastNonOverviewProc = fallbackStage;
+      }
+    }
     adjustUIForProcess(currentProc);
     const loadedPrefs = loadUiPreferences();
     if(!loadedPrefs.filter && typeof s.filter === 'string'){
@@ -14944,6 +14987,10 @@ function switchProcess(newProc){
     try{
       refreshCrmDerivedData({ recompute:false, rebuildOverview:false, allowDuringInit:true });
     }catch(_err){ /* noop */ }
+  }
+
+  if(newProc && newProc !== OVERVIEW_STAGE && STAGES.includes(newProc)){
+    lastNonOverviewProc = newProc;
   }
 
   if(newProc === OVERVIEW_STAGE){
