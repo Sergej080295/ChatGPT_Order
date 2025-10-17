@@ -18,6 +18,47 @@ const PGPOOL_MAX = Number.parseInt(process.env.PGPOOL_MAX || '10', 10);
 const PGPOOL_IDLE = Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10);
 
 const STAGE_KEYS = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
+const CRM_STAGE_IGNORE = '__ignore__';
+const CRM_TASK_PREFIX = 'crm-task::';
+
+const CRM_STAGE_DEFAULT_MAP = new Map([
+  ['подготовка в работу', 'draw'],
+  ['технологи: подготовка в работу', 'draw'],
+  ['техподготовка', 'draw'],
+  ['закупка', 'proc'],
+  ['покупка', 'proc'],
+  ['снабжение', 'proc'],
+  ['рубка', 'shear'],
+  ['резка', 'shear'],
+  ['лазер', 'laser'],
+  ['гибка', 'bend'],
+  ['сварка', 'weld'],
+  ['зенковка', 'mech'],
+  ['зенкование', 'mech'],
+  ['мехобработка', 'mech'],
+  ['мех.обработка', 'mech'],
+  ['мех. обработка', 'mech'],
+  ['мех-обработка', 'mech'],
+  ['мехобр', 'mech'],
+  ['мехобр.', 'mech'],
+  ['сверловка', 'mech'],
+  ['сверление', 'mech'],
+  ['сверл', 'mech'],
+  ['резьбонарезка', 'mech'],
+  ['резьба', 'mech'],
+  ['резьб', 'mech'],
+  ['пуклевка', 'mech'],
+  ['пукл', 'mech'],
+  ['заклепка', 'mech'],
+  ['заклеп', 'mech'],
+  ['кооперация', 'coop'],
+  ['кооп', 'coop'],
+  ['покраска', 'coop'],
+  ['цинкование (кооперация)', 'coop'],
+  ['цинкование', 'coop'],
+  ['упаковка', 'pack'],
+  ['отгрузка', 'ship']
+]);
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -136,6 +177,234 @@ function normalizeNumber(value) {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function normalizeIsoDate(value) {
+  if (!value) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) {
+      return trimmed;
+    }
+    return parsed.toISOString();
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return date.toISOString();
+}
+
+function clampProgress(value) {
+  const num = normalizeNumber(value);
+  if (num === null) {
+    return null;
+  }
+  if (Number.isNaN(num)) {
+    return null;
+  }
+  const limited = Math.max(0, Math.min(100, Math.round(num)));
+  return limited;
+}
+
+function mapCrmStageName(name, mapping = {}) {
+  const label = sanitizeString(name);
+  if (!label) {
+    return null;
+  }
+  const normalized = label.toLowerCase();
+  if (mapping && typeof mapping === 'object') {
+    const customRaw = mapping[normalized];
+    if (customRaw === CRM_STAGE_IGNORE) {
+      return null;
+    }
+    if (typeof customRaw === 'string' && STAGE_KEYS.includes(customRaw)) {
+      return customRaw;
+    }
+  }
+  let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || null;
+  if (!fallback) {
+    if (normalized.includes('кооп') || normalized.includes('кооперац') || normalized.includes('покрас')) {
+      fallback = 'coop';
+    } else if (
+      normalized.includes('мехобр')
+      || normalized.includes('зенк')
+      || normalized.includes('сверл')
+      || normalized.includes('резьб')
+      || normalized.includes('пукл')
+      || normalized.includes('заклеп')
+    ) {
+      fallback = 'mech';
+    }
+  }
+  return fallback;
+}
+
+function ensureOrderIdentitySnapshot(order, fallbackIndex = 0) {
+  if (!order || typeof order !== 'object') {
+    return `order-${fallbackIndex || 1}`;
+  }
+  const candidates = [
+    order.orderIdentity,
+    order.identity,
+    order.uid,
+    order.id,
+    order.crmOrderId,
+    order.orderId,
+    order.orderNumber,
+    order.orderNo,
+    order.title && order.customer ? `${order.title}::${order.customer}` : null,
+    order.title
+  ];
+  for (const candidate of candidates) {
+    const normalized = sanitizeString(candidate);
+    if (normalized) {
+      if (!order.orderIdentity) {
+        order.orderIdentity = normalized;
+      }
+      return normalized;
+    }
+  }
+  const generated = `order-${fallbackIndex || Math.floor(Math.random() * 100000)}`;
+  order.orderIdentity = generated;
+  return generated;
+}
+
+function buildCrmStageTasksFromSnapshot(snapshot) {
+  const boards = snapshot?.crm?.boards;
+  if (!Array.isArray(boards) || boards.length === 0) {
+    return [];
+  }
+  const mapping = snapshot?.meta?.settings?.crmStageMapping || {};
+  const stageTasks = [];
+
+  boards.forEach((board) => {
+    if (!board || typeof board !== 'object') {
+      return;
+    }
+    const boardId = sanitizeString(board.id);
+    const laneNames = Array.isArray(board.lanes) ? board.lanes : [];
+    const primaryLane = laneNames.length ? sanitizeString(laneNames[0]) : '';
+    const orders = Array.isArray(board.orders) ? board.orders : [];
+
+    orders.forEach((order, orderIndex) => {
+      if (!order || typeof order !== 'object') {
+        return;
+      }
+      const orderCopy = { ...order };
+      const orderIdentity = ensureOrderIdentitySnapshot(orderCopy, orderIndex + 1);
+      const orderUid = sanitizeString(orderCopy.uid);
+      const orderNumber = sanitizeString(orderCopy.orderNumber) || sanitizeString(orderCopy.orderNo);
+      const orderCustomer = sanitizeString(orderCopy.orderCustomer) || sanitizeString(orderCopy.customer);
+      let orderId = sanitizeString(orderCopy.orderId);
+      if (!orderId) {
+        const composed = [orderNumber ? (orderNumber.startsWith('№') ? orderNumber : `№${orderNumber}`) : '', orderCustomer]
+          .map((value) => sanitizeString(value))
+          .filter(Boolean)
+          .join(' ');
+        orderId = composed || orderIdentity;
+      }
+      const lane = sanitizeString(orderCopy.status) || sanitizeString(orderCopy.lane) || primaryLane;
+      const parentId = sanitizeString(orderCopy.parentId);
+      const crmOrderId = sanitizeString(orderCopy.crmOrderId)
+        || sanitizeString(orderCopy.crm_id)
+        || sanitizeString(orderCopy.crmId)
+        || sanitizeString(orderCopy?.crm?.id);
+
+      const stages = Array.isArray(orderCopy.stages) ? orderCopy.stages : [];
+      stages.forEach((stage, stageIndex) => {
+        if (!stage || typeof stage !== 'object') {
+          return;
+        }
+        const stageKey = mapCrmStageName(stage.stageKey || stage.stage || stage.name, mapping);
+        if (!stageKey) {
+          return;
+        }
+        const hoursRaw = stage.hours !== undefined ? stage.hours : stage.value;
+        const hours = normalizeNumber(hoursRaw) || 0;
+        const progress = clampProgress(stage.progress);
+        const done = stage.done === true || (progress !== null && progress >= 100);
+        const startIso = normalizeIsoDate(stage.start);
+        const endIso = normalizeIsoDate(stage.end);
+        const origStartIso = normalizeIsoDate(stage.originalStart || stage.origStart);
+        const origEndIso = normalizeIsoDate(stage.originalEnd || stage.origEnd);
+        const doneAtIso = normalizeIsoDate(stage.doneAt);
+
+        const uidSeed = sanitizeString(orderUid || orderIdentity || orderId || `${boardId || 'board'}-${orderIndex + 1}`)
+          .replace(/\s+/g, '_');
+        const uid = `${CRM_TASK_PREFIX}${uidSeed || `auto-${stageIndex + 1}`}::${stageKey}`;
+
+        const routeSegment = {
+          hours,
+          start: startIso || null,
+          end: endIso || null
+        };
+        if (origStartIso) {
+          routeSegment.origStart = origStartIso;
+        }
+        if (origEndIso) {
+          routeSegment.origEnd = origEndIso;
+        }
+        if (doneAtIso) {
+          routeSegment.doneAt = doneAtIso;
+        }
+        if (progress !== null) {
+          routeSegment.progress = progress;
+        }
+
+        const task = {
+          uid,
+          orderId,
+          orderNumber: orderNumber || '',
+          orderCustomer: orderCustomer || '',
+          orderIdentity,
+          stage: stageKey,
+          childId: '',
+          parentId: parentId || '',
+          hours,
+          extraHours: 0,
+          startDate: startIso || '',
+          endDate: endIso || '',
+          startMissing: !startIso,
+          endMissing: !endIso,
+          state: lane || '',
+          status: done ? 'Готово (CRM)' : 'CRM',
+          useReserve: !!stage.useReserve,
+          progress: done ? 100 : (progress ?? 0),
+          origStartDate: origStartIso || '',
+          origEndDate: origEndIso || '',
+          route: { [stageKey]: routeSegment },
+          locked: false,
+          hiddenByState: false,
+          crmMeta: {
+            boardId: boardId || '',
+            crmOrderId: crmOrderId || '',
+            orderId,
+            orderIdentity,
+            stageKey,
+            stageId: sanitizeString(stage.id || stage.stageId || stage.crmStageId) || '',
+            stageName: sanitizeString(stage.name || stage.stageName || stage.stageKey) || stageKey,
+            lane: lane || ''
+          },
+          crmOrigin: true
+        };
+
+        if (doneAtIso) {
+          task.doneMeta = { when: doneAtIso, source: 'crm' };
+        }
+
+        stageTasks.push(task);
+      });
+    });
+  });
+
+  return stageTasks;
 }
 
 function normalizePercent(value) {
@@ -508,6 +777,24 @@ function ensureModeScopedConsistency(snapshot, tasks, stageSequences) {
     }
     stageTaskMap.get(normalizedStage).push(payload);
   });
+
+  if (stageTaskMap.size === 0) {
+    const fallback = buildCrmStageTasksFromSnapshot(snapshot);
+    if (fallback.length) {
+      fallback.forEach((task) => {
+        const normalizedStage = normalizeStage(task.stage);
+        if (!normalizedStage) {
+          return;
+        }
+        encounteredStages.add(normalizedStage);
+        if (!stageTaskMap.has(normalizedStage)) {
+          stageTaskMap.set(normalizedStage, []);
+        }
+        const list = stageTaskMap.get(normalizedStage);
+        list.push({ ...task });
+      });
+    }
+  }
 
   const orderedStages = [];
   STAGE_KEYS.forEach((stage) => {
