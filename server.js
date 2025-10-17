@@ -925,6 +925,14 @@ function extractStorageParts(snapshot) {
   ];
 
   const tasks = [];
+  const taskByUid = new Map();
+  const registerTaskRecord = (record) => {
+    if (!record || !record.uid) {
+      return;
+    }
+    tasks.push(record);
+    taskByUid.set(record.uid, record);
+  };
   for (const [key] of buckets) {
     const list = Array.isArray(normalized[key]) ? normalized[key] : [];
     list.forEach((task, index) => {
@@ -941,7 +949,7 @@ function extractStorageParts(snapshot) {
       const resolution = resolveKey(keySource);
       const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
       const meta = extractTaskMetadata(payload);
-      tasks.push({
+      registerTaskRecord({
         uid,
         orderUid,
         stage: normalizeStage(task?.stage),
@@ -953,7 +961,7 @@ function extractStorageParts(snapshot) {
     });
   }
 
-  const stageSequences = Array.isArray(normalized.orders)
+  let stageSequences = Array.isArray(normalized.orders)
     ? normalized.orders
         .map((entry) => {
           if (!Array.isArray(entry) || entry.length < 2) return null;
@@ -966,6 +974,105 @@ function extractStorageParts(snapshot) {
         })
         .filter(Boolean)
     : [];
+
+  const crmStageEntries = Array.isArray(normalized?.modeScoped?.crm?.stageTasks)
+    ? normalized.modeScoped.crm.stageTasks
+    : [];
+  const derivedStageSequences = new Map();
+
+  crmStageEntries.forEach((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      return;
+    }
+    const stage = normalizeStage(entry[0]);
+    if (!stage) {
+      return;
+    }
+    const list = Array.isArray(entry[1]) ? entry[1] : [];
+    const ids = [];
+    list.forEach((task, index) => {
+      const uid = resolveTaskUid(task, tasks.length + 1);
+      const payload = task && typeof task === 'object' ? { ...task, uid } : { uid };
+      if (!payload.stage) {
+        payload.stage = stage;
+      }
+      const keySource = {
+        uid,
+        orderId: payload.orderId || payload.crmOrderId,
+        orderNumber: payload.orderNumber || payload.number,
+        orderTitle: payload.orderTitle || payload.title,
+        orderCustomer: payload.orderCustomer || payload.customer,
+        orderIdentity: payload.orderIdentity || payload.identity
+      };
+      const resolution = resolveKey(keySource);
+      const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
+      const meta = extractTaskMetadata(payload);
+      if (taskByUid.has(uid)) {
+        const existing = taskByUid.get(uid);
+        if (stage && !existing.stage) {
+          existing.stage = stage;
+        }
+        if (existing.payload && !existing.payload.stage) {
+          existing.payload.stage = stage;
+        }
+        if (!existing.orderUid && orderUid) {
+          existing.orderUid = orderUid;
+        }
+        if ((!existing.meta || Object.keys(existing.meta || {}).length === 0) && meta) {
+          existing.meta = meta;
+        }
+      } else {
+        registerTaskRecord({
+          uid,
+          orderUid,
+          stage,
+          bucket: 'crm_stage',
+          position: tasks.length,
+          payload,
+          meta
+        });
+      }
+      if (!ids.includes(uid)) {
+        ids.push(uid);
+      }
+      if (resolution.key && resolution.merged && resolution.merged.length) {
+        resolution.merged.forEach((alias) => {
+          if (!orderKeyToUid.has(alias) && orderUid) {
+            orderKeyToUid.set(alias, orderUid);
+          }
+        });
+      }
+    });
+    derivedStageSequences.set(stage, ids);
+  });
+
+  if (derivedStageSequences.size > 0) {
+    const stageSequenceMap = new Map();
+    stageSequences.forEach((entry) => {
+      stageSequenceMap.set(entry.stage, entry.ids);
+    });
+    derivedStageSequences.forEach((ids, stage) => {
+      const existing = stageSequenceMap.get(stage);
+      if (!existing || existing.length === 0) {
+        stageSequenceMap.set(stage, ids);
+      }
+    });
+    const orderedSequences = [];
+    stageSequences.forEach((entry) => {
+      orderedSequences.push({ stage: entry.stage, ids: stageSequenceMap.get(entry.stage) || [] });
+      stageSequenceMap.delete(entry.stage);
+    });
+    STAGE_KEYS.forEach((stage) => {
+      if (stageSequenceMap.has(stage)) {
+        orderedSequences.push({ stage, ids: stageSequenceMap.get(stage) || [] });
+        stageSequenceMap.delete(stage);
+      }
+    });
+    stageSequenceMap.forEach((ids, stage) => {
+      orderedSequences.push({ stage, ids });
+    });
+    stageSequences = orderedSequences;
+  }
 
   const baseSnapshot = JSON.parse(JSON.stringify(normalized));
   baseSnapshot.crm = { ...baseSnapshot.crm, boards: [] };
