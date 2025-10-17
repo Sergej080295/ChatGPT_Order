@@ -2347,6 +2347,7 @@ function applyStateFromExternal(raw, opts={}){
       grouped.set(task.stage, arr);
     });
 
+    const hadBaseline = lastSyncedSnapshots && lastSyncedSnapshots.size > 0;
     const diffs = [];
     grouped.forEach((snapshot, stage)=>{
       const prev = lastSyncedSnapshots.get(stage) || [];
@@ -2358,6 +2359,7 @@ function applyStateFromExternal(raw, opts={}){
     const fingerprint = simpleHash(jsonText);
     const previousFingerprint = lastAppliedRemoteFingerprint || '';
     const skipToasts = !!(opts.skipToasts
+      || !hadBaseline
       || (fingerprint && fingerprint === lastPushedFingerprint)
       || (fingerprint && fingerprint === previousFingerprint));
     lastAppliedRemoteFingerprint = fingerprint;
@@ -2985,6 +2987,32 @@ function applyModeScopedState(mode){
       if(task) aggregated.push(cloneTaskRecord(task));
     });
   });
+  if(!aggregated.length){
+    const fallbackRows = snapshot.lastRows;
+    if(Array.isArray(fallbackRows) && fallbackRows.length){
+      const fallbackStageMap = new Map();
+      STAGES.forEach(stage=>{
+        const derived = mapRows(fallbackRows, stage) || [];
+        if(!derived.length) return;
+        const clones = derived.map(cloneTaskRecord).filter(Boolean);
+        if(clones.length){
+          fallbackStageMap.set(stage, clones);
+        }
+      });
+      if(fallbackStageMap.size){
+        stageMap.clear();
+        fallbackStageMap.forEach((list, stage)=>{
+          stageMap.set(stage, list);
+        });
+        aggregated.length = 0;
+        stageMap.forEach(list => {
+          list.forEach(task => {
+            if(task) aggregated.push(cloneTaskRecord(task));
+          });
+        });
+      }
+    }
+  }
   allTasksFromState = aggregated;
   const currentStage = document.getElementById('process')?.value || currentProc || OVERVIEW_STAGE;
   if(currentStage && currentStage !== OVERVIEW_STAGE){
