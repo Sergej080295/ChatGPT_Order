@@ -1,32 +1,28 @@
 'use strict';
 
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
-const { Pool } = require('pg');
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const MIGRATIONS_DIR = path.join(__dirname, 'migrations');
+const DATA_DIR = path.join(__dirname, 'data');
+const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 
-const DEFAULT_DATABASE_URL = 'postgresql://planner:planner@localhost:5432/planner';
-const DATABASE_URL = process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
-const PGSSL = process.env.PGSSLMODE === 'require' || process.env.PGSSL === 'true';
-const PGPOOL_MAX = Number.parseInt(process.env.PGPOOL_MAX || '10', 10);
-const PGPOOL_IDLE = Number.parseInt(process.env.PGPOOL_IDLE || '30000', 10);
-
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
-  max: Number.isFinite(PGPOOL_MAX) && PGPOOL_MAX > 0 ? PGPOOL_MAX : 10,
-  idleTimeoutMillis: Number.isFinite(PGPOOL_IDLE) && PGPOOL_IDLE >= 0 ? PGPOOL_IDLE : 30000
-});
-
-pool.on('error', (err) => {
-  console.error('Unexpected PostgreSQL error', err);
-});
+const pool = {
+  async connect() {
+    throw new Error('SQL storage is disabled');
+  },
+  async query() {
+    throw new Error('SQL storage is disabled');
+  },
+  on() {
+    // no-op
+  }
+};
 
 const app = express();
 app.use(compression());
@@ -39,6 +35,44 @@ let lastRevision = 0;
 let revisionColumnInfo = null;
 let ordersTableInfo = null;
 let settingsSchemaEnsured = false;
+
+async function ensureDataDir() {
+  try {
+    await fsp.mkdir(DATA_DIR, { recursive: true });
+  } catch (err) {
+    if (err && err.code !== 'EEXIST') {
+      throw err;
+    }
+  }
+}
+
+async function readLocalStateFile() {
+  try {
+    const raw = await fsp.readFile(LOCAL_STATE_FILE, 'utf8');
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function writeLocalStateFile(payload) {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Local state payload must be an object');
+  }
+  await ensureDataDir();
+  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+  const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
+  await fsp.writeFile(tmpPath, serialized, 'utf8');
+  await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+}
 
 const PG_UNDEFINED_TABLE = '42P01';
 const PG_UNDEFINED_COLUMN = '42703';
@@ -1510,10 +1544,20 @@ async function savePlannerDerivedState(client, snapshot, {
   );
 }
 
-async function getLatestRevision(client) {
-  const runner = client || pool;
-  const { rows } = await runner.query('SELECT COALESCE(MAX(rev), 0) AS rev FROM revisions');
-  return Number(rows[0]?.rev || 0);
+async function getLatestRevision() {
+  if (cachedSnapshot) {
+    const revValue = Number(cachedSnapshot.rev || 0);
+    if (Number.isFinite(revValue)) {
+      lastRevision = Math.max(lastRevision, revValue);
+    }
+    return lastRevision;
+  }
+  const stored = await readLocalStateFile();
+  const revValue = stored && Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
+  if (Number.isFinite(revValue)) {
+    lastRevision = Math.max(lastRevision, revValue);
+  }
+  return lastRevision;
 }
 
 async function buildSnapshotFromDatabase(client) {
@@ -1756,249 +1800,20 @@ async function ensureHistoryTrigger(client, tableName) {
   }
 }
 
-async function ensurePlannerSettingsSchema(client) {
+async function ensurePlannerSettingsSchema() {
   if (settingsSchemaEnsured) {
     return;
   }
-  const runner = client || pool;
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_admin (
-      id SMALLINT PRIMARY KEY DEFAULT 1,
-      allow_force_overwrite BOOLEAN NOT NULL DEFAULT FALSE,
-      write_mode TEXT NOT NULL DEFAULT 'both',
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_admin_hist (
-      id SMALLINT,
-      allow_force_overwrite BOOLEAN,
-      write_mode TEXT,
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(
-    'ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN'
-  );
-  await runner.query(
-    "ALTER TABLE settings_admin ADD COLUMN IF NOT EXISTS write_mode TEXT"
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS allow_force_overwrite BOOLEAN'
-  );
-  await runner.query(
-    "ALTER TABLE settings_admin_hist ADD COLUMN IF NOT EXISTS write_mode TEXT"
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN allow_force_overwrite SET DEFAULT FALSE'
-  );
-  await runner.query(
-    'UPDATE settings_admin SET allow_force_overwrite = FALSE WHERE allow_force_overwrite IS NULL'
-  );
-  await runner.query(
-    "UPDATE settings_admin SET write_mode = 'both' WHERE write_mode IS NULL OR write_mode NOT IN ('crm','planner','both')"
-  );
-  await runner.query(
-    "ALTER TABLE settings_admin ALTER COLUMN write_mode SET DEFAULT 'both'"
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN write_mode SET NOT NULL'
-  );
-  await runner.query(
-    'ALTER TABLE settings_admin ALTER COLUMN updated_at SET DEFAULT NOW()'
-  );
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_journal (
-      id SMALLINT PRIMARY KEY,
-      max_rows INTEGER NOT NULL DEFAULT 50,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_journal_hist (
-      id SMALLINT,
-      max_rows INTEGER,
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_column_widths (
-      column_key TEXT PRIMARY KEY,
-      width_px INTEGER NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_column_widths_hist (
-      column_key TEXT,
-      width_px INTEGER,
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_mapping (
-      crm_stage TEXT PRIMARY KEY,
-      planner_process_id SMALLINT REFERENCES processes(id) ON DELETE SET NULL,
-      is_ignored BOOLEAN NOT NULL DEFAULT FALSE,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_mapping_hist (
-      crm_stage TEXT,
-      planner_process_id SMALLINT,
-      is_ignored BOOLEAN,
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS excluded_statuses (
-      status_key TEXT PRIMARY KEY,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS excluded_statuses_hist (
-      status_key TEXT,
-      created_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_autoweight (
-      id SMALLINT PRIMARY KEY DEFAULT 1,
-      enabled BOOLEAN NOT NULL DEFAULT FALSE,
-      percent NUMERIC(10,2) NOT NULL DEFAULT 0,
-      minimum_hours NUMERIC(10,2) NOT NULL DEFAULT 0,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_autoweight_hist (
-      id SMALLINT,
-      enabled BOOLEAN,
-      percent NUMERIC(10,2),
-      minimum_hours NUMERIC(10,2),
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_shared_preferences (
-      pref_key TEXT PRIMARY KEY,
-      bool_value BOOLEAN NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-  await runner.query(`
-    CREATE TABLE IF NOT EXISTS settings_shared_preferences_hist (
-      pref_key TEXT,
-      bool_value BOOLEAN,
-      updated_at TIMESTAMPTZ,
-      rev BIGINT NOT NULL REFERENCES revisions(rev),
-      op CHAR(1) NOT NULL,
-      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
-
-  await runner.query(
-    `INSERT INTO settings_shared_preferences (pref_key, bool_value)
-      VALUES
-        ('autosaveOn', TRUE),
-        ('shiftOnProgress', TRUE),
-        ('autoOptimizeOn', TRUE),
-        ('cascadeReadyOn', TRUE)
-      ON CONFLICT (pref_key) DO NOTHING`
-  );
-
-  const tablesWithHistory = [
-    'settings_admin',
-    'settings_journal',
-    'settings_column_widths',
-    'settings_mapping',
-    'excluded_statuses',
-    'settings_autoweight',
-    'settings_shared_preferences'
-  ];
-
-  for (const tableName of tablesWithHistory) {
-    // eslint-disable-next-line no-await-in-loop
-    await ensureHistoryTrigger(runner, tableName);
-  }
-
   settingsSchemaEnsured = true;
 }
 
+
 function readMigrations() {
-  if (!fs.existsSync(MIGRATIONS_DIR)) {
-    return [];
-  }
-  return fs.readdirSync(MIGRATIONS_DIR)
-    .filter((file) => file.endsWith('.sql') && !file.endsWith('.down.sql'))
-    .sort()
-    .map((filename) => ({
-      filename,
-      sql: fs.readFileSync(path.join(MIGRATIONS_DIR, filename), 'utf8')
-    }));
+  return [];
 }
 
 async function runMigrations() {
-  resetOrdersTableInfo();
-  const client = await pool.connect();
-  try {
-    await ensureMigrationTable(client);
-    const migrations = readMigrations();
-    for (const migration of migrations) {
-      const { rows } = await client.query('SELECT 1 FROM planner_schema_migrations WHERE filename = $1', [migration.filename]);
-      if (rows.length > 0) {
-        continue;
-      }
-      await client.query('BEGIN');
-      try {
-        await ensureMigrationRevision(client);
-        await client.query(migration.sql);
-        await client.query('INSERT INTO planner_schema_migrations (filename) VALUES ($1)', [migration.filename]);
-        await client.query('COMMIT');
-        console.log(`Applied migration ${migration.filename}`);
-      } catch (err) {
-        await client.query('ROLLBACK');
-        throw err;
-      }
-    }
-  } finally {
-    client.release();
-  }
-}
-
-async function getLatestRevision(client) {
-  const runner = client || pool;
-  const { rows } = await runner.query('SELECT COALESCE(MAX(rev), 0) AS rev FROM revisions');
-  const rev = rows.length > 0 ? Number(rows[0].rev || 0) : 0;
-  lastRevision = Math.max(lastRevision, rev);
-  return rev;
+  console.log('SQL migrations disabled: using local-only storage');
 }
 
 async function loadRevisionColumnInfo(runner) {
@@ -2094,30 +1909,30 @@ async function ensureMigrationRevision(client) {
   await client.query('SELECT set_config($1, $2, true)', ['app.rev', String(rev)]);
 }
 
-async function loadLatestSnapshot(runner) {
-  const client = runner || pool;
-  await ensurePlannerSettingsSchema(client);
-  const snapshotObj = await buildSnapshotFromDatabase(client);
-  try {
-    const prefMap = await loadSharedPreferences(client);
-    if (prefMap && prefMap.size) {
-      applySharedPreferencesToSnapshot(snapshotObj, prefMap);
+async function loadLatestSnapshot() {
+  const stored = await readLocalStateFile();
+  if (stored && typeof stored === 'object') {
+    let snapshotObj = stored.snapshot;
+    if (!isPlainObject(snapshotObj)) {
+      snapshotObj = buildEmptySnapshot();
     }
-    const autoweight = await loadAutoweightSettings(client);
-    normalizeExtraTimeSettings(snapshotObj, autoweight);
-  } catch (err) {
-    console.warn('Failed to merge shared preferences into snapshot', err);
+    normalizeExtraTimeSettings(snapshotObj);
+    normalizeSnapshotCollections(snapshotObj);
+    const stateString = safeSerializeSnapshot(snapshotObj, stored.stateString);
+    const hash = stored.hash || computeSnapshotHash(stateString);
+    const rev = Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
+    return {
+      rev,
+      snapshot: snapshotObj,
+      stateString,
+      hash,
+      meta: stored.meta && typeof stored.meta === 'object' ? stored.meta : null
+    };
   }
-  const stateString = safeSerializeSnapshot(snapshotObj);
+  const empty = buildEmptySnapshot();
+  const stateString = JSON.stringify(empty);
   const hash = computeSnapshotHash(stateString);
-  const rev = await getLatestRevision(client);
-  return {
-    rev,
-    snapshot: snapshotObj,
-    stateString,
-    hash,
-    meta: null
-  };
+  return { rev: 0, snapshot: empty, stateString, hash, meta: null };
 }
 
 async function getCachedSnapshot() {
@@ -2556,34 +2371,43 @@ async function persistSnapshotWithSql(options) {
 
   const storedMeta = sanitizeMetaForStorage(meta);
 
-  const serializedBefore = safeSerializeSnapshot(parsedSnapshot);
-  const hashBefore = computeSnapshotHash(serializedBefore);
+  const serialized = safeSerializeSnapshot(parsedSnapshot);
+  const hashBefore = computeSnapshotHash(serialized);
   if (hash && hash !== hashBefore) {
     logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: hashBefore, provided: hash });
   }
 
-  let serialized = serializedBefore;
-  let effectiveHash = hashBefore;
+  await getLatestRevision();
+  const nextRev = lastRevision + 1;
+  const effectiveHash = hashBefore;
 
-  const { rev } = await runWithRevision(actor, source, note, async (client) => {
-    await ensurePlannerSettingsSchema(client);
-    const applyResult = await applySnapshotToSql(client, parsedSnapshot);
-    serialized = safeSerializeSnapshot(parsedSnapshot);
-    effectiveHash = computeSnapshotHash(serialized);
-    await savePlannerDerivedState(client, parsedSnapshot, applyResult);
-    return null;
-  });
+  const record = {
+    rev: nextRev,
+    snapshot: parsedSnapshot,
+    stateString: serialized,
+    hash: effectiveHash,
+    meta: storedMeta,
+    savedAt: new Date().toISOString(),
+    savedBy: {
+      actor: actor || null,
+      source: source || null,
+      note: note || null,
+      channel: channel || null
+    }
+  };
 
-  invalidateCache();
-  const latest = await getCachedSnapshot();
+  await writeLocalStateFile(record);
 
-  return {
-    rev: latest.rev || rev,
-    snapshot: latest.snapshot,
-    stateString: latest.stateString,
-    hash: latest.hash,
+  cachedSnapshot = {
+    rev: nextRev,
+    snapshot: parsedSnapshot,
+    stateString: serialized,
+    hash: effectiveHash,
     meta: storedMeta
   };
+  lastRevision = nextRev;
+
+  return cachedSnapshot;
 }
 
 function parseInteger(value, fallback = null) {
@@ -2679,71 +2503,16 @@ function extractSharedPreferences(snapshot) {
   return prefs;
 }
 
-async function syncSharedPreferences(client, snapshot) {
-  const prefs = extractSharedPreferences(snapshot);
-  try {
-    await client.query('DELETE FROM settings_shared_preferences');
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return;
-    }
-    throw err;
-  }
-
-  if (!prefs.length) {
-    return;
-  }
-
-  for (const pref of prefs) {
-    // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO settings_shared_preferences (pref_key, bool_value, updated_at)
-       VALUES ($1,$2,NOW())
-       ON CONFLICT (pref_key) DO UPDATE
-         SET bool_value = EXCLUDED.bool_value,
-             updated_at = NOW()` ,
-      [pref.key, pref.value]
-    );
-  }
+async function syncSharedPreferences() {
+  // no-op: shared preferences stored within snapshot
 }
 
 async function loadSharedPreferences(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
-  try {
-    const { rows } = await executor.query(
-      'SELECT pref_key, bool_value FROM settings_shared_preferences'
-    );
-    const map = new Map();
-    rows.forEach((row) => {
-      if (row && row.pref_key) {
-        map.set(row.pref_key, Boolean(row.bool_value));
-      }
-    });
-    return map;
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return null;
-    }
-    throw err;
-  }
+  return null;
 }
 
 async function getCurrentWriteMode(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
-  try {
-    const { rows } = await executor.query(
-      'SELECT write_mode FROM settings_admin WHERE id = 1'
-    );
-    if (rows.length && rows[0] && rows[0].write_mode) {
-      return normalizeWriteMode(rows[0].write_mode);
-    }
-    return DEFAULT_WRITE_MODE;
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return DEFAULT_WRITE_MODE;
-    }
-    throw err;
-  }
+  return DEFAULT_WRITE_MODE;
 }
 
 function applySharedPreferencesToSnapshot(snapshot, prefMap) {
@@ -2757,54 +2526,8 @@ function applySharedPreferencesToSnapshot(snapshot, prefMap) {
   }
 }
 
-async function loadAutoweightSettings(runner) {
-  const executor = runner && typeof runner.query === 'function' ? runner : pool;
-  try {
-    const { rows } = await executor.query(
-      'SELECT enabled, percent, minimum_hours FROM settings_autoweight WHERE id = 1'
-    );
-    if (!rows.length) {
-      return null;
-    }
-    const row = rows[0];
-    const percentRaw = row.percent === null || row.percent === undefined ? null : Number(row.percent);
-    const minimumRaw = row.minimum_hours === null || row.minimum_hours === undefined
-      ? null
-      : Number(row.minimum_hours);
-    const enabledRaw = row.enabled;
-    let enabled = null;
-    if (enabledRaw === null || enabledRaw === undefined) {
-      enabled = null;
-    } else if (typeof enabledRaw === 'boolean') {
-      enabled = enabledRaw;
-    } else if (typeof enabledRaw === 'number') {
-      enabled = enabledRaw !== 0;
-    } else if (typeof enabledRaw === 'string') {
-      const normalized = enabledRaw.trim().toLowerCase();
-      enabled = ['1', 't', 'true', 'yes', 'on'].includes(normalized);
-    } else {
-      enabled = Boolean(enabledRaw);
-    }
-    const percent = Number.isFinite(percentRaw)
-      ? Math.max(0, Math.round(percentRaw * 100) / 100)
-      : DEFAULT_EXTRA_PERCENT;
-    const minimum = Number.isFinite(minimumRaw)
-      ? Math.max(0, Math.round(minimumRaw * 100) / 100)
-      : DEFAULT_EXTRA_MINIMUM;
-    if (enabled === null) {
-      enabled = percent > 0 || minimum > 0;
-    }
-    return {
-      enabled,
-      percent,
-      minimum
-    };
-  } catch (err) {
-    if (err && err.code === PG_UNDEFINED_TABLE) {
-      return null;
-    }
-    throw err;
-  }
+async function loadAutoweightSettings() {
+  return null;
 }
 
 function valuesEqual(a, b) {
@@ -2873,7 +2596,7 @@ function buildSnapshotDiff(current, next) {
 }
 
 async function ensureSqlHydrated() {
-  // Snapshot hydration disabled; state is derived directly from SQL tables.
+  // No-op in local storage mode.
 }
 
 function createOrderKeyResolver() {
@@ -3651,7 +3374,7 @@ async function bootstrap() {
   await getCachedSnapshot();
   await ensureSqlHydrated();
   app.listen(PORT, () => {
-    console.log(`Planner SQL bridge listening on port ${PORT}`);
+    console.log(`Planner local storage server listening on port ${PORT}`);
   });
 }
 
