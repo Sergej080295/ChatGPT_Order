@@ -1133,7 +1133,6 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
-        <label class="small"><input type="checkbox" id="autosaveSetting" checked> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
@@ -2040,7 +2039,7 @@ function applyAccessMode(){
       el.disabled = !effectiveEdit;
     }
   });
-  const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
+  const toggleInputs = ['#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -10191,7 +10190,7 @@ function importStateFromCSV(text){
   // meta / UI
   if(meta.process) $("#process").value = meta.process;
   if(meta.ganttFilter) $("#ganttFilter").value = meta.ganttFilter;
-  autosaveOn = !!Number(meta.autosaveOn); $("#autosaveSetting").checked = autosaveOn;
+  autosaveOn = true;
   const logField = $("#logLimitInput");
   if(logField){
     logField.value = logLimitSetting === null ? '' : String(logLimitSetting);
@@ -12147,9 +12146,6 @@ function restoreState(json, opts={}){
     const loadedPrefs = loadUiPreferences();
     if(!loadedPrefs.filter && typeof s.filter === 'string'){
       loadedPrefs.filter = s.filter;
-    }
-    if(typeof loadedPrefs.autosaveOn !== 'boolean' && s.autosaveOn !== undefined){
-      loadedPrefs.autosaveOn = !!s.autosaveOn;
     }
     if(typeof loadedPrefs.shiftOnProgress !== 'boolean' && s.shiftOnProgress !== undefined){
       loadedPrefs.shiftOnProgress = !!s.shiftOnProgress;
@@ -14626,7 +14622,7 @@ function loadUiPreferences(){
     if(!raw) return {};
     const parsed = JSON.parse(raw);
     if(parsed && typeof parsed === 'object'){
-      ['cascadeReadyOn','autosaveOn','shiftOnProgress','autoOptimizeOn'].forEach(key=>{
+      ['cascadeReadyOn','shiftOnProgress','autoOptimizeOn'].forEach(key=>{
         if(Object.prototype.hasOwnProperty.call(parsed, key)) delete parsed[key];
       });
     }
@@ -14638,9 +14634,6 @@ function applyUiPreferences(prefs={}){
   if(typeof prefs.filter === 'string'){
     const filterEl = $("#ganttFilter");
     if(filterEl) filterEl.value = prefs.filter;
-  }
-  if(typeof prefs.autosaveOn === 'boolean'){
-    autosaveOn = prefs.autosaveOn;
   }
   if(typeof prefs.shiftOnProgress === 'boolean'){
     shiftOnProgress = prefs.shiftOnProgress;
@@ -14660,8 +14653,6 @@ function applyUiPreferences(prefs={}){
     updateIgnoredStatesSummary();
     updateExcludedAttention();
   }
-  const autosaveEl = $("#autosaveSetting");
-  if(autosaveEl) autosaveEl.checked = !!autosaveOn;
   const logLimitEl = $("#logLimitInput");
   if(logLimitEl) logLimitEl.value = logLimitSetting === null ? '' : String(logLimitSetting);
   const shiftEl = $("#shiftOnProgress");
@@ -14761,8 +14752,6 @@ function openSettingsDialog(){
   if(autoBox) autoBox.checked = autoOptimizeOn;
   const cascadeBox = $('#cascadeReady');
   if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
-  const autosaveBox = $('#autosaveSetting');
-  if(autosaveBox) autosaveBox.checked = autosaveOn;
   const logLimitField = $('#logLimitInput');
   if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
   const locBox = $('#storageLocal');
@@ -15353,12 +15342,7 @@ function wireHandlers(){
     document.getElementById('file')?.click();
   });
 
-  // автосохранение / ручное сохранение
-  $("#autosaveSetting").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = autosaveOn; notifyReadOnly(); return; }
-    autosaveOn = !!e.target.checked;
-    persistSharedPreference('autosaveOn', 'Автосохранение', autosaveOn);
-  });
+  // сохранение настроек
   $("#shiftOnProgress").addEventListener('change', e=>{
     if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
@@ -15694,7 +15678,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         });
         updateOrderSearchControls();
 
-        $("#autosaveSetting").checked = autosaveOn;
         renderSystemSettingsUI();
         renderAdminSettingsUI();
 }
