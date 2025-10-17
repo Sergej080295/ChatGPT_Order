@@ -807,7 +807,7 @@ async function savePlannerDerivedState(client, snapshot, {
     boardMap.set(boardId, { id: boardId, index });
   }
 
-  const orders = [];
+  const ordersByKey = new Map();
   for (const board of boards) {
     if (!isPlainObject(board)) continue;
     const boardId = sanitizeString(board.id) || Array.from(boardMap.keys())[0] || 'crm-board-1';
@@ -823,7 +823,7 @@ async function savePlannerDerivedState(client, snapshot, {
         || sanitizeString(order.orderNo)
         || `${boardId}:${position + 1}`;
       if (!canonicalKey) continue;
-      orders.push({
+      const entry = {
         key: canonicalKey,
         boardId,
         crmOrderId: sanitizeString(order.id)
@@ -832,15 +832,26 @@ async function savePlannerDerivedState(client, snapshot, {
           || null,
         position,
         payload: cloneJson(order)
-      });
+      };
+      if (ordersByKey.has(canonicalKey)) {
+        ordersByKey.delete(canonicalKey);
+      }
+      ordersByKey.set(canonicalKey, entry);
     }
   }
 
   const orderInsertSql = `
     INSERT INTO crm_orders_meta (order_key, order_id, board_id, crm_order_id, position, payload, updated_at)
     VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW())
+    ON CONFLICT (order_key) DO UPDATE SET
+      order_id = EXCLUDED.order_id,
+      board_id = EXCLUDED.board_id,
+      crm_order_id = EXCLUDED.crm_order_id,
+      position = EXCLUDED.position,
+      payload = EXCLUDED.payload,
+      updated_at = NOW()
   `;
-  for (const entry of orders) {
+  for (const entry of ordersByKey.values()) {
     const dbOrderId = orderMap.get(entry.key) || null;
     // eslint-disable-next-line no-await-in-loop
     await runner.query(orderInsertSql, [
