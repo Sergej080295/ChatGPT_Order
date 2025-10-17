@@ -53,7 +53,7 @@
 ## 5. Проверка работы базы данных
 1. **Миграции.** Выполните `npm run migrate`. В `planner_schema_migrations` появятся строки для всех файлов `migrations/*.sql`.
 2. **Инициализация.** После `npm start` убедитесь, что сервер выводит `Planner SQL bridge listening on port …`, а `SELECT COUNT(*) FROM orders;` возвращает актуальные данные. Если база пуста, UI получит пустой список без попыток восстановиться из JSON.
-3. **Общие настройки.** Измените параметры в разделе «Общие/Администрирование», нажмите «Применить» и выполните запросы:
+3. **Общие настройки.** Измените параметры в разделе «Общие», нажмите «Применить» и выполните запросы:
    ```sql
   SELECT allow_force_overwrite, write_mode FROM settings_admin;
    SELECT pref_key, bool_value FROM settings_shared_preferences ORDER BY pref_key;
@@ -62,11 +62,12 @@
    SELECT status_key FROM excluded_statuses ORDER BY status_key;
    SELECT max_rows FROM settings_journal;
    SELECT percent, minimum_hours FROM settings_autoweight;
-  SELECT id, name, lanes FROM crm_boards ORDER BY position;
-  SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code;
-  SELECT uid, stage_code, is_done FROM planner_tasks_payload ORDER BY sort_index;
+   SELECT id, name, lanes FROM crm_boards ORDER BY position;
+   SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code;
+   SELECT uid, stage_code, is_done FROM planner_tasks_payload ORDER BY sort_index;
    ```
    Таблицы CRM (`crm_boards`, `crm_orders_meta`) и вспомогательные таблицы (`planner_stage_orders`, `planner_tasks_payload`) должны обновиться.
+   Раздел «Администрирование» в UI отключён, поэтому параметры `settings_admin` при необходимости редактируются напрямую через SQL.
 4. **Маршрут заказа.** Отметьте готовность передела или измените часы в любом процессе и убедитесь, что `orders`, `order_process` и их `_hist`-таблицы получили свежие записи.
 5. **Ревизии.** Запросите последние ревизии: `SELECT rev, actor, source, note, created_at FROM revisions ORDER BY created_at DESC LIMIT 5;` — каждая операция сохранения должна добавлять новую строку.
 6. **Синхронизация клиентов.** Откройте планировщик в двух окнах. После изменения на одном клиенте второй должен получить SSE-событие и обновлённые данные без перезагрузки.

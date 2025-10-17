@@ -41,6 +41,7 @@ let ordersTableInfo = null;
 let settingsSchemaEnsured = false;
 
 const PG_UNDEFINED_TABLE = '42P01';
+const PG_UNDEFINED_COLUMN = '42703';
 const DEFAULT_EXTRA_PERCENT = 5;
 const DEFAULT_EXTRA_MINIMUM = 0.25;
 
@@ -798,13 +799,13 @@ async function buildSnapshotFromDatabase(client) {
   const runner = client || pool;
   await ensurePlannerSettingsSchema(runner);
 
-  const baseRow = await runner.query('SELECT payload FROM planner_misc_state WHERE key = $1', ['base']);
+  const baseRow = await queryRowsSafe(runner, 'SELECT payload FROM planner_misc_state WHERE key = $1', ['base']);
   const basePayload = baseRow.rows.length ? parseJsonColumn(baseRow.rows[0].payload, {}) : {};
 
   const snapshot = buildEmptySnapshot();
   applyBaseSnapshot(snapshot, basePayload);
 
-  const boardRows = await runner.query(
+  const boardRows = await queryRowsSafe(
     'SELECT id, name, lanes, position, payload FROM crm_boards ORDER BY position ASC, id ASC'
   );
   const boards = [];
@@ -823,7 +824,7 @@ async function buildSnapshotFromDatabase(client) {
     boardMap.set(board.id, board);
   }
 
-  const orderRows = await runner.query(
+  const orderRows = await queryRowsSafe(
     'SELECT order_key, board_id, payload, position FROM crm_orders_meta ORDER BY board_id ASC, position ASC, order_key ASC'
   );
   if (!boards.length && orderRows.rows.length) {
@@ -859,7 +860,7 @@ async function buildSnapshotFromDatabase(client) {
     snapshot.crm.currentBoardId = boards[0].id;
   }
 
-  const taskRows = await runner.query(
+  const taskRows = await queryRowsSafe(
     'SELECT uid, is_done, payload FROM planner_tasks_payload ORDER BY is_done ASC, sort_index ASC, uid ASC'
   );
   for (const row of taskRows.rows) {
@@ -872,10 +873,24 @@ async function buildSnapshotFromDatabase(client) {
     }
   }
 
-  const stageRows = await runner.query('SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC');
+  const stageRows = await queryRowsSafe('SELECT stage_code, order_uids FROM planner_stage_orders ORDER BY stage_code ASC');
   snapshot.orders = stageRows.rows.map((row) => [row.stage_code, Array.isArray(row.order_uids) ? row.order_uids : []]);
 
+  mergeCrmTasksIntoSnapshot(snapshot);
+
   return snapshot;
+}
+
+async function queryRowsSafe(runner, sql, params = []) {
+  const executor = runner && typeof runner.query === 'function' ? runner : pool;
+  try {
+    return await executor.query(sql, params);
+  } catch (err) {
+    if (err && (err.code === PG_UNDEFINED_TABLE || err.code === PG_UNDEFINED_COLUMN)) {
+      return { rows: [] };
+    }
+    throw err;
+  }
 }
 
 function classifyWriteChannel({ channel = null, source = null } = {}) {
