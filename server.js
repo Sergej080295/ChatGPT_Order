@@ -2058,6 +2058,45 @@ async function applySnapshotToSql(client, snapshot) {
   const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
   const crmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
   const tasks = baseTasks.concat(crmTasks);
+
+  if (Array.isArray(snapshot.t)) {
+    snapshot.t = tasks;
+  } else {
+    snapshot.t = tasks.slice();
+  }
+
+  if (crmTasks.length) {
+    const existingOrders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
+    const baseOrderMap = new Map();
+    existingOrders.forEach((entry) => {
+      if (!entry || !Array.isArray(entry)) return;
+      const [stage, list] = entry;
+      const stageKey = normalizeStage(stage);
+      if (!stageKey) return;
+      const filtered = Array.isArray(list)
+        ? list
+            .map((value) => (value == null ? '' : String(value)))
+            .filter((uid) => uid && !uid.startsWith(CRM_TASK_PREFIX))
+        : [];
+      baseOrderMap.set(stageKey, filtered);
+    });
+
+    const mergedOrderMap = new Map(baseOrderMap);
+    tasks.forEach((task) => {
+      if (!task || !task.uid) return;
+      const stageKey = normalizeStage(task.stage);
+      if (!stageKey) return;
+      const uid = String(task.uid);
+      const current = mergedOrderMap.get(stageKey) || [];
+      if (!current.includes(uid)) {
+        current.push(uid);
+      }
+      mergedOrderMap.set(stageKey, current);
+    });
+
+    snapshot.orders = Array.from(mergedOrderMap.entries());
+  }
+
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
 

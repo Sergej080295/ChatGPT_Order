@@ -11662,6 +11662,47 @@ function showConflictDialog(diff, author){
   $("#conflictDlg")?.showModal();
 }
 
+const TOAST_ALLOWED_TAGS = new Set(['DIV','SPAN','P','SMALL','STRONG','EM','B','I','UL','OL','LI','BR']);
+const TOAST_ALLOWED_ATTRS = new Set(['class','title','aria-label']);
+
+function sanitizeToastHtml(html){
+  if(typeof html !== 'string') return null;
+  const trimmed = html.trim();
+  if(!trimmed) return null;
+  const template = document.createElement('template');
+  template.innerHTML = trimmed;
+  const elements = Array.from(template.content.querySelectorAll('*'));
+  elements.forEach((el)=>{
+    if(!TOAST_ALLOWED_TAGS.has(el.tagName)){
+      const parent = el.parentNode;
+      if(parent){
+        while(el.firstChild){ parent.insertBefore(el.firstChild, el); }
+        parent.removeChild(el);
+      }
+      return;
+    }
+    Array.from(el.attributes).forEach(attr=>{
+      const name = attr.name.toLowerCase();
+      if(name.startsWith('on') || name === 'style' || !TOAST_ALLOWED_ATTRS.has(name)){
+        el.removeAttribute(attr.name);
+        return;
+      }
+      if(name === 'class'){
+        const safe = attr.value
+          .split(/\s+/)
+          .map(token => token.trim())
+          .filter(token => token && /^[a-z0-9_-]+$/i.test(token));
+        if(safe.length){
+          el.setAttribute('class', safe.join(' '));
+        }else{
+          el.removeAttribute('class');
+        }
+      }
+    });
+  });
+  return template.content;
+}
+
 function showToast({title='Планировщик', message='', actions=[], tone='info', autoClose=4200}={}){
   if(notificationsMuted) return;
   const container = document.getElementById('toastContainer');
@@ -11670,7 +11711,19 @@ function showToast({title='Планировщик', message='', actions=[], tone
   toast.className = 'pc-toast';
   toast.setAttribute('role','status');
   toast.dataset.variant = tone === 'success' ? 'success' : tone === 'error' ? 'danger' : tone === 'warning' ? 'warning' : 'info';
-  toast.innerHTML = `<span class="pc-toast__title">${escapeHtml(title)}</span><span class="pc-toast__body">${escapeHtml(message)}</span>`;
+  const titleSpan = document.createElement('span');
+  titleSpan.className = 'pc-toast__title';
+  titleSpan.textContent = title;
+  toast.appendChild(titleSpan);
+  const bodySpan = document.createElement('span');
+  bodySpan.className = 'pc-toast__body';
+  const fragment = sanitizeToastHtml(message);
+  if(fragment && fragment.childNodes.length){
+    bodySpan.appendChild(fragment);
+  }else{
+    bodySpan.textContent = message == null ? '' : String(message);
+  }
+  toast.appendChild(bodySpan);
   if(Array.isArray(actions) && actions.length){
     const bar = document.createElement('div');
     bar.className = 'planner-toast-actions';
