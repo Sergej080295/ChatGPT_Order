@@ -12212,7 +12212,8 @@ function persistNow(stageOverride, opts={}){
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
-    sharedContext=null
+    sharedContext=null,
+    forceRemote=false
   } = opts;
   const normalizedSettingsMeta = settingsMeta && typeof settingsMeta === 'object' ? clonePlain(settingsMeta) : null;
   let pushPromise = Promise.resolve(true);
@@ -12386,10 +12387,14 @@ function persistNow(stageOverride, opts={}){
 
       const targetStageLabel = visibleStageLabel;
 
-      if(remoteSyncEnabled()){
-        pushPromise = remoteBridge.push(payload, {
-          stage: targetStageLabel,
-          diff: combinedDiff,
+  const forceRemoteWrite = forceRemote === true
+    || (force && forceRemote !== false && source !== 'system');
+  const shouldPushRemote = remoteBridge.hasRemote && (remoteSyncEnabled() || forceRemoteWrite);
+
+  if(shouldPushRemote){
+    pushPromise = remoteBridge.push(payload, {
+      stage: targetStageLabel,
+      diff: combinedDiff,
           version:null,
           source,
           user:userAlias,
@@ -12471,10 +12476,10 @@ function persistNow(stageOverride, opts={}){
               throw err;
             }
           });
-      }else{
-        setDataMode(enableLocalStore ? 'local' : 'session');
-        pushPromise = Promise.resolve(true);
-      }
+  }else{
+    setDataMode(enableLocalStore ? 'local' : 'session');
+    pushPromise = Promise.resolve(true);
+  }
 
       if(hasChanges && announce){
         announceStateUpdate({
@@ -15381,7 +15386,7 @@ function wireHandlers(){
 
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
-    persistNow(undefined,{force:true});
+    persistNow(undefined,{force:true, forceRemote:true});
     alert('Состояние сохранено.');
   });
   
