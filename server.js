@@ -2754,6 +2754,8 @@ async function persistSnapshotWithSql(options) {
   ensureModeScopedState(parsedSnapshot);
   ensureLocalStorageMetadata(parsedSnapshot);
 
+  mergeCrmTasksIntoSnapshot(parsedSnapshot);
+
   const storedMeta = sanitizeMetaForStorage(meta);
 
   const serialized = safeSerializeSnapshot(parsedSnapshot);
