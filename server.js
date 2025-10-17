@@ -2615,6 +2615,31 @@ async function loadMetadataForRevisions(runner, revs) {
 }
 
 
+function normalizeForcePersistFlag(value) {
+  if (value === true) {
+    return true;
+  }
+  if (value === false || value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      return false;
+    }
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    if (['true', '1', 'yes', 'on', 'force', 'persist', 'enabled'].includes(normalized)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeRequestMeta(rawMeta) {
   const response = {
     actor: null,
@@ -2635,7 +2660,7 @@ function normalizeRequestMeta(rawMeta) {
 
   const working = { ...rawMeta };
 
-  if (working.forcePersist === true || working.forcePersist === 'true') {
+  if (normalizeForcePersistFlag(working.forcePersist)) {
     response.forcePersist = true;
   }
 
@@ -2662,6 +2687,17 @@ function normalizeRequestMeta(rawMeta) {
   delete working.force;
   delete working.ifMatch;
   delete working.forcePersist;
+
+  if (isPlainObject(working.meta)) {
+    if (!response.forcePersist && normalizeForcePersistFlag(working.meta.forcePersist)) {
+      response.forcePersist = true;
+    }
+    if (Object.prototype.hasOwnProperty.call(working.meta, 'forcePersist')) {
+      const cleanedMeta = { ...working.meta };
+      delete cleanedMeta.forcePersist;
+      working.meta = cleanedMeta;
+    }
+  }
 
   const actor = sanitizeString(working.actor || working.user || working.username || working.owner);
   const source = sanitizeString(working.source || working.changeType || working.stage || working.reason);
@@ -2902,8 +2938,11 @@ async function persistSnapshotWithSql(options) {
     hash = null,
     meta = null,
     skipIfUnchanged = false,
+    forcePersist = false,
     currentSnapshot = null
   } = options || {};
+
+  const shouldSkipUnchanged = Boolean(skipIfUnchanged && !forcePersist);
 
   let parsedSnapshot = null;
   if (isPlainObject(snapshot)) {
@@ -2946,7 +2985,7 @@ async function persistSnapshotWithSql(options) {
   const storedMeta = sanitizeMetaForStorage(meta);
   const normalizedHash = computeSnapshotHash(serialized);
 
-  if (skipIfUnchanged && currentSnapshot && Number(currentSnapshot.rev || 0) > 0) {
+  if (shouldSkipUnchanged && currentSnapshot && Number(currentSnapshot.rev || 0) > 0) {
     const currentHash = currentSnapshot.hash || null;
     const currentSanitizedMeta = sanitizeMetaForStorage(currentSnapshot.meta || null);
     if (currentHash && currentHash === normalizedHash && valuesEqual(currentSanitizedMeta, storedMeta)) {
@@ -3083,6 +3122,7 @@ app.put('/api/state', async (req, res) => {
       hash,
       meta: storedMeta,
       skipIfUnchanged: !normalizedMeta.forcePersist,
+      forcePersist: normalizedMeta.forcePersist,
       currentSnapshot: current
     });
 
@@ -3102,7 +3142,7 @@ app.put('/api/state', async (req, res) => {
         hash: latest.hash || null,
         duration
       });
-      res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, unchanged: true });
+      res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, unchanged: true, persisted: false });
       return;
     }
 
@@ -3113,7 +3153,7 @@ app.put('/api/state', async (req, res) => {
       hash: latest.hash || null,
       duration
     });
-    res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, conflict: false });
+    res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag, conflict: false, persisted: true });
   } catch (err) {
     if (err && err.message && err.message.includes('Snapshot payload')) {
       res.status(400).json({ error: err.message });
