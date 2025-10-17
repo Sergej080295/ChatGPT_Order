@@ -467,6 +467,55 @@ function deriveCrmTasksFromSnapshot(snapshot, { existingTasks = [] } = {}) {
   return tasks;
 }
 
+function mergeCrmTasksIntoSnapshot(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return { tasks: Array.isArray(snapshot?.t) ? snapshot.t : [], crmTasks: [] };
+  }
+
+  const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
+  const crmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
+  const tasks = crmTasks.length ? baseTasks.concat(crmTasks) : baseTasks.slice();
+
+  if (Array.isArray(snapshot.t)) {
+    snapshot.t = tasks;
+  } else {
+    snapshot.t = tasks.slice();
+  }
+
+  const baseOrderMap = new Map();
+  if (Array.isArray(snapshot.orders)) {
+    snapshot.orders.forEach((entry) => {
+      if (!entry || !Array.isArray(entry)) return;
+      const [stage, list] = entry;
+      const stageKey = normalizeStage(stage);
+      if (!stageKey) return;
+      const filtered = Array.isArray(list)
+        ? list
+            .map((value) => (value == null ? '' : String(value)))
+            .filter((uid) => uid && !uid.startsWith(CRM_TASK_PREFIX))
+        : [];
+      baseOrderMap.set(stageKey, filtered);
+    });
+  }
+
+  const mergedOrderMap = new Map(baseOrderMap);
+  tasks.forEach((task) => {
+    if (!task || !task.uid) return;
+    const stageKey = normalizeStage(task.stage);
+    if (!stageKey) return;
+    const uid = String(task.uid);
+    const current = mergedOrderMap.get(stageKey) || [];
+    if (!current.includes(uid)) {
+      current.push(uid);
+    }
+    mergedOrderMap.set(stageKey, current);
+  });
+
+  snapshot.orders = Array.from(mergedOrderMap.entries());
+
+  return { tasks, crmTasks };
+}
+
 function classifyWriteChannel({ channel = null, source = null } = {}) {
   const explicit = normalizeChannelValue(channel);
   if (explicit) {
@@ -1024,6 +1073,7 @@ async function loadLatestSnapshot(runner) {
     }
     const autoweight = await loadAutoweightSettings(client);
     normalizeExtraTimeSettings(snapshotObj, autoweight);
+    mergeCrmTasksIntoSnapshot(snapshotObj);
   } catch (err) {
     console.warn('Failed to merge shared preferences into snapshot', err);
   }
@@ -1517,17 +1567,22 @@ async function persistSnapshotWithSql(options) {
   normalizeExtraTimeSettings(parsedSnapshot);
   normalizeSnapshotCollections(parsedSnapshot);
 
-  const serialized = safeSerializeSnapshot(parsedSnapshot);
   const storedMeta = sanitizeMetaForStorage(meta);
-  const normalizedHash = computeSnapshotHash(serialized);
-  if (hash && hash !== normalizedHash) {
-    logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: normalizedHash, provided: hash });
+
+  const serializedBefore = safeSerializeSnapshot(parsedSnapshot);
+  const hashBefore = computeSnapshotHash(serializedBefore);
+  if (hash && hash !== hashBefore) {
+    logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: hashBefore, provided: hash });
   }
-  const effectiveHash = normalizedHash;
+
+  let serialized = serializedBefore;
+  let effectiveHash = hashBefore;
 
   const { rev, result } = await runWithRevision(actor, source, note, async (client, nextRev) => {
     await ensurePlannerSettingsSchema(client);
     await applySnapshotToSql(client, parsedSnapshot);
+    serialized = safeSerializeSnapshot(parsedSnapshot);
+    effectiveHash = computeSnapshotHash(serialized);
     await insertSnapshotRow(client, nextRev, parsedSnapshot, serialized, effectiveHash, storedMeta);
     return await loadLatestSnapshot(client);
   });
@@ -2055,47 +2110,7 @@ function mergeOrderRecords(target, source) {
 async function applySnapshotToSql(client, snapshot) {
   await ensurePlannerSettingsSchema(client);
   const previousWriteMode = await getCurrentWriteMode(client);
-  const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
-  const crmTasks = deriveCrmTasksFromSnapshot(snapshot, { existingTasks: baseTasks });
-  const tasks = baseTasks.concat(crmTasks);
-
-  if (Array.isArray(snapshot.t)) {
-    snapshot.t = tasks;
-  } else {
-    snapshot.t = tasks.slice();
-  }
-
-  if (crmTasks.length) {
-    const existingOrders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
-    const baseOrderMap = new Map();
-    existingOrders.forEach((entry) => {
-      if (!entry || !Array.isArray(entry)) return;
-      const [stage, list] = entry;
-      const stageKey = normalizeStage(stage);
-      if (!stageKey) return;
-      const filtered = Array.isArray(list)
-        ? list
-            .map((value) => (value == null ? '' : String(value)))
-            .filter((uid) => uid && !uid.startsWith(CRM_TASK_PREFIX))
-        : [];
-      baseOrderMap.set(stageKey, filtered);
-    });
-
-    const mergedOrderMap = new Map(baseOrderMap);
-    tasks.forEach((task) => {
-      if (!task || !task.uid) return;
-      const stageKey = normalizeStage(task.stage);
-      if (!stageKey) return;
-      const uid = String(task.uid);
-      const current = mergedOrderMap.get(stageKey) || [];
-      if (!current.includes(uid)) {
-        current.push(uid);
-      }
-      mergedOrderMap.set(stageKey, current);
-    });
-
-    snapshot.orders = Array.from(mergedOrderMap.entries());
-  }
+  const { tasks } = mergeCrmTasksIntoSnapshot(snapshot);
 
   const done = Array.isArray(snapshot.done) ? snapshot.done : [];
   const trash = Array.isArray(snapshot.trash) ? snapshot.trash : [];
