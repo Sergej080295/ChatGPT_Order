@@ -1242,6 +1242,7 @@ async function ensureCoreSchema(client) {
   `);
   await client.query(`
     ALTER TABLE pc_order_tasks
+      ADD COLUMN IF NOT EXISTS order_uid TEXT,
       ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
       ADD COLUMN IF NOT EXISTS order_number TEXT,
       ADD COLUMN IF NOT EXISTS stage_name TEXT,
