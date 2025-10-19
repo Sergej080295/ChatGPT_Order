@@ -1225,6 +1225,23 @@ async function ensureCoreSchema(client) {
   `);
   await client.query(`
     ALTER TABLE pc_order_tasks
+      ADD COLUMN IF NOT EXISTS bucket TEXT
+  `);
+  await client.query(`
+    UPDATE pc_order_tasks
+       SET bucket = 't'
+     WHERE bucket IS NULL
+  `);
+  await client.query(`
+    ALTER TABLE pc_order_tasks
+      ALTER COLUMN bucket SET DEFAULT 't'
+  `);
+  await client.query(`
+    ALTER TABLE pc_order_tasks
+      ALTER COLUMN bucket SET NOT NULL
+  `);
+  await client.query(`
+    ALTER TABLE pc_order_tasks
       ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
       ADD COLUMN IF NOT EXISTS order_number TEXT,
       ADD COLUMN IF NOT EXISTS stage_name TEXT,
