@@ -45,9 +45,10 @@ const TABLE_SNAPSHOTS = 'planner_state_snapshots';
 const TABLE_SCALARS = 'planner_state_scalars';
 const TABLE_LIST_ENTRIES = 'planner_state_list_entries';
 const TABLE_LIST_ATTRIBUTES = 'planner_state_list_entry_attributes';
-const TABLE_ORDERS = 'planner_state_orders';
-const TABLE_ORDER_ATTRIBUTES = 'planner_state_order_attributes';
-const TABLE_ORDER_ROUTES = 'planner_state_order_routes';
+const TABLE_ORDER_HEADERS = 'planner_orders';
+const TABLE_ORDER_STAGES = 'planner_order_stages';
+const TABLE_ORDER_STAGE_ATTRIBUTES = 'planner_order_stage_attributes';
+const TABLE_ORDER_STAGE_ROUTES = 'planner_order_stage_routes';
 const TABLE_CAPACITY = 'planner_state_capacity';
 const TABLE_PARALLEL = 'planner_state_parallel';
 const TABLE_ROUTE_OVERRIDES = 'planner_state_route_overrides';
@@ -1068,7 +1069,20 @@ async function clearStateForRevision(client, rev) {
   await client.query(`DELETE FROM ${TABLE_PARALLEL} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_ROUTE_OVERRIDES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_IGNORED_STATES} WHERE rev = $1`, [rev]);
-  await client.query(`DELETE FROM ${TABLE_ORDERS} WHERE rev = $1`, [rev]);
+  await client.query(
+    `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id IN (
+       SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1
+     )`,
+    [rev]
+  );
+  await client.query(
+    `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id IN (
+       SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1
+     )`,
+    [rev]
+  );
+  await client.query(`DELETE FROM ${TABLE_ORDER_STAGES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_ORDER_HEADERS} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_LIST_ENTRIES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_META_VALUES} WHERE rev = $1`, [rev]);
   await client.query(`DELETE FROM ${TABLE_META_HISTORY} WHERE rev = $1`, [rev]);
@@ -1282,6 +1296,26 @@ function extractOrderColumnValues(entry, identifiers) {
   );
   const doneSource = parseOptionalString(doneMeta?.source || entry?.source);
   const progress = parseOptionalNumber(entry?.progress);
+  const percent = parseOptionalNumber(
+    entry?.percent
+      || entry?.percentComplete
+      || entry?.progressPercent
+      || (isPlainObject(entry?.metrics) ? entry.metrics.percent : null)
+  );
+  const totalHours = parseOptionalNumber(
+    entry?.totalHours
+      || entry?.total
+      || entry?.hoursTotal
+      || entry?.totalPlan
+      || (isPlainObject(entry?.metrics) ? entry.metrics.totalHours : null)
+  );
+  const remainingHours = parseOptionalNumber(
+    entry?.remainingHours
+      || entry?.remaining
+      || entry?.rest
+      || entry?.balance
+      || (isPlainObject(entry?.metrics) ? entry.metrics.remaining : null)
+  );
   const useReserveValue = parseOptionalBoolean(entry?.useReserve);
   const lockedValue = parseOptionalBoolean(entry?.locked || (Array.isArray(entry?.lockedUsers) ? entry.lockedUsers.length > 0 : null));
 
@@ -1301,6 +1335,9 @@ function extractOrderColumnValues(entry, identifiers) {
     doneAt,
     doneSource,
     progress,
+    percent,
+    totalHours,
+    remainingHours,
     useReserve: useReserveValue === null ? null : !!useReserveValue,
     locked: lockedValue === null ? null : !!lockedValue
   };
@@ -1416,6 +1453,26 @@ function applyOrderColumnsToObject(row, baseEntry) {
   if (row.progress !== null && row.progress !== undefined) {
     assign('progress', Number(row.progress));
   }
+  if (row.percent !== null && row.percent !== undefined) {
+    assign('percent', Number(row.percent));
+    if (!Object.prototype.hasOwnProperty.call(entry, 'progressPercent')) {
+      entry.progressPercent = Number(row.percent);
+    }
+  }
+  if (row.total_hours !== null && row.total_hours !== undefined) {
+    const total = Number(row.total_hours);
+    assign('totalHours', total);
+    if (!Object.prototype.hasOwnProperty.call(entry, 'total')) {
+      entry.total = total;
+    }
+  }
+  if (row.remaining_hours !== null && row.remaining_hours !== undefined) {
+    const remaining = Number(row.remaining_hours);
+    assign('remainingHours', remaining);
+    if (!Object.prototype.hasOwnProperty.call(entry, 'remaining')) {
+      entry.remaining = remaining;
+    }
+  }
   if (row.use_reserve !== null) {
     assign('useReserve', !!row.use_reserve);
   }
@@ -1456,10 +1513,30 @@ function applyOrderColumnsToObject(row, baseEntry) {
 }
 
 async function persistOrderEntries(client, rev, listKey, entries) {
-  await client.query(`DELETE FROM ${TABLE_ORDERS} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+  const { rows: oldStageRows } = await client.query(
+    `SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1 AND list_key = $2`,
+    [rev, listKey]
+  );
+  const stageIds = oldStageRows.map((row) => row.id);
+  if (stageIds.length) {
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id = ANY($1::bigint[])`,
+      [stageIds]
+    );
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id = ANY($1::bigint[])`,
+      [stageIds]
+    );
+  }
+
+  await client.query(`DELETE FROM ${TABLE_ORDER_STAGES} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+  await client.query(`DELETE FROM ${TABLE_ORDER_HEADERS} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+
   if (!Array.isArray(entries) || !entries.length) {
     return;
   }
+
+  const orderCache = new Map();
 
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
@@ -1470,88 +1547,228 @@ async function persistOrderEntries(client, rev, listKey, entries) {
 
     const identifiers = extractOrderIdentifiers(entry);
     const columnValues = extractOrderColumnValues(entry, identifiers);
+    const primaryParentId = identifiers.parentOrderId
+      || identifiers.orderIdentity
+      || columnValues.orderIdentity
+      || columnValues.orderNumber
+      || columnValues.uid;
+
+    if (!primaryParentId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const canonicalParentId = identifiers.parentOrderId || primaryParentId;
+
+    let headerInfo = orderCache.get(canonicalParentId);
+    if (!headerInfo) {
+      // eslint-disable-next-line no-await-in-loop
+      const { rows: headerRows } = await client.query(
+        `INSERT INTO ${TABLE_ORDER_HEADERS} (
+           rev,
+           parent_order_id,
+           order_identity,
+           crm_order_id,
+           order_number,
+           order_customer,
+           order_title,
+           status,
+           state,
+           progress,
+           percent,
+           total_hours,
+           extra_hours,
+           remaining_hours,
+           start_at,
+           end_at,
+           orig_start_at,
+           done_at,
+           done_source,
+           use_reserve,
+           locked,
+           list_key,
+           ordinal
+         )
+         VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+         )
+         ON CONFLICT (rev, parent_order_id)
+         DO UPDATE SET
+           order_identity = EXCLUDED.order_identity,
+           crm_order_id = COALESCE(EXCLUDED.crm_order_id, ${TABLE_ORDER_HEADERS}.crm_order_id),
+           order_number = COALESCE(EXCLUDED.order_number, ${TABLE_ORDER_HEADERS}.order_number),
+           order_customer = COALESCE(EXCLUDED.order_customer, ${TABLE_ORDER_HEADERS}.order_customer),
+           order_title = COALESCE(EXCLUDED.order_title, ${TABLE_ORDER_HEADERS}.order_title),
+           status = COALESCE(EXCLUDED.status, ${TABLE_ORDER_HEADERS}.status),
+           state = COALESCE(EXCLUDED.state, ${TABLE_ORDER_HEADERS}.state),
+           progress = COALESCE(EXCLUDED.progress, ${TABLE_ORDER_HEADERS}.progress),
+           percent = COALESCE(EXCLUDED.percent, ${TABLE_ORDER_HEADERS}.percent),
+           total_hours = COALESCE(EXCLUDED.total_hours, ${TABLE_ORDER_HEADERS}.total_hours),
+           extra_hours = COALESCE(EXCLUDED.extra_hours, ${TABLE_ORDER_HEADERS}.extra_hours),
+           remaining_hours = COALESCE(EXCLUDED.remaining_hours, ${TABLE_ORDER_HEADERS}.remaining_hours),
+           start_at = COALESCE(EXCLUDED.start_at, ${TABLE_ORDER_HEADERS}.start_at),
+           end_at = COALESCE(EXCLUDED.end_at, ${TABLE_ORDER_HEADERS}.end_at),
+           orig_start_at = COALESCE(EXCLUDED.orig_start_at, ${TABLE_ORDER_HEADERS}.orig_start_at),
+           done_at = COALESCE(EXCLUDED.done_at, ${TABLE_ORDER_HEADERS}.done_at),
+           done_source = COALESCE(EXCLUDED.done_source, ${TABLE_ORDER_HEADERS}.done_source),
+           use_reserve = COALESCE(EXCLUDED.use_reserve, ${TABLE_ORDER_HEADERS}.use_reserve),
+           locked = COALESCE(EXCLUDED.locked, ${TABLE_ORDER_HEADERS}.locked),
+           list_key = EXCLUDED.list_key,
+           ordinal = LEAST(${TABLE_ORDER_HEADERS}.ordinal, EXCLUDED.ordinal),
+           updated_at = now()
+         RETURNING id, ordinal`,
+        [
+          rev,
+          canonicalParentId,
+          identifiers.orderIdentity
+            || columnValues.orderIdentity
+            || columnValues.uid
+            || canonicalParentId,
+          identifiers.crmOrderId,
+          columnValues.orderNumber,
+          columnValues.orderCustomer,
+          columnValues.orderTitle,
+          columnValues.status,
+          columnValues.state,
+          columnValues.progress,
+          columnValues.percent,
+          columnValues.totalHours,
+          columnValues.extraHours,
+          columnValues.remainingHours,
+          columnValues.startAt,
+          columnValues.endAt,
+          columnValues.origStartAt,
+          columnValues.doneAt,
+          columnValues.doneSource,
+          columnValues.useReserve,
+          columnValues.locked,
+          listKey,
+          index
+        ]
+      );
+
+      const headerRow = headerRows[0];
+      if (!headerRow || !headerRow.id) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      headerInfo = { id: headerRow.id };
+      orderCache.set(canonicalParentId, headerInfo);
+    }
+
+    const stageChildId = identifiers.childOrderId
+      || columnValues.uid
+      || identifiers.orderIdentity
+      || columnValues.orderIdentity
+      || `${canonicalParentId}::${index}`;
+
     // eslint-disable-next-line no-await-in-loop
-    const { rows } = await client.query(
-      `INSERT INTO ${TABLE_ORDERS} (
+    const { rows: stageRows } = await client.query(
+      `INSERT INTO ${TABLE_ORDER_STAGES} (
          rev,
-         list_key,
+         order_id,
          parent_order_id,
          child_order_id,
          order_identity,
-         crm_order_id,
          crm_child_id,
-         uid,
-         order_number,
-         order_customer,
-         order_title,
          stage,
-         state,
          status,
+         state,
+         progress,
+         percent,
          hours,
          extra_hours,
+         remaining_hours,
          start_at,
          end_at,
          orig_start_at,
          done_at,
          done_source,
-         progress,
          use_reserve,
          locked,
+         list_key,
          ordinal
        )
        VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
        )
+       ON CONFLICT (rev, parent_order_id, child_order_id)
+       DO UPDATE SET
+         order_id = EXCLUDED.order_id,
+         order_identity = EXCLUDED.order_identity,
+         crm_child_id = COALESCE(EXCLUDED.crm_child_id, ${TABLE_ORDER_STAGES}.crm_child_id),
+         stage = COALESCE(EXCLUDED.stage, ${TABLE_ORDER_STAGES}.stage),
+         status = COALESCE(EXCLUDED.status, ${TABLE_ORDER_STAGES}.status),
+         state = COALESCE(EXCLUDED.state, ${TABLE_ORDER_STAGES}.state),
+         progress = COALESCE(EXCLUDED.progress, ${TABLE_ORDER_STAGES}.progress),
+         percent = COALESCE(EXCLUDED.percent, ${TABLE_ORDER_STAGES}.percent),
+         hours = COALESCE(EXCLUDED.hours, ${TABLE_ORDER_STAGES}.hours),
+         extra_hours = COALESCE(EXCLUDED.extra_hours, ${TABLE_ORDER_STAGES}.extra_hours),
+         remaining_hours = COALESCE(EXCLUDED.remaining_hours, ${TABLE_ORDER_STAGES}.remaining_hours),
+         start_at = COALESCE(EXCLUDED.start_at, ${TABLE_ORDER_STAGES}.start_at),
+         end_at = COALESCE(EXCLUDED.end_at, ${TABLE_ORDER_STAGES}.end_at),
+         orig_start_at = COALESCE(EXCLUDED.orig_start_at, ${TABLE_ORDER_STAGES}.orig_start_at),
+         done_at = COALESCE(EXCLUDED.done_at, ${TABLE_ORDER_STAGES}.done_at),
+         done_source = COALESCE(EXCLUDED.done_source, ${TABLE_ORDER_STAGES}.done_source),
+         use_reserve = COALESCE(EXCLUDED.use_reserve, ${TABLE_ORDER_STAGES}.use_reserve),
+         locked = COALESCE(EXCLUDED.locked, ${TABLE_ORDER_STAGES}.locked),
+         list_key = EXCLUDED.list_key,
+         ordinal = EXCLUDED.ordinal,
+         updated_at = now()
        RETURNING id`,
       [
         rev,
-        listKey,
-        identifiers.parentOrderId,
-        identifiers.childOrderId,
-        identifiers.orderIdentity,
-        identifiers.crmOrderId,
+        headerInfo.id,
+        canonicalParentId,
+        stageChildId,
+        identifiers.orderIdentity
+          || columnValues.orderIdentity
+          || columnValues.uid
+          || stageChildId,
         identifiers.crmChildId,
-        columnValues.uid,
-        columnValues.orderNumber,
-        columnValues.orderCustomer,
-        columnValues.orderTitle,
         columnValues.stage,
-        columnValues.state,
         columnValues.status,
+        columnValues.state,
+        columnValues.progress,
+        columnValues.percent,
         columnValues.hours,
         columnValues.extraHours,
+        columnValues.remainingHours,
         columnValues.startAt,
         columnValues.endAt,
         columnValues.origStartAt,
         columnValues.doneAt,
         columnValues.doneSource,
-        columnValues.progress,
         columnValues.useReserve,
         columnValues.locked,
+        listKey,
         index
       ]
     );
 
-    const orderId = rows[0]?.id;
-    if (!orderId) {
+    const stageRow = stageRows[0];
+    if (!stageRow || !stageRow.id) {
       // eslint-disable-next-line no-continue
       continue;
     }
 
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id = $1`,
+      [stageRow.id]
+    );
     const routeSegments = extractRouteSegmentsForStorage(entry);
     for (const segment of routeSegments) {
+      if (!segment.key) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_ORDER_ROUTES} (order_id, segment_key, hours, start_at, end_at, orig_start_at, done_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         ON CONFLICT (order_id, segment_key) DO UPDATE
-           SET hours = EXCLUDED.hours,
-               start_at = EXCLUDED.start_at,
-               end_at = EXCLUDED.end_at,
-               orig_start_at = EXCLUDED.orig_start_at,
-               done_at = EXCLUDED.done_at`,
+        `INSERT INTO ${TABLE_ORDER_STAGE_ROUTES} (stage_id, segment_key, hours, start_at, end_at, orig_start_at, done_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
         [
-          orderId,
+          stageRow.id,
           segment.key,
           segment.hours,
           segment.startAt,
@@ -1562,14 +1779,19 @@ async function persistOrderEntries(client, rev, listKey, entries) {
       );
     }
 
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id = $1`,
+      [stageRow.id]
+    );
     const attributeRows = flattenObjectForStorage(entry);
     for (const row of attributeRows) {
       // eslint-disable-next-line no-await-in-loop
       await client.query(
-        `INSERT INTO ${TABLE_ORDER_ATTRIBUTES} (order_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+        `INSERT INTO ${TABLE_ORDER_STAGE_ATTRIBUTES} (stage_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
-          orderId,
+          stageRow.id,
           row.path,
           row.ordinal || 0,
           row.type,
@@ -1910,33 +2132,38 @@ async function loadRouteOverrides(executor, rev) {
 
 async function loadOrderEntries(executor, rev, listKey) {
   const { rows } = await executor.query(
-    `SELECT id,
-            ordinal,
-            parent_order_id,
-            child_order_id,
-            order_identity,
-            crm_order_id,
-            crm_child_id,
-            uid,
-            order_number,
-            order_customer,
-            order_title,
-            stage,
-            state,
-            status,
-            hours,
-            extra_hours,
-            start_at,
-            end_at,
-            orig_start_at,
-            done_at,
-            done_source,
-            progress,
-            use_reserve,
-            locked
-       FROM ${TABLE_ORDERS}
-      WHERE rev = $1 AND list_key = $2
-      ORDER BY ordinal`,
+    `SELECT stage.id,
+            stage.ordinal,
+            stage.parent_order_id,
+            stage.child_order_id,
+            stage.child_order_id AS uid,
+            stage.order_identity,
+            header.crm_order_id,
+            stage.crm_child_id,
+            header.order_number,
+            header.order_customer,
+            header.order_title,
+            stage.stage,
+            COALESCE(stage.state, header.state) AS state,
+            COALESCE(stage.status, header.status) AS status,
+            COALESCE(stage.hours, header.total_hours) AS hours,
+            COALESCE(stage.extra_hours, header.extra_hours) AS extra_hours,
+            COALESCE(stage.start_at, header.start_at) AS start_at,
+            COALESCE(stage.end_at, header.end_at) AS end_at,
+            COALESCE(stage.orig_start_at, header.orig_start_at) AS orig_start_at,
+            COALESCE(stage.done_at, header.done_at) AS done_at,
+            COALESCE(stage.done_source, header.done_source) AS done_source,
+            COALESCE(stage.progress, header.progress) AS progress,
+            COALESCE(stage.percent, header.percent) AS percent,
+            header.total_hours,
+            COALESCE(stage.remaining_hours, header.remaining_hours) AS remaining_hours,
+            COALESCE(stage.use_reserve, header.use_reserve) AS use_reserve,
+            COALESCE(stage.locked, header.locked) AS locked
+       FROM ${TABLE_ORDER_STAGES} stage
+  LEFT JOIN ${TABLE_ORDER_HEADERS} header
+         ON header.id = stage.order_id
+      WHERE stage.rev = $1 AND stage.list_key = $2
+      ORDER BY stage.ordinal`,
     [rev, listKey]
   );
   if (!rows.length) {
@@ -1945,18 +2172,18 @@ async function loadOrderEntries(executor, rev, listKey) {
 
   const orderIds = rows.map((row) => row.id);
   const { rows: attrRows } = await executor.query(
-    `SELECT order_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean
-       FROM ${TABLE_ORDER_ATTRIBUTES}
-      WHERE order_id = ANY($1::bigint[])
-      ORDER BY order_id, char_length(attr_path), attr_path, ordinal`,
+    `SELECT stage_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean
+       FROM ${TABLE_ORDER_STAGE_ATTRIBUTES}
+      WHERE stage_id = ANY($1::bigint[])
+      ORDER BY stage_id, char_length(attr_path), attr_path, ordinal`,
     [orderIds]
   );
   const grouped = new Map();
   attrRows.forEach((row) => {
-    if (!grouped.has(row.order_id)) {
-      grouped.set(row.order_id, []);
+    if (!grouped.has(row.stage_id)) {
+      grouped.set(row.stage_id, []);
     }
-    grouped.get(row.order_id).push({
+    grouped.get(row.stage_id).push({
       path: row.attr_path,
       value_type: row.value_type,
       value_text: row.value_text,
@@ -1967,17 +2194,17 @@ async function loadOrderEntries(executor, rev, listKey) {
   });
 
   const { rows: routeRows } = await executor.query(
-    `SELECT order_id, segment_key, hours, start_at, end_at, orig_start_at, done_at
-       FROM ${TABLE_ORDER_ROUTES}
-      WHERE order_id = ANY($1::bigint[])`,
+    `SELECT stage_id, segment_key, hours, start_at, end_at, orig_start_at, done_at
+       FROM ${TABLE_ORDER_STAGE_ROUTES}
+      WHERE stage_id = ANY($1::bigint[])`,
     [orderIds]
   );
   const routeGrouped = new Map();
   routeRows.forEach((row) => {
-    if (!routeGrouped.has(row.order_id)) {
-      routeGrouped.set(row.order_id, []);
+    if (!routeGrouped.has(row.stage_id)) {
+      routeGrouped.set(row.stage_id, []);
     }
-    routeGrouped.get(row.order_id).push({
+    routeGrouped.get(row.stage_id).push({
       key: parseOptionalString(row.segment_key),
       hours: row.hours === null || row.hours === undefined ? null : Number(row.hours),
       startAt: row.start_at || null,
