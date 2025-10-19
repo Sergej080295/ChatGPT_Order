@@ -1265,6 +1265,68 @@ async function ensureCoreSchema(client) {
      WHERE lane_id IS NOT NULL AND btrim(lane_id) = ''
   `);
   await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'data'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'payload'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_orders RENAME COLUMN data TO payload';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_orders ADD COLUMN IF NOT EXISTS payload JSONB');
+  await client.query(`
+    DO $$
+    DECLARE
+      col_type TEXT;
+      rec RECORD;
+      payload_text TEXT;
+    BEGIN
+      SELECT data_type INTO col_type
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'pc_orders'
+         AND column_name = 'payload';
+      IF col_type IS NOT NULL AND col_type <> 'jsonb' THEN
+        BEGIN
+          EXECUTE 'ALTER TABLE pc_orders ALTER COLUMN payload TYPE JSONB USING payload::jsonb';
+        EXCEPTION WHEN others THEN
+          EXECUTE 'ALTER TABLE pc_orders ADD COLUMN payload_tmp JSONB';
+          FOR rec IN EXECUTE 'SELECT uid, payload FROM pc_orders' LOOP
+            BEGIN
+              payload_text := rec.payload::text;
+              EXECUTE 'UPDATE pc_orders SET payload_tmp = $1::jsonb WHERE uid = $2'
+                USING payload_text, rec.uid;
+            EXCEPTION WHEN others THEN
+              EXECUTE 'UPDATE pc_orders SET payload_tmp = ''{}''::jsonb WHERE uid = $1'
+                USING rec.uid;
+            END;
+          END LOOP;
+          EXECUTE 'ALTER TABLE pc_orders DROP COLUMN payload';
+          EXECUTE 'ALTER TABLE pc_orders RENAME COLUMN payload_tmp TO payload';
+        END;
+      END IF;
+    END $$
+  `);
+  await client.query(`
+    UPDATE pc_orders
+       SET payload = '{}'::jsonb
+     WHERE payload IS NULL
+  `);
+  await client.query(`
+    ALTER TABLE pc_orders
+      ALTER COLUMN payload SET DEFAULT '{}'::jsonb,
+      ALTER COLUMN payload SET NOT NULL
+  `);
+  await client.query(`
     ALTER TABLE pc_orders
       ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
       ADD COLUMN IF NOT EXISTS order_number TEXT,
@@ -1391,6 +1453,68 @@ async function ensureCoreSchema(client) {
       ADD COLUMN IF NOT EXISTS due_date TEXT,
       ADD COLUMN IF NOT EXISTS expected_percent NUMERIC,
       ADD COLUMN IF NOT EXISTS progress_percent NUMERIC
+  `);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND column_name = 'data'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND column_name = 'payload'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_order_tasks RENAME COLUMN data TO payload';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_order_tasks ADD COLUMN IF NOT EXISTS payload JSONB');
+  await client.query(`
+    DO $$
+    DECLARE
+      col_type TEXT;
+      rec RECORD;
+      payload_text TEXT;
+    BEGIN
+      SELECT data_type INTO col_type
+        FROM information_schema.columns
+       WHERE table_schema = 'public'
+         AND table_name = 'pc_order_tasks'
+         AND column_name = 'payload';
+      IF col_type IS NOT NULL AND col_type <> 'jsonb' THEN
+        BEGIN
+          EXECUTE 'ALTER TABLE pc_order_tasks ALTER COLUMN payload TYPE JSONB USING payload::jsonb';
+        EXCEPTION WHEN others THEN
+          EXECUTE 'ALTER TABLE pc_order_tasks ADD COLUMN payload_tmp JSONB';
+          FOR rec IN EXECUTE 'SELECT uid, payload FROM pc_order_tasks' LOOP
+            BEGIN
+              payload_text := rec.payload::text;
+              EXECUTE 'UPDATE pc_order_tasks SET payload_tmp = $1::jsonb WHERE uid = $2'
+                USING payload_text, rec.uid;
+            EXCEPTION WHEN others THEN
+              EXECUTE 'UPDATE pc_order_tasks SET payload_tmp = ''{}''::jsonb WHERE uid = $1'
+                USING rec.uid;
+            END;
+          END LOOP;
+          EXECUTE 'ALTER TABLE pc_order_tasks DROP COLUMN payload';
+          EXECUTE 'ALTER TABLE pc_order_tasks RENAME COLUMN payload_tmp TO payload';
+        END;
+      END IF;
+    END $$
+  `);
+  await client.query(`
+    UPDATE pc_order_tasks
+       SET payload = '{}'::jsonb
+     WHERE payload IS NULL
+  `);
+  await client.query(`
+    ALTER TABLE pc_order_tasks
+      ALTER COLUMN payload SET DEFAULT '{}'::jsonb,
+      ALTER COLUMN payload SET NOT NULL
   `);
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_bucket_idx ON pc_order_tasks(bucket)');
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_order_idx ON pc_order_tasks(order_uid)');
