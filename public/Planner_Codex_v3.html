@@ -2980,6 +2980,91 @@ function applyModeScopedState(mode){
       : [];
     stageMap.set(stage, tasksArr);
   });
+  if(key === PLANNER_MODES.crm){
+    const hasCrmBoards = crmState && Array.isArray(crmState.boards) && crmState.boards.length;
+    if(hasCrmBoards){
+      if(!Array.isArray(crmStageTasks) || !crmStageTasks.length){
+        try{
+          const rebuilt = buildCrmStageTasks({ force:true });
+          if(Array.isArray(rebuilt)){
+            crmStageTasks = rebuilt.map(task => task ? cloneTaskRecord(task) : task).filter(Boolean);
+          }
+        }catch(err){
+          console.warn('Failed to rebuild CRM stage tasks during applyModeScopedState', err);
+          crmStageTasks = Array.isArray(crmStageTasks) ? crmStageTasks : [];
+        }
+      }
+      const stageUidSets = new Map();
+      stageMap.forEach((list, stage)=>{
+        const keyStage = typeof stage === 'string' ? stage : '';
+        const uidSet = new Set();
+        list.forEach(task => { if(task?.uid) uidSet.add(task.uid); });
+        stageUidSets.set(keyStage, uidSet);
+      });
+      let appendedCrmTasks = false;
+      if(Array.isArray(crmStageTasks) && crmStageTasks.length){
+        crmStageTasks.forEach(task => {
+          if(!task) return;
+          const stageRaw = typeof task.stage === 'string' ? task.stage : (task.crmMeta?.stageKey || '');
+          const stageKey = stageRaw ? stageRaw.trim().toLowerCase() : '';
+          if(!stageKey) return;
+          if(!stageMap.has(stageKey)){
+            stageMap.set(stageKey, []);
+            stageUidSets.set(stageKey, new Set());
+          }
+          const list = stageMap.get(stageKey);
+          const uidSet = stageUidSets.get(stageKey) || new Set();
+          const uid = task.uid || task.payload?.uid || '';
+          if(uid && uidSet.has(uid)){
+            return;
+          }
+          const copy = cloneTaskRecord(task);
+          copy.stage = stageKey;
+          list.push(copy);
+          if(uid){ uidSet.add(uid); }
+          stageUidSets.set(stageKey, uidSet);
+          appendedCrmTasks = true;
+        });
+      }
+      if(appendedCrmTasks){
+        if(!(ordersByStage instanceof Map)){
+          ordersByStage = new Map();
+        }
+        stageMap.forEach((list, stage)=>{
+          if(!Array.isArray(list) || !list.length) return;
+          const normalizedStage = typeof stage === 'string' ? stage : '';
+          const sequence = ordersByStage.get(normalizedStage);
+          if(Array.isArray(sequence) && sequence.length){
+            const indexMap = new Map(sequence.map((id, idx)=>[id, idx]));
+            list.sort((a,b)=>{
+              const uidA = a?.uid || '';
+              const uidB = b?.uid || '';
+              const posA = indexMap.has(uidA) ? indexMap.get(uidA) : Number.MAX_SAFE_INTEGER;
+              const posB = indexMap.has(uidB) ? indexMap.get(uidB) : Number.MAX_SAFE_INTEGER;
+              if(posA === posB){
+                const labelA = (a.orderIdentity || a.orderNumber || uidA || '').toString();
+                const labelB = (b.orderIdentity || b.orderNumber || uidB || '').toString();
+                return labelA.localeCompare(labelB, 'ru');
+              }
+              return posA - posB;
+            });
+          }else{
+            list.sort((a,b)=>{
+              const labelA = (a.orderIdentity || a.orderNumber || a.uid || '').toString();
+              const labelB = (b.orderIdentity || b.orderNumber || b.uid || '').toString();
+              const cmp = labelA.localeCompare(labelB, 'ru');
+              if(cmp !== 0) return cmp;
+              const startA = a.startDate instanceof Date ? a.startDate.getTime() : 0;
+              const startB = b.startDate instanceof Date ? b.startDate.getTime() : 0;
+              if(startA === startB) return (a.uid || '').localeCompare(b.uid || '');
+              return startA - startB;
+            });
+            ordersByStage.set(normalizedStage, list.map(item => item?.uid).filter(Boolean));
+          }
+        });
+      }
+    }
+  }
   const aggregated = [];
   stageMap.forEach(list => {
     list.forEach(task => {
