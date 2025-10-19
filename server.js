@@ -1516,6 +1516,72 @@ async function ensureCoreSchema(client) {
       ALTER COLUMN payload SET DEFAULT '{}'::jsonb,
       ALTER COLUMN payload SET NOT NULL
   `);
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND column_name = 'id'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND column_name = 'uid'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_order_tasks RENAME COLUMN id TO uid';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_order_tasks ADD COLUMN IF NOT EXISTS uid TEXT');
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND column_name = 'id'
+      ) THEN
+        EXECUTE 'UPDATE pc_order_tasks SET uid = COALESCE(uid, id::text) WHERE uid IS NULL';
+      END IF;
+    END $$
+  `);
+  await client.query(`
+    UPDATE pc_order_tasks
+       SET uid = 'task-' || md5(random()::text || clock_timestamp()::text)
+     WHERE uid IS NULL OR btrim(uid) = ''
+  `);
+  await client.query('ALTER TABLE pc_order_tasks ALTER COLUMN uid TYPE TEXT USING uid::text');
+  await client.query('ALTER TABLE pc_order_tasks ALTER COLUMN uid SET NOT NULL');
+  await client.query(`
+    DO $$
+    DECLARE
+      pk_name TEXT;
+    BEGIN
+      SELECT constraint_name
+        INTO pk_name
+        FROM information_schema.table_constraints
+       WHERE table_schema = 'public'
+         AND table_name = 'pc_order_tasks'
+         AND constraint_type = 'PRIMARY KEY'
+       LIMIT 1;
+      IF pk_name IS NULL THEN
+        EXECUTE 'ALTER TABLE pc_order_tasks ADD CONSTRAINT pc_order_tasks_pkey PRIMARY KEY (uid)';
+      ELSIF NOT EXISTS (
+        SELECT 1
+          FROM information_schema.key_column_usage
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_order_tasks'
+           AND constraint_name = pk_name
+           AND column_name = 'uid'
+      ) THEN
+        EXECUTE format('ALTER TABLE pc_order_tasks DROP CONSTRAINT %I', pk_name);
+        EXECUTE 'ALTER TABLE pc_order_tasks ADD CONSTRAINT pc_order_tasks_pkey PRIMARY KEY (uid)';
+      END IF;
+    END $$
+  `);
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_bucket_idx ON pc_order_tasks(bucket)');
   await client.query('CREATE INDEX IF NOT EXISTS pc_order_tasks_order_idx ON pc_order_tasks(order_uid)');
   await client.query('CREATE INDEX IF NOT EXISTS pc_orders_crm_order_idx ON pc_orders(crm_order_id)');
