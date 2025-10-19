@@ -49,6 +49,12 @@ function getDatabase() {
       settings_hash TEXT,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS stage_allocations (
+      stage TEXT PRIMARY KEY,
+      tasks_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   return sqlite;
 }
@@ -169,7 +175,14 @@ function readSnapshotFromSql() {
     ensureModeScopedState(parsed);
     ensureLocalStorageMetadata(parsed);
     applyStoredSettingsToSnapshot(parsed);
-    mergeCrmTasksIntoSnapshot(parsed);
+    const storedStageAllocations = readStageAllocationsFromSql();
+    if (storedStageAllocations.length) {
+      applyStageAllocationsToSnapshot(parsed, storedStageAllocations);
+    }
+    const mergeResult = mergeCrmTasksIntoSnapshot(parsed);
+    if (!storedStageAllocations.length && mergeResult.stageAllocations.length) {
+      writeStageAllocationsToSql(mergeResult.stageAllocations);
+    }
     const stateString = safeSerializeSnapshot(parsed);
     const hash = row.hash || computeSnapshotHash(stateString);
     const meta = safeParseJson(row.meta_json, null);
@@ -973,9 +986,248 @@ function deriveCrmTasksFromSnapshot(snapshot, { existingTasks = [] } = {}) {
   return tasks;
 }
 
+function collectStageAllocationsFromSnapshot(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return [];
+  }
+
+  const stageMap = new Map();
+
+  const ensureBucket = (stage) => {
+    const normalizedStage = normalizeStage(stage) || sanitizeString(stage);
+    if (!normalizedStage) {
+      return null;
+    }
+    if (!stageMap.has(normalizedStage)) {
+      stageMap.set(normalizedStage, { tasks: [], seen: new Set() });
+    }
+    return stageMap.get(normalizedStage);
+  };
+
+  const registerTask = (stageKey, task) => {
+    const bucket = ensureBucket(stageKey);
+    if (!bucket) {
+      return;
+    }
+    if (!task || typeof task !== 'object') {
+      return;
+    }
+    const cloned = cloneJson(task);
+    if (!isPlainObject(cloned)) {
+      return;
+    }
+    const normalizedStage = normalizeStage(cloned.stage) || normalizeStage(stageKey) || sanitizeString(stageKey);
+    if (!normalizedStage) {
+      return;
+    }
+    cloned.stage = normalizedStage;
+    const uid = cloned.uid == null ? '' : String(cloned.uid);
+    if (uid) {
+      if (bucket.seen.has(uid)) {
+        return;
+      }
+      bucket.seen.add(uid);
+      cloned.uid = uid;
+    }
+    bucket.tasks.push(cloned);
+  };
+
+  const scoped = snapshot?.modeScoped?.crm;
+  if (isPlainObject(scoped) && Array.isArray(scoped.stageTasks)) {
+    scoped.stageTasks.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        return;
+      }
+      const [stageKey, list] = entry;
+      const tasks = Array.isArray(list) ? list : [];
+      tasks.forEach((task) => registerTask(stageKey, task));
+    });
+  }
+
+  const tasks = Array.isArray(snapshot.t) ? snapshot.t : [];
+  tasks.forEach((task) => {
+    if (!task) {
+      return;
+    }
+    const serialized = serializeTaskForModeState(task);
+    if (!serialized) {
+      return;
+    }
+    registerTask(serialized.stage || task.stage, serialized);
+  });
+
+  const normalizedEntries = [];
+  const seenStages = new Set();
+
+  PLANNER_STAGE_CODES.forEach((stage) => {
+    const bucket = stageMap.get(stage);
+    if (bucket) {
+      normalizedEntries.push([stage, bucket.tasks]);
+      seenStages.add(stage);
+    } else {
+      normalizedEntries.push([stage, []]);
+    }
+  });
+
+  stageMap.forEach((bucket, stage) => {
+    if (seenStages.has(stage)) {
+      return;
+    }
+    normalizedEntries.push([stage, bucket.tasks]);
+  });
+
+  return normalizedEntries;
+}
+
+function applyStageAllocationsToSnapshot(snapshot, stageEntries) {
+  if (!isPlainObject(snapshot)) {
+    return { entries: [], orders: [] };
+  }
+
+  const stageMap = new Map();
+  const entries = Array.isArray(stageEntries) ? stageEntries : [];
+
+  entries.forEach((entry) => {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      return;
+    }
+    const [stageKey, list] = entry;
+    const normalizedStage = normalizeStage(stageKey) || sanitizeString(stageKey);
+    if (!normalizedStage) {
+      return;
+    }
+    const tasks = Array.isArray(list) ? list : [];
+    const seen = new Set();
+    const normalizedTasks = [];
+    tasks.forEach((task) => {
+      if (!task || typeof task !== 'object') {
+        return;
+      }
+      const cloned = cloneJson(task);
+      if (!isPlainObject(cloned)) {
+        return;
+      }
+      const stageCandidate = normalizeStage(cloned.stage) || normalizedStage;
+      if (!stageCandidate) {
+        return;
+      }
+      cloned.stage = stageCandidate;
+      const uid = cloned.uid == null ? '' : String(cloned.uid);
+      if (uid) {
+        if (seen.has(uid)) {
+          return;
+        }
+        cloned.uid = uid;
+        seen.add(uid);
+      }
+      normalizedTasks.push(cloned);
+    });
+    const orderIds = normalizedTasks
+      .map((task) => (task && task.uid ? String(task.uid) : ''))
+      .filter((uid) => uid);
+    stageMap.set(normalizedStage, { tasks: normalizedTasks, orders: orderIds });
+  });
+
+  const normalizedEntries = [];
+  const orderEntries = [];
+  const seenStages = new Set();
+
+  PLANNER_STAGE_CODES.forEach((stage) => {
+    const bucket = stageMap.get(stage);
+    if (bucket) {
+      normalizedEntries.push([stage, bucket.tasks]);
+      orderEntries.push([stage, bucket.orders]);
+    } else {
+      normalizedEntries.push([stage, []]);
+      orderEntries.push([stage, []]);
+    }
+    seenStages.add(stage);
+  });
+
+  stageMap.forEach((bucket, stage) => {
+    if (seenStages.has(stage)) {
+      return;
+    }
+    normalizedEntries.push([stage, bucket.tasks]);
+    orderEntries.push([stage, bucket.orders]);
+  });
+
+  if (!isPlainObject(snapshot.modeScoped)) {
+    snapshot.modeScoped = {};
+  }
+  if (!isPlainObject(snapshot.modeScoped.crm)) {
+    snapshot.modeScoped.crm = buildEmptyModeScopedSnapshot();
+  }
+  const scoped = snapshot.modeScoped.crm;
+  scoped.stageTasks = normalizedEntries.map(([stage, list]) => [stage, cloneJson(list)]);
+  scoped.orders = orderEntries.map(([stage, ids]) => [stage, ids.slice()]);
+
+  snapshot.orders = orderEntries.map(([stage, ids]) => [stage, ids.slice()]);
+
+  return { entries: normalizedEntries, orders: orderEntries };
+}
+
+function writeStageAllocationsToSql(stageEntries) {
+  try {
+    const db = getDatabase();
+    const normalized = Array.isArray(stageEntries) ? stageEntries : [];
+    const now = new Date().toISOString();
+    const tx = db.transaction((entries) => {
+      db.prepare('DELETE FROM stage_allocations').run();
+      if (!entries.length) {
+        return;
+      }
+      const insert = db.prepare(
+        'INSERT INTO stage_allocations (stage, tasks_json, updated_at) VALUES (@stage, @tasks_json, @updated_at)'
+      );
+      entries.forEach((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) {
+          return;
+        }
+        const [stageKey, list] = entry;
+        const normalizedStage = normalizeStage(stageKey) || sanitizeString(stageKey);
+        if (!normalizedStage) {
+          return;
+        }
+        const tasks = Array.isArray(list) ? list : [];
+        insert.run({ stage: normalizedStage, tasks_json: JSON.stringify(tasks), updated_at: now });
+      });
+    });
+    tx(normalized);
+  } catch (err) {
+    console.warn('Failed to persist stage allocations to sqlite', err);
+  }
+}
+
+function readStageAllocationsFromSql() {
+  try {
+    const db = getDatabase();
+    const rows = db.prepare('SELECT stage, tasks_json FROM stage_allocations').all();
+    if (!Array.isArray(rows) || !rows.length) {
+      return [];
+    }
+    const entries = [];
+    rows.forEach((row) => {
+      const stageKey = normalizeStage(row.stage) || sanitizeString(row.stage);
+      if (!stageKey) {
+        return;
+      }
+      const tasks = safeParseJson(row.tasks_json, []);
+      if (!Array.isArray(tasks)) {
+        return;
+      }
+      entries.push([stageKey, tasks.map((task) => (isPlainObject(task) ? cloneJson(task) : null)).filter(Boolean)]);
+    });
+    return entries;
+  } catch (err) {
+    console.warn('Failed to read stage allocations from sqlite', err);
+    return [];
+  }
+}
+
 function mergeCrmTasksIntoSnapshot(snapshot) {
   if (!isPlainObject(snapshot)) {
-    return { tasks: Array.isArray(snapshot?.t) ? snapshot.t : [], crmTasks: [] };
+    return { tasks: Array.isArray(snapshot?.t) ? snapshot.t : [], crmTasks: [], stageAllocations: [] };
   }
 
   const baseTasks = Array.isArray(snapshot.t) ? snapshot.t : [];
@@ -1021,9 +1273,12 @@ function mergeCrmTasksIntoSnapshot(snapshot) {
 
   ensureCrmModeScoped(snapshot, tasks);
 
+  const stageAllocations = collectStageAllocationsFromSnapshot(snapshot);
+  const applied = applyStageAllocationsToSnapshot(snapshot, stageAllocations);
+
   const crmTasks = tasks.filter((task) => isCrmTaskRecord(task));
 
-  return { tasks, crmTasks };
+  return { tasks, crmTasks, stageAllocations: applied.entries };
 }
 
 function toIsoString(value) {
@@ -2595,6 +2850,8 @@ async function loadLatestSnapshot() {
     ensureModeScopedState(snapshotObj);
     ensureLocalStorageMetadata(snapshotObj);
     applyStoredSettingsToSnapshot(snapshotObj);
+    const { stageAllocations } = mergeCrmTasksIntoSnapshot(snapshotObj);
+    writeStageAllocationsToSql(stageAllocations);
     const normalizedSettings = writePlannerSettingsToSql(snapshotObj.meta?.settings || {});
     if (isPlainObject(snapshotObj.meta)) {
       snapshotObj.meta.settings = normalizedSettings;
@@ -3069,7 +3326,9 @@ async function persistSnapshotWithSql(options) {
     parsedSnapshot.meta.settings = persistedSettings;
   }
 
-  mergeCrmTasksIntoSnapshot(parsedSnapshot);
+  const { stageAllocations } = mergeCrmTasksIntoSnapshot(parsedSnapshot);
+
+  writeStageAllocationsToSql(stageAllocations);
 
   const storedMeta = sanitizeMetaForStorage(meta);
 
