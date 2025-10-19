@@ -7,6 +7,23 @@ CREATE TABLE IF NOT EXISTS planner_state_snapshots (
   creator TEXT
 );
 
+-- Backfill missing revisions derived from legacy order rows so FK checks pass.
+INSERT INTO planner_state_snapshots (rev, created_at)
+SELECT DISTINCT so.rev, now()
+  FROM planner_state_orders so
+ WHERE NOT EXISTS (
+         SELECT 1
+           FROM planner_state_snapshots ps
+          WHERE ps.rev = so.rev
+       );
+
+-- Align the sequence with the current maximum revision value.
+SELECT setval(
+  'planner_state_snapshots_rev_seq',
+  GREATEST(1, COALESCE((SELECT MAX(rev) FROM planner_state_snapshots), 1)),
+  true
+);
+
 -- Prepare new consolidated tables for orders and peredels (stages).
 CREATE TABLE IF NOT EXISTS planner_orders (
   id BIGSERIAL PRIMARY KEY,
