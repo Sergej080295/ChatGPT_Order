@@ -1222,6 +1222,49 @@ async function ensureCoreSchema(client) {
   `);
   await client.query('ALTER TABLE pc_orders ALTER COLUMN board_id SET NOT NULL');
   await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'lane_code'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'lane_id'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_orders RENAME COLUMN lane_code TO lane_id';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_orders ADD COLUMN IF NOT EXISTS lane_id TEXT');
+  await client.query('ALTER TABLE pc_orders ALTER COLUMN lane_id TYPE TEXT USING lane_id::text');
+  await client.query(`
+    DO $do$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'lane_code'
+      ) THEN
+        EXECUTE $sql$
+          UPDATE pc_orders
+             SET lane_id = COALESCE(NULLIF(btrim(lane_id), ''), NULLIF(btrim(lane_code::text), ''))
+           WHERE lane_id IS NULL OR btrim(lane_id) = '';
+        $sql$;
+      END IF;
+    END
+    $do$
+  `);
+  await client.query(`
+    UPDATE pc_orders
+       SET lane_id = NULL
+     WHERE lane_id IS NOT NULL AND btrim(lane_id) = ''
+  `);
+  await client.query(`
     ALTER TABLE pc_orders
       ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
       ADD COLUMN IF NOT EXISTS order_number TEXT,
