@@ -776,12 +776,45 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
+const CRM_STAGE_NAME_TO_KEY={
+  'подготовка в работу':'draw',
+  'подготовка':'draw',
+  'закупка':'proc',
+  'рубка':'shear',
+  'лазер':'laser',
+  'гибка':'bend',
+  'сварка':'weld',
+  'мехобработка':'mech',
+  'кооперация':'coop',
+  'упаковка':'pack',
+  'отгрузка':'ship',
+  'чек лист':'checklist',
+  'чек-лист':'checklist',
+  'чеклист':'checklist'
+};
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const CRM_AUTOSAVE_PREF_KEY='mini_crm_autosave_pref_v1';
 let crmAutosaveOn=true;
 let crmHasPendingChanges=false;
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+function normalizeIdentityPart(value){
+  if(value===null||value===undefined) return '';
+  return String(value).trim().toLowerCase();
+}
+function buildCrmOrderIdentity(order,index){
+  if(!order||typeof order!=='object'){ return index!=null?`crm-order-${index}`:null; }
+  const numberPart=normalizeIdentityPart(order.orderNo||order.orderNumber||'');
+  const customerPart=normalizeIdentityPart(order.customer||order.orderCustomer||'');
+  if(numberPart||customerPart){
+    return `${numberPart}::${customerPart}`.replace(/^::/,'').replace(/::$/,'');
+  }
+  const idRaw=order.id!=null?String(order.id).trim():'';
+  if(idRaw) return idRaw;
+  const parentRaw=order.parentId!=null?String(order.parentId).trim():'';
+  if(parentRaw) return parentRaw;
+  return index!=null?`crm-order-${index}`:null;
+}
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
@@ -1926,6 +1959,8 @@ function buildCrmStateFromSnapshot(snapshot){
       const stage={
         id:stageId,
         name:rawEntry.stage || rawEntry.name || 'Передел',
+        stageKey:rawEntry.stage || null,
+        listKey,
         done:!!(rawEntry.done || doneMeta.when || Number(rawEntry.progress||rawEntry.percent||0)>=100),
         progress:Number(rawEntry.progress ?? rawEntry.percent ?? 0) || 0,
         percent:Number(rawEntry.percent ?? rawEntry.progress ?? 0) || 0,
@@ -1959,6 +1994,186 @@ function buildCrmStateFromSnapshot(snapshot){
   });
   board.orders=ordered;
   return { boards:[board], currentBoardId:defaultBoardId };
+}
+
+function stageKeyFromCrmStage(stage){
+  if(stage&&typeof stage.stageKey==='string'){const trimmed=stage.stageKey.trim();if(trimmed) return trimmed;}
+  const normalized=normalizeStageName(stage?.name||'');
+  if(normalized&&Object.prototype.hasOwnProperty.call(CRM_STAGE_NAME_TO_KEY,normalized)){
+    return CRM_STAGE_NAME_TO_KEY[normalized];
+  }
+  if(normalized){
+    return normalized.replace(/[^a-z0-9]+/g,'_');
+  }
+  return '';
+}
+
+function isoFromDateLike(value){
+  if(!value) return '';
+  if(value instanceof Date){
+    const t=value.getTime();
+    if(Number.isNaN(t)) return '';
+    return new Date(t).toISOString();
+  }
+  if(typeof value==='number'){ if(!Number.isFinite(value)) return ''; return new Date(value).toISOString(); }
+  const str=String(value).trim();
+  if(!str) return '';
+  const parsed=new Date(str);
+  if(Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString();
+}
+
+function ensureCrmBoardFromState(crmState){
+  if(!crmState||typeof crmState!=='object') return null;
+  const boards=Array.isArray(crmState.boards)?crmState.boards:[];
+  if(!boards.length) return null;
+  if(crmState.currentBoardId){
+    const found=boards.find(board=>board&&board.id===crmState.currentBoardId);
+    if(found) return found;
+  }
+  return boards[0];
+}
+
+function mergeCrmOrdersIntoPlannerSnapshot(target, crmState){
+  if(!target||typeof target!=='object') return;
+  const board=ensureCrmBoardFromState(crmState);
+  if(!board){
+    target.t=[];
+    target.done=[];
+    target.trash=[];
+    target.orders=[];
+    return;
+  }
+  const active=[];
+  const done=[];
+  const trash=[];
+  const ordersMap=new Map();
+  const lanes=Array.isArray(board.lanes)?board.lanes:[];
+  const defaultLane=lanes.length?lanes[0]:'';
+  const orders=Array.isArray(board.orders)?board.orders:[];
+  orders.forEach((order,orderIdx)=>{
+    if(!order||typeof order!=='object') return;
+    const parentIdentity=buildCrmOrderIdentity(order,orderIdx)||`crm-order-${orderIdx}`;
+    const parentId=(order.parentId!=null?String(order.parentId).trim():'' )||parentIdentity;
+    const orderNumber=order.orderNo||order.orderNumber||'';
+    const orderCustomer=order.customer||order.orderCustomer||'';
+    const orderTitle=order.title||order.orderTitle||parentIdentity;
+    const status=order.status||defaultLane||'';
+    const state=order.state||'';
+    const baseListKey=order.listKey==='trash'?'trash':(order.listKey==='done'?'done':'t');
+    const stages=Array.isArray(order.stages)?order.stages.slice():[];
+    stages.sort((a,b)=>{
+      const ao=Number.isFinite(a?.stageOrdinal)?Number(a.stageOrdinal):Number.isFinite(a?.priorityIndex)?Number(a.priorityIndex):Number.MAX_SAFE_INTEGER;
+      const bo=Number.isFinite(b?.stageOrdinal)?Number(b.stageOrdinal):Number.isFinite(b?.priorityIndex)?Number(b.priorityIndex):Number.MAX_SAFE_INTEGER;
+      return ao-bo;
+    });
+    let hasActiveStage=false;
+    stages.forEach((stage,stageIdx)=>{
+      if(!stage||typeof stage!=='object') return;
+      const stageKey=stageKeyFromCrmStage(stage);
+      const stageName=stageKey||stage.name||'';
+      const stageUid=stage.id?String(stage.id):`${parentIdentity}::${stageName||'stage'}::${stageIdx}`;
+      const progress=Number(stage.progress ?? order.progress ?? 0) || 0;
+      const percent=Number(stage.percent ?? progress) || 0;
+      const isDone=baseListKey==='done' || stage.done || progress>=100;
+      const hours=parseNumericValue(stage.value);
+      const extra=parseNumericValue(stage.extra);
+      const remaining=parseNumericValue(stage.remaining);
+      const startIso=isoFromDateLike(stage.start);
+      const endIso=isoFromDateLike(stage.end);
+      const origStartIso=isoFromDateLike(stage.originalStart || stage.origStart);
+      const doneIso=isoFromDateLike(stage.doneAt || stage.end);
+      const crmMeta={ lane:status, orderId:parentIdentity };
+
+      if(baseListKey==='trash'){
+        trash.push({
+          uid:stageUid,
+          orderId:parentIdentity,
+          orderIdentity:parentIdentity,
+          orderNumber,
+          orderCustomer,
+          orderTitle,
+          stage:stageName,
+          parentId,
+          childId:stageUid,
+          hours:hours.hasValue?hours.number:null,
+          extra:extra.hasValue?extra.number:null,
+          start:startIso,
+          end:endIso,
+          doneAt:doneIso,
+          source:'crm',
+          crmMeta
+        });
+        return;
+      }
+
+      if(isDone){
+        done.push({
+          uid:stageUid,
+          orderId:parentIdentity,
+          orderIdentity:parentIdentity,
+          orderNumber,
+          orderCustomer,
+          orderTitle,
+          stage:stageName,
+          parentId,
+          childId:stageUid,
+          hours:hours.hasValue?hours.number:null,
+          extra:extra.hasValue?extra.number:null,
+          start:startIso,
+          end:endIso,
+          when:doneIso,
+          doneAt:doneIso,
+          source:'crm',
+          crmMeta
+        });
+        return;
+      }
+
+      const activeEntry={
+        uid:stageUid,
+        orderId:parentIdentity,
+        orderIdentity:parentIdentity,
+        orderNumber,
+        orderCustomer,
+        orderTitle,
+        parentId,
+        childId:stageUid,
+        stage:stageName,
+        state,
+        status,
+        progress,
+        percent,
+        hours:hours.hasValue?hours.number:null,
+        extraHours:extra.hasValue?extra.number:null,
+        remainingHours:remaining.hasValue?remaining.number:null,
+        startDate:startIso,
+        endDate:endIso,
+        origStartDate:origStartIso,
+        useReserve:!!order.useReserve,
+        locked:!!order.locked,
+        orderOrdinal:Number.isFinite(order.priorityIndex)?Number(order.priorityIndex):null,
+        doneMeta:doneIso?{ when:doneIso, source:'crm' }:null,
+        crmMeta
+      };
+      active.push(activeEntry);
+      hasActiveStage=true;
+      const ordersKey=(stageKey||normalizeStageName(stage.name||'')).trim();
+      if(ordersKey){
+        if(!ordersMap.has(ordersKey)) ordersMap.set(ordersKey,[]);
+        ordersMap.get(ordersKey).push(stageUid);
+      }
+    });
+
+    // Если у заказа нет активных переделов, просто пропускаем его —
+    // он попадёт либо в архив (done), либо в корзину (trash).
+  });
+
+  target.t=active;
+  target.done=done;
+  target.trash=trash;
+  target.orders=Array.from(ordersMap.entries());
+  if(!Array.isArray(target.locked)) target.locked=[];
 }
 
 async function pushCrmToServer(){
@@ -2021,6 +2236,7 @@ async function pushCrmToServer(){
     plannerSnapshot.crm=snapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
+    mergeCrmOrdersIntoPlannerSnapshot(plannerSnapshot, snapshot);
     const now=new Date(nowIso);
     const nowLabel=now.toLocaleString();
     const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
