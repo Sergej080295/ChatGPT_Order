@@ -4062,6 +4062,7 @@ function refreshCrmDerivedData(options={}){
   updateOptimizeButtonsHighlight();
 }
 
+
 function applyPlannerMode(mode, options={}){
   const normalized = normalizePlannerMode(mode);
   const prev = plannerMode;
@@ -4084,11 +4085,13 @@ function applyPlannerMode(mode, options={}){
   updateStageFilterControls();
   const changed = prev !== normalized;
   if(options.persist && changed){
-    try{ persistSharedPreference('plannerMode', 'Режим планировщика', normalized); }
-    catch(_err){ /* ignore */ }
+    const draft = ensureSharedSettingsDraft();
+    draft.plannerMode = normalized;
+    markSharedSettingsDirty('plannerMode');
   }
   return changed;
 }
+
 
 function buildCrmUpdateFromTask(task, stage, extras={}){
   if(!task || !stage || !task.crmMeta) return null;
@@ -7057,6 +7060,75 @@ function sanitizeExtraMinimum(value){
 const KNOWN_SETTINGS_KEYS = new Set([
   'capacity','parallel','plannerMode','notificationsMuted','tableColumns','extraTime','crmStageMapping','logLimit','updatedAt','admin'
 ]);
+
+const SHARED_PREF_KEYS = [
+  'shiftOnProgress',
+  'autoOptimizeOn',
+  'cascadeReadyOn',
+  'priorityChangeLoggingOn',
+  'routeDateChangeLoggingOn',
+  'notificationsMuted'
+];
+
+const SHARED_PREF_LABELS = {
+  shiftOnProgress: 'Сдвигать старт при правке «Прогресса»',
+  autoOptimizeOn: 'Автооптимизация',
+  cascadeReadyOn: 'Автоготовность при упаковке/отгрузке',
+  priorityChangeLoggingOn: 'Изменение приоритета',
+  routeDateChangeLoggingOn: 'Изменение дат маршрута',
+  notificationsMuted: 'Без уведомлений'
+};
+
+function normalizeCapacityMap(source, fallback = DEFAULT_CAP){
+  const result = {};
+  const fallbackMap = fallback && typeof fallback === 'object' ? fallback : DEFAULT_CAP;
+  STAGE_KEYS.forEach(stage=>{
+    const fallbackRaw = fallbackMap && Object.prototype.hasOwnProperty.call(fallbackMap, stage)
+      ? Number(fallbackMap[stage])
+      : Number(DEFAULT_CAP[stage]);
+    const fallbackValue = Number.isFinite(fallbackRaw) && fallbackRaw >= 0
+      ? Math.round(fallbackRaw * 100) / 100
+      : 0;
+    const raw = source && Object.prototype.hasOwnProperty.call(source, stage)
+      ? source[stage]
+      : fallbackValue;
+    const num = Number(raw);
+    result[stage] = Number.isFinite(num) && num >= 0
+      ? Math.round(num * 100) / 100
+      : fallbackValue;
+  });
+  return result;
+}
+
+function normalizeParallelMap(source, fallback = DEFAULT_PARALLEL){
+  const result = {};
+  const fallbackMap = fallback && typeof fallback === 'object' ? fallback : DEFAULT_PARALLEL;
+  STAGE_KEYS.forEach(stage=>{
+    if(!NOHOUR_STAGES.has(stage)) return;
+    const fallbackRaw = fallbackMap && Object.prototype.hasOwnProperty.call(fallbackMap, stage)
+      ? Number(fallbackMap[stage])
+      : Number(DEFAULT_PARALLEL[stage]);
+    const fallbackValue = Number.isFinite(fallbackRaw) && fallbackRaw > 0
+      ? Math.max(1, Math.round(fallbackRaw))
+      : Math.max(1, Math.round(DEFAULT_PARALLEL[stage] ?? 3));
+    const raw = source && Object.prototype.hasOwnProperty.call(source, stage)
+      ? source[stage]
+      : fallbackValue;
+    const num = Number(raw);
+    result[stage] = Number.isFinite(num) && num > 0
+      ? Math.max(1, Math.round(num))
+      : fallbackValue;
+  });
+  return result;
+}
+
+function normalizeSharedPrefs(source){
+  const prefs = {};
+  SHARED_PREF_KEYS.forEach(key=>{
+    prefs[key] = !!(source && typeof source === 'object' && source[key]);
+  });
+  return prefs;
+}
 
 function clonePlain(value){
   if(Array.isArray(value)) return value.map(clonePlain);
@@ -13130,8 +13202,6 @@ function persistMaybe(reason='data', opts={}){
 
 let pendingSettingsTimer = null;
 let pendingSettingsQueue = [];
-let pendingSharedPrefTimer = null;
-let pendingSharedPrefQueue = [];
 
 function formatSettingsValue(kind, value){
   const num = Number(value);
@@ -13159,117 +13229,6 @@ function buildSettingsSummary(changes){
     const suffix = change.kind === 'capacity' ? ' ч/день' : '';
     return `${stageName}: ${label} ${formatSettingsValue(change.kind, change.to)}${suffix}`;
   }).join('; ');
-}
-
-function persistSystemSettingsChange(entries){
-  if(!Array.isArray(entries) || !entries.length) return;
-  const normalized = entries
-    .map(entry=>{
-      if(!entry || !entry.stage || !entry.kind) return null;
-      return {
-        stage: entry.stage,
-        kind: entry.kind === 'capacity' ? 'capacity' : 'parallel',
-        from: entry.from,
-        to: entry.to
-      };
-    })
-    .filter(Boolean);
-  if(!normalized.length) return;
-  pendingSettingsQueue = pendingSettingsQueue.concat(normalized);
-  if(pendingSettingsTimer){
-    clearTimeout(pendingSettingsTimer);
-  }
-  pendingSettingsTimer = setTimeout(()=>{
-    const byKey = new Map();
-    pendingSettingsQueue.forEach(change=>{
-      const key = `${change.stage}:${change.kind}`;
-      if(byKey.has(key)){
-        const existing = byKey.get(key);
-        existing.to = change.to;
-      }else{
-        byKey.set(key, { ...change });
-      }
-    });
-    const merged = [...byKey.values()];
-    pendingSettingsQueue = [];
-    pendingSettingsTimer = null;
-    const timestamp = new Date().toLocaleString();
-    syncSharedSettingsToMeta(timestamp);
-    bumpSettingsVersion();
-    persistNow(undefined, {
-      source:'settings',
-      force:true,
-      settingsChange:{ entries: merged, timestamp }
-    });
-  }, 150);
-}
-
-function persistSharedPreferencesChange(entries, options={}){
-  if(!Array.isArray(entries) || !entries.length) return;
-  const immediate = !!options.immediate;
-  const context = typeof options.context === 'string' ? options.context : null;
-  const timestampOverride = typeof options.timestamp === 'string' ? options.timestamp : null;
-  const settingsMetaOverride = options && typeof options.settingsMeta === 'object'
-    ? clonePlain(options.settingsMeta)
-    : null;
-  const normalized = entries
-    .map(entry=>{
-      if(!entry || !entry.key) return null;
-      const key = String(entry.key);
-      if(!key) return null;
-      return {
-        stage: 'global',
-        kind: 'pref',
-        key,
-        label: entry.label || key,
-        to: entry.value
-      };
-    })
-    .filter(Boolean);
-  if(!normalized.length) return;
-  pendingSharedPrefQueue = pendingSharedPrefQueue.concat(normalized);
-
-  const flush = ()=>{
-    const byKey = new Map();
-    pendingSharedPrefQueue.forEach(change=>{
-      const key = change.key;
-      byKey.set(key, { ...change });
-    });
-    const merged = [...byKey.values()];
-    pendingSharedPrefQueue = [];
-    pendingSharedPrefTimer = null;
-    const timestamp = timestampOverride || new Date().toLocaleString();
-    syncSharedSettingsToMeta(timestamp);
-    bumpSettingsVersion();
-    const persistOpts = {
-      source:'settings',
-      force:true,
-      settingsChange:{ entries: merged, timestamp },
-      sharedContext: context
-    };
-    if(settingsMetaOverride){
-      persistOpts.settingsMeta = clonePlain(settingsMetaOverride);
-    }
-    return persistNow(undefined, persistOpts);
-  };
-
-  if(immediate){
-    if(pendingSharedPrefTimer){
-      clearTimeout(pendingSharedPrefTimer);
-      pendingSharedPrefTimer = null;
-    }
-    return flush();
-  }
-
-  if(pendingSharedPrefTimer){
-    clearTimeout(pendingSharedPrefTimer);
-  }
-  pendingSharedPrefTimer = setTimeout(flush, 120);
-  return null;
-}
-
-function persistSharedPreference(key, label, value, options){
-  persistSharedPreferencesChange([{ key, label, value }], options);
 }
 
 function cloneCrmMappingForSnapshot(map){
@@ -13303,12 +13262,26 @@ function crmMappingsEqual(a, b){
   return true;
 }
 
+
 function cloneSharedSettingsBaseline(){
+  const capacity = normalizeCapacityMap(capByProc, DEFAULT_CAP);
+  const parallel = normalizeParallelMap(parallelByProc, DEFAULT_PARALLEL);
   const columns = {};
   TABLE_COLUMN_DEFS.forEach(def=>{
     columns[def.key] = getColumnWidthValue(def.key);
   });
+  const prefs = normalizeSharedPrefs({
+    shiftOnProgress,
+    autoOptimizeOn,
+    cascadeReadyOn,
+    priorityChangeLoggingOn,
+    routeDateChangeLoggingOn,
+    notificationsMuted
+  });
+  const plannerModeValue = plannerMode || determinePlannerModeFallback();
   return {
+    capacity,
+    parallel,
     tableColumns: columns,
     extraTime: {
       percent: sanitizeExtraPercent(extraTimeSettings.percent),
@@ -13316,16 +13289,56 @@ function cloneSharedSettingsBaseline(){
     },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
     crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping),
-    admin: { ...adminSettingsState }
+    admin: { ...adminSettingsState },
+    prefs,
+    plannerMode: plannerModeValue
   };
 }
+
+
 
 function ensureSharedSettingsDraft(){
   if(!sharedSettingsDraft){
     sharedSettingsDraft = cloneSharedSettingsBaseline();
+  }else{
+    if(!sharedSettingsDraft.capacity){
+      sharedSettingsDraft.capacity = normalizeCapacityMap(capByProc, DEFAULT_CAP);
+    }
+    if(!sharedSettingsDraft.parallel){
+      sharedSettingsDraft.parallel = normalizeParallelMap(parallelByProc, DEFAULT_PARALLEL);
+    }
+    if(!sharedSettingsDraft.tableColumns){
+      const columns = {};
+      TABLE_COLUMN_DEFS.forEach(def=>{
+        columns[def.key] = getColumnWidthValue(def.key);
+      });
+      sharedSettingsDraft.tableColumns = columns;
+    }
+    if(!sharedSettingsDraft.extraTime){
+      sharedSettingsDraft.extraTime = {
+        percent: sanitizeExtraPercent(extraTimeSettings.percent),
+        minimum: sanitizeExtraMinimum(extraTimeSettings.minimum)
+      };
+    }
+    if(!sharedSettingsDraft.prefs || typeof sharedSettingsDraft.prefs !== 'object'){
+      sharedSettingsDraft.prefs = normalizeSharedPrefs({
+        shiftOnProgress,
+        autoOptimizeOn,
+        cascadeReadyOn,
+        priorityChangeLoggingOn,
+        routeDateChangeLoggingOn,
+        notificationsMuted
+      });
+    }else{
+      sharedSettingsDraft.prefs = normalizeSharedPrefs(sharedSettingsDraft.prefs);
+    }
+    if(!sharedSettingsDraft.plannerMode){
+      sharedSettingsDraft.plannerMode = plannerMode || determinePlannerModeFallback();
+    }
   }
   return sharedSettingsDraft;
 }
+
 
 function resetSharedSettingsDraft(){
   sharedSettingsDraft = cloneSharedSettingsBaseline();
@@ -13379,11 +13392,44 @@ function markSharedSettingsDirty(key){
   updateSharedSettingsButtons();
 }
 
+function updateSharedPrefsDraftValue(key, value){
+  const draft = ensureSharedSettingsDraft();
+  const source = draft.prefs && typeof draft.prefs === 'object' && !Array.isArray(draft.prefs)
+    ? draft.prefs
+    : sharedSettingsSnapshot?.prefs;
+  const baseline = source && typeof source === 'object' ? source : {
+    shiftOnProgress,
+    autoOptimizeOn,
+    cascadeReadyOn,
+    priorityChangeLoggingOn,
+    routeDateChangeLoggingOn,
+    notificationsMuted
+  };
+  const prefs = normalizeSharedPrefs(baseline);
+  const prev = !!prefs[key];
+  const next = !!value;
+  if(prev !== next){
+    prefs[key] = next;
+    draft.prefs = { ...prefs };
+    markSharedSettingsDirty('sharedPrefs');
+  }else{
+    draft.prefs = { ...prefs };
+  }
+  return prev;
+}
+
+
 function restoreSharedSettingsSnapshot(){
   if(!sharedSettingsSnapshot) return;
   sharedSettingsApplying = false;
   sharedSettingsPendingStamp = null;
   const snap = sharedSettingsSnapshot;
+  const restoredCapacity = normalizeCapacityMap(snap.capacity || capByProc, DEFAULT_CAP);
+  capByProc = { ...restoredCapacity };
+  stateMeta.settings.capacity = { ...restoredCapacity };
+  const restoredParallel = normalizeParallelMap(snap.parallel || parallelByProc, DEFAULT_PARALLEL);
+  parallelByProc = { ...restoredParallel };
+  stateMeta.settings.parallel = { ...restoredParallel };
   tableColumnWidths = { ...snap.tableColumns };
   stateMeta.settings.tableColumns = { ...tableColumnWidths };
   applyTableColumnWidths();
@@ -13406,6 +13452,35 @@ function restoreSharedSettingsSnapshot(){
   const adminSnapshot = sanitizeAdminSettings(snap.admin, adminSettingsState);
   adminSettingsState = { ...adminSnapshot };
   stateMeta.settings.admin = { ...adminSnapshot };
+
+  const prefsSnapshot = normalizeSharedPrefs(snap.prefs || {});
+  shiftOnProgress = !!prefsSnapshot.shiftOnProgress;
+  autoOptimizeOn = !!prefsSnapshot.autoOptimizeOn;
+  cascadeReadyOn = !!prefsSnapshot.cascadeReadyOn;
+  priorityChangeLoggingOn = !!prefsSnapshot.priorityChangeLoggingOn;
+  routeDateChangeLoggingOn = !!prefsSnapshot.routeDateChangeLoggingOn;
+  notificationsMuted = !!prefsSnapshot.notificationsMuted;
+  stateMeta.settings.notificationsMuted = notificationsMuted;
+  const shiftBox = document.getElementById('shiftOnProgress');
+  if(shiftBox) shiftBox.checked = shiftOnProgress;
+  const autoBox = document.getElementById('autoOptimize');
+  if(autoBox) autoBox.checked = autoOptimizeOn;
+  const cascadeBox = document.getElementById('cascadeReady');
+  if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
+  const notifyPriorityEl = document.getElementById('notifyPriorityChange');
+  if(notifyPriorityEl) notifyPriorityEl.checked = priorityChangeLoggingOn;
+  const notifyRouteEl = document.getElementById('notifyRouteDates');
+  if(notifyRouteEl) notifyRouteEl.checked = routeDateChangeLoggingOn;
+  const muteBox = document.getElementById('muteNotifications');
+  if(muteBox) muteBox.checked = notificationsMuted;
+  updateIgnoredStatesSummary();
+  updateExcludedAttention();
+
+  const plannerModeValue = snap.plannerMode || determinePlannerModeFallback();
+  if(plannerMode !== plannerModeValue){
+    applyPlannerMode(plannerModeValue, { persist:false });
+  }
+
   renderSystemSettingsUI();
   renderAdminSettingsUI();
   if(isCrmMode()){
@@ -13415,7 +13490,9 @@ function restoreSharedSettingsSnapshot(){
   captureSharedSettingsSnapshot(true);
   applyTableColumnWidths();
   updateSharedSettingsButtons();
+  recompute();
 }
+
 
 function maybeResolveSharedSettingsAck(stamp){
   if(!sharedSettingsApplying) return;
@@ -13464,6 +13541,7 @@ function handleSharedSettingsCommitError(err){
   updateSharedSettingsButtons();
 }
 
+
 function commitSharedSettingsChanges(){
   if(sharedSettingsApplying) return;
   if(sharedSettingsDirtyKeys.size === 0){
@@ -13478,10 +13556,80 @@ function commitSharedSettingsChanges(){
   if(!stateMeta.settings) stateMeta.settings = {};
   const requestedKeys = new Set(sharedSettingsDirtyKeys);
 
-  const prevAdmin = sanitizeAdminSettings(adminSettingsState);
-  const draftAdminRaw = draft.admin || prevAdmin;
-  const nextAdmin = sanitizeAdminSettings(draftAdminRaw, prevAdmin);
-  sharedSettingsDraft.admin = { ...nextAdmin };
+  const currentCapacity = normalizeCapacityMap(capByProc, DEFAULT_CAP);
+  const baselineCapacity = sharedSettingsSnapshot && sharedSettingsSnapshot.capacity
+    ? normalizeCapacityMap(sharedSettingsSnapshot.capacity, currentCapacity)
+    : currentCapacity;
+  const nextCapacity = draft.capacity
+    ? normalizeCapacityMap(draft.capacity, baselineCapacity)
+    : currentCapacity;
+  capByProc = { ...nextCapacity };
+  stateMeta.settings.capacity = { ...nextCapacity };
+  const capacityChanges = STAGE_KEYS
+    .filter(stage => (nextCapacity[stage] ?? null) !== (baselineCapacity[stage] ?? null))
+    .map(stage => ({ stage, from: baselineCapacity[stage] ?? null, to: nextCapacity[stage] ?? null }));
+
+  const currentParallel = normalizeParallelMap(parallelByProc, DEFAULT_PARALLEL);
+  const baselineParallel = sharedSettingsSnapshot && sharedSettingsSnapshot.parallel
+    ? normalizeParallelMap(sharedSettingsSnapshot.parallel, currentParallel)
+    : currentParallel;
+  const nextParallel = draft.parallel
+    ? normalizeParallelMap(draft.parallel, baselineParallel)
+    : currentParallel;
+  parallelByProc = { ...nextParallel };
+  stateMeta.settings.parallel = { ...nextParallel };
+  const parallelChanges = Array.from(NOHOUR_STAGES)
+    .filter(stage => (nextParallel[stage] ?? null) !== (baselineParallel[stage] ?? null))
+    .map(stage => ({ stage, from: baselineParallel[stage] ?? null, to: nextParallel[stage] ?? null }));
+
+  const currentPrefs = normalizeSharedPrefs({
+    shiftOnProgress,
+    autoOptimizeOn,
+    cascadeReadyOn,
+    priorityChangeLoggingOn,
+    routeDateChangeLoggingOn,
+    notificationsMuted
+  });
+  const baselinePrefs = sharedSettingsSnapshot && sharedSettingsSnapshot.prefs
+    ? normalizeSharedPrefs(sharedSettingsSnapshot.prefs)
+    : currentPrefs;
+  const nextPrefs = draft.prefs ? normalizeSharedPrefs(draft.prefs) : currentPrefs;
+  const prefChanges = [];
+  SHARED_PREF_KEYS.forEach(key=>{
+    if((nextPrefs[key] ?? false) !== (baselinePrefs[key] ?? false)){
+      prefChanges.push({ key, from: baselinePrefs[key] ?? false, to: nextPrefs[key] ?? false });
+    }
+  });
+  shiftOnProgress = !!nextPrefs.shiftOnProgress;
+  autoOptimizeOn = !!nextPrefs.autoOptimizeOn;
+  cascadeReadyOn = !!nextPrefs.cascadeReadyOn;
+  priorityChangeLoggingOn = !!nextPrefs.priorityChangeLoggingOn;
+  routeDateChangeLoggingOn = !!nextPrefs.routeDateChangeLoggingOn;
+  notificationsMuted = !!nextPrefs.notificationsMuted;
+  stateMeta.settings.notificationsMuted = notificationsMuted;
+  const shiftBox = document.getElementById('shiftOnProgress');
+  if(shiftBox) shiftBox.checked = shiftOnProgress;
+  const autoBox = document.getElementById('autoOptimize');
+  if(autoBox) autoBox.checked = autoOptimizeOn;
+  const cascadeBox = document.getElementById('cascadeReady');
+  if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
+  const notifyPriorityEl = document.getElementById('notifyPriorityChange');
+  if(notifyPriorityEl) notifyPriorityEl.checked = priorityChangeLoggingOn;
+  const notifyRouteEl = document.getElementById('notifyRouteDates');
+  if(notifyRouteEl) notifyRouteEl.checked = routeDateChangeLoggingOn;
+  const muteBox = document.getElementById('muteNotifications');
+  if(muteBox) muteBox.checked = notificationsMuted;
+  updateIgnoredStatesSummary();
+  updateExcludedAttention();
+
+  const baselinePlannerMode = sharedSettingsSnapshot && sharedSettingsSnapshot.plannerMode
+    ? sharedSettingsSnapshot.plannerMode
+    : (stateMeta.settings.plannerMode || determinePlannerModeFallback());
+  const nextPlannerMode = draft.plannerMode || baselinePlannerMode;
+  const plannerModeChanged = nextPlannerMode !== baselinePlannerMode;
+  stateMeta.settings.plannerMode = nextPlannerMode;
+  sharedSettingsDraft.plannerMode = nextPlannerMode;
+  refreshPlannerModeUI();
 
   const prevColumns = {};
   TABLE_COLUMN_DEFS.forEach(def=>{
@@ -13533,11 +13681,21 @@ function commitSharedSettingsChanges(){
   sharedSettingsDraft.crmStageMapping = nextSnapshot;
   const mappingChanged = !crmMappingsEqual(prevMappingSnapshot, nextSnapshot);
   const mappingChangeRequested = mappingChanged || crmMappingReplaceMode;
+
+  const prevAdmin = sanitizeAdminSettings(adminSettingsState);
+  const draftAdminRaw = draft.admin || prevAdmin;
+  const nextAdmin = sanitizeAdminSettings(draftAdminRaw, prevAdmin);
+  sharedSettingsDraft.admin = { ...nextAdmin };
   const adminChanged = nextAdmin.historyLimit !== prevAdmin.historyLimit
     || nextAdmin.historyDailyLimit !== prevAdmin.historyDailyLimit
-    || nextAdmin.allowForceOverwrite !== prevAdmin.allowForceOverwrite;
+    || nextAdmin.allowForceOverwrite !== prevAdmin.allowForceOverwrite
+    || nextAdmin.writeMode !== prevAdmin.writeMode;
 
   const changedKeys = new Set();
+  if(capacityChanges.length) changedKeys.add('capacity');
+  if(parallelChanges.length) changedKeys.add('parallel');
+  if(prefChanges.length) changedKeys.add('sharedPrefs');
+  if(plannerModeChanged) changedKeys.add('plannerMode');
   if(changedColumnKeys.length) changedKeys.add('tableColumns');
   if(extraChanged) changedKeys.add('extraTime');
   if(logChanged) changedKeys.add('logLimit');
@@ -13570,6 +13728,10 @@ function commitSharedSettingsChanges(){
   stateMeta.settings.admin = { ...adminSettingsState };
 
   const sanitizedSettings = syncSharedSettingsToMeta(timestamp);
+  capByProc = normalizeCapacityMap(sanitizedSettings.capacity || nextCapacity, DEFAULT_CAP);
+  parallelByProc = normalizeParallelMap(sanitizedSettings.parallel || nextParallel, DEFAULT_PARALLEL);
+  stateMeta.settings.capacity = { ...capByProc };
+  stateMeta.settings.parallel = { ...parallelByProc };
   tableColumnWidths = { ...sanitizedSettings.tableColumns };
   extraTimeSettings = { ...sanitizedSettings.extraTime };
   logLimitSetting = sanitizedSettings.logLimit === null ? null : Number(sanitizedSettings.logLimit);
@@ -13578,16 +13740,27 @@ function commitSharedSettingsChanges(){
   stateMeta.settings.admin = { ...adminSettingsState };
 
   sharedSettingsDraft = {
+    capacity: { ...capByProc },
+    parallel: { ...parallelByProc },
     tableColumns: { ...sanitizedSettings.tableColumns },
     extraTime: { ...sanitizedSettings.extraTime },
     logLimit: logLimitSetting === null ? null : Number(logLimitSetting),
     crmStageMapping: cloneCrmMappingForSnapshot(crmStageMapping),
-    admin: { ...adminSettingsState }
+    admin: { ...adminSettingsState },
+    prefs: { ...nextPrefs },
+    plannerMode: sanitizedSettings.plannerMode || nextPlannerMode
   };
   updateSharedSettingsButtons();
   renderAdminSettingsUI();
 
-  const entries = [];
+  const settingsEntries = [];
+  capacityChanges.forEach(change=>{
+    settingsEntries.push({ stage: change.stage, kind:'capacity', from: change.from, to: change.to });
+  });
+  parallelChanges.forEach(change=>{
+    settingsEntries.push({ stage: change.stage, kind:'parallel', from: change.from, to: change.to });
+  });
+
   if(changedColumnKeys.length){
     const nowTs = Date.now();
     lastColumnWidthChangeAt = nowTs;
@@ -13600,28 +13773,42 @@ function commitSharedSettingsChanges(){
     changedColumnKeys.forEach(colKey=>{
       const def = TABLE_COLUMN_DEFS.find(item=>item.key === colKey);
       const label = TABLE_COLUMN_LABEL_MAP[colKey] || def?.label || colKey;
-      entries.push({
+      settingsEntries.push({
+        kind:'pref',
         key:`tableColumn.${colKey}`,
         label:`Ширина колонки «${label}»`,
-        value:tableColumnWidths[colKey]
+        to: tableColumnWidths[colKey]
       });
     });
   }
 
   if(extraChanged){
-    entries.push({ key:'extraTime.percent', label:'Автодовес, %', value: extraTimeSettings.percent });
-    entries.push({ key:'extraTime.minimum', label:'Минимум доп. времени, ч', value: extraTimeSettings.minimum });
+    settingsEntries.push({ kind:'pref', key:'extraTime.percent', label:'Автодовес, %', to: extraTimeSettings.percent });
+    settingsEntries.push({ kind:'pref', key:'extraTime.minimum', label:'Минимум доп. времени, ч', to: extraTimeSettings.minimum });
   }
 
   if(logChanged){
-    entries.push({ key:'logLimit', label:'Лимит журнала', value: stateMeta.settings.logLimit });
+    settingsEntries.push({ kind:'pref', key:'logLimit', label:'Лимит журнала', to: stateMeta.settings.logLimit });
   }
 
   if(mappingChangeRequested){
-    entries.push({ key:'crmStageMapping', label:'Сопоставление стадий CRM', value: cloneCrmMappingForSnapshot(crmStageMapping) });
+    settingsEntries.push({ kind:'pref', key:'crmStageMapping', label:'Сопоставление стадий CRM', to: cloneCrmMappingForSnapshot(crmStageMapping) });
   }
 
-  if(extraChanged){
+  prefChanges.forEach(change=>{
+    const label = SHARED_PREF_LABELS[change.key] || change.key;
+    settingsEntries.push({ kind:'pref', key: change.key, label, to: change.to });
+  });
+
+  if(plannerModeChanged){
+    settingsEntries.push({ kind:'pref', key:'plannerMode', label:'Режим планировщика', to: nextPlannerMode });
+  }
+
+  if(adminChanged || requestedKeys.has('admin')){
+    settingsEntries.push({ kind:'pref', key:'admin', label:'Настройки администрирования', to: sanitizeAdminSettings(nextAdmin, adminSettingsState) });
+  }
+
+  if(capacityChanges.length || parallelChanges.length || extraChanged){
     recompute();
   }
   if(logChanged){
@@ -13641,14 +13828,20 @@ function commitSharedSettingsChanges(){
   if(crmMappingReplaceMode){
     settingsMetaPayload.replace = true;
   }
-  const persistOptions = { immediate:true, context:'sharedSettings', timestamp };
+  const persistOptions = {
+    source:'settings',
+    force:true,
+    settingsChange:{ entries: settingsEntries, timestamp },
+    context:'sharedSettings',
+    timestamp
+  };
   if(Object.keys(settingsMetaPayload).length){
     persistOptions.settingsMeta = settingsMetaPayload;
   }
 
-  const flushResult = persistSharedPreferencesChange(entries, persistOptions);
-  if(flushResult && typeof flushResult.then === 'function'){
-    flushResult.then(()=>{
+  const persistResult = persistNow(undefined, persistOptions);
+  if(persistResult && typeof persistResult.then === 'function'){
+    persistResult.then(()=>{
       if(!remoteSyncEnabled()){
         handleSharedSettingsCommitSuccess();
       }
@@ -13662,6 +13855,8 @@ function commitSharedSettingsChanges(){
     handleSharedSettingsCommitSuccess();
   }
 }
+
+
 
 function renderSystemSettingsUI(){
   const container = document.getElementById('systemSettings');
@@ -13677,6 +13872,8 @@ function renderSystemSettingsUI(){
   container.innerHTML = '';
 
   const draft = sharedSettingsEditing ? ensureSharedSettingsDraft() : null;
+  const capacityForUi = normalizeCapacityMap(draft ? draft.capacity : capByProc, capByProc);
+  const parallelForUi = normalizeParallelMap(draft ? draft.parallel : parallelByProc, parallelByProc);
 
   const wrapper = document.createElement('details');
   wrapper.className = 'settings-system-wrapper';
@@ -13713,12 +13910,12 @@ function renderSystemSettingsUI(){
       input.type = 'number';
       input.min = '1';
       input.step = '1';
-      input.value = String(Math.max(1, parallelByProc[stage] ?? DEFAULT_PARALLEL[stage] ?? 3));
+      input.value = String(parallelForUi[stage] ?? Math.max(1, DEFAULT_PARALLEL[stage] ?? 3));
     }else{
       input.type = 'number';
       input.min = '0';
       input.step = '0.25';
-      input.value = String(capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15);
+      input.value = String(capacityForUi[stage] ?? DEFAULT_CAP[stage] ?? 15);
     }
     input.addEventListener('change', handleSystemSettingChange);
     controls.appendChild(input);
@@ -13829,6 +14026,7 @@ function renderSystemSettingsUI(){
     updateSharedSettingsButtons();
   }
 }
+
 
 function getAdminSettingsDisplay(){
   if(sharedSettingsEditing && sharedSettingsDraft && sharedSettingsDraft.admin){
@@ -14569,6 +14767,7 @@ function refreshSystemSettingsAccess(){
   renderAdminSettingsUI();
 }
 
+
 function handleSystemSettingChange(e){
   const input = e.target;
   if(!input || !input.dataset) return;
@@ -14596,34 +14795,43 @@ function handleSystemSettingChange(e){
       return;
     }
     parallelByProc[stage] = value;
-    stateMeta.settings.parallel[stage] = value;
-    input.value = String(value);
+    const normalizedParallel = normalizeParallelMap(parallelByProc, parallelByProc);
+    parallelByProc = { ...normalizedParallel };
+    stateMeta.settings.parallel = { ...normalizedParallel };
+    const draft = ensureSharedSettingsDraft();
+    draft.parallel = { ...normalizedParallel };
+    input.value = String(parallelByProc[stage]);
     persistMaybe('ui');
-    if(stage === $("#process").value){
+    if(stage === $('#process').value){
       recompute();
     }
-    persistSystemSettingsChange([{ stage, kind:'parallel', from: prev, to: value }]);
+    markSharedSettingsDirty('parallel');
   }else{
     let value = Number(input.value);
     if(!Number.isFinite(value) || value < 0){
       value = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
     }
-    value = Math.max(0, value);
+    value = Math.max(0, Math.round(value * 100) / 100);
     const prev = capByProc[stage] ?? DEFAULT_CAP[stage] ?? 15;
     if(Math.abs(value - prev) < 0.0001){
       input.value = String(prev);
       return;
     }
     capByProc[stage] = value;
-    stateMeta.settings.capacity[stage] = value;
-    input.value = String(value);
+    const normalizedCapacity = normalizeCapacityMap(capByProc, capByProc);
+    capByProc = { ...normalizedCapacity };
+    stateMeta.settings.capacity = { ...normalizedCapacity };
+    const draft = ensureSharedSettingsDraft();
+    draft.capacity = { ...normalizedCapacity };
+    input.value = String(capByProc[stage]);
     persistMaybe('ui');
-    if(stage === $("#process").value){
+    if(stage === $('#process').value){
       recompute();
     }
-    persistSystemSettingsChange([{ stage, kind:'capacity', from: prev, to: value }]);
+    markSharedSettingsDirty('capacity');
   }
 }
+
 
 function handleColumnWidthChange(e){
   const input = e.target;
@@ -15461,9 +15669,10 @@ function wireHandlers(){
 
   // сохранение настроек
   $("#shiftOnProgress").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = shiftOnProgress; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!shiftOnProgress; notifyReadOnly(); return; }
     shiftOnProgress = !!e.target.checked;
-    persistSharedPreference('shiftOnProgress', 'Сдвигать старт при правке «Прогресса»', shiftOnProgress);
+    updateSharedPrefsDraftValue('shiftOnProgress', shiftOnProgress);
   });
   $("#saveBtn").addEventListener('click', ()=>{
     if(!userCanEdit()){ notifyReadOnly(); return; }
@@ -15473,36 +15682,41 @@ function wireHandlers(){
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = autoOptimizeOn; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!autoOptimizeOn; notifyReadOnly(); return; }
     autoOptimizeOn = !!e.target.checked;
-    persistSharedPreference('autoOptimizeOn', 'Автооптимизация', autoOptimizeOn);
+    updateSharedPrefsDraftValue('autoOptimizeOn', autoOptimizeOn);
     updateOptimizeButtonsHighlight();
   });
 
   $("#cascadeReady").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = cascadeReadyOn; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!cascadeReadyOn; notifyReadOnly(); return; }
     cascadeReadyOn = !!e.target.checked;
-    persistSharedPreference('cascadeReadyOn', 'Автоготовность при упаковке/отгрузке', cascadeReadyOn);
+    updateSharedPrefsDraftValue('cascadeReadyOn', cascadeReadyOn);
   });
 
   $("#notifyPriorityChange").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = priorityChangeLoggingOn; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!priorityChangeLoggingOn; notifyReadOnly(); return; }
     priorityChangeLoggingOn = !!e.target.checked;
-    persistSharedPreference('priorityChangeLoggingOn', 'Изменение приоритета', priorityChangeLoggingOn);
+    updateSharedPrefsDraftValue('priorityChangeLoggingOn', priorityChangeLoggingOn);
   });
 
   $("#notifyRouteDates").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = routeDateChangeLoggingOn; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!routeDateChangeLoggingOn; notifyReadOnly(); return; }
     routeDateChangeLoggingOn = !!e.target.checked;
-    persistSharedPreference('routeDateChangeLoggingOn', 'Изменение дат маршрута', routeDateChangeLoggingOn);
+    updateSharedPrefsDraftValue('routeDateChangeLoggingOn', routeDateChangeLoggingOn);
   });
 
   $("#muteNotifications").addEventListener('change', e=>{
-    if(!userCanEdit()){ e.target.checked = notificationsMuted; notifyReadOnly(); return; }
+    if(!(e.target instanceof HTMLInputElement)) return;
+    if(!userCanEdit()){ e.target.checked = !!notificationsMuted; notifyReadOnly(); return; }
     notificationsMuted = !!e.target.checked;
     stateMeta.settings = stateMeta.settings || {};
     stateMeta.settings.notificationsMuted = notificationsMuted;
-    persistSharedPreference('notificationsMuted', 'Без уведомлений', notificationsMuted);
+    updateSharedPrefsDraftValue('notificationsMuted', notificationsMuted);
   });
 
   // Гант — FS

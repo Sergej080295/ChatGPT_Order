@@ -42,6 +42,13 @@ function getDatabase() {
       value_json TEXT,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS planner_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      settings_json TEXT NOT NULL,
+      settings_hash TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
   return sqlite;
 }
@@ -90,6 +97,8 @@ let lastRevision = 0;
 let revisionColumnInfo = null;
 let ordersTableInfo = null;
 let settingsSchemaEnsured = false;
+
+const SETTINGS_ROW_ID = 1;
 
 async function ensureDataDir() {
   try {
@@ -159,6 +168,7 @@ function readSnapshotFromSql() {
     normalizeSnapshotCollections(parsed);
     ensureModeScopedState(parsed);
     ensureLocalStorageMetadata(parsed);
+    applyStoredSettingsToSnapshot(parsed);
     mergeCrmTasksIntoSnapshot(parsed);
     const stateString = safeSerializeSnapshot(parsed);
     const hash = row.hash || computeSnapshotHash(stateString);
@@ -248,6 +258,210 @@ function readLatestSnapshotMetadata() {
   } catch (err) {
     console.warn('Failed to read snapshot metadata from sqlite storage', err);
     return null;
+  }
+}
+
+const KNOWN_SHARED_SETTINGS_KEYS = new Set([
+  'capacity',
+  'parallel',
+  'plannerMode',
+  'notificationsMuted',
+  'tableColumns',
+  'extraTime',
+  'crmStageMapping',
+  'logLimit',
+  'admin',
+  'updatedAt'
+]);
+
+function normalizePlannerMode(value) {
+  if (value === null || value === undefined) {
+    return 'crm';
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'csv') {
+    return 'csv';
+  }
+  if (normalized === 'crm') {
+    return 'crm';
+  }
+  return 'crm';
+}
+
+function sanitizeSharedSettingsForStorage(source) {
+  const base = sanitizeMetaForStorage(isPlainObject(source) ? source : {}) || {};
+  const sanitized = {};
+
+  const capacityRaw = isPlainObject(base.capacity) ? base.capacity : {};
+  const capacity = {};
+  for (const code of PLANNER_STAGE_CODES) {
+    const num = Number(capacityRaw[code]);
+    if (Number.isFinite(num) && num >= 0) {
+      capacity[code] = Math.round(num * 100) / 100;
+    }
+  }
+  sanitized.capacity = capacity;
+
+  const parallelRaw = isPlainObject(base.parallel) ? base.parallel : {};
+  const parallel = {};
+  for (const code of PLANNER_STAGE_CODES) {
+    const num = Number(parallelRaw[code]);
+    if (!Number.isFinite(num) || num <= 0) {
+      continue;
+    }
+    parallel[code] = Math.max(1, Math.round(num));
+  }
+  sanitized.parallel = parallel;
+
+  sanitized.plannerMode = normalizePlannerMode(base.plannerMode);
+  sanitized.notificationsMuted = Boolean(base.notificationsMuted);
+
+  const columnsRaw = isPlainObject(base.tableColumns) ? base.tableColumns : {};
+  const tableColumns = {};
+  for (const [key, value] of Object.entries(columnsRaw)) {
+    const columnKey = sanitizeString(key);
+    if (!columnKey) continue;
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) continue;
+    tableColumns[columnKey] = Math.round(width);
+  }
+  sanitized.tableColumns = tableColumns;
+
+  const extraRaw = isPlainObject(base.extraTime) ? base.extraTime : {};
+  const percent = Number(extraRaw.percent);
+  const minimum = Number(extraRaw.minimum);
+  const extra = {
+    percent: Number.isFinite(percent) && percent >= 0 ? Math.round(percent * 100) / 100 : DEFAULT_EXTRA_PERCENT,
+    minimum: Number.isFinite(minimum) && minimum >= 0 ? Math.round(minimum * 100) / 100 : DEFAULT_EXTRA_MINIMUM
+  };
+  if (typeof extraRaw.enabled === 'boolean') {
+    extra.enabled = extraRaw.enabled;
+  }
+  sanitized.extraTime = extra;
+
+  const logLimitNum = Number(base.logLimit);
+  sanitized.logLimit = Number.isFinite(logLimitNum) && logLimitNum >= 0 ? Math.round(logLimitNum) : null;
+
+  const mappingRaw = isPlainObject(base.crmStageMapping) ? base.crmStageMapping : {};
+  const mapping = {};
+  for (const [key, value] of Object.entries(mappingRaw)) {
+    const normalizedKey = sanitizeString(key).toLowerCase();
+    if (!normalizedKey) continue;
+    const stageValue = sanitizeString(value).toLowerCase();
+    if (stageValue === CRM_STAGE_IGNORE) {
+      mapping[normalizedKey] = CRM_STAGE_IGNORE;
+      continue;
+    }
+    if (PLANNER_STAGE_CODES.includes(stageValue)) {
+      mapping[normalizedKey] = stageValue;
+    }
+  }
+  sanitized.crmStageMapping = mapping;
+
+  const adminRaw = isPlainObject(base.admin) ? base.admin : {};
+  const historyLimit = Number(adminRaw.historyLimit);
+  const historyDailyLimit = Number(adminRaw.historyDailyLimit);
+  sanitized.admin = {
+    historyLimit: Number.isFinite(historyLimit) && historyLimit >= 0 ? Math.round(historyLimit) : null,
+    historyDailyLimit: Number.isFinite(historyDailyLimit) && historyDailyLimit >= 0
+      ? Math.round(historyDailyLimit)
+      : null,
+    allowForceOverwrite: Boolean(adminRaw.allowForceOverwrite),
+    writeMode: normalizeWriteMode(adminRaw.writeMode)
+  };
+
+  const updatedAtRaw = typeof base.updatedAt === 'string' ? base.updatedAt.trim() : '';
+  if (updatedAtRaw) {
+    sanitized.updatedAt = updatedAtRaw;
+  }
+
+  for (const [key, value] of Object.entries(base)) {
+    if (KNOWN_SHARED_SETTINGS_KEYS.has(key)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+
+  return sanitized;
+}
+
+function readPlannerSettingsFromSql() {
+  try {
+    const db = getDatabase();
+    const row = db
+      .prepare('SELECT settings_json, settings_hash, updated_at FROM planner_settings WHERE id = ?')
+      .get(SETTINGS_ROW_ID);
+    if (!row) {
+      return null;
+    }
+    const parsed = safeParseJson(row.settings_json, null);
+    if (!isPlainObject(parsed)) {
+      return null;
+    }
+    const sanitized = sanitizeSharedSettingsForStorage(parsed);
+    const updatedAt = typeof row.updated_at === 'string' && row.updated_at.trim()
+      ? row.updated_at.trim()
+      : sanitized.updatedAt;
+    if (updatedAt) {
+      sanitized.updatedAt = updatedAt;
+    }
+    return { settings: sanitized, hash: row.settings_hash || null, updatedAt: sanitized.updatedAt || null };
+  } catch (err) {
+    console.warn('Failed to read planner settings from sqlite storage', err);
+    return null;
+  }
+}
+
+function writePlannerSettingsToSql(settings) {
+  const sanitized = sanitizeSharedSettingsForStorage(settings);
+  const updatedAt = typeof sanitized.updatedAt === 'string' && sanitized.updatedAt.trim()
+    ? sanitized.updatedAt.trim()
+    : new Date().toISOString();
+  sanitized.updatedAt = updatedAt;
+  const payload = JSON.stringify(sanitized);
+  const hash = computeSnapshotHash(payload);
+  try {
+    const db = getDatabase();
+    const existing = db
+      .prepare('SELECT settings_hash FROM planner_settings WHERE id = ?')
+      .get(SETTINGS_ROW_ID);
+    if (existing && existing.settings_hash === hash) {
+      return sanitized;
+    }
+    db.prepare(
+      `INSERT INTO planner_settings (id, settings_json, settings_hash, updated_at)
+       VALUES (@id,@json,@hash,@updated_at)
+       ON CONFLICT(id) DO UPDATE SET
+         settings_json = excluded.settings_json,
+         settings_hash = excluded.settings_hash,
+         updated_at = excluded.updated_at`
+    ).run({
+      id: SETTINGS_ROW_ID,
+      json: payload,
+      hash,
+      updated_at: updatedAt
+    });
+    return sanitized;
+  } catch (err) {
+    console.error('Failed to write planner settings to sqlite storage', err);
+    throw err;
+  }
+}
+
+function applyStoredSettingsToSnapshot(snapshot) {
+  if (!isPlainObject(snapshot)) {
+    return;
+  }
+  if (!isPlainObject(snapshot.meta)) {
+    snapshot.meta = {};
+  }
+  const stored = readPlannerSettingsFromSql();
+  if (stored && isPlainObject(stored.settings)) {
+    snapshot.meta.settings = stored.settings;
+  } else if (isPlainObject(snapshot.meta.settings)) {
+    snapshot.meta.settings = sanitizeSharedSettingsForStorage(snapshot.meta.settings);
+  } else {
+    snapshot.meta.settings = {};
   }
 }
 
@@ -2390,6 +2604,11 @@ async function loadLatestSnapshot() {
     normalizeSnapshotCollections(snapshotObj);
     ensureModeScopedState(snapshotObj);
     ensureLocalStorageMetadata(snapshotObj);
+    applyStoredSettingsToSnapshot(snapshotObj);
+    const normalizedSettings = writePlannerSettingsToSql(snapshotObj.meta?.settings || {});
+    if (isPlainObject(snapshotObj.meta)) {
+      snapshotObj.meta.settings = normalizedSettings;
+    }
     const stateString = safeSerializeSnapshot(snapshotObj);
     const hash = computeSnapshotHash(stateString);
     const rev = Number.isFinite(Number(stored.rev)) ? Number(stored.rev) : 0;
@@ -2855,6 +3074,10 @@ async function persistSnapshotWithSql(options) {
   normalizeSnapshotCollections(parsedSnapshot);
   ensureModeScopedState(parsedSnapshot);
   ensureLocalStorageMetadata(parsedSnapshot);
+  const persistedSettings = writePlannerSettingsToSql(parsedSnapshot.meta?.settings || {});
+  if (isPlainObject(parsedSnapshot.meta)) {
+    parsedSnapshot.meta.settings = persistedSettings;
+  }
 
   mergeCrmTasksIntoSnapshot(parsedSnapshot);
 
@@ -3093,6 +3316,7 @@ async function ensureSqlHydrated() {
     return;
   }
   try {
+    writePlannerSettingsToSql(snapshot.snapshot?.meta?.settings || {});
     writeSnapshotToSql({
       rev: Number(snapshot.rev) || lastRevision || 0,
       snapshot: snapshot.snapshot,
