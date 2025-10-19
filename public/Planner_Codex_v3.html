@@ -112,7 +112,9 @@
     };
   };
 
-  if ('EventSource' in window) {
+  const realtimeAllowed = false;
+
+  if (realtimeAllowed && 'EventSource' in window) {
     connect();
   }
 
@@ -822,7 +824,7 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
-      <button id="saveBtn" class="btn small">Сохранить</button>
+      <button id="refreshBtn" class="btn small ghost">Обновить</button>
       <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
           <rect x="4" y="3" width="14" height="18" rx="2" fill="#2563eb"/>
@@ -1137,7 +1139,7 @@ body.overview-fs-active{overflow:hidden}
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Сохранение данных:</div>
         <label class="small"><input type="checkbox" id="storageLocal" checked> Локально (браузер)</label>
-        <label class="small"><input type="checkbox" id="storageRemote" checked> SQL база</label>
+        <label class="small"><input type="checkbox" id="storageRemote" checked disabled> SQL база</label>
         <div class="small muted" id="storageModeHint">—</div>
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;width:100%">
@@ -1180,7 +1182,7 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
-        <label class="small"><input type="checkbox" id="autosaveSetting" checked> Автосохранение</label>
+        <label class="small"><input type="checkbox" id="autosaveSetting" checked disabled> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
@@ -1962,7 +1964,10 @@ function createRemoteBridge(){
     if(adapter){
       const saver = adapter.saveState || adapter.setState || adapter.pushState || adapter.write || adapter.put;
       if(typeof saver === 'function'){
-        try{ await saver.call(adapter, payload, meta); return true; }
+        try{
+          const adapterResult = await saver.call(adapter, payload, meta);
+          return adapterResult === undefined ? true : adapterResult;
+        }
         catch(err){ lastError = err; console.warn('remote save failed', err); }
       }
     }
@@ -1999,7 +2004,9 @@ function createRemoteBridge(){
           }
           throw err;
         }
-        return parsedDetail ?? trimmedDetail ?? '';
+        if(parsedDetail !== null) return parsedDetail;
+        if(trimmedDetail) return trimmedDetail;
+        return { ok:true };
       };
       const guessContentType = (body)=>{
         if(typeof body === 'string'){
@@ -2023,16 +2030,16 @@ function createRemoteBridge(){
           if(typeof payload === 'string'){
             wrapper.hash = simpleHash(payload);
           }
-          await attempt(JSON.stringify(wrapper), 'application/json');
-          return true;
+          const wrappedResult = await attempt(JSON.stringify(wrapper), 'application/json');
+          return wrappedResult === undefined ? true : wrappedResult;
         }catch(err){
           lastError = err;
           console.warn('endpoint save failed (wrapped)', err);
         }
       }
       try{
-        await attempt(payload, guessContentType(payload));
-        return true;
+        const directResult = await attempt(payload, guessContentType(payload));
+        return directResult === undefined ? true : directResult;
       }catch(err){
         lastError = err;
         console.warn('endpoint save failed', err);
@@ -2074,16 +2081,15 @@ function createRemoteBridge(){
 }
 
 function remoteSyncEnabled(){
-  return !!(remoteBridge.hasRemote && enableRemoteStore);
+  return !!remoteBridge.hasRemote;
 }
 
 function refreshDataModeIndicator(){
   const badge = $("#dataModeBadge");
   const active = [];
   if(enableLocalStore) active.push('локальный кэш');
-  if(remoteSyncEnabled()) active.push('SQL база');
-  else if(!remoteBridge.hasRemote) active.push('SQL (недоступно)');
-  else if(enableRemoteStore) active.push('SQL (отключено)');
+  if(remoteBridge.hasRemote) active.push('SQL база');
+  else active.push('SQL (недоступно)');
   if(!active.length) active.push('только текущий сеанс');
   if(badge){
     let mode = currentDataOrigin;
@@ -2118,14 +2124,14 @@ function applyAccessMode(){
   if(document.body){
     document.body.classList.toggle('view-only', !canEdit);
   }
-  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#saveBtn','#logClear','#trashClear'];
+  const toggleSelectors = ['#addOrder','#importCsvBtn','#optimizeAllBtn','#optimizeStageBtn','#clearAll','#exceptionsBtn','#reserveBtn','#logClear','#trashClear'];
   toggleSelectors.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
       el.disabled = !canEdit;
     }
   });
-  const toggleInputs = ['#autosaveSetting','#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
+  const toggleInputs = ['#shiftOnProgress','#autoOptimize','#cascadeReady','#notifyPriorityChange','#notifyRouteDates','#muteNotifications','#logLimitInput'];
   toggleInputs.forEach(sel=>{
     const el = $(sel);
     if(el && 'disabled' in el){
@@ -2187,7 +2193,7 @@ function loadStoragePrefs(){
       else if(typeof parsed.remote === 'boolean') pref.remote = parsed.remote;
     }
   }catch(_){ /* ignore */ }
-  pref.remote = !!pref.remote;
+  pref.remote = true;
   if(!pref.local && !pref.remote){
     pref.local = true;
   }
@@ -2198,7 +2204,7 @@ function applyStoragePrefs(changes={}){
   const prevLocal = enableLocalStore;
   const prevRemote = enableRemoteStore;
   if('local' in changes) enableLocalStore = !!changes.local;
-  if('remote' in changes) remotePreferenceRequested = !!changes.remote;
+  if('remote' in changes) remotePreferenceRequested = true;
 
   if(!enableLocalStore && !remotePreferenceRequested){
     if(prevLocal){ enableLocalStore = true; }
@@ -2246,7 +2252,7 @@ function applyStoragePrefs(changes={}){
 }
 
 function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStore){
-  const desiredRemote = !!hasRemote && !!remotePreferenceRequested;
+  const desiredRemote = !!hasRemote;
   const changed = desiredRemote !== prevRemote;
   const changeInfo = {
     changed,
@@ -2254,11 +2260,12 @@ function handleRemoteAvailabilityChange(hasRemote, prevRemote = enableRemoteStor
     becameInactive: !desiredRemote && prevRemote
   };
   enableRemoteStore = desiredRemote;
+  remotePreferenceRequested = desiredRemote;
   const remoteBox = $("#storageRemote");
   if(remoteBox){
     remoteBox.checked = enableRemoteStore;
-    remoteBox.disabled = !hasRemote;
-    remoteBox.parentElement?.classList.toggle('muted', remoteBox.disabled);
+    remoteBox.disabled = true;
+    remoteBox.parentElement?.classList.remove('muted');
   }
   refreshDataModeIndicator();
   return changeInfo;
@@ -2323,19 +2330,12 @@ function handleRemoteBridgeEvent(evt){
 
 function updateRealtimeMode(){
   if(remoteSubscriptionStop){
-    if(!remoteSyncEnabled()){
-      try{ remoteSubscriptionStop(); }catch(_){ /* ignore */ }
-      remoteSubscriptionStop = null;
-    }
+    try{ remoteSubscriptionStop(); }catch(_){ /* ignore */ }
+    remoteSubscriptionStop = null;
   }
-  if(remoteSyncEnabled()){
-    if(!remoteSubscriptionStop){
-      try{ remoteSubscriptionStop = remoteBridge.subscribe(handleRemoteBridgeEvent); }
-      catch(_){ remoteSubscriptionStop = null; }
-    }
-    startRemotePolling();
-  }else{
-    if(remotePollTimer){ clearTimeout(remotePollTimer); remotePollTimer = null; }
+  if(remotePollTimer){
+    clearTimeout(remotePollTimer);
+    remotePollTimer = null;
   }
   refreshDataModeIndicator();
 }
@@ -2743,6 +2743,15 @@ let lastDiffApplied=null;    // запомненный diff для выборо�
 let allTasksFromState = null;   // полный снимок задач всех переделов, если он приехал из импорта состояния
 let crmStageTasks = [];
 const MODE_SCOPED_KEYS = [PLANNER_MODES.csv, PLANNER_MODES.crm];
+
+function enforceAutosaveAlwaysOn(){
+  autosaveOn = true;
+  const box = document.getElementById('autosaveSetting');
+  if(box){
+    box.checked = true;
+    box.disabled = true;
+  }
+}
 function toIsoSafe(value){
   if(!value) return '';
   const date = value instanceof Date ? value : new Date(value);
@@ -3220,6 +3229,7 @@ const storagePref = loadStoragePrefs();
 enableLocalStore = storagePref.local;
 remotePreferenceRequested = storagePref.remote;
 enableRemoteStore = remoteBridge.hasRemote && remotePreferenceRequested;
+enforceAutosaveAlwaysOn();
 // Сохранённый порядок строк по каждому переделу: stage -> [uid, uid, ...]
 let ordersByStage = new Map();
 let currentProc = '';
@@ -5526,10 +5536,48 @@ function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage=
     }
 
     const tasksForStage = stageMap?.get(stage) || [];
+    const detail = {};
     if(tasksForStage.length){
-      stageDetails[stage] = {
-        uids: tasksForStage.map(task => task.uid)
+      detail.uids = tasksForStage.map(task => task.uid);
+    }
+
+    const crmTaskWithMeta = tasksForStage.find(task => task && task.crmMeta && typeof task.crmMeta === 'object');
+    let crmMeta = crmTaskWithMeta ? { ...crmTaskWithMeta.crmMeta } : null;
+    if(!crmMeta){
+      const orderInfo = orderEntry?.order || {};
+      const orderCrm = orderInfo.crm && typeof orderInfo.crm === 'object' ? orderInfo.crm : {};
+      const candidate = {
+        boardId: orderCrm.boardId || orderCrm.crmBoardId || '',
+        crmOrderId: orderCrm.id || orderCrm.crmOrderId || '',
+        orderId: orderInfo.orderId || '',
+        orderIdentity: orderInfo.orderIdentity || orderEntry.key || '',
+        lane: orderCrm.lane || orderCrm.status || ''
       };
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageId') && seg.crmStageId !== undefined){
+        candidate.stageId = seg.crmStageId;
+      }
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageName') && seg.crmStageName){
+        candidate.stageName = seg.crmStageName;
+      }
+      candidate.stageKey = stage;
+      const hasMeaningfulMeta = Object.values(candidate).some(value => {
+        if(value === null || value === undefined) return false;
+        if(typeof value === 'string') return value.trim().length > 0;
+        return true;
+      });
+      if(hasMeaningfulMeta){
+        crmMeta = candidate;
+      }
+    }
+
+    if(crmMeta){
+      if(!crmMeta.stageKey) crmMeta.stageKey = stage;
+      if(!crmMeta.stageName) crmMeta.stageName = seg?.crmStageName || STAGE_TITLE[stage] || stage;
+      detail.crmMeta = crmMeta;
+    }
+
+    if(Object.keys(detail).length){
+      stageDetails[stage] = detail;
     }
 
     const metrics = metricsByStage && metricsByStage[stage]
@@ -5906,6 +5954,12 @@ function applyStageProgress(identity, stage, value, options={}){
     ? !!options.interactive
     : INTERACTIVE_PROGRESS_SOURCES.has(source);
   let completionMoment = new Date(defaultMoment);
+  const explicitCrmMetaRaw = options && typeof options.crmMeta === 'object' ? options.crmMeta : null;
+  const explicitCrmMeta = explicitCrmMetaRaw ? { ...explicitCrmMetaRaw } : null;
+  if(explicitCrmMeta){
+    if(!explicitCrmMeta.stageKey) explicitCrmMeta.stageKey = stage;
+    if(!explicitCrmMeta.stageName) explicitCrmMeta.stageName = STAGE_TITLE[stage] || stage;
+  }
   const progressBeforeMap = new Map();
   const progressAfterMap = new Map();
   const summaryRecords = new Map();
@@ -5916,6 +5970,17 @@ function applyStageProgress(identity, stage, value, options={}){
   const ensureCrmMeta = taskObj => {
     if(!taskObj) return null;
     if(taskObj.crmMeta && taskObj.crmMeta.stageKey){
+      return taskObj;
+    }
+    if(explicitCrmMeta){
+      const merged = { ...explicitCrmMeta };
+      if(taskObj.crmMeta && typeof taskObj.crmMeta === 'object'){
+        taskObj.crmMeta = { ...merged, ...taskObj.crmMeta };
+      }else{
+        taskObj.crmMeta = merged;
+      }
+      if(!taskObj.crmMeta.stageKey) taskObj.crmMeta.stageKey = stage;
+      if(!taskObj.crmMeta.stageName) taskObj.crmMeta.stageName = STAGE_TITLE[stage] || stage;
       return taskObj;
     }
     const fallback = crmReferenceTask || findCrmStageTaskForIdentity(identity, stage);
@@ -5939,8 +6004,36 @@ function applyStageProgress(identity, stage, value, options={}){
     return taskObj;
   };
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment, extraOptions={})=>{
-    const enriched = ensureCrmMeta(taskObj);
+    let enriched = ensureCrmMeta(taskObj);
+    if(!enriched && explicitCrmMeta){
+      enriched = ensureCrmMeta({
+        crmMeta: { ...explicitCrmMeta },
+        route: {}
+      });
+    }
     if(!enriched || !enriched.crmMeta) return;
+    if(!enriched.route || typeof enriched.route !== 'object'){
+      enriched.route = {};
+    }
+    if(doneFlag && doneMoment){
+      const doneDate = doneMoment instanceof Date ? doneMoment : new Date(doneMoment);
+      if(!Number.isNaN(doneDate.getTime())){
+        const seg = { ...(enriched.route[stage] || {}) };
+        seg.doneAt = doneDate;
+        enriched.route[stage] = seg;
+        enriched.doneMeta = {
+          ...(enriched.doneMeta || {}),
+          when: doneDate,
+          source: extraOptions.doneSource || source
+        };
+      }
+    }else if(!doneFlag && enriched.route[stage]){
+      const seg = { ...(enriched.route[stage]) };
+      if('doneAt' in seg){
+        delete seg.doneAt;
+        enriched.route[stage] = seg;
+      }
+    }
     const payload = buildCrmUpdateFromTask(enriched, stage, {
       progress: progressValue,
       done: !!doneFlag,
@@ -6004,6 +6097,23 @@ function applyStageProgress(identity, stage, value, options={}){
   });
 
   if(!uidSet.size){
+    if(explicitCrmMeta){
+      queueCrmUpdate(null, normalized, markDone, markDone ? completionMoment : null);
+      if(crmUpdates.length){
+        applyCrmProgressUpdates(crmUpdates);
+      }
+      updateDoneAttention();
+      updateStageSnapshotFromAggregated(stage);
+      rebuildAndRenderMasterRoute();
+      recompute();
+      const persistOptions = {
+        source,
+        stageOverride: stage,
+        force: options.force === true || interactive || markDone
+      };
+      persistMaybe('data', persistOptions);
+      return true;
+    }
     if(!options.silent) alert('Не удалось определить задачи для выбранного передела.');
     return false;
   }
@@ -6307,6 +6417,10 @@ function handleRouteStageToggle(stage, toggleEl){
   const stageTitle = STAGE_TITLE[stage] || stage;
   const hasTasks = (currentRouteContext.stageDetails?.[stage]?.uids || []).length > 0;
   const isDone = (currentRouteContext.doneStages || []).includes(stage);
+  const stageMeta = currentRouteContext.stageDetails?.[stage];
+  const crmMeta = stageMeta && stageMeta.crmMeta && typeof stageMeta.crmMeta === 'object'
+    ? stageMeta.crmMeta
+    : null;
   if(!hasTasks && !isDone){
     alert('Нет задач для изменения статуса этого передела.');
     return;
@@ -6319,7 +6433,8 @@ function handleRouteStageToggle(stage, toggleEl){
       : `Снять отметку готовности с передела «${stageTitle}»?`;
     if(!confirm(question)) return;
     const targetValue = shouldMarkDone ? 100 : 0;
-    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, { source:'route-dialog' })){
+    const progressOpts = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, progressOpts)){
       if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
         currentRouteContext.sourceTask.progress = targetValue;
       }
@@ -6341,7 +6456,8 @@ function handleRouteStageToggle(stage, toggleEl){
     alert('Введите число от 0 до 100.');
     return;
   }
-  if(applyStageProgress(currentRouteContext.identity, stage, value, { source:'route-dialog' })){
+  const options = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+  if(applyStageProgress(currentRouteContext.identity, stage, value, options)){
     if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
       currentRouteContext.sourceTask.progress = value;
     }
@@ -7078,7 +7194,7 @@ function applySharedPreferences(preferences, options={}){
   SHARED_PREFERENCE_KEYS.forEach(key=>{
     const value = normalized[key];
     switch(key){
-      case 'autosaveOn': autosaveOn = !!value; break;
+      case 'autosaveOn': autosaveOn = true; break;
       case 'autoOptimizeOn': autoOptimizeOn = !!value; break;
       case 'cascadeReadyOn': cascadeReadyOn = !!value; break;
       case 'shiftOnProgress': shiftOnProgress = !!value; break;
@@ -7090,12 +7206,13 @@ function applySharedPreferences(preferences, options={}){
   });
   if(!stateMeta.settings) stateMeta.settings = {};
   stateMeta.settings.notificationsMuted = !!normalized.notificationsMuted;
+  enforceAutosaveAlwaysOn();
   if(options.updateUI !== false){
     const updateCheckbox = (id, value)=>{
       const el = document.getElementById(id);
       if(el) el.checked = !!value;
     };
-    updateCheckbox('autosaveSetting', autosaveOn);
+    updateCheckbox('autosaveSetting', true);
     updateCheckbox('autoOptimize', autoOptimizeOn);
     updateCheckbox('cascadeReady', cascadeReadyOn);
     updateCheckbox('shiftOnProgress', shiftOnProgress);
@@ -10219,7 +10336,9 @@ function importStateFromCSV(text){
   // meta / UI
   if(meta.process) $("#process").value = meta.process;
   if(meta.ganttFilter) $("#ganttFilter").value = meta.ganttFilter;
-  autosaveOn = !!Number(meta.autosaveOn); $("#autosaveSetting").checked = autosaveOn;
+  autosaveOn = true;
+  if(meta && typeof meta === 'object'){ meta.autosaveOn = 1; }
+  enforceAutosaveAlwaysOn();
   const logField = $("#logLimitInput");
   if(logField){
     logField.value = logLimitSetting === null ? '' : String(logLimitSetting);
@@ -10284,9 +10403,6 @@ function importStateFromCSV(text){
 
   recompute();
   persistMaybe();
-  if(!autosaveOn){
-    setDataMode(remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session'));
-  }
   alert('Состояние импортировано.');
 }
 
@@ -12109,7 +12225,7 @@ function restoreState(json, opts={}){
       loadedPrefs.filter = s.filter;
     }
     if(typeof loadedPrefs.autosaveOn !== 'boolean' && s.autosaveOn !== undefined){
-      loadedPrefs.autosaveOn = !!s.autosaveOn;
+      loadedPrefs.autosaveOn = true;
     }
     if(typeof loadedPrefs.shiftOnProgress !== 'boolean' && s.shiftOnProgress !== undefined){
       loadedPrefs.shiftOnProgress = !!s.shiftOnProgress;
@@ -12204,6 +12320,51 @@ function loadStageFromLS(stage){
   }catch(_){ return null; }
 }
 
+function normalizeRemoteSaveResult(result, overrides={}){
+  const base={
+    ok:true,
+    persisted:true,
+    unchanged:false,
+    rev:null,
+    hash:null,
+    etag:null,
+    raw:result
+  };
+  if(result && typeof result==='object'){
+    if(Object.prototype.hasOwnProperty.call(result,'ok')) base.ok=result.ok!==false;
+    if(Object.prototype.hasOwnProperty.call(result,'unchanged')){
+      base.unchanged=!!result.unchanged;
+      if(base.unchanged) base.persisted=false;
+    }
+    if(Object.prototype.hasOwnProperty.call(result,'persisted')){
+      base.persisted=!!result.persisted;
+      if(result.persisted===false) base.unchanged=base.unchanged||true;
+    }
+    if(result.hash) base.hash=String(result.hash).trim()||null;
+    if(result.etag) base.etag=String(result.etag).trim()||null;
+    const revNum=Number(result.rev);
+    if(Number.isFinite(revNum) && revNum>0) base.rev=revNum;
+    if(!Object.prototype.hasOwnProperty.call(result,'persisted')){
+      if(base.ok && base.unchanged){
+        base.persisted=false;
+      }else if(base.ok){
+        base.persisted=true;
+      }else{
+        base.persisted=false;
+      }
+    }
+  }else if(result===false){
+    base.ok=false;
+    base.persisted=false;
+  }else if(result===true || result===undefined || result===null){
+    base.persisted=result!==null;
+  }else{
+    base.message=String(result);
+  }
+  if(!base.ok) base.persisted=false;
+  return { ...base, ...overrides };
+}
+
 function persistNow(stageOverride, opts={}){
   const {
     source='manual',
@@ -12216,10 +12377,35 @@ function persistNow(stageOverride, opts={}){
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
-    sharedContext=null
+    sharedContext=null,
+    forceRemote=false,
+    confirmRemote=false,
+    forcePersist=null
   } = opts;
   const normalizedSettingsMeta = settingsMeta && typeof settingsMeta === 'object' ? clonePlain(settingsMeta) : null;
-  let pushPromise = Promise.resolve(true);
+  const confirmAfterRemoteSave = async (resultMeta={})=>{
+    if(!confirmRemote) return;
+    if(!remoteBridge.hasRemote) return;
+    if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function') return;
+    try{
+      const latest=await window.plannerRemote.loadState({ withMeta:true });
+      if(!latest) return;
+      const rawState = typeof latest.state==='string' ? latest.state : JSON.stringify(latest.state||{});
+      const meta={};
+      if(latest.hash) meta.hash=latest.hash;
+      if(latest.etag) meta.etag=latest.etag;
+      applyStateFromExternal(rawState,{ preserveProcess:true, origin:'remote', skipToasts:true, meta });
+      if(window.plannerRemote.applyFingerprint){
+        window.plannerRemote.applyFingerprint({
+          hash: meta.hash || resultMeta.hash || null,
+          etag: meta.etag || resultMeta.etag || null
+        });
+      }
+    }catch(err){
+      console.warn('remote confirmation load failed', err);
+    }
+  };
+  let pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:true, persisted:false, unchanged:true }));
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
     const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
@@ -12390,95 +12576,111 @@ function persistNow(stageOverride, opts={}){
 
       const targetStageLabel = visibleStageLabel;
 
-      if(remoteSyncEnabled()){
-        pushPromise = remoteBridge.push(payload, {
-          stage: targetStageLabel,
-          diff: combinedDiff,
-          version:null,
-          source,
-          user:userAlias,
-          session:SESSION_ID,
-          summary: summaryLine || undefined,
-          authors: authorsMap,
-          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
-          time: nowStr,
-          changeType
-        })
-          .then(()=>{ setDataMode('remote'); return true; })
-          .catch(async err=>{
-            const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
-              if(sharedAttempt){
-                err.__sharedHandled = true;
-                handleSharedSettingsCommitError(err);
-              }
-              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
-              const stageName = meaningfulEntries.length>1
-                ? 'несколько переделов'
-                : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
-              const lastAuthor = detail?.lastAuthor;
-              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-              if(!sharedAttempt){
-                const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-                if(authorName){
-                  messageParts.push(`Последние правки: ${authorName}.`);
-                }
-                messageParts.push('Актуальные данные загружены заново.');
-                showToast({
-                  title:'Конфликт синхронизации',
-                  message: messageParts.join(' '),
-                  actions:[{label:'OK', handler:(el)=> el.remove()}]
-                });
-              }
-              try{
-                const latest = await remoteBridge.pull();
-                if(latest){
-                  applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
-                }
-              }catch(pullErr){
-                console.warn('failed to refresh after conflict', pullErr);
-              }
-              setDataMode('remote');
-              if(sharedAttempt){
-                throw err;
-              }
-              return;
+  const forceRemoteWrite = forceRemote === true
+    || (force && forceRemote !== false && source !== 'system');
+  const shouldPushRemote = remoteBridge.hasRemote;
+  const forcePersistRequest = forcePersist === true
+    || (forcePersist !== false && shouldPushRemote);
+
+  if(shouldPushRemote){
+    const metaPayload = {
+      stage: targetStageLabel,
+      diff: combinedDiff,
+      version:null,
+      source,
+      user:userAlias,
+      session:SESSION_ID,
+      summary: summaryLine || undefined,
+      authors: authorsMap,
+      ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
+      time: nowStr,
+      changeType
+    };
+    if(forcePersistRequest) metaPayload.forcePersist = true;
+    pushPromise = remoteBridge.push(payload, metaPayload)
+      .then(async rawResult=>{
+        const normalized=normalizeRemoteSaveResult(rawResult);
+        setDataMode('remote');
+        if(normalized.ok && normalized.persisted){
+          await confirmAfterRemoteSave(normalized);
+        }
+        return normalized;
+      })
+      .catch(async err=>{
+        const sharedAttempt = sharedContext === 'sharedSettings';
+        if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
+          if(sharedAttempt){
+            err.__sharedHandled = true;
+            handleSharedSettingsCommitError(err);
+          }
+          const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+          const stageName = meaningfulEntries.length>1
+            ? 'несколько переделов'
+            : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
+          const lastAuthor = detail?.lastAuthor;
+          const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+          if(!sharedAttempt){
+            const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+            if(authorName){
+              messageParts.push(`Последние правки: ${authorName}.`);
             }
-            console.warn('remote push failed', err);
-            const hadLocal = enableLocalStore;
-            if(!hadLocal){
-              applyStoragePrefs({ local:true });
-            }
-            let detailText = '';
-            if(err){
-              if(typeof err.detail === 'string' && err.detail.trim()){
-                detailText = err.detail.trim();
-              }else if(err.detail && typeof err.detail === 'object'){
-                const extra = err.detail.message || err.detail.error || err.body || '';
-                if(extra) detailText = String(extra).trim();
-              }
-              if(!detailText && err.message){
-                detailText = err.message;
-              }
-            }
-            const detailSuffix = detailText ? ` (${detailText})` : '';
+            messageParts.push('Актуальные данные загружены заново.');
             showToast({
-              title:'Ошибка синхронизации',
-              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+              title:'Конфликт синхронизации',
+              message: messageParts.join(' '),
               actions:[{label:'OK', handler:(el)=> el.remove()}]
             });
-            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
-            setDataMode(modeAfter);
-            if(sharedAttempt){
-              err.__sharedHandled = true;
-              handleSharedSettingsCommitError(err);
-              throw err;
+          }
+          try{
+            const latest = await remoteBridge.pull();
+            if(latest){
+              applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
             }
-          });
-      }else{
-        setDataMode(enableLocalStore ? 'local' : 'session');
-        pushPromise = Promise.resolve(true);
-      }
+          }catch(pullErr){
+            console.warn('failed to refresh after conflict', pullErr);
+          }
+          setDataMode('remote');
+          if(sharedAttempt){
+            throw err;
+          }
+          return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, conflict:true, error:err });
+        }
+        console.warn('remote push failed', err);
+        const hadLocal = enableLocalStore;
+        if(!hadLocal){
+          applyStoragePrefs({ local:true });
+        }
+        let detailText = '';
+        if(err){
+          if(typeof err.detail === 'string' && err.detail.trim()){
+            detailText = err.detail.trim();
+          }else if(err.detail && typeof err.detail === 'object'){
+            const extra = err.detail.message || err.detail.error || err.body || '';
+            if(extra) detailText = String(extra).trim();
+          }
+          if(!detailText && err.message){
+            detailText = err.message;
+          }
+        }
+        const detailSuffix = detailText ? ` (${detailText})` : '';
+        showToast({
+          title:'Ошибка синхронизации',
+          message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+          actions:[{label:'OK', handler:(el)=> el.remove()}]
+        });
+        const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+        setDataMode(modeAfter);
+        if(sharedAttempt){
+          err.__sharedHandled = true;
+          handleSharedSettingsCommitError(err);
+          throw err;
+        }
+        return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, error:err, fallback:true });
+      });
+  }else{
+    setDataMode(enableLocalStore ? 'local' : 'session');
+    pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:false, persisted:false, unchanged:true, offline:true }));
+  }
 
       if(hasChanges && announce){
         announceStateUpdate({
@@ -12497,7 +12699,7 @@ function persistNow(stageOverride, opts={}){
     }catch(e){
       console.warn('persist failed', e);
     }
-    return;
+    return pushPromise;
   }
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
@@ -12782,9 +12984,10 @@ function persistNow(stageOverride, opts={}){
 
     const settingsVersionForRemote = getSettingsVersion();
 
-    if(remoteSyncEnabled()){
+    if(remoteBridge.hasRemote){
       if(skipRemote){
         setDataMode('remote');
+        pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:true, persisted:false, unchanged:true, skipped:true }));
       }else{
         const remoteStage = isSettingsChange && !diffChanged ? SETTINGS_STAGE_KEY : curStage;
         const remoteSummary = summaryForMeta || undefined;
@@ -12802,7 +13005,7 @@ function persistNow(stageOverride, opts={}){
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
-        pushPromise = remoteBridge.push(payload, {
+        const metaPayload = {
           stage:remoteStage,
           diff:remoteDiff,
           version:remoteVersion,
@@ -12815,8 +13018,17 @@ function persistNow(stageOverride, opts={}){
           time: nowStr,
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
           ...remoteExtras
-        })
-          .then(()=>{ setDataMode('remote'); return true; })
+        };
+        if(forcePersistRequest) metaPayload.forcePersist = true;
+        pushPromise = remoteBridge.push(payload, metaPayload)
+          .then(async rawResult=>{
+            const normalized=normalizeRemoteSaveResult(rawResult);
+            setDataMode('remote');
+            if(normalized.ok && normalized.persisted){
+              await confirmAfterRemoteSave(normalized);
+            }
+            return normalized;
+          })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
             if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
@@ -12852,7 +13064,7 @@ function persistNow(stageOverride, opts={}){
               if(sharedAttempt){
                 throw err;
               }
-              return;
+              return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, conflict:true, error:err });
             }
             console.warn('remote push failed', err);
             const hadLocal = enableLocalStore;
@@ -12884,11 +13096,12 @@ function persistNow(stageOverride, opts={}){
               handleSharedSettingsCommitError(err);
               throw err;
             }
+            return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, error:err, fallback:true });
           });
       }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
-      pushPromise = Promise.resolve(true);
+      pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:false, persisted:false, unchanged:true, offline:true }));
     }
 
     if(announce){
@@ -12935,7 +13148,10 @@ function persistMaybe(reason='data', opts={}){
   if(reason==='ui'){ saveUiPreferences(); return; }
   if(!userCanEdit() && !opts.force && opts.source !== 'system') return;
   const stageOverride = Object.prototype.hasOwnProperty.call(opts, 'stageOverride') ? opts.stageOverride : undefined;
-  if(autosaveOn || opts.force) persistNow(stageOverride, opts);
+  const payload = { ...opts };
+  if(!Object.prototype.hasOwnProperty.call(payload, 'forceRemote')) payload.forceRemote = true;
+  if(!Object.prototype.hasOwnProperty.call(payload, 'forcePersist')) payload.forcePersist = true;
+  persistNow(stageOverride, payload);
 }
 
 let pendingSettingsTimer = null;
@@ -14684,7 +14900,7 @@ function applyUiPreferences(prefs={}){
     if(filterEl) filterEl.value = prefs.filter;
   }
   if(typeof prefs.autosaveOn === 'boolean'){
-    autosaveOn = prefs.autosaveOn;
+    autosaveOn = true;
   }
   if(typeof prefs.shiftOnProgress === 'boolean'){
     shiftOnProgress = prefs.shiftOnProgress;
@@ -14704,8 +14920,7 @@ function applyUiPreferences(prefs={}){
     updateIgnoredStatesSummary();
     updateExcludedAttention();
   }
-  const autosaveEl = $("#autosaveSetting");
-  if(autosaveEl) autosaveEl.checked = !!autosaveOn;
+  enforceAutosaveAlwaysOn();
   const logLimitEl = $("#logLimitInput");
   if(logLimitEl) logLimitEl.value = logLimitSetting === null ? '' : String(logLimitSetting);
   const shiftEl = $("#shiftOnProgress");
@@ -15047,11 +15262,8 @@ function wireHandlers(){
   const storageRemote = $("#storageRemote");
   if(storageRemote){
     storageRemote.checked = enableRemoteStore;
-    storageRemote.disabled = !remoteBridge.hasRemote;
-    storageRemote.parentElement?.classList.toggle('muted', storageRemote.disabled);
-    storageRemote.addEventListener('change', e=>{
-      applyStoragePrefs({ remote: !!e.target.checked });
-    });
+    storageRemote.disabled = true;
+    storageRemote.parentElement?.classList.remove('muted');
   }
 
   const adminPanelEl = document.getElementById('adminSettingsPanel');
@@ -15320,16 +15532,7 @@ function wireHandlers(){
     document.getElementById('file')?.click();
   });
 
-  // автосохранение / ручное сохранение
-  $("#autosaveSetting").addEventListener('change', e=>{
-    const target = e.target;
-    if(!(target instanceof HTMLInputElement)) return;
-    if(!userCanEdit()){ target.checked = autosaveOn; notifyReadOnly(); return; }
-    autosaveOn = !!target.checked;
-    const prefsDraft = ensureSharedPreferencesDraft();
-    prefsDraft.autosaveOn = autosaveOn;
-    markSharedSettingsDirty('preferences');
-  });
+  // автосохранение всегда активно
   $("#shiftOnProgress").addEventListener('change', e=>{
     const target = e.target;
     if(!(target instanceof HTMLInputElement)) return;
@@ -15339,12 +15542,50 @@ function wireHandlers(){
     prefsDraft.shiftOnProgress = shiftOnProgress;
     markSharedSettingsDirty('preferences');
   });
-  $("#saveBtn").addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-    persistNow(undefined,{force:true});
-    alert('Состояние сохранено.');
-  });
-  
+  const refreshBtn = $("#refreshBtn");
+  if(refreshBtn){
+    const defaultLabel = refreshBtn.textContent;
+    const setBusy = (busy)=>{
+      refreshBtn.disabled = !!busy;
+      refreshBtn.textContent = busy ? 'Обновляем…' : (defaultLabel || 'Обновить');
+    };
+    refreshBtn.addEventListener('click', async ()=>{
+      setBusy(true);
+      try{
+        if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function'){
+          throw new Error('SQL-сервис недоступен');
+        }
+        const latest = await window.plannerRemote.loadState({ withMeta:true });
+        const rawState = latest && typeof latest.state === 'string' ? latest.state : '';
+        if(rawState){
+          const meta = {};
+          if(latest && typeof latest.hash === 'string'){ meta.hash = latest.hash; }
+          if(latest && typeof latest.etag === 'string'){ meta.etag = latest.etag; }
+          applyStateFromExternal(rawState, { preserveProcess:true, origin:'remote', skipToasts:true, meta });
+          if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function'){
+            window.plannerRemote.applyFingerprint({ etag: latest?.etag || null, hash: latest?.hash || null });
+          }
+          if(typeof showToast === 'function'){
+            showToast({ title:'Состояние обновлено', message:'Загружены актуальные данные из базы SQL.' });
+          }
+        }else{
+          if(typeof showToast === 'function'){
+            showToast({ title:'Обновление', message:'Нет данных для загрузки из базы.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+          }
+        }
+      }catch(err){
+        console.warn('manual refresh failed', err);
+        if(typeof showToast === 'function'){
+          showToast({ title:'Ошибка обновления', message:'Не удалось получить данные из базы SQL.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+        }else{
+          alert('Не удалось получить данные из базы SQL.');
+        }
+      }finally{
+        setBusy(false);
+      }
+    });
+  }
+
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
     const target = e.target;
@@ -15647,7 +15888,10 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             const cascadeBox = $('#cascadeReady');
             if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
             const autosaveBox = $('#autosaveSetting');
-            if(autosaveBox) autosaveBox.checked = autosaveOn;
+            if(autosaveBox){
+              autosaveBox.checked = true;
+              autosaveBox.disabled = true;
+            }
             const logLimitField = $('#logLimitInput');
             if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
             const locBox = $('#storageLocal');
@@ -15655,8 +15899,8 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             const remBox = $('#storageRemote');
             if(remBox){
               remBox.checked = enableRemoteStore;
-              remBox.disabled = !remoteBridge.hasRemote;
-              remBox.parentElement?.classList.toggle('muted', remBox.disabled);
+              remBox.disabled = true;
+              remBox.parentElement?.classList.remove('muted');
             }
             const startStageSel = $('#startStagePreference');
             if(startStageSel) startStageSel.value = getPreferredStartStage();
@@ -15717,7 +15961,7 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
         });
         updateOrderSearchControls();
 
-        $("#autosaveSetting").checked = autosaveOn;
+        enforceAutosaveAlwaysOn();
         renderSystemSettingsUI();
         renderAdminSettingsUI();
 }
