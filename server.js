@@ -1212,6 +1212,72 @@ async function ensureCoreSchema(client) {
       ADD COLUMN IF NOT EXISTS updated_text TEXT
   `);
   await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'id'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'uid'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_orders RENAME COLUMN id TO uid';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_orders ADD COLUMN IF NOT EXISTS uid TEXT');
+  await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'id'
+      ) THEN
+        EXECUTE 'UPDATE pc_orders SET uid = COALESCE(uid, id::text) WHERE uid IS NULL';
+      END IF;
+    END $$
+  `);
+  await client.query(`
+    UPDATE pc_orders
+       SET uid = 'order-' || md5(random()::text || clock_timestamp()::text)
+     WHERE uid IS NULL OR btrim(uid) = ''
+  `);
+  await client.query('ALTER TABLE pc_orders ALTER COLUMN uid TYPE TEXT USING uid::text');
+  await client.query('ALTER TABLE pc_orders ALTER COLUMN uid SET NOT NULL');
+  await client.query(`
+    DO $$
+    DECLARE
+      pk_name TEXT;
+    BEGIN
+      SELECT constraint_name
+        INTO pk_name
+        FROM information_schema.table_constraints
+       WHERE table_schema = 'public'
+         AND table_name = 'pc_orders'
+         AND constraint_type = 'PRIMARY KEY'
+       LIMIT 1;
+      IF pk_name IS NULL THEN
+        EXECUTE 'ALTER TABLE pc_orders ADD CONSTRAINT pc_orders_pkey PRIMARY KEY (uid)';
+      ELSIF NOT EXISTS (
+        SELECT 1
+          FROM information_schema.key_column_usage
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND constraint_name = pk_name
+           AND column_name = 'uid'
+      ) THEN
+        EXECUTE format('ALTER TABLE pc_orders DROP CONSTRAINT %I', pk_name);
+        EXECUTE 'ALTER TABLE pc_orders ADD CONSTRAINT pc_orders_pkey PRIMARY KEY (uid)';
+      END IF;
+    END $$
+  `);
+  await client.query(`
     CREATE TABLE IF NOT EXISTS pc_order_tasks (
       uid TEXT PRIMARY KEY,
       order_uid TEXT,
