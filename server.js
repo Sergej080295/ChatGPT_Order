@@ -1196,6 +1196,32 @@ async function ensureCoreSchema(client) {
     )
   `);
   await client.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'board_code'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'pc_orders'
+           AND column_name = 'board_id'
+      ) THEN
+        EXECUTE 'ALTER TABLE pc_orders RENAME COLUMN board_code TO board_id';
+      END IF;
+    END $$
+  `);
+  await client.query('ALTER TABLE pc_orders ADD COLUMN IF NOT EXISTS board_id TEXT');
+  await client.query('ALTER TABLE pc_orders ALTER COLUMN board_id TYPE TEXT USING board_id::text');
+  await client.query(`
+    UPDATE pc_orders
+       SET board_id = COALESCE(NULLIF(btrim(board_id), ''), 'legacy-board')
+     WHERE board_id IS NULL OR btrim(board_id) = ''
+  `);
+  await client.query('ALTER TABLE pc_orders ALTER COLUMN board_id SET NOT NULL');
+  await client.query(`
     ALTER TABLE pc_orders
       ADD COLUMN IF NOT EXISTS crm_order_id TEXT,
       ADD COLUMN IF NOT EXISTS order_number TEXT,
