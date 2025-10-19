@@ -565,18 +565,22 @@
   #stagesTable th:first-child,#stagesTable td:first-child{text-align:left}
   #stagesTable th:not(:first-child),#stagesTable td:not(:first-child){text-align:center}
   #stagesTable td input,#stagesTable td select{width:100%}
-  #stagesTable thead th:nth-child(1){width:29%}
-  #stagesTable thead th:nth-child(2){width:7%}
-  #stagesTable thead th:nth-child(3){width:12%}
-  #stagesTable thead th:nth-child(4){width:18%}
+  #stagesTable thead th:nth-child(1){width:27%}
+  #stagesTable thead th:nth-child(2){width:8%}
+  #stagesTable thead th:nth-child(3){width:7%}
+  #stagesTable thead th:nth-child(4){width:12%}
   #stagesTable thead th:nth-child(5){width:18%}
-  #stagesTable thead th:nth-child(6){width:12%}
-  #stagesTable thead th:nth-child(7){width:4%}
+  #stagesTable thead th:nth-child(6){width:18%}
+  #stagesTable thead th:nth-child(7){width:12%}
+  #stagesTable thead th:nth-child(8){width:4%}
   #stagesTable input[data-k="progress"]{max-width:76px;text-align:center;margin:auto}
   #stagesTable input[data-k="start"],#stagesTable input[data-k="end"]{max-width:136px;text-align:center;margin:auto}
   #stagesTable input[data-k="value"]{max-width:280px;width:100%;text-align:center;margin:auto}
   #stagesTable input.stg-name{padding:4px 6px}
   #stagesTable td.chk{padding:3px 8px}
+  #stagesTable td.priority-cell{padding:3px 8px;text-align:center;font-weight:600;color:var(--muted)}
+  #stagesTable td.priority-cell span{display:inline-flex;align-items:center;justify-content:center;min-width:28px;padding:2px 6px;border-radius:999px;background:rgba(37,99,235,.12);color:#1d4ed8;font-size:12px;}
+  body[data-theme="light"] #stagesTable td.priority-cell span{background:rgba(29,78,216,.12);color:#1d4ed8}
   .progress-expected-cell{display:flex;align-items:center;justify-content:center;gap:6px}
   .progress-expected-cell .expected-indicator{font-size:12px;color:var(--muted)}
   .progress-expected-cell .expected-indicator.behind{color:#dc2626;font-weight:600}
@@ -653,10 +657,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 4h2V2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm14 6H5v10h14V10zm0-2V6H5v2h14z"/></svg>
       </a>
     </div>
-    <div class="boards">
+    <div class="boards" aria-hidden="true" hidden>
       <select id="boardSelect"></select>
-      <span class="pill muted" id="stats">—</span>
     </div>
+    <span class="pill muted" id="stats">—</span>
     <div class="actions">
       <button id="newOrderBtn" class="primary">+ Заказ</button>
       <button id="exportBtn" title="Экспорт JSON">⭳</button>
@@ -666,7 +670,7 @@
     </div>
     <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
     <div class="sync-actions">
-      <label><input id="crmAutosaveToggle" type="checkbox" checked disabled /> Автосохранение</label>
+      <button id="clearOrdersBtn" class="ghost" type="button">Очистить заказы</button>
     </div>
   </div>
 </header>
@@ -702,7 +706,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th>Передел</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th>Передел</th><th>Приоритет</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
           <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -1263,8 +1267,13 @@ function appendStageRow(st){
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
   const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
   const tr=document.createElement('tr');
+  const priorityNumber=Number(st.priorityIndex);
+  const hasPriority=Number.isFinite(priorityNumber);
+  if(hasPriority){tr.dataset.priority=String(priorityNumber);}else{delete tr.dataset.priority;}
+  const priorityCell=hasPriority?`<span>${priorityNumber}</span>`:'<span class="muted">—</span>';
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
+    <td class="priority-cell">${priorityCell}</td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
     <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
@@ -1360,7 +1369,8 @@ function readStages(){
     const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
     const startInput=get('start');
     const endInput=get('end');
-    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??'')}
+    const priorityValue=Number(r.dataset.priority);
+    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??''),priorityIndex:Number.isFinite(priorityValue)?priorityValue:null}
   })
 }
 
@@ -1646,12 +1656,18 @@ function handleOrderRemoval(order, board){
 }
 
 /* TOP BAR & INIT */
-const addBoardBtn=$('#addBoardBtn');
-if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save('Создание доски');renderAll();openBoard();};}
-const editBoardBtn=$('#editBoardBtn');
-if(editBoardBtn){editBoardBtn.onclick=openBoard;}
 $('#newOrderBtn').onclick=()=>openOrder(null);
-boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
+const clearOrdersBtn=$('#clearOrdersBtn');
+if(clearOrdersBtn){
+  clearOrdersBtn.addEventListener('click',()=>{
+    if(!state||!Array.isArray(state.boards)) return;
+    if(!confirm('Очистить все заказы? Действие нельзя отменить.')) return;
+    state.boards.forEach(board=>{ if(board && Array.isArray(board.orders)) board.orders=[]; });
+    save('Очистка заказов');
+    renderAll();
+    showToast({title:'CRM',message:'Все заказы удалены.',tone:'warn'});
+  });
+}
 q.oninput=()=>renderCards();
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
@@ -1675,16 +1691,15 @@ async function refreshCrmFromRemote({ announce=true }={}){
       if(parsed && typeof parsed==='object'){
         syncCrmNotificationsMutedFromPlanner(parsed);
         syncCrmAutosaveFromPlanner(parsed);
-        if(parsed.crm){
-          applyRemoteCrm(parsed.crm);
-          if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint==='function'){
-            window.plannerRemote.applyFingerprint({ etag: loaded?.etag || null, hash: loaded?.hash || null });
-          }
-          if(announce){
-            showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
-          }
-          return true;
+        const derived=buildCrmStateFromSnapshot(parsed);
+        applyRemoteCrm(derived);
+        if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint==='function'){
+          window.plannerRemote.applyFingerprint({ etag: loaded?.etag || null, hash: loaded?.hash || null });
         }
+        if(announce){
+          showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
+        }
+        return true;
       }
       if(announce){
         showToast({title:'CRM',message:'Нет данных для загрузки из SQL.',tone:'warn'});
@@ -1702,14 +1717,6 @@ async function refreshCrmFromRemote({ announce=true }={}){
     }
     return false;
   }
-}
-
-const crmAutosaveToggle=$('#crmAutosaveToggle');
-if(crmAutosaveToggle){
-  crmAutosaveOn=true;
-  crmAutosaveToggle.checked=true;
-  crmAutosaveToggle.disabled=true;
-  try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY,'1');}catch(_err){/* ignore */}
 }
 
 /* === CRM ↔ Planner Sync === */
@@ -1838,10 +1845,9 @@ function queueSync(summary){
 }
 
 function updateSyncButtons(){
-  const toggle=$('#crmAutosaveToggle');
-  if(toggle){
-    toggle.checked=true;
-    toggle.disabled=true;
+  const clearBtn=$('#clearOrdersBtn');
+  if(clearBtn){
+    clearBtn.disabled=!!crmSyncInFlight;
   }
 }
 
@@ -1864,6 +1870,95 @@ function buildCrmOrdersSummary(snapshot){
     total:order.serviceTotal??''
   }));
   return { stages:['crm'], totals, orders:sample };
+}
+
+function buildCrmStateFromSnapshot(snapshot){
+  const defaultBoardId='crm-default-board';
+  const lanesSource=Array.isArray(snapshot?.crm?.boards?.[0]?.lanes)&&snapshot.crm.boards[0].lanes.length?snapshot.crm.boards[0].lanes.slice():[...DEFAULT_LANES];
+  const board={id:defaultBoardId,name:'Список заказов',lanes:lanesSource,orders:[]};
+  const fallback={boards:[board],currentBoardId:defaultBoardId};
+  if(!snapshot||typeof snapshot!=='object') return fallback;
+  const lists=[
+    ['t',Array.isArray(snapshot.t)?snapshot.t:[]],
+    ['done',Array.isArray(snapshot.done)?snapshot.done:[]],
+    ['trash',Array.isArray(snapshot.trash)?snapshot.trash:[]]
+  ];
+  const orders=new Map();
+  let creationIndex=0;
+  for(const [listKey,entries] of lists){
+    for(let idx=0; idx<entries.length; idx+=1){
+      const rawEntry=entries[idx];
+      if(!rawEntry||typeof rawEntry!=='object') continue;
+      const parentKey=rawEntry.parentId||rawEntry.parent_id||rawEntry.parentOrderId||rawEntry.orderId||rawEntry.orderIdentity||rawEntry.uid||rawEntry.id;
+      if(!parentKey) continue;
+      let order=orders.get(parentKey);
+      if(!order){
+        const orderOrdinal=Number(rawEntry.orderOrdinal);
+        order={
+          id:parentKey,
+          parentId:rawEntry.parentId||rawEntry.parent_id||parentKey,
+          title:rawEntry.title||rawEntry.orderTitle||rawEntry.orderIdentity||parentKey,
+          orderNo:rawEntry.orderNumber||rawEntry.orderNo||'',
+          customer:rawEntry.orderCustomer||rawEntry.customer||'',
+          status:rawEntry.status||lanesSource[0]||'',
+          state:rawEntry.state||'',
+          progress:Number(rawEntry.progress ?? rawEntry.percent ?? 0) || 0,
+          percent:Number(rawEntry.percent ?? rawEntry.progress ?? 0) || 0,
+          total:rawEntry.totalHours ?? rawEntry.total ?? '',
+          serviceTotal:rawEntry.serviceTotal ?? '',
+          start:rawEntry.startDate || rawEntry.start || '',
+          end:rawEntry.endDate || rawEntry.end || '',
+          stages:[],
+          childIds:Array.isArray(rawEntry.childIds)?rawEntry.childIds.slice():[],
+          listKey,
+          orderOrdinal:Number.isFinite(orderOrdinal)?orderOrdinal:null,
+          createdIndex:creationIndex++
+        };
+        orders.set(parentKey,order);
+      }
+      if(rawEntry.status && order.status!==rawEntry.status){
+        order.status=rawEntry.status;
+      }
+      const stageId=rawEntry.childId||rawEntry.child_id||rawEntry.uid||rawEntry.orderIdentity||`${parentKey}::${idx}`;
+      if(order.stages.some(stage=>stage.id===stageId)) continue;
+      const stageOrdinal=Number(rawEntry.stageOrdinal ?? rawEntry.ordinal);
+      const doneMeta=rawEntry&&rawEntry.doneMeta&&typeof rawEntry.doneMeta==='object'?rawEntry.doneMeta:{};
+      const stage={
+        id:stageId,
+        name:rawEntry.stage || rawEntry.name || 'Передел',
+        done:!!(rawEntry.done || doneMeta.when || Number(rawEntry.progress||rawEntry.percent||0)>=100),
+        progress:Number(rawEntry.progress ?? rawEntry.percent ?? 0) || 0,
+        percent:Number(rawEntry.percent ?? rawEntry.progress ?? 0) || 0,
+        start:rawEntry.startDate || rawEntry.start || '',
+        end:rawEntry.endDate || rawEntry.end || '',
+        value:rawEntry.value ?? rawEntry.hours ?? '',
+        extra:rawEntry.extraHours ?? rawEntry.extra ?? '',
+        remaining:rawEntry.remainingHours ?? rawEntry.remaining ?? '',
+        doneAt:doneMeta.when || rawEntry.doneAt || '',
+        stageOrdinal:Number.isFinite(stageOrdinal)?stageOrdinal:idx
+      };
+      order.stages.push(stage);
+    }
+  }
+  const ordered=Array.from(orders.values());
+  ordered.sort((a,b)=>{
+    const ao=Number.isFinite(a.orderOrdinal)?a.orderOrdinal:Number.MAX_SAFE_INTEGER;
+    const bo=Number.isFinite(b.orderOrdinal)?b.orderOrdinal:Number.MAX_SAFE_INTEGER;
+    if(ao!==bo) return ao-bo;
+    return a.createdIndex-b.createdIndex;
+  });
+  ordered.forEach((order,idx)=>{
+    const priority=idx+1;
+    order.priorityIndex=priority;
+    order.stages.sort((a,b)=>{
+      const ao=Number.isFinite(a.stageOrdinal)?a.stageOrdinal:Number.MAX_SAFE_INTEGER;
+      const bo=Number.isFinite(b.stageOrdinal)?b.stageOrdinal:Number.MAX_SAFE_INTEGER;
+      return ao-bo;
+    });
+    order.stages=order.stages.map(stage=>({ ...stage, priorityIndex: priority }));
+  });
+  board.orders=ordered;
+  return { boards:[board], currentBoardId:defaultBoardId };
 }
 
 async function pushCrmToServer(){

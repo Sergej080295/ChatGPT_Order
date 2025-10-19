@@ -732,23 +732,6 @@ body.overview-fs-active{overflow:hidden}
 .settings-extra-row label{display:flex;flex-direction:column;gap:4px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;font-size:12px;min-width:160px;}
 .settings-extra-row input{padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
 
-.settings-admin-panel{display:flex;flex-direction:column;gap:16px;width:100%;}
-.admin-settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
-.admin-settings-grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;}
-.admin-settings-grid input{padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;}
-.admin-force-toggle{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;}
-.admin-force-toggle input{width:18px;height:18px;}
-.admin-settings-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
-.admin-history-section{display:flex;flex-direction:column;gap:12px;width:100%;}
-.admin-history-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
-.admin-history-toolbar input{padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;}
-.admin-history-list{display:flex;flex-direction:column;gap:8px;}
-.admin-history-item{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;background:#fff;box-shadow:0 1px 1px rgba(15,23,42,0.04);display:flex;flex-direction:column;gap:6px;}
-.admin-history-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted);}
-.admin-history-summary{font-size:12px;color:#0f172a;}
-.admin-history-actions{display:flex;flex-wrap:wrap;gap:8px;}
-.admin-history-empty{font-size:12px;color:var(--muted);padding:12px 0;}
-.admin-history-footer{display:flex;justify-content:center;}
 #historyViewContent{width:100%;min-height:220px;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-family:ui-monospace,Menlo,Monaco,'Courier New',monospace;font-size:12px;resize:vertical;}
 .history-view-meta{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#0f172a;margin-bottom:8px;}
 
@@ -1121,7 +1104,6 @@ body.overview-fs-active{overflow:hidden}
   <div class="settings-tab-bar">
     <button class="settings-tab active" data-settings-tab="personal" type="button">Персональные</button>
     <button class="settings-tab" data-settings-tab="shared" type="button">Общие</button>
-    <button class="settings-tab" data-settings-tab="admin" type="button">Администрирование</button>
   </div>
   <div class="settings-panels">
     <div class="settings-panel active" data-settings-panel="personal">
@@ -1181,7 +1163,6 @@ body.overview-fs-active{overflow:hidden}
       </div>
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:8px;margin-top:14px;width:100%">
         <div class="muted small">Журнал и уведомления:</div>
-        <label class="small"><input type="checkbox" id="autosaveSetting" checked disabled> Автосохранение</label>
         <label class="small"><input type="checkbox" id="notifyPriorityChange" checked> Изменение приоритета</label>
         <label class="small"><input type="checkbox" id="notifyRouteDates" checked> Изменение дат маршрута</label>
         <label class="small"><input type="checkbox" id="muteNotifications"> Без уведомлений</label>
@@ -1201,43 +1182,6 @@ body.overview-fs-active{overflow:hidden}
         <div class="row" style="gap:8px;flex-wrap:wrap;">
           <button id="sharedSettingsCancel" class="btn ghost" type="button" disabled>Отмена</button>
           <button id="sharedSettingsApply" class="btn primary" type="button" disabled>Применить</button>
-        </div>
-      </div>
-    </div>
-    <div class="settings-panel" data-settings-panel="admin">
-      <div class="settings-admin-panel" id="adminSettingsPanel">
-        <div class="admin-settings-grid">
-          <label>Хранить последних N снимков
-            <input id="adminHistoryLimit" type="number" min="1" max="500" step="1" />
-          </label>
-          <label>Снимков на день (N)
-            <input id="adminHistoryDailyLimit" type="number" min="1" max="100" step="1" />
-          </label>
-          <label class="admin-force-toggle">
-            <span>Разрешить перезапись без проверки версий</span>
-            <input id="adminAllowForceOverwrite" type="checkbox" />
-          </label>
-        </div>
-        <div class="admin-settings-actions">
-          <button id="adminSnapshotBtn" class="btn ghost small" type="button">Создать снимок сейчас</button>
-          <button id="adminSnapshotsClearBtn" class="btn ghost small" type="button">Очистить снимки</button>
-          <button id="adminSaveBtn" class="btn primary small" type="button">Сохранить</button>
-        </div>
-      </div>
-      <div class="admin-history-section">
-        <div class="admin-history-toolbar">
-          <input id="historyFilterActor" type="text" placeholder="Пользователь" />
-          <input id="historyFilterSource" type="text" placeholder="Источник" />
-          <input id="historyFilterFrom" type="date" />
-          <input id="historyFilterTo" type="date" />
-          <button id="historyFilterApply" class="btn small" type="button">Обновить</button>
-          <button id="historyFilterReset" class="btn small ghost" type="button">Сброс</button>
-        </div>
-        <div class="admin-history-list" id="adminHistoryList">
-          <div class="admin-history-empty">История ещё не загружена.</div>
-        </div>
-        <div class="admin-history-footer">
-          <button id="historyLoadMore" class="btn ghost small" type="button">Загрузить ещё</button>
         </div>
       </div>
     </div>
@@ -14949,7 +14893,7 @@ function applyUiPreferences(prefs={}){
 }
 
 function activateSettingsTab(name){
-  const allowed = new Set(['personal','shared','admin']);
+  const allowed = new Set(['personal','shared']);
   const target = allowed.has(name) ? name : 'personal';
   $$('.settings-tab').forEach(btn=>{
     const tab = btn.dataset.settingsTab;
@@ -14959,10 +14903,6 @@ function activateSettingsTab(name){
     const tab = panel.dataset.settingsPanel;
     panel.classList.toggle('active', tab === target);
   });
-  if(target === 'admin'){
-    renderAdminSettingsUI();
-    ensureAdminHistoryLoaded();
-  }
 }
 
 function updateFreshnessUI(){
@@ -15851,11 +15791,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             if(autoBox) autoBox.checked = autoOptimizeOn;
             const cascadeBox = $('#cascadeReady');
             if(cascadeBox) cascadeBox.checked = cascadeReadyOn;
-            const autosaveBox = $('#autosaveSetting');
-            if(autosaveBox){
-              autosaveBox.checked = true;
-              autosaveBox.disabled = true;
-            }
             const logLimitField = $('#logLimitInput');
             if(logLimitField) logLimitField.value = logLimitSetting === null ? '' : String(logLimitSetting);
             const locBox = $('#storageLocal');
@@ -15872,7 +15807,6 @@ $("#routeDlg").addEventListener('close', ()=>{ currentRouteContext = null; });
             sharedSettingsEditing = true;
             resetSharedSettingsDraft();
             renderSystemSettingsUI();
-            renderAdminSettingsUI();
             captureSharedSettingsSnapshot(true);
             refreshDataModeIndicator();
             refreshPlannerModeUI();
