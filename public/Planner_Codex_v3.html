@@ -4544,6 +4544,11 @@ function setStageListFilter(stage, mode){
       select.value = normalized;
     }
   }
+  try{
+    persistMaybe('data', { source:'filters', force:true, announce:false });
+  }catch(err){
+    console.warn('failed to persist stage filter', err);
+  }
 }
 
 function updateStageFilterControls(stage){
@@ -15263,6 +15268,10 @@ function switchProcess(newProc){
       .filter(Boolean);
   }
 
+  const crmStageCandidates = isCrmMode() && Array.isArray(crmStageTasks)
+    ? crmStageTasks.filter(task => task && task.stage === newProc)
+    : [];
+
   if(saved && saved.length){
     tasks = saved;
   }else if(cached.length || skipSaved){
@@ -15285,16 +15294,46 @@ function switchProcess(newProc){
     tasks = active;
   }
 
-  if(!tasks.length && isCrmMode()){
-    const fallback = Array.isArray(crmStageTasks)
-      ? crmStageTasks.filter(task => task && task.stage === newProc)
-      : [];
-    if(fallback.length){
-      tasks = fallback.map(cloneTaskRecord);
+  let crmStageClones = null;
+  let manualStageClones = [];
+  if(isCrmMode()){
+    manualStageClones = tasks
+      .filter(task => task && !isCrmTask(task))
+      .map(cloneTaskRecord);
+    if(crmStageCandidates.length){
+      crmStageClones = crmStageCandidates.map(cloneTaskRecord);
+    }else if(!tasks.length){
+      const fallback = Array.isArray(crmStageTasks)
+        ? crmStageTasks.filter(task => task && task.stage === newProc)
+        : [];
+      if(fallback.length){
+        crmStageClones = fallback.map(cloneTaskRecord);
+      }
+    }
+    if(Array.isArray(crmStageClones) && crmStageClones.length){
+      tasks = manualStageClones.concat(crmStageClones);
     }
   }
 
   lockedUids = new Set();
+
+  if(isCrmMode() && Array.isArray(crmStageClones) && crmStageClones.length){
+    const crmUids = crmStageClones.map(task => task && task.uid).filter(Boolean);
+    if(crmUids.length){
+      const manualUids = manualStageClones.map(task => task && task.uid).filter(Boolean);
+      ordersByStage.set(newProc, manualUids.concat(crmUids));
+    }
+    if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+    const preserved = allTasksFromState.filter(task => {
+      if(!task) return false;
+      if(task.stage !== newProc) return true;
+      return !isCrmTask(task);
+    });
+    const combined = preserved
+      .concat(manualStageClones.map(cloneTaskRecord))
+      .concat(crmStageClones.map(cloneTaskRecord));
+    allTasksFromState = combined;
+  }
 
   stagesDirtyFromRoute.delete(newProc);
 
