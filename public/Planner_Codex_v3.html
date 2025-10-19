@@ -5253,6 +5253,48 @@ function deriveStageTasksFromOverview(stage){
   return { tasks: collected, order: collected.map(task=>task.uid) };
 }
 
+function hydrateStageCachesFromOverview(stages){
+  const stageList = Array.isArray(stages) && stages.length
+    ? stages.filter(stage => STAGES.includes(stage))
+    : STAGES.slice();
+  if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+  const hasTasks = new Map();
+  allTasksFromState.forEach(task => {
+    if(!task || !task.stage) return;
+    const stageKey = task.stage;
+    if(!hasTasks.has(stageKey)) hasTasks.set(stageKey, 0);
+    hasTasks.set(stageKey, hasTasks.get(stageKey) + 1);
+  });
+  const currentStage = document.getElementById('process')?.value || currentProc || '';
+  let currentStageUpdated = false;
+
+  stageList.forEach(stage => {
+    if(stage === OVERVIEW_STAGE) return;
+    const existingCount = hasTasks.get(stage) || 0;
+    if(existingCount > 0) return;
+    const derived = deriveStageTasksFromOverview(stage);
+    if(!Array.isArray(derived.tasks) || !derived.tasks.length) return;
+    const clones = derived.tasks.map(cloneTaskRecord).filter(Boolean);
+    if(!clones.length) return;
+    const withoutStage = allTasksFromState.filter(task => !(task && task.stage === stage));
+    const appended = clones.map(cloneTaskRecord);
+    allTasksFromState = withoutStage.concat(appended);
+    hasTasks.set(stage, appended.length);
+    const orderList = Array.isArray(derived.order) && derived.order.length
+      ? derived.order.map(uid => uid == null ? '' : String(uid)).filter(Boolean)
+      : appended.map(task => task.uid).filter(Boolean);
+    ordersByStage.set(stage, orderList);
+    stagesDirtyFromRoute.delete(stage);
+    if(stage === currentStage){
+      tasks = clones.map(cloneTaskRecord);
+      lockedUids = new Set();
+      currentStageUpdated = true;
+    }
+  });
+
+  return { currentStageUpdated };
+}
+
 function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
   const key = orderEntry.key;
   const tasks = stageTasks.get(key)?.get(stage) || [];
@@ -12528,6 +12570,7 @@ function restoreState(json, opts={}){
     plannerStateReady = true;
     refreshCrmDerivedData({ allowDuringInit:true, recompute:false, rebuildOverview:false });
 
+    hydrateStageCachesFromOverview();
     sortBySavedOrder(tasks, $("#process").value);
     recompute();
     updateTrashAttention?.();
