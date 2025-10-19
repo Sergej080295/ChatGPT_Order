@@ -2943,6 +2943,7 @@ function captureModeScopedState(mode){
   snapshot.lastImportTime = lastImportTime || '';
   snapshot.lastManualTime = lastManualTime || '';
   modeScopedState[key] = snapshot;
+  return stageSnapshots;
 }
 function applyModeScopedState(mode){
   const key = MODE_SCOPED_KEYS.includes(mode) ? mode : PLANNER_MODES.csv;
@@ -3856,8 +3857,9 @@ function buildCrmStageTask(order, stageKey, segment, meta){
   return task;
 }
 
-function buildCrmStageTasks(){
-  if(!isCrmMode()) return [];
+function buildCrmStageTasks(options={}){
+  const { force=false } = options || {};
+  if(!force && !isCrmMode()) return [];
   if(!crmState || !Array.isArray(crmState.boards)) return [];
   const tasks = [];
   crmState.boards.forEach(board => {
@@ -10579,7 +10581,10 @@ function renderDeltaDialog(diffByStage, currentByStage){
 
 let pendingRows=null;
 
-function collectStageTasksSnapshot(){
+function collectStageTasksSnapshot(options={}){
+  const includeCrm = options.includeCrm !== false;
+  const syncCaches = options.syncCaches !== undefined ? !!options.syncCaches : isCrmMode();
+  const preferCachedCrm = options.preferCached === true;
   const stageMaps = new Map();
   const existingOrders = ordersByStage instanceof Map ? ordersByStage : new Map();
 
@@ -10633,14 +10638,21 @@ function collectStageTasksSnapshot(){
   }
 
   let crmSources = [];
-  if(isCrmMode()){
-    try{
-      const rebuilt = buildCrmStageTasks();
-      if(Array.isArray(rebuilt)){
-        crmSources = rebuilt;
+  if(includeCrm){
+    const hasCached = Array.isArray(crmStageTasks) && crmStageTasks.length;
+    const canBuild = !preferCachedCrm && crmState && Array.isArray(crmState.boards) && crmState.boards.length;
+    if(canBuild){
+      try{
+        const rebuilt = buildCrmStageTasks({ force:true });
+        if(Array.isArray(rebuilt) && rebuilt.length){
+          crmSources = rebuilt;
+        }
+      }catch(_err){
+        crmSources = [];
       }
-    }catch(_err){
-      crmSources = [];
+    }
+    if(!crmSources.length && hasCached){
+      crmSources = crmStageTasks.map(cloneTaskRecord);
     }
     if(crmSources.length){
       crmSources.forEach(task => register(task));
@@ -10676,7 +10688,7 @@ function collectStageTasksSnapshot(){
 
   ordersByStage = nextOrders;
 
-  if(isCrmMode()){
+  if(includeCrm){
     const aggregatedCrm = [];
     nextSnapshot.forEach(list => {
       list.forEach(task => {
@@ -10685,7 +10697,16 @@ function collectStageTasksSnapshot(){
         }
       });
     });
-    crmStageTasks = aggregatedCrm;
+    if(aggregatedCrm.length || syncCaches){
+      crmStageTasks = aggregatedCrm;
+      if(syncCaches){
+        if(aggregatedCrm.length){
+          injectCrmTasksIntoCaches();
+        }else{
+          purgeCrmTasksFromCaches();
+        }
+      }
+    }
   }
 
   return nextSnapshot;
@@ -10777,10 +10798,38 @@ async function importRows(rows){
 ========= */
 const LS_KEY='yougile_planner_state_v5';
 function buildStateObject(){
-  captureModeScopedState(plannerMode);
+  const stageSnapshots = captureModeScopedState(plannerMode) || new Map();
   const curStage = $("#process").value;
   const combined = new Map();
-  tasks.forEach(x=>{ if(x && x.uid) combined.set(x.uid, x); });
+  const registerCombined = (task, options={}) => {
+    if(!task || !task.uid) return;
+    const stageHint = options.stage || '';
+    const prefer = options.prefer === true;
+    const copy = cloneTaskRecord(task);
+    if(stageHint && !copy.stage){
+      copy.stage = stageHint;
+    }
+    const existing = combined.get(copy.uid);
+    if(!existing){
+      combined.set(copy.uid, copy);
+      return;
+    }
+    const existingIsCrm = isCrmTask(existing);
+    const copyIsCrm = isCrmTask(copy);
+    if(prefer || (copyIsCrm && !existingIsCrm)){
+      combined.set(copy.uid, copy);
+    }
+  };
+
+  stageSnapshots.forEach((list, stageKey)=>{
+    if(!Array.isArray(list) || !list.length) return;
+    list.forEach(task => registerCombined(task, { stage: stageKey }));
+  });
+
+  tasks.forEach(task => {
+    if(!task || !task.uid) return;
+    registerCombined(task, { stage: task.stage || curStage, prefer:true });
+  });
   if((!Array.isArray(allTasksFromState) || !allTasksFromState.length) && Array.isArray(lastRows) && lastRows.length){
     const doneSet = new Set(doneTasks.map(d=>d.uid));
     const aggregated = [];
@@ -10790,9 +10839,10 @@ function buildStateObject(){
     allTasksFromState = aggregated;
   }
   if(Array.isArray(allTasksFromState) && allTasksFromState.length){
-    allTasksFromState.forEach(x=>{
-      if(!x || !x.uid || x.stage === curStage) return;
-      if(!combined.has(x.uid)) combined.set(x.uid, cloneTaskRecord(x));
+    allTasksFromState.forEach(task=>{
+      if(!task || !task.uid) return;
+      if(task.stage === curStage && combined.has(task.uid)) return;
+      registerCombined(task, { stage: task.stage || '' });
     });
   }
   const mergedTasks = [...combined.values()];
@@ -10818,6 +10868,8 @@ function buildStateObject(){
     const doneMetaOut = doneWhenIso
       ? { when: doneWhenIso, source: x.doneMeta?.source || '' }
       : null;
+    const bucketRaw = typeof x.bucket === 'string' ? x.bucket.trim() : '';
+    const bucket = bucketRaw || (isCrmTask(x) || x.crmOrigin ? 'crm_stage' : 't');
     return {
       uid:x.uid, orderId:x.orderId, orderNumber:x.orderNumber||'', orderCustomer:x.orderCustomer||'', orderIdentity: identity,
       stage:x.stage, childId:x.childId, parentId:x.parentId,
@@ -10825,6 +10877,7 @@ function buildStateObject(){
       startDate:x.startDate? x.startDate.toISOString(): '', endDate:x.endDate? x.endDate.toISOString(): '',
       startMissing:!!x.startMissing, endMissing:!!x.endMissing,
       state:x.state||'', status:x.status||'',
+      bucket,
       useReserve:!!x.useReserve, progress:x.progress||0,
       origStartDate:x.origStartDate?x.origStartDate.toISOString():'',
       route:{
@@ -13303,6 +13356,29 @@ function cloneCrmMappingForSnapshot(map){
   return result;
 }
 
+async function submitSharedSettingsChange(payload){
+  const body = JSON.stringify(payload ?? {});
+  const res = await fetch('/api/settings', {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Accept':'application/json,text/plain' },
+    body
+  });
+  const text = await res.text().catch(()=> '') || '';
+  let data = null;
+  if(text.trim()){
+    try{ data = JSON.parse(text); }
+    catch(_err){ data = null; }
+  }
+  if(!res.ok){
+    const err = new Error((data && data.error) || text || `HTTP ${res.status}`);
+    err.status = res.status;
+    if(data && typeof data === 'object') err.detail = data;
+    else if(text) err.detail = text;
+    throw err;
+  }
+  return data || {};
+}
+
 function crmMappingsEqual(a, b){
   const mapA = a || {};
   const mapB = b || {};
@@ -13654,26 +13730,28 @@ function commitSharedSettingsChanges(){
   if(crmMappingReplaceMode){
     settingsMetaPayload.replace = true;
   }
-  const persistOptions = { immediate:true, context:'sharedSettings', timestamp };
+
+  const requestPayload = {
+    timestamp,
+    entries,
+    keys: changedKeysList,
+    settings: sanitizedSettings,
+    context: 'sharedSettings'
+  };
   if(Object.keys(settingsMetaPayload).length){
-    persistOptions.settingsMeta = settingsMetaPayload;
+    requestPayload.meta = settingsMetaPayload;
   }
 
-  const flushResult = persistSharedPreferencesChange(entries, persistOptions);
-  if(flushResult && typeof flushResult.then === 'function'){
-    flushResult.then(()=>{
-      if(!remoteSyncEnabled()){
-        handleSharedSettingsCommitSuccess();
-      }
-    }).catch(err=>{
-      if(err && err.__sharedHandled){
-        return;
-      }
+  submitSharedSettingsChange(requestPayload)
+    .then(response=>{
+      const serverStamp = typeof response?.updatedAt === 'string' ? response.updatedAt : timestamp;
+      try{ syncSharedSettingsToMeta(serverStamp); }
+      catch(_err){ /* ignore sync issues, local snapshot уже обновлён */ }
+      handleSharedSettingsCommitSuccess();
+    })
+    .catch(err=>{
       handleSharedSettingsCommitError(err);
     });
-  }else if(!remoteSyncEnabled()){
-    handleSharedSettingsCommitSuccess();
-  }
 }
 
 function renderSystemSettingsUI(){

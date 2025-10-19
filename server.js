@@ -90,6 +90,10 @@ function normalizeStage(value) {
   return String(value).trim().toLowerCase();
 }
 
+function isCrmTaskUid(uid) {
+  return typeof uid === 'string' && uid.startsWith(CRM_TASK_PREFIX);
+}
+
 function computeHash(input) {
   return crypto.createHash('sha1').update(input || '', 'utf8').digest('hex');
 }
@@ -857,6 +861,245 @@ function ensureModeScopedConsistency(snapshot, tasks, stageSequences) {
   return snapshot;
 }
 
+function sanitizeIncomingSettings(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const settings = {};
+
+  if (source.capacity && typeof source.capacity === 'object') {
+    const capacity = {};
+    Object.entries(source.capacity).forEach(([stage, value]) => {
+      const normalizedStage = normalizeStage(stage);
+      const num = Number(value);
+      if (normalizedStage && Number.isFinite(num)) {
+        capacity[normalizedStage] = num;
+      }
+    });
+    if (Object.keys(capacity).length) {
+      settings.capacity = capacity;
+    }
+  }
+
+  if (source.parallel && typeof source.parallel === 'object') {
+    const parallel = {};
+    Object.entries(source.parallel).forEach(([stage, value]) => {
+      const normalizedStage = normalizeStage(stage);
+      const num = Number(value);
+      if (normalizedStage && Number.isFinite(num) && num > 0) {
+        parallel[normalizedStage] = num;
+      }
+    });
+    if (Object.keys(parallel).length) {
+      settings.parallel = parallel;
+    }
+  }
+
+  if (source.tableColumns && typeof source.tableColumns === 'object') {
+    const tableColumns = {};
+    Object.entries(source.tableColumns).forEach(([key, value]) => {
+      const column = sanitizeString(key);
+      const num = Number(value);
+      if (column && Number.isFinite(num) && num > 0) {
+        tableColumns[column] = Math.round(num);
+      }
+    });
+    if (Object.keys(tableColumns).length) {
+      settings.tableColumns = tableColumns;
+    }
+  }
+
+  if (source.extraTime && typeof source.extraTime === 'object') {
+    const extra = {};
+    const percent = Number(source.extraTime.percent);
+    const minimum = Number(source.extraTime.minimum);
+    if (Number.isFinite(percent) && percent >= 0) {
+      extra.percent = percent;
+    }
+    if (Number.isFinite(minimum) && minimum >= 0) {
+      extra.minimum = minimum;
+    }
+    if (Object.keys(extra).length) {
+      settings.extraTime = extra;
+    }
+  }
+
+  if (source.crmStageMapping && typeof source.crmStageMapping === 'object') {
+    const mapping = {};
+    Object.entries(source.crmStageMapping).forEach(([key, value]) => {
+      const normalizedKey = sanitizeString(key).toLowerCase();
+      if (!normalizedKey) {
+        return;
+      }
+      if (value === CRM_STAGE_IGNORE) {
+        mapping[normalizedKey] = CRM_STAGE_IGNORE;
+        return;
+      }
+      const stage = normalizeStage(value);
+      if (stage) {
+        mapping[normalizedKey] = stage;
+      }
+    });
+    if (Object.keys(mapping).length) {
+      settings.crmStageMapping = mapping;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'logLimit')) {
+    if (source.logLimit === null || source.logLimit === undefined || source.logLimit === '') {
+      settings.logLimit = null;
+    } else {
+      const num = Number(source.logLimit);
+      if (Number.isFinite(num)) {
+        settings.logLimit = num;
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(source, 'notificationsMuted')) {
+    settings.notificationsMuted = !!source.notificationsMuted;
+  }
+
+  if (source.plannerMode !== undefined) {
+    const mode = sanitizeString(source.plannerMode);
+    if (mode) {
+      settings.plannerMode = mode.toLowerCase();
+    }
+  }
+
+  if (source.admin && typeof source.admin === 'object') {
+    const admin = {};
+    if (source.admin.historyLimit !== undefined) {
+      const limit = Number(source.admin.historyLimit);
+      if (Number.isFinite(limit) && limit > 0) {
+        admin.historyLimit = Math.round(limit);
+      }
+    }
+    if (source.admin.historyDailyLimit !== undefined) {
+      const daily = Number(source.admin.historyDailyLimit);
+      if (Number.isFinite(daily) && daily > 0) {
+        admin.historyDailyLimit = Math.round(daily);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(source.admin, 'allowForceOverwrite')) {
+      admin.allowForceOverwrite = source.admin.allowForceOverwrite === true || source.admin.allowForceOverwrite === 'true';
+    }
+    if (source.admin.writeMode !== undefined) {
+      const mode = sanitizeString(source.admin.writeMode).toLowerCase();
+      if (['crm', 'planner', 'both'].includes(mode)) {
+        admin.writeMode = mode;
+      }
+    }
+    if (Object.keys(admin).length) {
+      settings.admin = admin;
+    }
+  }
+
+  return settings;
+}
+
+function applySettingsToSnapshot(snapshot, settings, options = {}) {
+  const normalized = normalizeSnapshotCollections(snapshot);
+  const metaSettings = normalized.meta && typeof normalized.meta === 'object' && normalized.meta.settings
+    ? { ...normalized.meta.settings }
+    : buildEmptySnapshot().meta.settings;
+
+  if (settings.capacity) {
+    normalized.capByProc = { ...(normalized.capByProc || {}), ...settings.capacity };
+    metaSettings.capacity = { ...(metaSettings.capacity || {}), ...settings.capacity };
+  }
+
+  if (settings.parallel) {
+    normalized.parallelByProc = { ...(normalized.parallelByProc || {}), ...settings.parallel };
+    metaSettings.parallel = { ...(metaSettings.parallel || {}), ...settings.parallel };
+  }
+
+  if (settings.tableColumns) {
+    metaSettings.tableColumns = { ...(metaSettings.tableColumns || {}), ...settings.tableColumns };
+  }
+
+  if (settings.extraTime) {
+    const baseExtra = metaSettings.extraTime && typeof metaSettings.extraTime === 'object'
+      ? { ...metaSettings.extraTime }
+      : {};
+    if (settings.extraTime.percent !== undefined) {
+      baseExtra.percent = Number(settings.extraTime.percent);
+    }
+    if (settings.extraTime.minimum !== undefined) {
+      baseExtra.minimum = Number(settings.extraTime.minimum);
+    }
+    metaSettings.extraTime = baseExtra;
+  }
+
+  if (settings.crmStageMapping) {
+    const replaceMapping = options.replaceMapping === true;
+    const baseMap = replaceMapping
+      ? {}
+      : (metaSettings.crmStageMapping && typeof metaSettings.crmStageMapping === 'object'
+        ? { ...metaSettings.crmStageMapping }
+        : {});
+    Object.entries(settings.crmStageMapping).forEach(([key, value]) => {
+      if (value === CRM_STAGE_IGNORE) {
+        baseMap[key] = CRM_STAGE_IGNORE;
+      } else {
+        baseMap[key] = value;
+      }
+    });
+    metaSettings.crmStageMapping = baseMap;
+  }
+
+  if (settings.logLimit !== undefined) {
+    if (settings.logLimit === null) {
+      metaSettings.logLimit = null;
+    } else {
+      metaSettings.logLimit = Number(settings.logLimit);
+    }
+  }
+
+  if (settings.notificationsMuted !== undefined) {
+    normalized.notificationsMuted = !!settings.notificationsMuted;
+    metaSettings.notificationsMuted = normalized.notificationsMuted;
+  }
+
+  if (settings.plannerMode) {
+    metaSettings.plannerMode = settings.plannerMode;
+  }
+
+  if (settings.admin) {
+    const baseAdmin = metaSettings.admin && typeof metaSettings.admin === 'object'
+      ? { ...metaSettings.admin }
+      : {};
+    if (settings.admin.historyLimit !== undefined) {
+      const limit = Math.max(1, Math.round(Number(settings.admin.historyLimit)) || 1);
+      baseAdmin.historyLimit = limit;
+      if (baseAdmin.historyDailyLimit && baseAdmin.historyDailyLimit > limit) {
+        baseAdmin.historyDailyLimit = limit;
+      }
+    }
+    if (settings.admin.historyDailyLimit !== undefined) {
+      const dailyRaw = Math.max(1, Math.round(Number(settings.admin.historyDailyLimit)) || 1);
+      const limit = Math.max(1, Math.round(Number(baseAdmin.historyLimit || dailyRaw)) || 1);
+      baseAdmin.historyLimit = limit;
+      baseAdmin.historyDailyLimit = Math.min(limit, dailyRaw);
+    }
+    if (settings.admin.allowForceOverwrite !== undefined) {
+      baseAdmin.allowForceOverwrite = !!settings.admin.allowForceOverwrite;
+    }
+    if (settings.admin.writeMode) {
+      const mode = sanitizeString(settings.admin.writeMode).toLowerCase();
+      if (['crm', 'planner', 'both'].includes(mode)) {
+        baseAdmin.writeMode = mode;
+      }
+    }
+    metaSettings.admin = baseAdmin;
+  }
+
+  if (settings.updatedAt) {
+    metaSettings.updatedAt = settings.updatedAt;
+  }
+
+  normalized.meta.settings = metaSettings;
+  return normalized;
+}
+
 function hasCrmStageTasks(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') {
     return false;
@@ -1220,6 +1463,7 @@ function extractStorageParts(snapshot) {
     tasks.push(record);
     taskByUid.set(record.uid, record);
   };
+  const flatStageCandidates = new Map();
   for (const [key] of buckets) {
     const list = Array.isArray(normalized[key]) ? normalized[key] : [];
     list.forEach((task, index) => {
@@ -1236,15 +1480,27 @@ function extractStorageParts(snapshot) {
       const resolution = resolveKey(keySource);
       const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
       const meta = extractTaskMetadata(payload);
-      registerTaskRecord({
+      const stage = normalizeStage(task?.stage) || normalizeStage(payload.stage);
+      if (stage && !payload.stage) {
+        payload.stage = stage;
+      }
+      const bucketName = isCrmTaskUid(uid) && stage ? 'crm_stage' : key;
+      const record = {
         uid,
         orderUid,
-        stage: normalizeStage(task?.stage),
-        bucket: key,
+        stage,
+        bucket: bucketName,
         position: index,
         payload,
         meta
-      });
+      };
+      registerTaskRecord(record);
+      if (stage) {
+        if (!flatStageCandidates.has(stage)) {
+          flatStageCandidates.set(stage, []);
+        }
+        flatStageCandidates.get(stage).push({ uid, position: index, bucket: bucketName });
+      }
     });
   }
 
@@ -1331,6 +1587,40 @@ function extractStorageParts(snapshot) {
       }
     });
     derivedStageSequences.set(stage, ids);
+  });
+
+  flatStageCandidates.forEach((entries, stage) => {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return;
+    }
+    const sorted = entries
+      .slice()
+      .sort((a, b) => {
+        const left = Number.isFinite(a.position) ? a.position : Number.MAX_SAFE_INTEGER;
+        const right = Number.isFinite(b.position) ? b.position : Number.MAX_SAFE_INTEGER;
+        if (left === right) {
+          return sanitizeString(a.uid).localeCompare(sanitizeString(b.uid));
+        }
+        return left - right;
+      })
+      .map((entry) => sanitizeString(entry.uid))
+      .filter(Boolean);
+    if (!sorted.length) {
+      return;
+    }
+    if (derivedStageSequences.has(stage)) {
+      const existing = derivedStageSequences.get(stage) || [];
+      const seen = new Set(existing);
+      sorted.forEach((uid) => {
+        if (!seen.has(uid)) {
+          existing.push(uid);
+          seen.add(uid);
+        }
+      });
+      derivedStageSequences.set(stage, existing);
+    } else {
+      derivedStageSequences.set(stage, sorted);
+    }
   });
 
   if (derivedStageSequences.size > 0) {
@@ -1953,6 +2243,38 @@ app.put('/api/state', async (req, res) => {
     res.status(200).json({ ok: true, rev: latest.rev, hash: latest.hash, etag });
   } catch (err) {
     console.error('PUT /api/state failed', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    const rawBody = req.body && typeof req.body === 'object' ? req.body : {};
+    const incomingSettings = sanitizeIncomingSettings(rawBody.settings || {});
+    const timestamp = sanitizeString(rawBody.timestamp) || new Date().toISOString();
+    incomingSettings.updatedAt = timestamp;
+    const replaceMapping = !!(rawBody.meta && typeof rawBody.meta === 'object' && rawBody.meta.replace);
+
+    const current = await getCachedSnapshot();
+    const previousHash = current?.hash || null;
+    const baselineSnapshot = current?.snapshot ? clonePlain(current.snapshot) : buildEmptySnapshot();
+    const updatedSnapshot = applySettingsToSnapshot(baselineSnapshot, incomingSettings, { replaceMapping });
+    const stateString = safeJsonStringify(updatedSnapshot, '{}');
+    const latest = await persistSnapshotWithSql({ snapshot: updatedSnapshot, stateString });
+
+    if (latest.hash !== previousHash) {
+      broadcastRevision({ rev: latest.rev, hash: latest.hash });
+    }
+
+    res.status(200).json({
+      ok: true,
+      hash: latest.hash,
+      rev: latest.rev,
+      updatedAt: incomingSettings.updatedAt,
+      settings: latest.snapshot?.meta?.settings || null
+    });
+  } catch (err) {
+    console.error('POST /api/settings failed', err);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
