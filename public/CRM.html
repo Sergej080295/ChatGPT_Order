@@ -109,7 +109,9 @@
     };
   };
 
-  if ('EventSource' in window) {
+  const realtimeAllowed = true;
+
+  if (realtimeAllowed && 'EventSource' in window) {
     connect();
   }
 
@@ -563,18 +565,22 @@
   #stagesTable th:first-child,#stagesTable td:first-child{text-align:left}
   #stagesTable th:not(:first-child),#stagesTable td:not(:first-child){text-align:center}
   #stagesTable td input,#stagesTable td select{width:100%}
-  #stagesTable thead th:nth-child(1){width:29%}
-  #stagesTable thead th:nth-child(2){width:7%}
-  #stagesTable thead th:nth-child(3){width:12%}
-  #stagesTable thead th:nth-child(4){width:18%}
+  #stagesTable thead th:nth-child(1){width:27%}
+  #stagesTable thead th:nth-child(2){width:8%}
+  #stagesTable thead th:nth-child(3){width:7%}
+  #stagesTable thead th:nth-child(4){width:12%}
   #stagesTable thead th:nth-child(5){width:18%}
-  #stagesTable thead th:nth-child(6){width:12%}
-  #stagesTable thead th:nth-child(7){width:4%}
+  #stagesTable thead th:nth-child(6){width:18%}
+  #stagesTable thead th:nth-child(7){width:12%}
+  #stagesTable thead th:nth-child(8){width:4%}
   #stagesTable input[data-k="progress"]{max-width:76px;text-align:center;margin:auto}
   #stagesTable input[data-k="start"],#stagesTable input[data-k="end"]{max-width:136px;text-align:center;margin:auto}
   #stagesTable input[data-k="value"]{max-width:280px;width:100%;text-align:center;margin:auto}
   #stagesTable input.stg-name{padding:4px 6px}
   #stagesTable td.chk{padding:3px 8px}
+  #stagesTable td.priority-cell{padding:3px 8px;text-align:center;font-weight:600;color:var(--muted)}
+  #stagesTable td.priority-cell span{display:inline-flex;align-items:center;justify-content:center;min-width:28px;padding:2px 6px;border-radius:999px;background:rgba(37,99,235,.12);color:#1d4ed8;font-size:12px;}
+  body[data-theme="light"] #stagesTable td.priority-cell span{background:rgba(29,78,216,.12);color:#1d4ed8}
   .progress-expected-cell{display:flex;align-items:center;justify-content:center;gap:6px}
   .progress-expected-cell .expected-indicator{font-size:12px;color:var(--muted)}
   .progress-expected-cell .expected-indicator.behind{color:#dc2626;font-weight:600}
@@ -626,6 +632,11 @@
   body[data-theme="light"] .planner-button{background:linear-gradient(135deg,rgba(27,92,255,.22),rgba(27,92,255,.08));border-color:rgba(27,92,255,.45);color:#1b5cff}
   body[data-theme="light"] .planner-button:hover{box-shadow:0 8px 18px rgba(27,92,255,.18);background:linear-gradient(135deg,rgba(27,92,255,.3),rgba(27,92,255,.12))}
 
+  .sync-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto;margin-top:12px}
+  .sync-actions label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .sync-actions button{min-width:110px}
+  .sync-actions .ghost{background:#fff}
+
   .tt{position:fixed;z-index:9998;background:var(--tooltipBg);color:var(--text);border:1px solid var(--tooltipBd);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;max-width:320px;pointer-events:none}
   .tt h5{margin:0 0 6px 0;font-size:12px;color:var(--muted)}
   .tt ul{margin:0;padding-left:16px}
@@ -646,10 +657,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M5 4h2V2h2v2h6V2h2v2h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm14 6H5v10h14V10zm0-2V6H5v2h14z"/></svg>
       </a>
     </div>
-    <div class="boards">
+    <div class="boards" aria-hidden="true" hidden>
       <select id="boardSelect"></select>
-      <span class="pill muted" id="stats">—</span>
     </div>
+    <span class="pill muted" id="stats">—</span>
     <div class="actions">
       <button id="newOrderBtn" class="primary">+ Заказ</button>
       <button id="exportBtn" title="Экспорт JSON">⭳</button>
@@ -658,6 +669,9 @@
       <button id="themeBtn" title="Переключить тему">🌙</button>
     </div>
     <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
+    <div class="sync-actions">
+      <button id="clearOrdersBtn" class="ghost" type="button">Очистить заказы</button>
+    </div>
   </div>
 </header>
 
@@ -692,7 +706,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th>Передел</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th>Передел</th><th>Приоритет</th><th>Готово</th><th>% вып.</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
           <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -762,9 +776,45 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
+const CRM_STAGE_NAME_TO_KEY={
+  'подготовка в работу':'draw',
+  'подготовка':'draw',
+  'закупка':'proc',
+  'рубка':'shear',
+  'лазер':'laser',
+  'гибка':'bend',
+  'сварка':'weld',
+  'мехобработка':'mech',
+  'кооперация':'coop',
+  'упаковка':'pack',
+  'отгрузка':'ship',
+  'чек лист':'checklist',
+  'чек-лист':'checklist',
+  'чеклист':'checklist'
+};
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const CRM_AUTOSAVE_PREF_KEY='mini_crm_autosave_pref_v1';
+let crmAutosaveOn=true;
+let crmHasPendingChanges=false;
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+function normalizeIdentityPart(value){
+  if(value===null||value===undefined) return '';
+  return String(value).trim().toLowerCase();
+}
+function buildCrmOrderIdentity(order,index){
+  if(!order||typeof order!=='object'){ return index!=null?`crm-order-${index}`:null; }
+  const numberPart=normalizeIdentityPart(order.orderNo||order.orderNumber||'');
+  const customerPart=normalizeIdentityPart(order.customer||order.orderCustomer||'');
+  if(numberPart||customerPart){
+    return `${numberPart}::${customerPart}`.replace(/^::/,'').replace(/::$/,'');
+  }
+  const idRaw=order.id!=null?String(order.id).trim():'';
+  if(idRaw) return idRaw;
+  const parentRaw=order.parentId!=null?String(order.parentId).trim():'';
+  if(parentRaw) return parentRaw;
+  return index!=null?`crm-order-${index}`:null;
+}
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
@@ -1250,8 +1300,13 @@ function appendStageRow(st){
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
   const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
   const tr=document.createElement('tr');
+  const priorityNumber=Number(st.priorityIndex);
+  const hasPriority=Number.isFinite(priorityNumber);
+  if(hasPriority){tr.dataset.priority=String(priorityNumber);}else{delete tr.dataset.priority;}
+  const priorityCell=hasPriority?`<span>${priorityNumber}</span>`:'<span class="muted">—</span>';
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
+    <td class="priority-cell">${priorityCell}</td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
     <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${Number(st.progress??0)}" /><span class="expected-indicator"></span></div>`}</td>
     <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
@@ -1347,7 +1402,8 @@ function readStages(){
     const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
     const startInput=get('start');
     const endInput=get('end');
-    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??'')}
+    const priorityValue=Number(r.dataset.priority);
+    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??''),priorityIndex:Number.isFinite(priorityValue)?priorityValue:null}
   })
 }
 
@@ -1633,17 +1689,68 @@ function handleOrderRemoval(order, board){
 }
 
 /* TOP BAR & INIT */
-const addBoardBtn=$('#addBoardBtn');
-if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Новая доска';state.boards.push(b);state.currentBoardId=b.id;save('Создание доски');renderAll();openBoard();};}
-const editBoardBtn=$('#editBoardBtn');
-if(editBoardBtn){editBoardBtn.onclick=openBoard;}
 $('#newOrderBtn').onclick=()=>openOrder(null);
-boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
+const clearOrdersBtn=$('#clearOrdersBtn');
+if(clearOrdersBtn){
+  clearOrdersBtn.addEventListener('click',()=>{
+    if(!state||!Array.isArray(state.boards)) return;
+    if(!confirm('Очистить все заказы? Действие нельзя отменить.')) return;
+    state.boards.forEach(board=>{ if(board && Array.isArray(board.orders)) board.orders=[]; });
+    save('Очистка заказов');
+    renderAll();
+    showToast({title:'CRM',message:'Все заказы удалены.',tone:'warn'});
+  });
+}
 q.oninput=()=>renderCards();
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+
+async function refreshCrmFromRemote({ announce=true }={}){
+  if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function'){
+    if(announce){
+      showToast({title:'CRM',message:'Подключение к планировщику недоступно.',tone:'error',autoClose:5000});
+    }
+    return false;
+  }
+  try{
+    const loaded=await window.plannerRemote.loadState({ withMeta:true });
+    const rawState=loaded && typeof loaded.state==='string' ? loaded.state : '';
+    if(rawState){
+      let parsed=null;
+      try{ parsed=JSON.parse(rawState); }
+      catch(err){ console.warn('CRM: не удалось разобрать состояние планировщика',err); parsed=null; }
+      if(parsed && typeof parsed==='object'){
+        syncCrmNotificationsMutedFromPlanner(parsed);
+        syncCrmAutosaveFromPlanner(parsed);
+        const derived=buildCrmStateFromSnapshot(parsed);
+        applyRemoteCrm(derived);
+        if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint==='function'){
+          window.plannerRemote.applyFingerprint({ etag: loaded?.etag || null, hash: loaded?.hash || null });
+        }
+        if(announce){
+          showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
+        }
+        return true;
+      }
+      if(announce){
+        showToast({title:'CRM',message:'Нет данных для загрузки из SQL.',tone:'warn'});
+      }
+      return false;
+    }
+    if(announce){
+      showToast({title:'CRM',message:'Нет данных для загрузки из SQL.',tone:'warn'});
+    }
+    return false;
+  }catch(err){
+    console.error('CRM refresh failed',err);
+    if(announce){
+      showToast({title:'CRM',message:'Не удалось получить данные из SQL.',tone:'error',autoClose:5000});
+    }
+    return false;
+  }
+}
 
 /* === CRM ↔ Planner Sync === */
 const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
@@ -1689,15 +1796,44 @@ function syncCrmNotificationsMutedFromPlanner(state){
     window.__CRM_NOTIFICATIONS_MUTED__=next;
   }
 }
+
+function derivePlannerAutosave(state){
+  if(!state||typeof state!=='object') return undefined;
+  if(typeof state.autosaveOn==='boolean') return state.autosaveOn;
+  const meta=state.meta||{};
+  if(typeof meta.autosaveOn==='boolean') return meta.autosaveOn;
+  const metaPrefs=meta.preferences||{};
+  if(typeof metaPrefs.autosaveOn==='boolean') return metaPrefs.autosaveOn;
+  const settings=meta.settings||{};
+  const settingsPrefs=settings.preferences||{};
+  if(typeof settingsPrefs.autosaveOn==='boolean') return settingsPrefs.autosaveOn;
+  const prefs=state.preferences||{};
+  if(typeof prefs.autosaveOn==='boolean') return prefs.autosaveOn;
+  return undefined;
+}
+
+function syncCrmAutosaveFromPlanner(state){
+  crmAutosaveOn=true;
+  try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY,'1');}catch(_err){/* ignore */}
+  updateSyncButtons();
+}
 let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
+let crmRemoteUnsubscribe=null;
 let crmAlias=(()=>{
   try{const stored=localStorage.getItem(CRM_ALIAS_STORAGE_KEY); if(stored) return stored;}
   catch(_err){/* ignore */}
   return 'CRM оператор';
 })();
+
+try{
+  const storedAutosave=localStorage.getItem(CRM_AUTOSAVE_PREF_KEY);
+  if(storedAutosave!==null){
+    crmAutosaveOn=true;
+  }
+}catch(_err){/* ignore */}
 
 function setCrmAlias(name){
   crmAlias=(name||'CRM оператор').trim()||'CRM оператор';
@@ -1717,10 +1853,35 @@ function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
   if(autoClose>0){setTimeout(close,autoClose);}
 }
 
+function setupPlannerRemoteSubscription(){
+  if(crmRemoteUnsubscribe){
+    try{ crmRemoteUnsubscribe(); }catch(_err){ /* ignore */ }
+    crmRemoteUnsubscribe=null;
+  }
+  if(window.plannerRemote && typeof window.plannerRemote.onRemoteUpdate==='function'){
+    crmRemoteUnsubscribe = window.plannerRemote.onRemoteUpdate(async ()=>{
+      if(crmSuppressNext){
+        crmSuppressNext=false;
+        return;
+      }
+      await refreshCrmFromRemote({ announce:false });
+    });
+  }
+}
+
 function queueSync(summary){
   crmPendingSummary=summary||'Изменения CRM';
+  crmHasPendingChanges=true;
   if(crmSyncTimer) clearTimeout(crmSyncTimer);
-  crmSyncTimer=setTimeout(pushCrmToServer,450);
+  crmSyncTimer=setTimeout(()=>{ pushCrmToServer(); },450);
+  updateSyncButtons();
+}
+
+function updateSyncButtons(){
+  const clearBtn=$('#clearOrdersBtn');
+  if(clearBtn){
+    clearBtn.disabled=!!crmSyncInFlight;
+  }
 }
 
 function buildCrmOrdersSummary(snapshot){
@@ -1744,12 +1905,285 @@ function buildCrmOrdersSummary(snapshot){
   return { stages:['crm'], totals, orders:sample };
 }
 
+function buildCrmStateFromSnapshot(snapshot){
+  const defaultBoardId='crm-default-board';
+  const lanesSource=Array.isArray(snapshot?.crm?.boards?.[0]?.lanes)&&snapshot.crm.boards[0].lanes.length?snapshot.crm.boards[0].lanes.slice():[...DEFAULT_LANES];
+  const board={id:defaultBoardId,name:'Список заказов',lanes:lanesSource,orders:[]};
+  const fallback={boards:[board],currentBoardId:defaultBoardId};
+  if(!snapshot||typeof snapshot!=='object') return fallback;
+  const lists=[
+    ['t',Array.isArray(snapshot.t)?snapshot.t:[]],
+    ['done',Array.isArray(snapshot.done)?snapshot.done:[]],
+    ['trash',Array.isArray(snapshot.trash)?snapshot.trash:[]]
+  ];
+  const orders=new Map();
+  let creationIndex=0;
+  for(const [listKey,entries] of lists){
+    for(let idx=0; idx<entries.length; idx+=1){
+      const rawEntry=entries[idx];
+      if(!rawEntry||typeof rawEntry!=='object') continue;
+      const parentKey=rawEntry.parentId||rawEntry.parent_id||rawEntry.parentOrderId||rawEntry.orderId||rawEntry.orderIdentity||rawEntry.uid||rawEntry.id;
+      if(!parentKey) continue;
+      let order=orders.get(parentKey);
+      if(!order){
+        const orderOrdinal=Number(rawEntry.orderOrdinal);
+        order={
+          id:parentKey,
+          parentId:rawEntry.parentId||rawEntry.parent_id||parentKey,
+          title:rawEntry.title||rawEntry.orderTitle||rawEntry.orderIdentity||parentKey,
+          orderNo:rawEntry.orderNumber||rawEntry.orderNo||'',
+          customer:rawEntry.orderCustomer||rawEntry.customer||'',
+          status:rawEntry.status||lanesSource[0]||'',
+          state:rawEntry.state||'',
+          progress:Number(rawEntry.progress ?? rawEntry.percent ?? 0) || 0,
+          percent:Number(rawEntry.percent ?? rawEntry.progress ?? 0) || 0,
+          total:rawEntry.totalHours ?? rawEntry.total ?? '',
+          serviceTotal:rawEntry.serviceTotal ?? '',
+          start:rawEntry.startDate || rawEntry.start || '',
+          end:rawEntry.endDate || rawEntry.end || '',
+          stages:[],
+          childIds:Array.isArray(rawEntry.childIds)?rawEntry.childIds.slice():[],
+          listKey,
+          orderOrdinal:Number.isFinite(orderOrdinal)?orderOrdinal:null,
+          createdIndex:creationIndex++
+        };
+        orders.set(parentKey,order);
+      }
+      if(rawEntry.status && order.status!==rawEntry.status){
+        order.status=rawEntry.status;
+      }
+      const stageId=rawEntry.childId||rawEntry.child_id||rawEntry.uid||rawEntry.orderIdentity||`${parentKey}::${idx}`;
+      if(order.stages.some(stage=>stage.id===stageId)) continue;
+      const stageOrdinal=Number(rawEntry.stageOrdinal ?? rawEntry.ordinal);
+      const doneMeta=rawEntry&&rawEntry.doneMeta&&typeof rawEntry.doneMeta==='object'?rawEntry.doneMeta:{};
+      const stage={
+        id:stageId,
+        name:rawEntry.stage || rawEntry.name || 'Передел',
+        stageKey:rawEntry.stage || null,
+        listKey,
+        done:!!(rawEntry.done || doneMeta.when || Number(rawEntry.progress||rawEntry.percent||0)>=100),
+        progress:Number(rawEntry.progress ?? rawEntry.percent ?? 0) || 0,
+        percent:Number(rawEntry.percent ?? rawEntry.progress ?? 0) || 0,
+        start:rawEntry.startDate || rawEntry.start || '',
+        end:rawEntry.endDate || rawEntry.end || '',
+        value:rawEntry.value ?? rawEntry.hours ?? '',
+        extra:rawEntry.extraHours ?? rawEntry.extra ?? '',
+        remaining:rawEntry.remainingHours ?? rawEntry.remaining ?? '',
+        doneAt:doneMeta.when || rawEntry.doneAt || '',
+        stageOrdinal:Number.isFinite(stageOrdinal)?stageOrdinal:idx
+      };
+      order.stages.push(stage);
+    }
+  }
+  const ordered=Array.from(orders.values());
+  ordered.sort((a,b)=>{
+    const ao=Number.isFinite(a.orderOrdinal)?a.orderOrdinal:Number.MAX_SAFE_INTEGER;
+    const bo=Number.isFinite(b.orderOrdinal)?b.orderOrdinal:Number.MAX_SAFE_INTEGER;
+    if(ao!==bo) return ao-bo;
+    return a.createdIndex-b.createdIndex;
+  });
+  ordered.forEach((order,idx)=>{
+    const priority=idx+1;
+    order.priorityIndex=priority;
+    order.stages.sort((a,b)=>{
+      const ao=Number.isFinite(a.stageOrdinal)?a.stageOrdinal:Number.MAX_SAFE_INTEGER;
+      const bo=Number.isFinite(b.stageOrdinal)?b.stageOrdinal:Number.MAX_SAFE_INTEGER;
+      return ao-bo;
+    });
+    order.stages=order.stages.map(stage=>({ ...stage, priorityIndex: priority }));
+  });
+  board.orders=ordered;
+  return { boards:[board], currentBoardId:defaultBoardId };
+}
+
+function stageKeyFromCrmStage(stage){
+  if(stage&&typeof stage.stageKey==='string'){const trimmed=stage.stageKey.trim();if(trimmed) return trimmed;}
+  const normalized=normalizeStageName(stage?.name||'');
+  if(normalized&&Object.prototype.hasOwnProperty.call(CRM_STAGE_NAME_TO_KEY,normalized)){
+    return CRM_STAGE_NAME_TO_KEY[normalized];
+  }
+  if(normalized){
+    return normalized.replace(/[^a-z0-9]+/g,'_');
+  }
+  return '';
+}
+
+function isoFromDateLike(value){
+  if(!value) return '';
+  if(value instanceof Date){
+    const t=value.getTime();
+    if(Number.isNaN(t)) return '';
+    return new Date(t).toISOString();
+  }
+  if(typeof value==='number'){ if(!Number.isFinite(value)) return ''; return new Date(value).toISOString(); }
+  const str=String(value).trim();
+  if(!str) return '';
+  const parsed=new Date(str);
+  if(Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString();
+}
+
+function ensureCrmBoardFromState(crmState){
+  if(!crmState||typeof crmState!=='object') return null;
+  const boards=Array.isArray(crmState.boards)?crmState.boards:[];
+  if(!boards.length) return null;
+  if(crmState.currentBoardId){
+    const found=boards.find(board=>board&&board.id===crmState.currentBoardId);
+    if(found) return found;
+  }
+  return boards[0];
+}
+
+function mergeCrmOrdersIntoPlannerSnapshot(target, crmState){
+  if(!target||typeof target!=='object') return;
+  const board=ensureCrmBoardFromState(crmState);
+  if(!board){
+    target.t=[];
+    target.done=[];
+    target.trash=[];
+    target.orders=[];
+    return;
+  }
+  const active=[];
+  const done=[];
+  const trash=[];
+  const ordersMap=new Map();
+  const lanes=Array.isArray(board.lanes)?board.lanes:[];
+  const defaultLane=lanes.length?lanes[0]:'';
+  const orders=Array.isArray(board.orders)?board.orders:[];
+  orders.forEach((order,orderIdx)=>{
+    if(!order||typeof order!=='object') return;
+    const parentIdentity=buildCrmOrderIdentity(order,orderIdx)||`crm-order-${orderIdx}`;
+    const parentId=(order.parentId!=null?String(order.parentId).trim():'' )||parentIdentity;
+    const orderNumber=order.orderNo||order.orderNumber||'';
+    const orderCustomer=order.customer||order.orderCustomer||'';
+    const orderTitle=order.title||order.orderTitle||parentIdentity;
+    const status=order.status||defaultLane||'';
+    const state=order.state||'';
+    const baseListKey=order.listKey==='trash'?'trash':(order.listKey==='done'?'done':'t');
+    const stages=Array.isArray(order.stages)?order.stages.slice():[];
+    stages.sort((a,b)=>{
+      const ao=Number.isFinite(a?.stageOrdinal)?Number(a.stageOrdinal):Number.isFinite(a?.priorityIndex)?Number(a.priorityIndex):Number.MAX_SAFE_INTEGER;
+      const bo=Number.isFinite(b?.stageOrdinal)?Number(b.stageOrdinal):Number.isFinite(b?.priorityIndex)?Number(b.priorityIndex):Number.MAX_SAFE_INTEGER;
+      return ao-bo;
+    });
+    let hasActiveStage=false;
+    stages.forEach((stage,stageIdx)=>{
+      if(!stage||typeof stage!=='object') return;
+      const stageKey=stageKeyFromCrmStage(stage);
+      const stageName=stageKey||stage.name||'';
+      const stageUid=stage.id?String(stage.id):`${parentIdentity}::${stageName||'stage'}::${stageIdx}`;
+      const progress=Number(stage.progress ?? order.progress ?? 0) || 0;
+      const percent=Number(stage.percent ?? progress) || 0;
+      const isDone=baseListKey==='done' || stage.done || progress>=100;
+      const hours=parseNumericValue(stage.value);
+      const extra=parseNumericValue(stage.extra);
+      const remaining=parseNumericValue(stage.remaining);
+      const startIso=isoFromDateLike(stage.start);
+      const endIso=isoFromDateLike(stage.end);
+      const origStartIso=isoFromDateLike(stage.originalStart || stage.origStart);
+      const doneIso=isoFromDateLike(stage.doneAt || stage.end);
+      const crmMeta={ lane:status, orderId:parentIdentity };
+
+      if(baseListKey==='trash'){
+        trash.push({
+          uid:stageUid,
+          orderId:parentIdentity,
+          orderIdentity:parentIdentity,
+          orderNumber,
+          orderCustomer,
+          orderTitle,
+          stage:stageName,
+          parentId,
+          childId:stageUid,
+          hours:hours.hasValue?hours.number:null,
+          extra:extra.hasValue?extra.number:null,
+          start:startIso,
+          end:endIso,
+          doneAt:doneIso,
+          source:'crm',
+          crmMeta
+        });
+        return;
+      }
+
+      if(isDone){
+        done.push({
+          uid:stageUid,
+          orderId:parentIdentity,
+          orderIdentity:parentIdentity,
+          orderNumber,
+          orderCustomer,
+          orderTitle,
+          stage:stageName,
+          parentId,
+          childId:stageUid,
+          hours:hours.hasValue?hours.number:null,
+          extra:extra.hasValue?extra.number:null,
+          start:startIso,
+          end:endIso,
+          when:doneIso,
+          doneAt:doneIso,
+          source:'crm',
+          crmMeta
+        });
+        return;
+      }
+
+      const activeEntry={
+        uid:stageUid,
+        orderId:parentIdentity,
+        orderIdentity:parentIdentity,
+        orderNumber,
+        orderCustomer,
+        orderTitle,
+        parentId,
+        childId:stageUid,
+        stage:stageName,
+        state,
+        status,
+        progress,
+        percent,
+        hours:hours.hasValue?hours.number:null,
+        extraHours:extra.hasValue?extra.number:null,
+        remainingHours:remaining.hasValue?remaining.number:null,
+        startDate:startIso,
+        endDate:endIso,
+        origStartDate:origStartIso,
+        useReserve:!!order.useReserve,
+        locked:!!order.locked,
+        orderOrdinal:Number.isFinite(order.priorityIndex)?Number(order.priorityIndex):null,
+        doneMeta:doneIso?{ when:doneIso, source:'crm' }:null,
+        crmMeta
+      };
+      active.push(activeEntry);
+      hasActiveStage=true;
+      const ordersKey=(stageKey||normalizeStageName(stage.name||'')).trim();
+      if(ordersKey){
+        if(!ordersMap.has(ordersKey)) ordersMap.set(ordersKey,[]);
+        ordersMap.get(ordersKey).push(stageUid);
+      }
+    });
+
+    // Если у заказа нет активных переделов, просто пропускаем его —
+    // он попадёт либо в архив (done), либо в корзину (trash).
+  });
+
+  target.t=active;
+  target.done=done;
+  target.trash=trash;
+  target.orders=Array.from(ordersMap.entries());
+  if(!Array.isArray(target.locked)) target.locked=[];
+}
+
 async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
   crmSyncInFlight=true;
+  updateSyncButtons();
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
     crmSyncInFlight=false;
+    updateSyncButtons();
     return;
   }
   const snapshot=deepClone(state);
@@ -1780,9 +2214,29 @@ async function pushCrmToServer(){
     }
     if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
     syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+    const autosaveValue=!!crmAutosaveOn;
+    plannerSnapshot.autosaveOn=autosaveValue;
+    const plannerMeta=plannerSnapshot.meta||{};
+    plannerSnapshot.meta=plannerMeta;
+    const metaPreferences=plannerMeta.preferences&&typeof plannerMeta.preferences==='object'?
+      {...plannerMeta.preferences}:{ };
+    metaPreferences.autosaveOn=autosaveValue;
+    plannerMeta.preferences=metaPreferences;
+    const plannerSettings=plannerMeta.settings&&typeof plannerMeta.settings==='object'?
+      {...plannerMeta.settings}:{ };
+    const settingsPreferences=plannerSettings.preferences&&typeof plannerSettings.preferences==='object'?
+      {...plannerSettings.preferences}:{ };
+    settingsPreferences.autosaveOn=autosaveValue;
+    plannerSettings.preferences=settingsPreferences;
+    plannerMeta.settings=plannerSettings;
+    const rootPreferences=plannerSnapshot.preferences&&typeof plannerSnapshot.preferences==='object'?
+      {...plannerSnapshot.preferences}:{ };
+    rootPreferences.autosaveOn=autosaveValue;
+    plannerSnapshot.preferences=rootPreferences;
     plannerSnapshot.crm=snapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
+    mergeCrmOrdersIntoPlannerSnapshot(plannerSnapshot, snapshot);
     const now=new Date(nowIso);
     const nowLabel=now.toLocaleString();
     const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
@@ -1822,7 +2276,8 @@ async function pushCrmToServer(){
       user:crmAlias,
       time:nowLabel,
       changeType:'CRM',
-      ordersSummary:summaryObj
+      ordersSummary:summaryObj,
+      forcePersist:true
     };
     if(baseHash) metaPayload.baseHash=baseHash;
     if(baseEtag) metaPayload.baseEtag=baseEtag;
@@ -1863,7 +2318,11 @@ async function pushCrmToServer(){
   }
 
   if(success){
+    crmHasPendingChanges=false;
+    try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY, crmAutosaveOn?'1':'0');}catch(_err){/* ignore */}
+    updateSyncButtons();
     showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    setTimeout(()=>{ crmSuppressNext=false; },15000);
   }else if(lastError){
     crmSuppressNext=false;
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
@@ -1881,6 +2340,8 @@ async function pushCrmToServer(){
   }
 
   crmSyncInFlight=false;
+  updateSyncButtons();
+  return success;
 }
 
 function applyRemoteCrm(crm){
@@ -1895,21 +2356,8 @@ function applyRemoteCrm(crm){
   state=cloned;
   persistLocal();
   renderAll();
-}
-
-if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
-  window.plannerRemote.onRemoteUpdate(payload=>{
-    if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload||!payload.state) return;
-    try{
-      const parsed=JSON.parse(payload.state);
-      syncCrmNotificationsMutedFromPlanner(parsed);
-      if(parsed&&parsed.crm){
-        applyRemoteCrm(parsed.crm);
-        showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
-      }
-    }catch(err){ console.warn('CRM remote update parse failed',err); }
-  });
+  crmHasPendingChanges=false;
+  updateSyncButtons();
 }
 
 document.addEventListener('visibilitychange',()=>{
@@ -1931,6 +2379,9 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
 renderAll();
+updateSyncButtons();
+setupPlannerRemoteSubscription();
+refreshCrmFromRemote({ announce:false });
 
 /* hotkeys */
 document.addEventListener('keydown',e=>{

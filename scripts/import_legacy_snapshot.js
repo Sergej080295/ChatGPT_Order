@@ -14,9 +14,26 @@ const pool = new Pool({
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined
 });
 
-const SNAPSHOT_CATEGORY_STATE = 'state';
-const SNAPSHOT_CATEGORY_META = 'meta';
-const GENERAL_SETTINGS_TABLE = 'planner_general_settings';
+const TABLE_SNAPSHOTS = 'planner_state_snapshots';
+const TABLE_SCALARS = 'planner_state_scalars';
+const TABLE_CAPACITY = 'planner_state_capacity';
+const TABLE_PARALLEL = 'planner_state_parallel';
+const TABLE_ROUTE_OVERRIDES = 'planner_state_route_overrides';
+const TABLE_IGNORED_STATES = 'planner_state_ignored_states';
+const TABLE_LIST_ENTRIES = 'planner_state_list_entries';
+const TABLE_LIST_ATTRIBUTES = 'planner_state_list_entry_attributes';
+const TABLE_ORDER_HEADERS = 'planner_orders';
+const TABLE_ORDER_STAGES = 'planner_order_stages';
+const TABLE_ORDER_STAGE_ATTRIBUTES = 'planner_order_stage_attributes';
+const TABLE_ORDER_STAGE_ROUTES = 'planner_order_stage_routes';
+const TABLE_META_VALUES = 'planner_meta_values';
+const TABLE_META_HISTORY = 'planner_meta_history_entries';
+const TABLE_META_HISTORY_ATTRS = 'planner_meta_history_entry_attributes';
+const TABLE_CRM_VALUES = 'planner_state_crm_values';
+const TABLE_MODE_VALUES = 'planner_state_mode_scoped_values';
+const GENERAL_SETTINGS_TABLE = 'planner_settings';
+const SETTINGS_SCOPE_GENERAL = 'general';
+const SETTINGS_SCOPE_PREFERENCES = 'preferences';
 const GENERAL_PREFERENCE_KEYS = [
   'autosaveOn',
   'autoOptimizeOn',
@@ -25,6 +42,24 @@ const GENERAL_PREFERENCE_KEYS = [
   'priorityChangeLoggingOn',
   'routeDateChangeLoggingOn',
   'notificationsMuted'
+];
+const ORDER_LIST_KEYS = ['t', 'done', 'trash'];
+const STATE_LIST_KEYS = ['orders', 'exc', 'res', 'locked'];
+const STATE_SCALAR_KEYS = [
+  'process',
+  'filter',
+  'freshness',
+  'freshnessCsv',
+  'freshnessManual',
+  'lastImportTime',
+  'lastManualTime',
+  'autosaveOn',
+  'autoOptimizeOn',
+  'cascadeReadyOn',
+  'priorityChangeLoggingOn',
+  'routeDateChangeLoggingOn',
+  'notificationsMuted',
+  'shiftOnProgress'
 ];
 
 function isPlainObject(value) {
@@ -47,6 +82,15 @@ function cloneDeepPlain(value) {
     return Number.isNaN(time) ? null : new Date(time);
   }
   return value;
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function normalizePreferenceValue(value) {
@@ -89,12 +133,13 @@ function normalizePreferenceValue(value) {
   return Boolean(value);
 }
 
-function extractGeneralSettingsForStorage(snapshot, meta = null) {
+function extractGeneralSettingsForStorage(snapshot) {
   if (!isPlainObject(snapshot)) {
-    return { hasSettings: false, payload: null, meta: isPlainObject(meta) ? meta : null };
+    return { hasSettings: false, payload: null, meta: null };
   }
 
-  const workingMeta = isPlainObject(meta) ? cloneDeepPlain(meta) : null;
+  const snapshotMetaSource = isPlainObject(snapshot.meta) ? snapshot.meta : null;
+  const workingMeta = snapshotMetaSource ? cloneDeepPlain(snapshotMetaSource) : null;
   let settings = null;
 
   if (Object.prototype.hasOwnProperty.call(snapshot, 'settings')) {
@@ -107,9 +152,9 @@ function extractGeneralSettingsForStorage(snapshot, meta = null) {
     }
   }
 
-  if (isPlainObject(snapshot.meta) && Object.prototype.hasOwnProperty.call(snapshot.meta, 'settings')) {
-    const metaValue = snapshot.meta.settings;
-    delete snapshot.meta.settings;
+  if (snapshotMetaSource && Object.prototype.hasOwnProperty.call(snapshotMetaSource, 'settings')) {
+    const metaValue = snapshotMetaSource.settings;
+    delete snapshotMetaSource.settings;
     if (isPlainObject(metaValue)) {
       settings = metaValue;
     } else if (metaValue === null || metaValue === undefined) {
@@ -130,7 +175,7 @@ function extractGeneralSettingsForStorage(snapshot, meta = null) {
   const preferences = {};
   const preferenceSources = [
     snapshot,
-    isPlainObject(snapshot.meta) ? snapshot.meta : null,
+    snapshotMetaSource,
     workingMeta
   ];
 
@@ -287,6 +332,913 @@ function flattenObjectForStorage(source) {
   return rows;
 }
 
+function parseOptionalString(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    const normalized = String(value).trim();
+    return normalized || null;
+  }
+  return null;
+}
+
+function parseOptionalNumber(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed.replace(',', '.');
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  return null;
+}
+
+function parseOptionalBoolean(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  return normalizePreferenceValue(value);
+}
+
+function parseOptionalTimestamp(value) {
+  const date = parseDate(value);
+  return date ? date.toISOString() : null;
+}
+
+async function clearStateForRevision(client, rev) {
+  await client.query(`DELETE FROM ${TABLE_SCALARS} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_CAPACITY} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_PARALLEL} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_ROUTE_OVERRIDES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_IGNORED_STATES} WHERE rev = $1`, [rev]);
+  await client.query(
+    `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id IN (
+       SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1
+     )`,
+    [rev]
+  );
+  await client.query(
+    `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id IN (
+       SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1
+     )`,
+    [rev]
+  );
+  await client.query(`DELETE FROM ${TABLE_ORDER_STAGES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_ORDER_HEADERS} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_LIST_ENTRIES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_META_VALUES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_META_HISTORY} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_CRM_VALUES} WHERE rev = $1`, [rev]);
+  await client.query(`DELETE FROM ${TABLE_MODE_VALUES} WHERE rev = $1`, [rev]);
+}
+
+async function persistScalarValues(client, rev, snapshot) {
+  await client.query(`DELETE FROM ${TABLE_SCALARS} WHERE rev = $1`, [rev]);
+  for (const key of STATE_SCALAR_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(snapshot, key)) {
+      continue;
+    }
+    const normalized = normalizePrimitiveForStorage(snapshot[key]);
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${TABLE_SCALARS} (rev, key, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)` ,
+      [rev, key, normalized.type, normalized.text, normalized.numeric, normalized.boolean, null]
+    );
+  }
+}
+
+async function persistCapacity(client, rev, capacity) {
+  await client.query(`DELETE FROM ${TABLE_CAPACITY} WHERE rev = $1`, [rev]);
+  if (!isPlainObject(capacity)) {
+    return;
+  }
+  for (const [code, value] of Object.entries(capacity)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${TABLE_CAPACITY} (rev, process_code, minutes) VALUES ($1,$2,$3)` ,
+      [rev, String(code), numeric]
+    );
+  }
+}
+
+async function persistParallel(client, rev, parallel) {
+  await client.query(`DELETE FROM ${TABLE_PARALLEL} WHERE rev = $1`, [rev]);
+  if (!isPlainObject(parallel)) {
+    return;
+  }
+  for (const [code, value] of Object.entries(parallel)) {
+    const flag = normalizePreferenceValue(value);
+    if (flag === null) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${TABLE_PARALLEL} (rev, process_code, is_parallel) VALUES ($1,$2,$3)` ,
+      [rev, String(code), flag]
+    );
+  }
+}
+
+async function persistRouteOverrides(client, rev, overrides) {
+  await client.query(`DELETE FROM ${TABLE_ROUTE_OVERRIDES} WHERE rev = $1`, [rev]);
+  if (!Array.isArray(overrides)) {
+    return;
+  }
+  for (const entry of overrides) {
+    if (!Array.isArray(entry) || entry.length < 2) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const key = parseOptionalString(entry[0]) || '';
+    const payload = isPlainObject(entry[1]) ? entry[1] : {};
+    const [parentRaw, stageRaw] = key.split('::');
+    const parentOrderId = parseOptionalString(parentRaw) || '';
+    const stage = parseOptionalString(stageRaw) || '';
+    const startAt = parseDate(payload.start || payload.startAt || payload.start_date);
+    const endAt = parseDate(payload.end || payload.endAt || payload.end_date);
+    const source = parseOptionalString(payload.source || payload.reason || payload.note);
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${TABLE_ROUTE_OVERRIDES} (rev, parent_order_id, stage, start_at, end_at, source)
+       VALUES ($1,$2,$3,$4,$5,$6)` ,
+      [
+        rev,
+        parentOrderId,
+        stage,
+        startAt ? startAt.toISOString() : null,
+        endAt ? endAt.toISOString() : null,
+        source
+      ]
+    );
+  }
+}
+
+async function persistIgnoredStates(client, rev, ignored) {
+  await client.query(`DELETE FROM ${TABLE_IGNORED_STATES} WHERE rev = $1`, [rev]);
+  if (!Array.isArray(ignored)) {
+    return;
+  }
+  for (let index = 0; index < ignored.length; index += 1) {
+    const key = parseOptionalString(ignored[index]);
+    if (!key) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${TABLE_IGNORED_STATES} (rev, state_key, ordinal) VALUES ($1,$2,$3)` ,
+      [rev, key, index]
+    );
+  }
+}
+
+function sanitizeStageOrdersEntry(entry) {
+  if (!Array.isArray(entry) || entry.length < 1) {
+    return null;
+  }
+  const stage = parseOptionalString(entry[0]);
+  if (!stage) {
+    return null;
+  }
+  const rawList = entry.length > 1 ? entry[1] : [];
+  const uids = Array.isArray(rawList)
+    ? rawList.map((value) => parseOptionalString(value)).filter((value) => value !== null)
+    : [];
+  return { stage, uids };
+}
+
+function sanitizeLockedEntry(entry) {
+  const value = parseOptionalString(entry);
+  return value || null;
+}
+
+function extractOrderIdentifiers(entry) {
+  if (!isPlainObject(entry)) {
+    return {
+      parentOrderId: null,
+      childOrderId: null,
+      orderIdentity: null,
+      crmOrderId: null,
+      crmChildId: null
+    };
+  }
+
+  const parentOrderId = parseOptionalString(
+    entry.parentId
+      || entry.parent_id
+      || entry.parentOrderId
+      || entry.parent_order_id
+      || entry.parent
+  );
+  const childOrderId = parseOptionalString(
+    entry.childId
+      || entry.child_id
+      || entry.childOrderId
+      || entry.child_order_id
+      || entry.uid
+      || entry.id
+  );
+  const orderIdentity = parseOptionalString(
+    entry.orderIdentity
+      || entry.orderId
+      || entry.order_id
+      || entry.orderNumber
+      || entry.order_number
+      || entry.id
+      || entry.uid
+      || childOrderId
+      || parentOrderId
+  );
+  const crmOrderId = parseOptionalString(
+    entry.crmOrderId
+      || entry.crm_order_id
+      || entry.crmParentId
+      || entry.crm_parent_id
+      || entry.crmOrder
+      || entry.crmId
+  );
+  const crmChildId = parseOptionalString(
+    entry.crmChildId
+      || entry.crm_child_id
+      || entry.crmChild
+      || entry.crm_child
+      || entry.crmChildOrderId
+      || entry.crm_child_order_id
+  );
+
+  return {
+    parentOrderId,
+    childOrderId,
+    orderIdentity,
+    crmOrderId,
+    crmChildId
+  };
+}
+
+function extractOrderColumnValues(entry, identifiers) {
+  const uid = parseOptionalString(entry?.uid || entry?.childId || entry?.child_id || identifiers.childOrderId);
+  const orderNumber = parseOptionalString(entry?.orderNumber || entry?.orderNo || entry?.number);
+  const orderCustomer = parseOptionalString(entry?.orderCustomer || entry?.customer);
+  const orderTitle = parseOptionalString(entry?.orderTitle || entry?.title || entry?.name || identifiers.orderIdentity);
+  const stage = parseOptionalString(entry?.stage);
+  const state = parseOptionalString(entry?.state);
+  const status = parseOptionalString(entry?.status);
+  const hours = parseOptionalNumber(entry?.hours);
+  const extraHoursSource = entry?.extraHours !== undefined ? entry.extraHours : entry?.extra;
+  const extraHours = parseOptionalNumber(extraHoursSource);
+  const startAt = parseOptionalTimestamp(entry?.startDate || entry?.start);
+  const endAt = parseOptionalTimestamp(entry?.endDate || entry?.end);
+  const origStartAt = parseOptionalTimestamp(entry?.origStartDate || entry?.origStart || entry?.originalStart);
+  const doneMeta = isPlainObject(entry?.doneMeta) ? entry.doneMeta : null;
+  const doneAt = parseOptionalTimestamp(
+    doneMeta?.when
+      || entry?.doneAt
+      || entry?.when
+      || (isPlainObject(entry?.route) && stage ? entry.route[stage]?.doneAt : null)
+  );
+  const doneSource = parseOptionalString(doneMeta?.source || entry?.source);
+  const progress = parseOptionalNumber(entry?.progress);
+  const percent = parseOptionalNumber(
+    entry?.percent
+      || entry?.percentComplete
+      || entry?.progressPercent
+      || (isPlainObject(entry?.metrics) ? entry.metrics.percent : null)
+  );
+  const totalHours = parseOptionalNumber(
+    entry?.totalHours
+      || entry?.total
+      || entry?.hoursTotal
+      || entry?.totalPlan
+      || (isPlainObject(entry?.metrics) ? entry.metrics.totalHours : null)
+  );
+  const remainingHours = parseOptionalNumber(
+    entry?.remainingHours
+      || entry?.remaining
+      || entry?.rest
+      || entry?.balance
+      || (isPlainObject(entry?.metrics) ? entry.metrics.remaining : null)
+  );
+  const useReserveValue = parseOptionalBoolean(entry?.useReserve);
+  const lockedValue = parseOptionalBoolean(entry?.locked || (Array.isArray(entry?.lockedUsers) ? entry.lockedUsers.length > 0 : null));
+
+  return {
+    uid,
+    orderNumber,
+    orderCustomer,
+    orderTitle,
+    stage,
+    state,
+    status,
+    hours,
+    extraHours,
+    startAt,
+    endAt,
+    origStartAt,
+    doneAt,
+    doneSource,
+    progress,
+    percent,
+    totalHours,
+    remainingHours,
+    useReserve: useReserveValue === null ? null : !!useReserveValue,
+    locked: lockedValue === null ? null : !!lockedValue
+  };
+}
+
+function extractRouteSegmentsForStorage(entry) {
+  if (!isPlainObject(entry) || !isPlainObject(entry.route)) {
+    return [];
+  }
+  const segments = [];
+  Object.entries(entry.route).forEach(([key, value]) => {
+    const segmentKey = parseOptionalString(key);
+    if (!segmentKey || !isPlainObject(value)) {
+      return;
+    }
+    const hours = parseOptionalNumber(value.hours);
+    const startAt = parseOptionalTimestamp(value.start);
+    const endAt = parseOptionalTimestamp(value.end);
+    const origStartAt = parseOptionalTimestamp(value.origStart || value.originalStart);
+    const doneAt = parseOptionalTimestamp(value.doneAt);
+    if (hours === null && !startAt && !endAt && !origStartAt && !doneAt) {
+      return;
+    }
+    segments.push({
+      key: segmentKey,
+      hours,
+      startAt,
+      endAt,
+      origStartAt,
+      doneAt
+    });
+  });
+  return segments;
+}
+
+async function persistOrderEntries(client, rev, listKey, entries) {
+  const { rows: oldStageRows } = await client.query(
+    `SELECT id FROM ${TABLE_ORDER_STAGES} WHERE rev = $1 AND list_key = $2`,
+    [rev, listKey]
+  );
+  const stageIds = oldStageRows.map((row) => row.id);
+  if (stageIds.length) {
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id = ANY($1::bigint[])`,
+      [stageIds]
+    );
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id = ANY($1::bigint[])`,
+      [stageIds]
+    );
+  }
+
+  await client.query(`DELETE FROM ${TABLE_ORDER_STAGES} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+  await client.query(`DELETE FROM ${TABLE_ORDER_HEADERS} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+
+  if (!Array.isArray(entries) || !entries.length) {
+    return;
+  }
+
+  const orderCache = new Map();
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!isPlainObject(entry)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const identifiers = extractOrderIdentifiers(entry);
+    const columnValues = extractOrderColumnValues(entry, identifiers);
+    const primaryParentId = identifiers.parentOrderId
+      || identifiers.orderIdentity
+      || columnValues.orderIdentity
+      || columnValues.orderNumber
+      || columnValues.uid;
+
+    if (!primaryParentId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const canonicalParentId = identifiers.parentOrderId || primaryParentId;
+
+    let headerInfo = orderCache.get(canonicalParentId);
+    if (!headerInfo) {
+      // eslint-disable-next-line no-await-in-loop
+      const { rows: headerRows } = await client.query(
+        `INSERT INTO ${TABLE_ORDER_HEADERS} (
+           rev,
+           parent_order_id,
+           order_identity,
+           crm_order_id,
+           order_number,
+           order_customer,
+           order_title,
+           status,
+           state,
+           progress,
+           percent,
+           total_hours,
+           extra_hours,
+           remaining_hours,
+           start_at,
+           end_at,
+           orig_start_at,
+           done_at,
+           done_source,
+           use_reserve,
+           locked,
+           list_key,
+           ordinal
+         )
+         VALUES (
+           $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+         )
+         ON CONFLICT (rev, parent_order_id)
+         DO UPDATE SET
+           order_identity = EXCLUDED.order_identity,
+           crm_order_id = COALESCE(EXCLUDED.crm_order_id, ${TABLE_ORDER_HEADERS}.crm_order_id),
+           order_number = COALESCE(EXCLUDED.order_number, ${TABLE_ORDER_HEADERS}.order_number),
+           order_customer = COALESCE(EXCLUDED.order_customer, ${TABLE_ORDER_HEADERS}.order_customer),
+           order_title = COALESCE(EXCLUDED.order_title, ${TABLE_ORDER_HEADERS}.order_title),
+           status = COALESCE(EXCLUDED.status, ${TABLE_ORDER_HEADERS}.status),
+           state = COALESCE(EXCLUDED.state, ${TABLE_ORDER_HEADERS}.state),
+           progress = COALESCE(EXCLUDED.progress, ${TABLE_ORDER_HEADERS}.progress),
+           percent = COALESCE(EXCLUDED.percent, ${TABLE_ORDER_HEADERS}.percent),
+           total_hours = COALESCE(EXCLUDED.total_hours, ${TABLE_ORDER_HEADERS}.total_hours),
+           extra_hours = COALESCE(EXCLUDED.extra_hours, ${TABLE_ORDER_HEADERS}.extra_hours),
+           remaining_hours = COALESCE(EXCLUDED.remaining_hours, ${TABLE_ORDER_HEADERS}.remaining_hours),
+           start_at = COALESCE(EXCLUDED.start_at, ${TABLE_ORDER_HEADERS}.start_at),
+           end_at = COALESCE(EXCLUDED.end_at, ${TABLE_ORDER_HEADERS}.end_at),
+           orig_start_at = COALESCE(EXCLUDED.orig_start_at, ${TABLE_ORDER_HEADERS}.orig_start_at),
+           done_at = COALESCE(EXCLUDED.done_at, ${TABLE_ORDER_HEADERS}.done_at),
+           done_source = COALESCE(EXCLUDED.done_source, ${TABLE_ORDER_HEADERS}.done_source),
+           use_reserve = COALESCE(EXCLUDED.use_reserve, ${TABLE_ORDER_HEADERS}.use_reserve),
+           locked = COALESCE(EXCLUDED.locked, ${TABLE_ORDER_HEADERS}.locked),
+           list_key = EXCLUDED.list_key,
+           ordinal = LEAST(${TABLE_ORDER_HEADERS}.ordinal, EXCLUDED.ordinal),
+           updated_at = now()
+         RETURNING id`,
+        [
+          rev,
+          canonicalParentId,
+          identifiers.orderIdentity
+            || columnValues.orderIdentity
+            || columnValues.uid
+            || canonicalParentId,
+          identifiers.crmOrderId,
+          columnValues.orderNumber,
+          columnValues.orderCustomer,
+          columnValues.orderTitle,
+          columnValues.status,
+          columnValues.state,
+          columnValues.progress,
+          columnValues.percent,
+          columnValues.totalHours,
+          columnValues.extraHours,
+          columnValues.remainingHours,
+          columnValues.startAt,
+          columnValues.endAt,
+          columnValues.origStartAt,
+          columnValues.doneAt,
+          columnValues.doneSource,
+          columnValues.useReserve,
+          columnValues.locked,
+          listKey,
+          index
+        ]
+      );
+
+      const headerRow = headerRows[0];
+      if (!headerRow || !headerRow.id) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      headerInfo = { id: headerRow.id };
+      orderCache.set(canonicalParentId, headerInfo);
+    }
+
+    const stageChildId = identifiers.childOrderId
+      || columnValues.uid
+      || identifiers.orderIdentity
+      || columnValues.orderIdentity
+      || `${canonicalParentId}::${index}`;
+
+    // eslint-disable-next-line no-await-in-loop
+    const { rows: stageRows } = await client.query(
+      `INSERT INTO ${TABLE_ORDER_STAGES} (
+         rev,
+         order_id,
+         parent_order_id,
+         child_order_id,
+         order_identity,
+         crm_child_id,
+         stage,
+         status,
+         state,
+         progress,
+         percent,
+         hours,
+         extra_hours,
+         remaining_hours,
+         start_at,
+         end_at,
+         orig_start_at,
+         done_at,
+         done_source,
+         use_reserve,
+         locked,
+         list_key,
+         ordinal
+       )
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23
+       )
+       ON CONFLICT (rev, parent_order_id, child_order_id)
+       DO UPDATE SET
+         order_id = EXCLUDED.order_id,
+         order_identity = EXCLUDED.order_identity,
+         crm_child_id = COALESCE(EXCLUDED.crm_child_id, ${TABLE_ORDER_STAGES}.crm_child_id),
+         stage = COALESCE(EXCLUDED.stage, ${TABLE_ORDER_STAGES}.stage),
+         status = COALESCE(EXCLUDED.status, ${TABLE_ORDER_STAGES}.status),
+         state = COALESCE(EXCLUDED.state, ${TABLE_ORDER_STAGES}.state),
+         progress = COALESCE(EXCLUDED.progress, ${TABLE_ORDER_STAGES}.progress),
+         percent = COALESCE(EXCLUDED.percent, ${TABLE_ORDER_STAGES}.percent),
+         hours = COALESCE(EXCLUDED.hours, ${TABLE_ORDER_STAGES}.hours),
+         extra_hours = COALESCE(EXCLUDED.extra_hours, ${TABLE_ORDER_STAGES}.extra_hours),
+         remaining_hours = COALESCE(EXCLUDED.remaining_hours, ${TABLE_ORDER_STAGES}.remaining_hours),
+         start_at = COALESCE(EXCLUDED.start_at, ${TABLE_ORDER_STAGES}.start_at),
+         end_at = COALESCE(EXCLUDED.end_at, ${TABLE_ORDER_STAGES}.end_at),
+         orig_start_at = COALESCE(EXCLUDED.orig_start_at, ${TABLE_ORDER_STAGES}.orig_start_at),
+         done_at = COALESCE(EXCLUDED.done_at, ${TABLE_ORDER_STAGES}.done_at),
+         done_source = COALESCE(EXCLUDED.done_source, ${TABLE_ORDER_STAGES}.done_source),
+         use_reserve = COALESCE(EXCLUDED.use_reserve, ${TABLE_ORDER_STAGES}.use_reserve),
+         locked = COALESCE(EXCLUDED.locked, ${TABLE_ORDER_STAGES}.locked),
+         list_key = EXCLUDED.list_key,
+         ordinal = EXCLUDED.ordinal,
+         updated_at = now()
+       RETURNING id`,
+      [
+        rev,
+        headerInfo.id,
+        canonicalParentId,
+        stageChildId,
+        identifiers.orderIdentity
+          || columnValues.orderIdentity
+          || columnValues.uid
+          || stageChildId,
+        identifiers.crmChildId,
+        columnValues.stage,
+        columnValues.status,
+        columnValues.state,
+        columnValues.progress,
+        columnValues.percent,
+        columnValues.hours,
+        columnValues.extraHours,
+        columnValues.remainingHours,
+        columnValues.startAt,
+        columnValues.endAt,
+        columnValues.origStartAt,
+        columnValues.doneAt,
+        columnValues.doneSource,
+        columnValues.useReserve,
+        columnValues.locked,
+        listKey,
+        index
+      ]
+    );
+
+    const stageRow = stageRows[0];
+    if (!stageRow || !stageRow.id) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ROUTES} WHERE stage_id = $1`,
+      [stageRow.id]
+    );
+    const routeSegments = extractRouteSegmentsForStorage(entry);
+    for (const segment of routeSegments) {
+      if (!segment.key) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_ORDER_STAGE_ROUTES} (stage_id, segment_key, hours, start_at, end_at, orig_start_at, done_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          stageRow.id,
+          segment.key,
+          segment.hours,
+          segment.startAt,
+          segment.endAt,
+          segment.origStartAt,
+          segment.doneAt
+        ]
+      );
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `DELETE FROM ${TABLE_ORDER_STAGE_ATTRIBUTES} WHERE stage_id = $1`,
+      [stageRow.id]
+    );
+    const attributeRows = flattenObjectForStorage(entry);
+    for (const row of attributeRows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_ORDER_STAGE_ATTRIBUTES} (stage_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          stageRow.id,
+          row.path,
+          row.ordinal || 0,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          null
+        ]
+      );
+    }
+  }
+}
+
+async function persistListEntries(client, rev, listKey, entries) {
+  await client.query(`DELETE FROM ${TABLE_LIST_ENTRIES} WHERE rev = $1 AND list_key = $2`, [rev, listKey]);
+  if (!Array.isArray(entries) || !entries.length) {
+    return;
+  }
+
+  if (listKey === 'locked') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const uid = sanitizeLockedEntry(entries[index]);
+      if (!uid) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [rev, listKey, null, null, uid, index]
+      );
+    }
+    return;
+  }
+
+  if (listKey === 'orders') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const sanitized = sanitizeStageOrdersEntry(entries[index]);
+      if (!sanitized) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      const orderIdentity = sanitized.stage;
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [rev, listKey, sanitized.stage, null, orderIdentity, index]
+      );
+      const entryId = rows[0]?.id;
+      if (!entryId) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      const attributeRows = flattenObjectForStorage({ stage: sanitized.stage, uids: sanitized.uids });
+      for (const row of attributeRows) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            entryId,
+            row.path,
+            row.ordinal || 0,
+            row.type,
+            row.valueText,
+            row.valueNumeric,
+            row.valueBoolean,
+            null
+          ]
+        );
+      }
+    }
+    return;
+  }
+
+  if (listKey === 'exc' || listKey === 'res') {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      let key = null;
+      let value = null;
+
+      if (Array.isArray(entry) && entry.length >= 1) {
+        key = parseOptionalString(entry[0]);
+        value = entry.length > 1 ? entry[1] : null;
+      } else if (isPlainObject(entry)) {
+        key = parseOptionalString(entry.key || entry.id || entry.name);
+        if (Object.prototype.hasOwnProperty.call(entry, 'value')) {
+          value = entry.value;
+        } else if (Object.prototype.hasOwnProperty.call(entry, 'hours')) {
+          value = entry.hours;
+        } else {
+          value = { ...entry };
+        }
+      }
+
+      if (!key) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const { rows } = await client.query(
+        `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [rev, listKey, key, null, key, index]
+      );
+      const entryId = rows[0]?.id;
+      if (!entryId) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      const attributeValue = isPlainObject(value) ? value : { value };
+      const attributeRows = flattenObjectForStorage(attributeValue);
+      for (const row of attributeRows) {
+        // eslint-disable-next-line no-await-in-loop
+        await client.query(
+          `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+          [
+            entryId,
+            row.path,
+            row.ordinal || 0,
+            row.type,
+            row.valueText,
+            row.valueNumeric,
+            row.valueBoolean,
+            null
+          ]
+        );
+      }
+    }
+    return;
+  }
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    if (!isPlainObject(entry)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const parentOrderId = parseOptionalString(entry.parentId);
+    const childOrderId = parseOptionalString(entry.childId);
+    const orderIdentity = parseOptionalString(entry.orderId || entry.orderNumber || entry.orderIdentity);
+    // eslint-disable-next-line no-await-in-loop
+    const { rows } = await client.query(
+      `INSERT INTO ${TABLE_LIST_ENTRIES} (rev, list_key, parent_order_id, child_order_id, order_identity, ordinal)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       RETURNING id`,
+      [rev, listKey, parentOrderId, childOrderId, orderIdentity, index]
+    );
+    const entryId = rows[0]?.id;
+    if (!entryId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const attributeRows = flattenObjectForStorage(entry);
+    for (const row of attributeRows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_LIST_ATTRIBUTES} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          entryId,
+          row.path,
+          row.ordinal || 0,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          null
+        ]
+      );
+    }
+  }
+}
+
+async function persistStructuredValues(client, table, rev, data) {
+  await client.query(`DELETE FROM ${table} WHERE rev = $1`, [rev]);
+  if (!isPlainObject(data) || !Object.keys(data).length) {
+    return;
+  }
+  const rows = flattenObjectForStorage(data);
+  for (const row of rows) {
+    // eslint-disable-next-line no-await-in-loop
+    await client.query(
+      `INSERT INTO ${table} (rev, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+      [
+        rev,
+        row.path,
+        row.ordinal || 0,
+        row.type,
+        row.valueText,
+        row.valueNumeric,
+        row.valueBoolean,
+        null
+      ]
+    );
+  }
+}
+
+async function persistMetaHistory(client, rev, history) {
+  await client.query(`DELETE FROM ${TABLE_META_HISTORY} WHERE rev = $1`, [rev]);
+  if (!Array.isArray(history) || !history.length) {
+    return;
+  }
+  for (let index = 0; index < history.length; index += 1) {
+    const entry = history[index];
+    if (!isPlainObject(entry)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const actor = parseOptionalString(entry.actor);
+    const source = parseOptionalString(entry.source);
+    const note = parseOptionalString(entry.note);
+    const summary = parseOptionalString(entry.summary);
+    const when = parseDate(entry.when || entry.timestamp || entry.createdAt);
+    // eslint-disable-next-line no-await-in-loop
+    const { rows } = await client.query(
+      `INSERT INTO ${TABLE_META_HISTORY} (rev, ordinal, actor, source, note, summary, event_time)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id` ,
+      [rev, index, actor, source, note, summary, when ? when.toISOString() : null]
+    );
+    const entryId = rows[0]?.id;
+    if (!entryId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const attributeRows = flattenObjectForStorage(entry);
+    for (const row of attributeRows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${TABLE_META_HISTORY_ATTRS} (entry_id, attr_path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)` ,
+        [
+          entryId,
+          row.path,
+          row.ordinal || 0,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          null
+        ]
+      );
+    }
+  }
+}
+
 function sanitizeGeneralPreferences(preferences) {
   if (!isPlainObject(preferences)) {
     return null;
@@ -344,102 +1296,139 @@ async function persistGeneralSettings(client, payload, options = {}) {
     return;
   }
 
-  const sanitizedPayload = sanitizeGeneralSettingsPayload(payload || {});
-  await client.query(`DELETE FROM ${GENERAL_SETTINGS_TABLE}`);
+  await client.query(
+    `DELETE FROM ${GENERAL_SETTINGS_TABLE} WHERE scope = ANY($1::text[])`,
+    [[SETTINGS_SCOPE_GENERAL, SETTINGS_SCOPE_PREFERENCES]]
+  );
 
-  if (!sanitizedPayload) {
+  const actor = options?.actor ? String(options.actor).trim() || null : null;
+  const sanitized = sanitizeGeneralSettingsPayload(payload || {});
+  if (!sanitized) {
     return;
   }
 
-  const combined = {};
-  if (sanitizedPayload.settings) {
-    Object.assign(combined, sanitizedPayload.settings);
-  }
-  if (sanitizedPayload.preferences) {
-    combined.preferences = sanitizedPayload.preferences;
-  }
-
-  if (!Object.keys(combined).length) {
-    return;
-  }
-
-  const rows = flattenObjectForStorage(combined);
-  const actorValue = options?.actor ? String(options.actor).trim() || null : null;
-  for (const row of rows) {
-    // eslint-disable-next-line no-await-in-loop
+  if (sanitized.settings === null) {
     await client.query(
-      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (path, value_type, value_text, value_numeric, value_boolean, ordinal, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [
-        row.path,
-        row.type,
-        row.valueText,
-        row.valueNumeric,
-        row.valueBoolean,
-        row.ordinal,
-        actorValue
-      ]
+      `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [SETTINGS_SCOPE_GENERAL, '', 0, 'null', null, null, null, null, actor]
     );
+  } else if (isPlainObject(sanitized.settings)) {
+    const rows = flattenObjectForStorage(sanitized.settings);
+    for (const row of rows) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          SETTINGS_SCOPE_GENERAL,
+          row.path,
+          row.ordinal || 0,
+          row.type,
+          row.valueText,
+          row.valueNumeric,
+          row.valueBoolean,
+          null,
+          actor
+        ]
+      );
+    }
+  }
+
+  if (isPlainObject(sanitized.preferences)) {
+    for (const [key, value] of Object.entries(sanitized.preferences)) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `INSERT INTO ${GENERAL_SETTINGS_TABLE} (scope, path, ordinal, value_type, value_text, value_numeric, value_boolean, value_timestamp, updated_by)
+         VALUES ($1,$2,0,'boolean',NULL,NULL,$3,NULL,$4)
+         ON CONFLICT (scope, path, ordinal) DO UPDATE
+           SET value_boolean = EXCLUDED.value_boolean,
+               value_type = EXCLUDED.value_type,
+               updated_at = NOW(),
+               updated_by = EXCLUDED.updated_by`,
+        [SETTINGS_SCOPE_PREFERENCES, key, Boolean(value), actor]
+      );
+    }
   }
 }
 
 async function persistSnapshotData(client, rev, snapshot, hash, meta, options = {}) {
   const snapshotSource = isPlainObject(snapshot) ? snapshot : {};
   const workingSnapshot = cloneDeepPlain(snapshotSource);
-  const extraction = extractGeneralSettingsForStorage(workingSnapshot, meta);
-  const { hasSettings, payload, meta: cleanedMeta } = extraction;
-  const snapshotRows = flattenObjectForStorage(workingSnapshot);
+  const extraction = extractGeneralSettingsForStorage(workingSnapshot);
+  const { hasSettings, payload, meta: snapshotMeta } = extraction;
+
   await client.query(
-    `INSERT INTO planner_snapshots (rev, hash)
+    `INSERT INTO ${TABLE_SNAPSHOTS} (rev, hash)
      VALUES ($1,$2)
      ON CONFLICT (rev) DO UPDATE
        SET hash = EXCLUDED.hash,
            created_at = NOW()` ,
     [rev, hash]
   );
-  await client.query(
-    'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
-    [rev, SNAPSHOT_CATEGORY_STATE]
-  );
-  for (const row of snapshotRows) {
+
+  await clearStateForRevision(client, rev);
+
+  await persistScalarValues(client, rev, workingSnapshot);
+  await persistCapacity(client, rev, workingSnapshot.capByProc);
+  await persistParallel(client, rev, workingSnapshot.parallelByProc);
+  await persistRouteOverrides(client, rev, workingSnapshot.routeOverrides);
+  await persistIgnoredStates(client, rev, workingSnapshot.ignoredStates);
+
+  for (const listKey of ORDER_LIST_KEYS) {
+    const items = Array.isArray(workingSnapshot[listKey]) ? workingSnapshot[listKey] : [];
     // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO planner_snapshot_entries (rev, category, path, value_type, value_text, value_numeric, value_boolean, ordinal)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        rev,
-        SNAPSHOT_CATEGORY_STATE,
-        row.path,
-        row.type,
-        row.valueText,
-        row.valueNumeric,
-        row.valueBoolean,
-        row.ordinal
-      ]
-    );
+    await persistOrderEntries(client, rev, listKey, items);
+    delete workingSnapshot[listKey];
   }
-  await client.query(
-    'DELETE FROM planner_snapshot_entries WHERE rev = $1 AND category = $2',
-    [rev, SNAPSHOT_CATEGORY_META]
-  );
-  const metaRows = flattenObjectForStorage(isPlainObject(cleanedMeta) ? cleanedMeta : {});
-  for (const row of metaRows) {
+
+  for (const listKey of STATE_LIST_KEYS) {
+    const items = Array.isArray(workingSnapshot[listKey]) ? workingSnapshot[listKey] : [];
     // eslint-disable-next-line no-await-in-loop
-    await client.query(
-      `INSERT INTO planner_snapshot_entries (rev, category, path, value_type, value_text, value_numeric, value_boolean, ordinal)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [
-        rev,
-        SNAPSHOT_CATEGORY_META,
-        row.path,
-        row.type,
-        row.valueText,
-        row.valueNumeric,
-        row.valueBoolean,
-        row.ordinal
-      ]
-    );
+    await persistListEntries(client, rev, listKey, items);
+    delete workingSnapshot[listKey];
   }
+
+  const crmData = isPlainObject(workingSnapshot.crm) ? workingSnapshot.crm : null;
+  await persistStructuredValues(client, TABLE_CRM_VALUES, rev, crmData);
+  delete workingSnapshot.crm;
+
+  const modeScopedData = isPlainObject(workingSnapshot.modeScoped) ? workingSnapshot.modeScoped : null;
+  await persistStructuredValues(client, TABLE_MODE_VALUES, rev, modeScopedData);
+  delete workingSnapshot.modeScoped;
+
+  STATE_SCALAR_KEYS.forEach((key) => {
+    delete workingSnapshot[key];
+  });
+  delete workingSnapshot.capByProc;
+  delete workingSnapshot.parallelByProc;
+  delete workingSnapshot.routeOverrides;
+  delete workingSnapshot.ignoredStates;
+
+  const sanitizedSnapshotMeta = sanitizeMetaForStorage(snapshotMeta);
+  let metaForStorage = null;
+  let historyPayload = [];
+  if (isPlainObject(sanitizedSnapshotMeta) && Object.keys(sanitizedSnapshotMeta).length) {
+    metaForStorage = { ...sanitizedSnapshotMeta };
+    if (Array.isArray(metaForStorage.history)) {
+      historyPayload = metaForStorage.history.slice();
+      delete metaForStorage.history;
+    }
+    if (!Object.keys(metaForStorage).length) {
+      metaForStorage = null;
+    }
+  }
+
+  const requestMetaSanitized = sanitizeMetaForStorage(meta);
+  if (isPlainObject(requestMetaSanitized) && Object.keys(requestMetaSanitized).length) {
+    if (!metaForStorage) {
+      metaForStorage = {};
+    }
+    metaForStorage.lastRequest = requestMetaSanitized;
+  }
+
+  await persistStructuredValues(client, TABLE_META_VALUES, rev, metaForStorage);
+  await persistMetaHistory(client, rev, historyPayload);
 
   await persistGeneralSettings(client, payload, { hasSettings, actor: options?.actor || null });
 }
