@@ -1710,11 +1710,15 @@ function assembleSnapshot(baseSnapshot, boards, orders, tasks, stageSequences) {
   });
 
   tasks.forEach((task) => {
-    const list = bucketMap.get(task.bucket);
+    const bucket = task.bucket === 'crm_stage' ? 't' : task.bucket;
+    const list = bucketMap.get(bucket);
     if (!list) return;
     const payload = task.payload && typeof task.payload === 'object'
       ? { ...task.payload, uid: task.uid }
       : { uid: task.uid };
+    if (task.bucket && typeof payload.bucket === 'undefined') {
+      payload.bucket = task.bucket;
+    }
     if (task.orderUid) {
       payload.orderIdentity = payload.orderIdentity || task.orderUid;
     }
