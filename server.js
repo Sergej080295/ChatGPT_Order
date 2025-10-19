@@ -76,7 +76,6 @@ const STATE_SCALAR_KEYS = [
   'process',
   'filter',
   'freshness',
-  'freshnessCsv',
   'freshnessManual',
   'lastImportTime',
   'lastManualTime',
@@ -418,7 +417,6 @@ function buildEmptySnapshot() {
     locked: [],
     orders: [],
     freshness: '',
-    freshnessCsv: '',
     freshnessManual: '',
     lastImportTime: '',
     lastManualTime: '',
@@ -434,7 +432,6 @@ function buildEmptySnapshot() {
     meta: {
       versions: {},
       lastAuthors: {},
-      csvTimestamp: '',
       manualTimestamp: '',
       history: [],
       settings: {
