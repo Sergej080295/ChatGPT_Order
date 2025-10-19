@@ -113,8 +113,22 @@ BEGIN
   IF legacy_orders IS NOT NULL THEN
     WITH latest_order AS (
       SELECT *,
+             COALESCE(
+               parent_order_id,
+               order_identity,
+               order_number,
+               crm_order_id,
+               'legacy_parent_' || id::text
+             ) AS normalized_parent_id,
              ROW_NUMBER() OVER (
-               PARTITION BY rev, parent_order_id
+               PARTITION BY rev,
+               COALESCE(
+                 parent_order_id,
+                 order_identity,
+                 order_number,
+                 crm_order_id,
+                 'legacy_parent_' || id::text
+               )
                ORDER BY ordinal ASC, id DESC
              ) AS row_rank
         FROM planner_state_orders
@@ -128,7 +142,7 @@ BEGIN
         list_key, ordinal, updated_at
       )
       SELECT lo.rev,
-             lo.parent_order_id,
+             lo.normalized_parent_id,
              lo.order_identity,
              lo.crm_order_id,
              lo.order_number,
@@ -163,8 +177,21 @@ BEGIN
     )
     SELECT o.rev,
            io.id,
-           o.parent_order_id,
-           COALESCE(o.child_order_id, o.uid, o.order_identity),
+           COALESCE(
+             o.parent_order_id,
+             o.order_identity,
+             o.order_number,
+             o.crm_order_id,
+             'legacy_parent_' || o.id::text
+           ),
+           COALESCE(
+             o.child_order_id,
+             o.uid,
+             o.order_identity,
+             o.order_number,
+             o.crm_child_id,
+             'legacy_child_' || o.id::text
+           ),
            o.order_identity,
            o.crm_child_id,
            o.stage,
@@ -187,7 +214,14 @@ BEGIN
            now()
       FROM planner_state_orders o
       JOIN inserted_orders io
-        ON io.rev = o.rev AND io.parent_order_id = o.parent_order_id;
+        ON io.rev = o.rev
+       AND io.parent_order_id = COALESCE(
+         o.parent_order_id,
+         o.order_identity,
+         o.order_number,
+         o.crm_order_id,
+         'legacy_parent_' || o.id::text
+       );
 
     IF legacy_attrs IS NOT NULL THEN
       INSERT INTO planner_order_stage_attributes (
@@ -206,8 +240,25 @@ BEGIN
         JOIN planner_state_orders so ON so.id = a.order_id
         JOIN planner_order_stages ps
           ON ps.rev = so.rev
-         AND ps.parent_order_id = so.parent_order_id
-         AND COALESCE(ps.child_order_id, ps.order_identity) = COALESCE(so.child_order_id, so.uid, so.order_identity)
+         AND ps.parent_order_id = COALESCE(
+           so.parent_order_id,
+           so.order_identity,
+           so.order_number,
+           so.crm_order_id,
+           'legacy_parent_' || so.id::text
+         )
+         AND COALESCE(
+           ps.child_order_id,
+           ps.order_identity,
+           ps.crm_child_id
+         ) = COALESCE(
+           so.child_order_id,
+           so.uid,
+           so.order_identity,
+           so.order_number,
+           so.crm_child_id,
+           'legacy_child_' || so.id::text
+         )
          AND ps.ordinal = so.ordinal;
     END IF;
 
@@ -226,8 +277,25 @@ BEGIN
         JOIN planner_state_orders so ON so.id = r.order_id
         JOIN planner_order_stages ps
           ON ps.rev = so.rev
-         AND ps.parent_order_id = so.parent_order_id
-         AND COALESCE(ps.child_order_id, ps.order_identity) = COALESCE(so.child_order_id, so.uid, so.order_identity)
+         AND ps.parent_order_id = COALESCE(
+           so.parent_order_id,
+           so.order_identity,
+           so.order_number,
+           so.crm_order_id,
+           'legacy_parent_' || so.id::text
+         )
+         AND COALESCE(
+           ps.child_order_id,
+           ps.order_identity,
+           ps.crm_child_id
+         ) = COALESCE(
+           so.child_order_id,
+           so.uid,
+           so.order_identity,
+           so.order_number,
+           so.crm_child_id,
+           'legacy_child_' || so.id::text
+         )
          AND ps.ordinal = so.ordinal;
     END IF;
 
