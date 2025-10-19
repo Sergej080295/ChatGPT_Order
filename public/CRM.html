@@ -1401,7 +1401,70 @@ function normalizeSearchTerm(value){
   if(value==null) return '';
   return String(value).trim().toLowerCase();
 }
-const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const generateBoardId=(hint)=>{
+  if(typeof hint==='string'){
+    const trimmed=hint.trim();
+    if(trimmed){
+      return trimmed;
+    }
+  }
+  if(typeof crypto!=='undefined' && typeof crypto.randomUUID==='function'){
+    try{return crypto.randomUUID();}
+    catch(_err){/* ignore */}
+  }
+  return 'crm-'+Math.random().toString(16).slice(2,10);
+};
+const defaultBoard=(idHint)=>({id:generateBoardId(idHint),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+function ensureCrmStateShape(value){
+  const base=(value&&typeof value==='object')?value:{};
+  if(!Array.isArray(base.boards)){
+    base.boards=[];
+  }
+  const normalizedBoards=[];
+  const seenIds=new Set();
+  let autoIndex=0;
+  const allocateId=(rawId)=>{
+    const candidate=typeof rawId==='string'?rawId.trim():'';
+    if(candidate && !seenIds.has(candidate)){
+      seenIds.add(candidate);
+      return candidate;
+    }
+    do{autoIndex+=1;}while(seenIds.has(`crm-board-${autoIndex}`));
+    const next=`crm-board-${autoIndex}`;
+    seenIds.add(next);
+    return next;
+  };
+  base.boards.forEach((rawBoard)=>{
+    if(!rawBoard||typeof rawBoard!=='object') return;
+    const board=rawBoard;
+    board.id=allocateId(board.id);
+    board.name=typeof board.name==='string'&&board.name.trim()?board.name.trim():'Список заказов';
+    if(!Array.isArray(board.lanes)){
+      board.lanes=[...DEFAULT_LANES];
+    }else{
+      board.lanes=board.lanes.map(lane=>typeof lane==='string'?lane.trim():'').filter(Boolean);
+      if(!board.lanes.length){
+        board.lanes=[...DEFAULT_LANES];
+      }
+    }
+    if(!Array.isArray(board.orders)){
+      board.orders=[];
+    }else{
+      board.orders=board.orders.filter(order=>order&&typeof order==='object');
+    }
+    normalizedBoards.push(board);
+  });
+  if(!normalizedBoards.length){
+    const fallback=defaultBoard('crm-board-1');
+    normalizedBoards.push(fallback);
+    seenIds.add(fallback.id);
+  }
+  base.boards=normalizedBoards;
+  if(!base.currentBoardId || !base.boards.some(b=>b.id===base.currentBoardId)){
+    base.currentBoardId=base.boards[0].id;
+  }
+  return base;
+}
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
 const normalizeWriteMode=value=>{
   if(value===null||value===undefined) return DATA_WRITE_MODES.both;
@@ -1475,8 +1538,8 @@ function parseNumericValue(raw){
   return { number:0, hasValue:false };
 }
 
-let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard()],currentBoardId:null};
-if(!state.currentBoardId&&Array.isArray(state.boards)&&state.boards.length){state.currentBoardId=state.boards[0].id;}
+let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
+state=ensureCrmStateShape(state);
 persistLocal();
 applyCrmWriteAccess();
 function load(){
@@ -1488,11 +1551,15 @@ function load(){
   try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}
 }
 function persistLocal(){
+  state=ensureCrmStateShape(state);
   try{localStorage.setItem(KEY,JSON.stringify(state));}
   catch(err){console.warn('CRM local save failed',err);}
 }
 function save(summary){persistLocal();queueSync(summary);}
-function currentBoard(){return state.boards.find(b=>b.id===state.currentBoardId)}
+function currentBoard(){
+  state=ensureCrmStateShape(state);
+  return state.boards.find(b=>b.id===state.currentBoardId);
+}
 
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
@@ -2472,7 +2539,7 @@ boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Перекл�
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
-$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');state=ensureCrmStateShape(obj);save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
 const orderSearchInput=document.getElementById('orderSearchInput');
 if(orderSearchInput){
@@ -2609,6 +2676,7 @@ async function pushCrmToServer(){
     crmSyncInFlight=false;
     return;
   }
+  state=ensureCrmStateShape(state);
   const snapshot=deepClone(state);
   if(!snapshot){
     crmSyncInFlight=false;
@@ -2764,14 +2832,8 @@ async function pushCrmToServer(){
 
 function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
-  const cloned=deepClone(crm) || { boards:[defaultBoard()], currentBoardId:null };
-  if(!Array.isArray(cloned.boards) || !cloned.boards.length){
-    cloned.boards=[defaultBoard()];
-  }
-  if(!cloned.currentBoardId || !cloned.boards.some(b=>b.id===cloned.currentBoardId)){
-    cloned.currentBoardId=cloned.boards[0].id;
-  }
-  state=cloned;
+  const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
+  state=ensureCrmStateShape(cloned);
   persistLocal();
   renderAll();
 }

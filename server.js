@@ -299,6 +299,17 @@ const CRM_PARALLEL_STAGES = new Set(['proc', 'shear', 'coop', 'pack', 'ship']);
 const CRM_TASK_PREFIX = 'crm-task::';
 const PLANNER_STAGE_CODES = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
 const MODE_SCOPED_KEYS = Object.freeze(['csv', 'crm']);
+const DEFAULT_CRM_LANES = Object.freeze([
+  'Не запланированное',
+  'Клиент',
+  'Отдел продаж',
+  'Технологи',
+  'Производство',
+  'Закупка',
+  'Упаковка',
+  'Готово (Ож. отгрузки)',
+  'Отгружено'
+]);
 
 const WRITE_CHANNELS = Object.freeze({
   CRM: 'crm',
@@ -1159,6 +1170,83 @@ function cloneJson(value) {
   }
 }
 
+function ensureCrmBoardsStructure(crm, fallbackCrm = null) {
+  const target = isPlainObject(crm) ? crm : { boards: [], currentBoardId: null };
+  if (!Array.isArray(target.boards)) {
+    target.boards = [];
+  }
+
+  const seenIds = new Set();
+  let sequence = 0;
+  const allocateId = (rawId) => {
+    const normalized = sanitizeString(rawId);
+    if (normalized && !seenIds.has(normalized)) {
+      seenIds.add(normalized);
+      return normalized;
+    }
+    do {
+      sequence += 1;
+    } while (seenIds.has(`crm-board-${sequence}`));
+    const candidate = `crm-board-${sequence}`;
+    seenIds.add(candidate);
+    return candidate;
+  };
+
+  const normalizeBoard = (rawBoard) => {
+    if (!isPlainObject(rawBoard)) {
+      return null;
+    }
+    const board = { ...rawBoard };
+    board.id = allocateId(board.id);
+    board.name = sanitizeString(board.name) || 'Список заказов';
+    const lanes = Array.isArray(board.lanes)
+      ? board.lanes.map((lane) => sanitizeString(lane)).filter(Boolean)
+      : [];
+    board.lanes = lanes.length ? lanes : [...DEFAULT_CRM_LANES];
+    board.orders = Array.isArray(board.orders)
+      ? board.orders.filter((order) => isPlainObject(order)).map((order) => cloneJson(order))
+      : [];
+    return board;
+  };
+
+  const normalizedBoards = [];
+  target.boards.forEach((rawBoard) => {
+    const normalized = normalizeBoard(rawBoard);
+    if (normalized) {
+      normalizedBoards.push(normalized);
+    }
+  });
+
+  if (!normalizedBoards.length && isPlainObject(fallbackCrm) && Array.isArray(fallbackCrm.boards)) {
+    fallbackCrm.boards.forEach((rawBoard) => {
+      const normalized = normalizeBoard(rawBoard);
+      if (normalized) {
+        normalizedBoards.push(normalized);
+      }
+    });
+  }
+
+  if (!normalizedBoards.length) {
+    const baseBoard = normalizeBoard({
+      id: 'crm-board-1',
+      name: 'Список заказов',
+      lanes: [...DEFAULT_CRM_LANES],
+      orders: []
+    });
+    if (baseBoard) {
+      normalizedBoards.push(baseBoard);
+    }
+  }
+
+  target.boards = normalizedBoards;
+  if (!sanitizeString(target.currentBoardId)
+      || !normalizedBoards.some((board) => board.id === target.currentBoardId)) {
+    target.currentBoardId = normalizedBoards[0]?.id || null;
+  }
+
+  return target;
+}
+
 function isEmptyArray(value) {
   return !Array.isArray(value) || value.length === 0;
 }
@@ -1269,17 +1357,7 @@ function applyFallbackSnapshot(target, fallback) {
   if (!isPlainObject(target.crm)) {
     target.crm = { boards: [], currentBoardId: null };
   }
-  if (isEmptyArray(target.crm.boards)
-      && isPlainObject(fallback.crm)
-      && Array.isArray(fallback.crm.boards)
-      && !isEmptyArray(fallback.crm.boards)) {
-    target.crm.boards = cloneJson(fallback.crm.boards);
-  }
-  if (!target.crm.currentBoardId
-      && isPlainObject(fallback.crm)
-      && fallback.crm.currentBoardId) {
-    target.crm.currentBoardId = fallback.crm.currentBoardId;
-  }
+  ensureCrmBoardsStructure(target.crm, fallback?.crm);
 }
 
 function extractBaseState(snapshot) {
@@ -1380,12 +1458,14 @@ function applyBaseSnapshot(target, base) {
   assignValue('notificationsMuted');
   assignValue('shiftOnProgress');
 
-  if (isPlainObject(base.crm)) {
-    if (!isPlainObject(target.crm)) {
-      target.crm = { boards: [], currentBoardId: null };
-    }
-    if (base.crm.currentBoardId) {
-      target.crm.currentBoardId = base.crm.currentBoardId;
+  if (!isPlainObject(target.crm)) {
+    target.crm = { boards: [], currentBoardId: null };
+  }
+  ensureCrmBoardsStructure(target.crm);
+  if (isPlainObject(base.crm) && base.crm.currentBoardId) {
+    const normalizedId = sanitizeString(base.crm.currentBoardId);
+    if (normalizedId && target.crm.boards.some((board) => board.id === normalizedId)) {
+      target.crm.currentBoardId = normalizedId;
     }
   }
 }
@@ -2676,6 +2756,11 @@ function normalizeSnapshotCollections(snapshot) {
   if (!isPlainObject(snapshot.meta.settings)) {
     snapshot.meta.settings = {};
   }
+
+  if (!isPlainObject(snapshot.crm)) {
+    snapshot.crm = { boards: [], currentBoardId: null };
+  }
+  ensureCrmBoardsStructure(snapshot.crm);
 }
 
 async function runWithRevision(actor, source, note, handler) {
