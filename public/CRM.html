@@ -109,7 +109,7 @@
     };
   };
 
-  const realtimeAllowed = false;
+  const realtimeAllowed = true;
 
   if (realtimeAllowed && 'EventSource' in window) {
     connect();
@@ -667,7 +667,6 @@
     <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
     <div class="sync-actions">
       <label><input id="crmAutosaveToggle" type="checkbox" checked disabled /> Автосохранение</label>
-      <button id="crmRefreshBtn" class="ghost">Обновить</button>
     </div>
   </div>
 </header>
@@ -1659,39 +1658,50 @@ $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
-const crmRefreshBtn=$('#crmRefreshBtn');
-if(crmRefreshBtn){
-  crmRefreshBtn.addEventListener('click',async ()=>{
-    if(!window.plannerRemote||typeof window.plannerRemote.loadState!=='function'){
-      showToast({title:'CRM',message:'Подключение к планировщику недоступно.',tone:'error'});
-      return;
+async function refreshCrmFromRemote({ announce=true }={}){
+  if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function'){
+    if(announce){
+      showToast({title:'CRM',message:'Подключение к планировщику недоступно.',tone:'error',autoClose:5000});
     }
-    const defaultLabel=crmRefreshBtn.textContent;
-    crmRefreshBtn.disabled=true;
-    crmRefreshBtn.textContent='Обновляем…';
-    try{
-      const loaded=await window.plannerRemote.loadState({ withMeta:true });
-      const raw=loaded&&typeof loaded.state==='string'?loaded.state:'';
-      if(raw){
-        const parsed=JSON.parse(raw);
+    return false;
+  }
+  try{
+    const loaded=await window.plannerRemote.loadState({ withMeta:true });
+    const rawState=loaded && typeof loaded.state==='string' ? loaded.state : '';
+    if(rawState){
+      let parsed=null;
+      try{ parsed=JSON.parse(rawState); }
+      catch(err){ console.warn('CRM: не удалось разобрать состояние планировщика',err); parsed=null; }
+      if(parsed && typeof parsed==='object'){
         syncCrmNotificationsMutedFromPlanner(parsed);
         syncCrmAutosaveFromPlanner(parsed);
-        if(parsed&&parsed.crm){
+        if(parsed.crm){
           applyRemoteCrm(parsed.crm);
+          if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint==='function'){
+            window.plannerRemote.applyFingerprint({ etag: loaded?.etag || null, hash: loaded?.hash || null });
+          }
+          if(announce){
+            showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
+          }
+          return true;
         }
-        showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
-      }else{
-        showToast({title:'CRM',message:'Нет данных для загрузки из базы.',tone:'warn'});
       }
-    }catch(err){
-      console.error('CRM refresh failed',err);
-      showToast({title:'CRM',message:'Не удалось получить данные из SQL.',tone:'error',autoClose:5000});
-    }finally{
-      crmRefreshBtn.disabled=false;
-      crmRefreshBtn.textContent=defaultLabel||'Обновить';
-      updateSyncButtons();
+      if(announce){
+        showToast({title:'CRM',message:'Нет данных для загрузки из SQL.',tone:'warn'});
+      }
+      return false;
     }
-  });
+    if(announce){
+      showToast({title:'CRM',message:'Нет данных для загрузки из SQL.',tone:'warn'});
+    }
+    return false;
+  }catch(err){
+    console.error('CRM refresh failed',err);
+    if(announce){
+      showToast({title:'CRM',message:'Не удалось получить данные из SQL.',tone:'error',autoClose:5000});
+    }
+    return false;
+  }
 }
 
 const crmAutosaveToggle=$('#crmAutosaveToggle');
@@ -1771,6 +1781,7 @@ let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
+let crmRemoteUnsubscribe=null;
 let crmAlias=(()=>{
   try{const stored=localStorage.getItem(CRM_ALIAS_STORAGE_KEY); if(stored) return stored;}
   catch(_err){/* ignore */}
@@ -1802,6 +1813,22 @@ function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
   if(autoClose>0){setTimeout(close,autoClose);}
 }
 
+function setupPlannerRemoteSubscription(){
+  if(crmRemoteUnsubscribe){
+    try{ crmRemoteUnsubscribe(); }catch(_err){ /* ignore */ }
+    crmRemoteUnsubscribe=null;
+  }
+  if(window.plannerRemote && typeof window.plannerRemote.onRemoteUpdate==='function'){
+    crmRemoteUnsubscribe = window.plannerRemote.onRemoteUpdate(async ()=>{
+      if(crmSuppressNext){
+        crmSuppressNext=false;
+        return;
+      }
+      await refreshCrmFromRemote({ announce:false });
+    });
+  }
+}
+
 function queueSync(summary){
   crmPendingSummary=summary||'Изменения CRM';
   crmHasPendingChanges=true;
@@ -1811,10 +1838,6 @@ function queueSync(summary){
 }
 
 function updateSyncButtons(){
-  const refreshBtn=$('#crmRefreshBtn');
-  if(refreshBtn){
-    refreshBtn.disabled=!!crmSyncInFlight;
-  }
   const toggle=$('#crmAutosaveToggle');
   if(toggle){
     toggle.checked=true;
@@ -1988,6 +2011,7 @@ async function pushCrmToServer(){
     try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY, crmAutosaveOn?'1':'0');}catch(_err){/* ignore */}
     updateSyncButtons();
     showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    setTimeout(()=>{ crmSuppressNext=false; },15000);
   }else if(lastError){
     crmSuppressNext=false;
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
@@ -2025,8 +2049,6 @@ function applyRemoteCrm(crm){
   updateSyncButtons();
 }
 
-/* Автообновление отключено — данные подтягиваются вручную кнопкой «Обновить». */
-
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden' && crmSyncTimer){
     pushCrmToServer();
@@ -2047,6 +2069,8 @@ document.addEventListener('click',e=>{
 function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
 renderAll();
 updateSyncButtons();
+setupPlannerRemoteSubscription();
+refreshCrmFromRemote({ announce:false });
 
 /* hotkeys */
 document.addEventListener('keydown',e=>{

@@ -112,7 +112,7 @@
     };
   };
 
-  const realtimeAllowed = false;
+  const realtimeAllowed = true;
 
   if (realtimeAllowed && 'EventSource' in window) {
     connect();
@@ -824,7 +824,6 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
-      <button id="refreshBtn" class="btn small ghost">Обновить</button>
       <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
           <rect x="4" y="3" width="14" height="18" rx="2" fill="#2563eb"/>
@@ -2336,6 +2335,15 @@ function updateRealtimeMode(){
   if(remotePollTimer){
     clearTimeout(remotePollTimer);
     remotePollTimer = null;
+  }
+  if(remoteSyncEnabled()){
+    try{
+      remoteSubscriptionStop = remoteBridge.subscribe(handleRemoteBridgeEvent);
+    }catch(err){
+      remoteSubscriptionStop = null;
+      console.warn('remote subscription failed', err);
+    }
+    startRemotePolling();
   }
   refreshDataModeIndicator();
 }
@@ -15542,50 +15550,6 @@ function wireHandlers(){
     prefsDraft.shiftOnProgress = shiftOnProgress;
     markSharedSettingsDirty('preferences');
   });
-  const refreshBtn = $("#refreshBtn");
-  if(refreshBtn){
-    const defaultLabel = refreshBtn.textContent;
-    const setBusy = (busy)=>{
-      refreshBtn.disabled = !!busy;
-      refreshBtn.textContent = busy ? 'Обновляем…' : (defaultLabel || 'Обновить');
-    };
-    refreshBtn.addEventListener('click', async ()=>{
-      setBusy(true);
-      try{
-        if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function'){
-          throw new Error('SQL-сервис недоступен');
-        }
-        const latest = await window.plannerRemote.loadState({ withMeta:true });
-        const rawState = latest && typeof latest.state === 'string' ? latest.state : '';
-        if(rawState){
-          const meta = {};
-          if(latest && typeof latest.hash === 'string'){ meta.hash = latest.hash; }
-          if(latest && typeof latest.etag === 'string'){ meta.etag = latest.etag; }
-          applyStateFromExternal(rawState, { preserveProcess:true, origin:'remote', skipToasts:true, meta });
-          if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function'){
-            window.plannerRemote.applyFingerprint({ etag: latest?.etag || null, hash: latest?.hash || null });
-          }
-          if(typeof showToast === 'function'){
-            showToast({ title:'Состояние обновлено', message:'Загружены актуальные данные из базы SQL.' });
-          }
-        }else{
-          if(typeof showToast === 'function'){
-            showToast({ title:'Обновление', message:'Нет данных для загрузки из базы.', actions:[{ label:'OK', handler:el=>el.remove() }] });
-          }
-        }
-      }catch(err){
-        console.warn('manual refresh failed', err);
-        if(typeof showToast === 'function'){
-          showToast({ title:'Ошибка обновления', message:'Не удалось получить данные из базы SQL.', actions:[{ label:'OK', handler:el=>el.remove() }] });
-        }else{
-          alert('Не удалось получить данные из базы SQL.');
-        }
-      }finally{
-        setBusy(false);
-      }
-    });
-  }
-
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{
     const target = e.target;
