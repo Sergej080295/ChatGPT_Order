@@ -1,30 +1,143 @@
 BEGIN;
 
--- Ensure base snapshot table exists so foreign keys remain valid.
-CREATE TABLE IF NOT EXISTS planner_state_snapshots (
-  rev BIGSERIAL PRIMARY KEY,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  creator TEXT
+-- Ensure revisions infrastructure exists because legacy installs may have it removed.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'revisions_rev_seq' AND relkind = 'S'
+  ) THEN
+    EXECUTE 'CREATE SEQUENCE revisions_rev_seq INCREMENT BY 1 MINVALUE 1 START WITH 1';
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS revisions (
+  id BIGSERIAL PRIMARY KEY,
+  rev BIGINT NOT NULL DEFAULT nextval('revisions_rev_seq'),
+  current_rev BIGINT NOT NULL DEFAULT currval('revisions_rev_seq'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  actor TEXT,
+  source TEXT,
+  note TEXT
 );
 
--- Backfill missing revisions derived from legacy order rows so FK checks pass.
-INSERT INTO planner_state_snapshots (rev, hash, created_at)
-SELECT DISTINCT so.rev,
-       'legacy-backfill-' || so.rev::text,
-       now()
-  FROM planner_state_orders so
- WHERE NOT EXISTS (
-         SELECT 1
-           FROM planner_state_snapshots ps
-          WHERE ps.rev = so.rev
+ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
+
+CREATE UNIQUE INDEX IF NOT EXISTS revisions_rev_unique_idx ON revisions (rev);
+
+-- Backfill revision rows referenced by legacy state tables.
+INSERT INTO revisions (rev, current_rev, created_at, actor, source, note)
+SELECT src.rev,
+       src.rev,
+       COALESCE(ord.created_at, snap.created_at, now()),
+       'migration-025',
+       'orders-backfill',
+       'Создано автоматически для восстановления ссылочной целостности'
+  FROM (
+         SELECT so.rev FROM planner_state_orders so
+         UNION
+         SELECT ps.rev FROM planner_state_snapshots ps
+         UNION
+         SELECT ss.rev FROM planner_state_scalars ss
+         UNION
+         SELECT sc.rev FROM planner_state_capacity sc
+         UNION
+         SELECT sp.rev FROM planner_state_parallel sp
+         UNION
+         SELECT sr.rev FROM planner_state_route_overrides sr
+         UNION
+         SELECT si.rev FROM planner_state_ignored_states si
+         UNION
+         SELECT le.rev FROM planner_state_list_entries le
+         UNION
+         SELECT mv.rev FROM planner_meta_values mv
+         UNION
+         SELECT mhe.rev FROM planner_meta_history_entries mhe
+         UNION
+         SELECT scv.rev FROM planner_state_crm_values scv
+         UNION
+         SELECT msm.rev FROM planner_state_mode_scoped_values msm
+       ) AS src
+  LEFT JOIN (
+         SELECT rev, MIN(start_at) AS created_at
+           FROM planner_state_orders
+          GROUP BY rev
+       ) AS ord ON ord.rev = src.rev
+  LEFT JOIN (
+         SELECT rev, MIN(created_at) AS created_at
+           FROM planner_state_snapshots
+          GROUP BY rev
+       ) AS snap ON snap.rev = src.rev
+ WHERE src.rev IS NOT NULL
+   AND NOT EXISTS (
+         SELECT 1 FROM revisions r WHERE r.rev = src.rev
        );
 
--- Align the sequence with the current maximum revision value.
 SELECT setval(
-  'planner_state_snapshots_rev_seq',
-  GREATEST(1, COALESCE((SELECT MAX(rev) FROM planner_state_snapshots), 1)),
+  'revisions_rev_seq',
+  GREATEST(1, COALESCE((SELECT MAX(rev) FROM revisions), 1)),
   true
 );
+
+CREATE TABLE IF NOT EXISTS planner_state_snapshots (
+  rev BIGINT PRIMARY KEY,
+  hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  creator TEXT,
+  CONSTRAINT planner_state_snapshots_rev_fkey
+    FOREIGN KEY (rev) REFERENCES revisions(rev) ON DELETE CASCADE
+);
+
+INSERT INTO planner_state_snapshots (rev, hash, created_at)
+SELECT src.rev,
+       'legacy-backfill-' || src.rev::text,
+       COALESCE(snap.created_at, now())
+  FROM (
+         SELECT so.rev FROM planner_state_orders so
+         UNION
+         SELECT ss.rev FROM planner_state_scalars ss
+         UNION
+         SELECT sc.rev FROM planner_state_capacity sc
+         UNION
+         SELECT sp.rev FROM planner_state_parallel sp
+         UNION
+         SELECT sr.rev FROM planner_state_route_overrides sr
+         UNION
+         SELECT si.rev FROM planner_state_ignored_states si
+         UNION
+         SELECT le.rev FROM planner_state_list_entries le
+         UNION
+         SELECT mv.rev FROM planner_meta_values mv
+         UNION
+         SELECT mhe.rev FROM planner_meta_history_entries mhe
+         UNION
+         SELECT scv.rev FROM planner_state_crm_values scv
+         UNION
+         SELECT msm.rev FROM planner_state_mode_scoped_values msm
+       ) AS src
+  LEFT JOIN (
+         SELECT rev, MIN(created_at) AS created_at
+           FROM planner_state_snapshots
+          GROUP BY rev
+       ) AS snap ON snap.rev = src.rev
+ WHERE src.rev IS NOT NULL
+   AND NOT EXISTS (
+         SELECT 1
+           FROM planner_state_snapshots ps
+          WHERE ps.rev = src.rev
+       );
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'planner_state_snapshots_rev_seq' AND relkind = 'S'
+  ) THEN
+    PERFORM setval(
+      'planner_state_snapshots_rev_seq',
+      GREATEST(1, COALESCE((SELECT MAX(rev) FROM planner_state_snapshots), 1)),
+      true
+    );
+  END IF;
+END$$;
 
 -- Prepare new consolidated tables for orders and peredels (stages).
 CREATE TABLE IF NOT EXISTS planner_orders (
