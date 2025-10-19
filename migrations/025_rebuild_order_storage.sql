@@ -22,9 +22,30 @@ CREATE TABLE IF NOT EXISTS revisions (
 
 ALTER SEQUENCE revisions_rev_seq OWNED BY revisions.rev;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'revisions_id_seq' AND relkind = 'S'
+  ) THEN
+    EXECUTE 'CREATE SEQUENCE revisions_id_seq INCREMENT BY 1 MINVALUE 1 START WITH 1';
+  END IF;
+
+  EXECUTE 'ALTER SEQUENCE revisions_id_seq OWNED BY revisions.id';
+  EXECUTE 'ALTER TABLE revisions ALTER COLUMN id SET DEFAULT nextval(''revisions_id_seq'')';
+END$$;
+
 CREATE UNIQUE INDEX IF NOT EXISTS revisions_rev_unique_idx ON revisions (rev);
 
 -- Backfill revision rows referenced by legacy state tables.
+WITH max_existing_id AS (
+  SELECT COALESCE(MAX(id), 0) AS max_id FROM revisions
+)
+SELECT setval(
+  'revisions_id_seq',
+  (SELECT max_id FROM max_existing_id),
+  (SELECT max_id FROM max_existing_id) <> 0
+);
+
 INSERT INTO revisions (rev, current_rev, created_at, actor, source, note)
 SELECT src.rev,
        src.rev,
