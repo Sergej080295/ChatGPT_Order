@@ -6,7 +6,7 @@
 <meta name="planner-state-endpoint" content="/api/state"/>
 <meta name="planner-state-method" content="PUT"/>
 <meta name="planner-state-wrap" content="true"/>
-<title>Планировщик — CSV only</title>
+<title>Планировщик — PlanCore</title>
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <script>
@@ -125,6 +125,24 @@
       throw new Error(detail || `HTTP ${res.status}`);
     }
     const text = await res.text();
+    let payload = null;
+    if(text && text.trim()){
+      try{ payload = JSON.parse(text); }
+      catch(err){ payload = null; }
+    }
+    const shouldHydrateCrm = !(options && (options.withMeta || options.returnMeta));
+    if(shouldHydrateCrm && payload && payload.crm){
+      try{
+        if(typeof window.__plannerSetInitialCrmState === 'function'){
+          window.__plannerSetInitialCrmState(payload.crm);
+        }else{
+          window.__plannerInitialCrmSnapshot = payload.crm;
+        }
+      }catch(err){
+        console.warn('initial CRM hydrate failed', err);
+        window.__plannerInitialCrmSnapshot = payload.crm;
+      }
+    }
     const bodyInfo = extractBodyFingerprint(text);
     const etag = res.headers.get('ETag');
     updateFingerprint({ etag, hash: bodyInfo?.hash });
@@ -2487,6 +2505,7 @@ async function bootstrapState(){
     applyUiPreferences(prefs);
     const initialMode = normalizePlannerMode(stateMeta.settings?.plannerMode || determinePlannerModeFallback());
     plannerMode = initialMode;
+    refreshPlannerModeUI();
     if(!stateMeta.settings){
       stateMeta.settings = {
         capacity: { ...DEFAULT_CAP },
@@ -2517,7 +2536,6 @@ async function bootstrapState(){
         stateMeta.settings.logLimit = DEFAULT_LOG_LIMIT;
       }
     }
-    refreshPlannerModeUI();
     plannerStateReady = true;
     try{
       refreshCrmDerivedData({ allowDuringInit:true });
@@ -3469,10 +3487,8 @@ function normalizePlannerMode(value){
 }
 
 function determinePlannerModeFallback(){
-  if(crmState && Array.isArray(crmState.boards) && crmState.boards.length){
-    return PLANNER_MODES.crm;
-  }
-  return PLANNER_MODES.csv;
+  // Всегда отдаём CRM как безопасный дефолт, чтобы колонки переделов не пустели
+  return PLANNER_MODES.crm;
 }
 
 function isCrmMode(){
@@ -3646,7 +3662,31 @@ function updateCrmBadge(){
   }
   badge.innerHTML = `CRM: ${total} <span class="planner-badge-meta">${escapeHtml(infoParts.join(' · '))}</span>`;
 }
-let crmState = { boards: [], currentBoardId: null, updatedAt: '' };
+const __bootstrapCrmSnapshot = window.__plannerInitialCrmSnapshot;
+if(__bootstrapCrmSnapshot){
+  try{ delete window.__plannerInitialCrmSnapshot; }catch(_err){ window.__plannerInitialCrmSnapshot = undefined; }
+}
+let crmState = (()=>{
+  if(__bootstrapCrmSnapshot){
+    try{ return normalizeCrmState(__bootstrapCrmSnapshot); }
+    catch(err){ console.warn('bootstrap CRM normalization failed', err); }
+  }
+  return { boards: [], currentBoardId: null, updatedAt: '' };
+})();
+window.__plannerSetInitialCrmState = (raw)=>{
+  if(!raw){
+    crmState = { boards: [], currentBoardId: null, updatedAt: '' };
+    updateCrmBadge();
+    return;
+  }
+  try{
+    crmState = normalizeCrmState(raw);
+  }catch(err){
+    console.warn('CRM hydrate failed', err);
+    crmState = { boards: [], currentBoardId: null, updatedAt: '' };
+  }
+  updateCrmBadge();
+};
 
 function getActiveCrmBoard(){
   if(!crmState || !Array.isArray(crmState.boards) || !crmState.boards.length) return null;
@@ -12815,22 +12855,27 @@ function persistNow(stageOverride, opts={}){
 
       const targetStageLabel = visibleStageLabel;
 
+      const combinedHasChanges = diffHasChanges(combinedDiff);
       if(remoteSyncEnabled()){
-        pushPromise = saveState(payload, {
-          stage: targetStageLabel,
-          diff: combinedDiff,
-          version:null,
-          source,
-          actor:userAlias,
-          user:userAlias,
-          session:SESSION_ID,
-          summary: summaryLine || undefined,
-          authors: authorsMap,
-          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
-          time: nowStr,
-          changeType,
-          channel: DATA_WRITE_MODES.planner
-        })
+        if(!combinedHasChanges && !force){
+          setDataMode('remote');
+          pushPromise = Promise.resolve(true);
+        }else{
+          pushPromise = saveState(payload, {
+            stage: targetStageLabel,
+            diff: combinedDiff,
+            version:null,
+            source,
+            actor:userAlias,
+            user:userAlias,
+            session:SESSION_ID,
+            summary: summaryLine || undefined,
+            authors: authorsMap,
+            ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
+            time: nowStr,
+            changeType,
+            channel: isCrmMode() ? DATA_WRITE_MODES.crm : DATA_WRITE_MODES.planner
+          })
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
@@ -12902,6 +12947,7 @@ function persistNow(stageOverride, opts={}){
               throw err;
             }
           });
+        }
       }else{
         setDataMode(enableLocalStore ? 'local' : 'session');
         pushPromise = Promise.resolve(true);
@@ -13243,26 +13289,32 @@ function persistNow(stageOverride, opts={}){
           updatedAt: stateMeta.settings?.updatedAt || nowStr
         };
         const remoteExtras = isSettingsChange ? { settings: remoteSettings } : {};
-        const metaChannel = isSettingsChange ? 'admin' : DATA_WRITE_MODES.planner;
+        const metaChannel = isSettingsChange ? 'admin' : (isCrmMode() ? DATA_WRITE_MODES.crm : DATA_WRITE_MODES.planner);
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
-        pushPromise = saveState(payload, {
-          stage:remoteStage,
-          diff:remoteDiff,
-          version:remoteVersion,
-          source,
-          actor:userAlias,
-          user:userAlias,
-          session:SESSION_ID,
-          summary: remoteSummary,
-          authors: remoteAuthors,
-          ordersSummary: remoteOrdersSummary,
-          time: nowStr,
-          changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
-          channel: metaChannel,
-          ...remoteExtras
-        })
+        const remoteDiffHasChanges = diffHasChanges(remoteDiff);
+        const shouldPushRemote = force || isSettingsChange || diffChanged || !rawPrev || remoteDiffHasChanges;
+        if(!shouldPushRemote){
+          setDataMode('remote');
+          pushPromise = Promise.resolve(true);
+        }else{
+          pushPromise = saveState(payload, {
+            stage:remoteStage,
+            diff:remoteDiff,
+            version:remoteVersion,
+            source,
+            actor:userAlias,
+            user:userAlias,
+            session:SESSION_ID,
+            summary: remoteSummary,
+            authors: remoteAuthors,
+            ordersSummary: remoteOrdersSummary,
+            time: nowStr,
+            changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
+            channel: metaChannel,
+            ...remoteExtras
+          })
           .then(()=>{ setDataMode('remote'); return true; })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
@@ -13332,6 +13384,7 @@ function persistNow(stageOverride, opts={}){
               throw err;
             }
           });
+        }
       }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
