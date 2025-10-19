@@ -8,8 +8,10 @@ CREATE TABLE IF NOT EXISTS planner_state_snapshots (
 );
 
 -- Backfill missing revisions derived from legacy order rows so FK checks pass.
-INSERT INTO planner_state_snapshots (rev, created_at)
-SELECT DISTINCT so.rev, now()
+INSERT INTO planner_state_snapshots (rev, hash, created_at)
+SELECT DISTINCT so.rev,
+       'legacy-backfill-' || so.rev::text,
+       now()
   FROM planner_state_orders so
  WHERE NOT EXISTS (
          SELECT 1
