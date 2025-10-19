@@ -1534,6 +1534,7 @@ const SAVE_PREF_KEY = 'yougile_planner_storage_pref_v1';
 const START_STAGE_PREF_KEY = 'yougile_planner_start_stage_v1';
 const PLANNER_MODES = { csv:'csv', crm:'crm' };
 const CRM_TASK_PREFIX = 'crm-task::';
+const OVERVIEW_TASK_PREFIX = 'overview::';
 const CRM_STAGE_IGNORE = '__ignore__';
 const DATA_MODE_LABELS = {
   remote:{label:'SQL база (онлайн)'},
@@ -5097,6 +5098,159 @@ function collectOrdersForList(filterMode=ORDER_FILTER_DEFAULT, options={}){
   rows.forEach((entry, idx)=>{ entry.order.number = idx+1; });
 
   return { rows, stageTasks, doneStageSet };
+}
+
+function buildManualStageTaskFromOrder(order, stage, segment, options={}){
+  if(!order || !stage) return null;
+  const key = options.key || orderKeyForRecord(order) || order.orderIdentity || order.orderId || order.parentId || '';
+  const stageSeg = segment || {};
+  const startRaw = stageSeg.start ?? stageSeg.origStart ?? null;
+  const endRaw = stageSeg.end ?? stageSeg.origEnd ?? null;
+  const startDate = safeDateValue(startRaw) || today0();
+  const endDate = safeDateValue(endRaw);
+  const origStart = safeDateValue(stageSeg.origStart);
+  const origEnd = safeDateValue(stageSeg.origEnd);
+  const doneAt = stageSeg.doneAt ? safeDateTimeValue(stageSeg.doneAt) : null;
+  const progressRaw = stageSeg.progress;
+  let progress = Number.isFinite(Number(progressRaw)) ? clampProgressValue(progressRaw) : null;
+  const doneSet = options.doneStageSet instanceof Set ? options.doneStageSet : new Set();
+  const identityKey = key ? String(key).trim() : '';
+  const isMarkedDone = doneSet.has(`${identityKey}::${stage}`) || !!stageSeg.done;
+  if(progress == null){
+    progress = isMarkedDone ? 100 : 0;
+  }
+  const isDone = isMarkedDone || progress >= 100 || (!!options.entry && options.entry.isDone && stage === 'ship');
+  const baseHours = Number(stageSeg.hours);
+  const hours = PARALLEL_STAGES.has(stage) ? 0 : (Number.isFinite(baseHours) ? Math.max(0, baseHours) : 0);
+
+  const route = {};
+  if(order.stages && typeof order.stages === 'object'){
+    Object.entries(order.stages).forEach(([stageKey, seg])=>{
+      if(!seg) return;
+      const segStart = safeDateValue(seg.start);
+      const segEnd = safeDateValue(seg.end);
+      const segOrigStart = safeDateValue(seg.origStart);
+      const segOrigEnd = safeDateValue(seg.origEnd);
+      const segDoneAt = seg.doneAt ? safeDateTimeValue(seg.doneAt) : null;
+      const entry = {
+        hours: Number(seg.hours)||0,
+        start: segStart ? new Date(segStart) : null,
+        end: segEnd ? new Date(segEnd) : null
+      };
+      if(segOrigStart) entry.origStart = new Date(segOrigStart);
+      if(segOrigEnd) entry.origEnd = new Date(segOrigEnd);
+      if(seg.progress != null && Number.isFinite(Number(seg.progress))){
+        entry.progress = clampProgressValue(seg.progress);
+      }
+      if(seg.done) entry.done = true;
+      if(seg.useReserve !== undefined) entry.useReserve = !!seg.useReserve;
+      if(segDoneAt) entry.doneAt = new Date(segDoneAt);
+      route[stageKey] = entry;
+    });
+  }
+
+  const uidBase = identityKey || order.orderId || order.parentId || Math.random().toString(36).slice(2);
+  const uid = `${OVERVIEW_TASK_PREFIX}${uidBase}::${stage}`;
+  const task = {
+    uid,
+    orderId: order.orderId || '',
+    orderNumber: order.orderNumber || '',
+    orderCustomer: order.orderCustomer || '',
+    orderIdentity: order.orderIdentity || identityKey || '',
+    stage,
+    childId: '',
+    parentId: order.parentId || '',
+    hours,
+    extraHours: roundExtraForStage(stage, computeAutoExtra(hours)),
+    startDate: startDate instanceof Date ? new Date(startDate) : today0(),
+    endDate: endDate instanceof Date ? new Date(endDate) : null,
+    startMissing: !stageSeg.start,
+    endMissing: !stageSeg.end,
+    state: order.crm?.lane || order.crm?.status || order.state || '',
+    status: isDone ? 'Готово (свод)' : 'Общий список',
+    useReserve: !!stageSeg.useReserve,
+    progress,
+    origStartDate: origStart instanceof Date ? new Date(origStart) : null,
+    origEndDate: origEnd instanceof Date ? new Date(origEnd) : null,
+    route,
+    isDone,
+    crmMeta: null,
+    crmOrigin: false
+  };
+  if(doneAt instanceof Date){
+    task.doneMeta = { when: new Date(doneAt), source: 'overview' };
+  }
+  ensureOrderIdentity(task);
+  applyIgnoredStateToTask(task);
+  return task;
+}
+
+function deriveStageTasksFromOverview(stage){
+  if(!stage || stage === OVERVIEW_STAGE || !STAGES.includes(stage)){
+    return { tasks: [], order: [] };
+  }
+  let snapshot;
+  try{
+    snapshot = collectOrdersForList('all', { ignoreSearch:true });
+  }catch(err){
+    console.warn('deriveStageTasksFromOverview failed to collect overview data', err);
+    return { tasks: [], order: [] };
+  }
+  const stageMap = snapshot && snapshot.stageTasks instanceof Map ? snapshot.stageTasks : null;
+  const doneStageSet = snapshot && snapshot.doneStageSet instanceof Set ? snapshot.doneStageSet : new Set();
+  const collected = [];
+  if(stageMap){
+    stageMap.forEach((byStage)=>{
+      if(!(byStage instanceof Map)) return;
+      const list = byStage.get(stage);
+      if(!Array.isArray(list) || !list.length) return;
+      list.forEach(item=>{
+        const clone = cloneTaskRecord(item);
+        if(!clone) return;
+        applyIgnoredStateToTask(clone);
+        ensureOrderIdentity(clone);
+        collected.push(clone);
+      });
+    });
+  }
+  if(collected.length){
+    collected.sort(compareTasksForOrdering);
+    return { tasks: collected, order: collected.map(task=>task.uid) };
+  }
+
+  if(!snapshot || !Array.isArray(snapshot.rows)){
+    return { tasks: [], order: [] };
+  }
+
+  snapshot.rows.forEach(entry => {
+    if(!entry || !entry.order) return;
+    const key = entry.key || entry.order.orderIdentity || entry.order.orderId || '';
+    const seg = entry.order.stages ? entry.order.stages[stage] : null;
+    const hasStage = !!seg || doneStageSet.has(`${key}::${stage}`) || (stage === 'ship' && entry.isDone);
+    if(!hasStage) return;
+    let task = null;
+    if(entry.order.crm){
+      const crmMeta = {
+        boardId: entry.order.crm.boardId || '',
+        orderId: entry.order.crm.id || '',
+        orderIdentity: entry.order.crm.orderIdentity || entry.order.orderIdentity || key || '',
+        stageKey: stage,
+        stageId: seg?.crmStageId || '',
+        stageName: seg?.crmStageName || seg?.crmStageKey || (STAGE_TITLE[stage] || stage),
+        lane: entry.order.crm.lane || entry.order.crm.status || ''
+      };
+      const segment = seg || { hours:0, done: doneStageSet.has(`${key}::${stage}`) };
+      task = buildCrmStageTask(entry.order, stage, segment, crmMeta);
+    }
+    if(!task){
+      task = buildManualStageTaskFromOrder(entry.order, stage, seg, { key, doneStageSet, entry });
+    }
+    if(!task) return;
+    collected.push(task);
+  });
+
+  collected.sort(compareTasksForOrdering);
+  return { tasks: collected, order: collected.map(task=>task.uid) };
 }
 
 function computeStageMetrics(orderEntry, stage, stageTasks, doneStageSet){
@@ -15283,6 +15437,24 @@ function switchProcess(newProc){
   }else{
     // на крайний случай — отфильтруем по stage из текущего массива
     tasks = tasks.filter(t=> t.stage === newProc);
+  }
+
+  if(!tasks.length){
+    const derived = deriveStageTasksFromOverview(newProc);
+    if(Array.isArray(derived.tasks) && derived.tasks.length){
+      tasks = derived.tasks.map(cloneTaskRecord).filter(Boolean);
+      if(!Array.isArray(allTasksFromState)) allTasksFromState = [];
+      allTasksFromState = allTasksFromState.filter(task => !(task && task.stage === newProc));
+      const forState = tasks.map(cloneTaskRecord).filter(Boolean);
+      allTasksFromState = allTasksFromState.concat(forState);
+      if(Array.isArray(derived.order) && derived.order.length){
+        ordersByStage.set(newProc, derived.order.slice());
+      }else{
+        ordersByStage.set(newProc, tasks.map(task => task.uid));
+      }
+      lockedUids = new Set();
+      stagesDirtyFromRoute.delete(newProc);
+    }
   }
 
   if(tasks.length){
