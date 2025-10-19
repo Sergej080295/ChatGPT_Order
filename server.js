@@ -274,17 +274,7 @@ const KNOWN_SHARED_SETTINGS_KEYS = new Set([
   'updatedAt'
 ]);
 
-function normalizePlannerMode(value) {
-  if (value === null || value === undefined) {
-    return 'crm';
-  }
-  const normalized = String(value).trim().toLowerCase();
-  if (normalized === 'csv') {
-    return 'csv';
-  }
-  if (normalized === 'crm') {
-    return 'crm';
-  }
+function normalizePlannerMode(_value) {
   return 'crm';
 }
 
@@ -512,7 +502,7 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
 const CRM_PARALLEL_STAGES = new Set(['proc', 'shear', 'coop', 'pack', 'ship']);
 const CRM_TASK_PREFIX = 'crm-task::';
 const PLANNER_STAGE_CODES = ['draw', 'proc', 'shear', 'laser', 'bend', 'weld', 'mech', 'coop', 'pack', 'ship'];
-const MODE_SCOPED_KEYS = Object.freeze(['csv', 'crm']);
+const MODE_SCOPED_KEYS = Object.freeze(['crm']);
 const DEFAULT_CRM_LANES = Object.freeze([
   'Не запланированное',
   'Клиент',
