@@ -303,14 +303,25 @@
 })();
 </script>
 <style>
+  html {
+    height: 100%;
+  }
+
   body {
+    height: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
   }
 
   main {
     padding: var(--pc-spacing-lg);
     flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
+    min-height: 0;
   }
 
   @media (max-width: 1023px) {
@@ -340,6 +351,41 @@
   .crm-toolbar .pc-surface {
     display: grid;
     gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-group {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    padding: var(--pc-spacing-sm);
+    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+  }
+
+  .crm-settings-group summary {
+    font-weight: var(--pc-font-weight-semibold);
+    cursor: pointer;
+  }
+
+  .crm-settings-group .crm-settings-fields {
+    display: grid;
+    gap: var(--pc-spacing-sm);
+    margin-top: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-group label {
+    display: grid;
+    gap: 4px;
+    font-size: 13px;
+  }
+
+  .crm-settings-inline {
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .crm-settings-inline > * {
+    flex: 1 1 140px;
   }
 
   .crm-toolbar__row {
@@ -438,6 +484,25 @@
     justify-content: flex-end;
   }
 
+  .crm-toolbar__actions .pc-icon-btn {
+    position: relative;
+  }
+
+  .crm-toolbar__badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 18px;
+    padding: 1px 4px;
+    border-radius: var(--pc-radius-pill);
+    background: var(--pc-danger);
+    color: #fff;
+    font-size: 10px;
+    line-height: 1.3;
+    text-align: center;
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
   .crm-toolbar__actions .pc-icon-btn svg {
     width: 18px;
     height: 18px;
@@ -452,6 +517,8 @@
     flex-direction: column;
     gap: var(--pc-spacing-md);
     height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   body[data-crm-view="orders"] .crm-orders-view {
@@ -507,6 +574,8 @@
     border-radius: var(--pc-radius-md);
     background: var(--pc-surface);
     overflow: auto;
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
   #crmOrdersTable {
@@ -716,8 +785,12 @@
     padding: 8px 12px;
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
-    background: color-mix(in srgb, var(--pc-border) 20%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 95%, transparent);
     overflow-x: auto;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    box-shadow: 0 -6px 18px rgba(15, 17, 21, 0.06);
   }
 
   .orders-overview-totals table {
@@ -741,11 +814,82 @@
     font-weight: 700;
   }
 
+  .crm-table-wrap {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    background: var(--pc-surface);
+    overflow: hidden auto;
+    max-height: 55vh;
+  }
+
+  .crm-modal-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: max-content;
+  }
+
+  .crm-modal-table th,
+  .crm-modal-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--pc-border);
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .crm-modal-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--pc-border) 16%, transparent);
+  }
+
+  .crm-modal-table th {
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-modal-actions {
+    margin-top: var(--pc-spacing-md);
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-trash-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-trash-filter {
+    display: inline-flex;
+    gap: var(--pc-spacing-xs);
+    align-items: center;
+  }
+
+  .crm-trash-filter button {
+    min-width: 0;
+  }
+
+  .crm-trash-filter button.active {
+    background: var(--pc-primary);
+    color: #2d2200;
+    border-color: var(--pc-primary);
+  }
+
   .orders-overview-empty {
     padding: 24px 12px;
     text-align: center;
     color: var(--pc-text-muted);
     font-size: 12px;
+  }
+
+  .crm-modal-empty {
+    padding: 16px;
+    text-align: center;
+    color: var(--pc-text-muted);
+    font-size: 13px;
   }
 
   #columns {
@@ -1593,6 +1737,13 @@
       </div>
       <div class="crm-toolbar__actions">
         <span class="pc-badge crm-toolbar__stats" id="stats">—</span>
+        <button id="crmUnaccountedBtn" class="pc-btn pc-btn--ghost" type="button">Не учтённые</button>
+        <button id="crmTrashBtn" class="pc-icon-btn" type="button" title="Корзина" aria-label="Корзина">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+          </svg>
+          <span class="crm-toolbar__badge" id="crmTrashBadge" hidden>0</span>
+        </button>
         <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button">+ Заказ</button>
         <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -1787,12 +1938,96 @@
       <div><label>Название доски</label><input name="name" required /></div>
       <div><label>Схема статусов (по столбцам)</label><input name="lanes" placeholder="Не запланированное, Клиент, …, Отгружено" /></div>
     </div>
+    <details class="crm-settings-group" open>
+      <summary>Настройки CRM</summary>
+      <div class="crm-settings-fields">
+        <label>
+          Состояния для раздела «Не учтённые»
+          <textarea name="unaccountedStatuses" rows="2" placeholder="Например: Черновик, Отложен"></textarea>
+        </label>
+        <div class="crm-settings-inline">
+          <label>
+            Режим очистки корзины
+            <select name="trashRetentionMode">
+              <option value="days">По дням</option>
+              <option value="count">По количеству</option>
+            </select>
+          </label>
+          <label>
+            Порог
+            <input name="trashRetentionValue" type="number" min="1" step="1" />
+          </label>
+        </div>
+        <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+      </div>
+    </details>
     <div class="rowc" style="justify-content:flex-end;gap:8px;margin-top:8px">
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
     <input type="hidden" name="id" />
   </form>
+</dialog>
+
+<!-- Диалог «Не учтённые» -->
+<dialog id="crmUnaccountedDlg" class="pc-modal">
+  <div class="dlg-head">
+    <strong>Не учтённые заказы</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmUnaccountedClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div class="crm-table-wrap">
+      <table class="crm-modal-table" id="crmUnaccountedTable">
+        <thead>
+          <tr>
+            <th style="width:56px">#</th>
+            <th style="width:160px">Номер</th>
+            <th style="width:200px">Клиент</th>
+            <th>Состояние</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="crm-modal-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmUnaccountedDismiss">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- Диалог корзины -->
+<dialog id="crmTrashDlg" class="pc-modal">
+  <div class="dlg-head">
+    <strong>Корзина удалённых</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmTrashClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div class="crm-trash-toolbar">
+      <div class="crm-trash-filter" role="group" aria-label="Фильтр корзины">
+        <button class="pc-btn pc-btn--ghost" type="button" data-trash-filter="all">Все</button>
+        <button class="pc-btn pc-btn--ghost" type="button" data-trash-filter="orders">Заказы</button>
+        <button class="pc-btn pc-btn--ghost" type="button" data-trash-filter="stages">Переделы</button>
+      </div>
+      <button class="pc-btn pc-btn--danger" type="button" id="crmTrashClear">Очистить корзину</button>
+    </div>
+    <div class="crm-table-wrap">
+      <table class="crm-modal-table" id="crmTrashTable">
+        <thead>
+          <tr>
+            <th style="width:90px">Вернуть</th>
+            <th style="width:120px">Тип</th>
+            <th style="width:220px">Заказ</th>
+            <th>Детали</th>
+            <th style="width:160px">Удалён</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="crm-modal-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmTrashDismiss">Закрыть</button>
+    </div>
+  </div>
 </dialog>
 
 <script>
@@ -1829,6 +2064,159 @@ const generateBoardId=(hint)=>{
   return 'crm-'+Math.random().toString(16).slice(2,10);
 };
 const defaultBoard=(idHint)=>({id:generateBoardId(idHint),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
+const CRM_TRASH_ENTRY_TYPES=Object.freeze({order:'order',stage:'stage'});
+const DEFAULT_TRASH_RETENTION_DAYS=30;
+const DEFAULT_TRASH_RETENTION_COUNT=200;
+const DEFAULT_TRASH_RETENTION=Object.freeze({mode:'days',value:DEFAULT_TRASH_RETENTION_DAYS});
+const normalizeStatusKey=value=>{
+  if(value==null) return '';
+  return String(value).trim().toLowerCase();
+};
+const generateStageId=()=>{
+  if(typeof crypto!=='undefined' && typeof crypto.randomUUID==='function'){
+    try{return crypto.randomUUID();}
+    catch(_err){/* ignore */}
+  }
+  return `crm-stage-${Math.random().toString(16).slice(2,10)}`;
+};
+function ensureStageIdentity(stage,fallbackId){
+  const candidates=[];
+  if(stage&&typeof stage==='object'){
+    candidates.push(stage.crmStageId,stage.id);
+  }
+  if(fallbackId!==undefined&&fallbackId!==null){
+    candidates.push(fallbackId);
+  }
+  let resolved=null;
+  for(const candidate of candidates){
+    if(candidate===undefined||candidate===null) continue;
+    const type=typeof candidate;
+    if(type!=='string'&&type!=='number'&&type!=='boolean') continue;
+    const trimmed=String(candidate).trim();
+    if(trimmed){
+      resolved=trimmed;
+      break;
+    }
+  }
+  if(!resolved){
+    resolved=generateStageId();
+  }
+  if(stage&&typeof stage==='object'){
+    stage.crmStageId=resolved;
+  }
+  return resolved;
+}
+const generateTrashId=()=>`trash-${Date.now().toString(16)}-${Math.random().toString(16).slice(2,8)}`;
+function sanitizeCrmSettings(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  const statusesSource=base.unaccountedStatuses;
+  let statuses=[];
+  if(Array.isArray(statusesSource)){
+    statuses=statusesSource.map(item=>String(item??'').trim());
+  }else if(typeof statusesSource==='string'){
+    statuses=statusesSource.split(/[\n,;]+/).map(part=>part.trim());
+  }
+  const uniqueStatuses=[];
+  const seen=new Set();
+  statuses.filter(Boolean).forEach(status=>{
+    const key=normalizeStatusKey(status);
+    if(!key||seen.has(key)) return;
+    seen.add(key);
+    uniqueStatuses.push(status);
+  });
+  const retentionSource=base.trashRetention&&typeof base.trashRetention==='object'?base.trashRetention:{};
+  const mode=retentionSource.mode==='count'?'count':'days';
+  let valueRaw=Number(retentionSource.value);
+  if(!Number.isFinite(valueRaw)||valueRaw<=0){
+    valueRaw=mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS;
+  }
+  const retention={mode,value:Math.max(1,Math.round(valueRaw))};
+  const result={};
+  Object.keys(base).forEach(key=>{
+    if(key==='unaccountedStatuses'||key==='trashRetention') return;
+    result[key]=base[key];
+  });
+  result.unaccountedStatuses=uniqueStatuses;
+  result.trashRetention=retention;
+  return result;
+}
+function cloneForTrash(value){
+  try{return JSON.parse(JSON.stringify(value));}
+  catch(_err){
+    if(Array.isArray(value)) return value.map(item=>cloneForTrash(item));
+    if(value&&typeof value==='object') return {...value};
+    return value;
+  }
+}
+function sanitizeCrmTrash(raw){
+  if(!Array.isArray(raw)) return [];
+  const sanitized=[];
+  raw.forEach(item=>{
+    if(!item||typeof item!=='object') return;
+    const type=item.type===CRM_TRASH_ENTRY_TYPES.stage?CRM_TRASH_ENTRY_TYPES.stage:CRM_TRASH_ENTRY_TYPES.order;
+    const id=typeof item.id==='string'&&item.id.trim()?item.id.trim():generateTrashId();
+    const removedAt=typeof item.removedAt==='string'&&item.removedAt.trim()?item.removedAt:new Date().toISOString();
+    const boardId=typeof item.boardId==='string'?item.boardId.trim():'';
+    const orderIdRaw=typeof item.orderId==='string'?item.orderId.trim():'';
+    if(type===CRM_TRASH_ENTRY_TYPES.order){
+      const order=cloneForTrash(item.order);
+      if(!order||typeof order!=='object') return;
+      const entry={
+        id,
+        type,
+        removedAt,
+        boardId,
+        orderId:typeof order.id==='string'&&order.id.trim()?order.id.trim():orderIdRaw,
+        order,
+        title:typeof item.title==='string'?item.title:''
+      };
+      if(item.parentId!=null){entry.parentId=String(item.parentId);} 
+      sanitized.push(entry);
+      return;
+    }
+    const stage=cloneForTrash(item.stage);
+    if(!stage||typeof stage!=='object') return;
+    const stageId=ensureStageIdentity(stage,item.stageId);
+    const posRaw=Number(item.position);
+    sanitized.push({
+      id,
+      type,
+      removedAt,
+      boardId,
+      orderId:orderIdRaw,
+      stageId,
+      stage,
+      orderTitle:typeof item.orderTitle==='string'?item.orderTitle:'',
+      position:Number.isFinite(posRaw)?posRaw:null
+    });
+  });
+  sanitized.sort((a,b)=>{
+    const aTime=Date.parse(a.removedAt||'')||0;
+    const bTime=Date.parse(b.removedAt||'')||0;
+    return bTime-aTime;
+  });
+  return sanitized;
+}
+function applyTrashRetentionToTarget(target){
+  if(!target||typeof target!=='object') return;
+  target.settings=sanitizeCrmSettings(target.settings);
+  const trash=Array.isArray(target.trash)?target.trash.slice():[];
+  const retention=target.settings.trashRetention||DEFAULT_TRASH_RETENTION;
+  let filtered=trash;
+  if(retention.mode==='days'){
+    const limitDays=Math.max(1,Number(retention.value)||DEFAULT_TRASH_RETENTION_DAYS);
+    const threshold=Date.now()-limitDays*86400000;
+    filtered=trash.filter(entry=>{
+      const time=Date.parse(entry.removedAt||'')||0;
+      return time>=threshold;
+    });
+  }else if(retention.mode==='count'){
+    const limitCount=Math.max(1,Number(retention.value)||DEFAULT_TRASH_RETENTION_COUNT);
+    filtered=trash.slice(0,limitCount);
+  }
+  target.trash=filtered;
+  return filtered;
+}
 function ensureCrmStateShape(value){
   const base=(value&&typeof value==='object')?value:{};
   if(!Array.isArray(base.boards)){
@@ -1866,6 +2254,17 @@ function ensureCrmStateShape(value){
     }else{
       board.orders=board.orders.filter(order=>order&&typeof order==='object');
     }
+    board.orders.forEach(order=>{
+      if(!order||typeof order!=='object') return;
+      if(!Array.isArray(order.stages)){
+        order.stages=[];
+        return;
+      }
+      order.stages=order.stages.filter(stage=>stage&&typeof stage==='object').map(stage=>{
+        ensureStageIdentity(stage);
+        return stage;
+      });
+    });
     normalizedBoards.push(board);
   });
   if(!normalizedBoards.length){
@@ -1877,6 +2276,9 @@ function ensureCrmStateShape(value){
   if(!base.currentBoardId || !base.boards.some(b=>b.id===base.currentBoardId)){
     base.currentBoardId=base.boards[0].id;
   }
+  base.settings=sanitizeCrmSettings(base.settings);
+  base.trash=sanitizeCrmTrash(base.trash);
+  applyTrashRetentionToTarget(base);
   return base;
 }
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
@@ -1956,6 +2358,9 @@ let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):
 state=ensureCrmStateShape(state);
 persistLocal();
 applyCrmWriteAccess();
+function applyTrashRetention(){
+  applyTrashRetentionToTarget(state);
+}
 function load(){
   if(window.__CRM_INITIAL_STATE__){
     const initial=deepClone(window.__CRM_INITIAL_STATE__);
@@ -1987,17 +2392,24 @@ const boardSelect=$('#boardSelect'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
       crmOrdersFilter=$('#crmOrdersFilter'),
-      crmOrdersBackBtn=$('#crmOrdersBackBtn');
+      crmOrdersBackBtn=$('#crmOrdersBackBtn'),
+      crmUnaccountedBtn=$('#crmUnaccountedBtn'),
+      crmTrashBtn=$('#crmTrashBtn'),
+      crmTrashBadge=$('#crmTrashBadge');
 const LANE_PAGE_SIZE=10;
 const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
 let dndInitialized=false;
 let draggingId=null;
+let editingOrderId=null;
+let stageSourceMap=new Map();
+let pendingStageDeletes=[];
 
 let currentCrmView='kanban';
 if(document.body){
   document.body.dataset.crmView=currentCrmView;
 }
+let currentCrmTrashFilter='all';
 
 const CRM_STAGE_ALIASES={
   proc:['proc','закупка','закуп','поставка','закупки'],
@@ -2178,6 +2590,272 @@ function collectCrmOrdersForList(filterMode){
   return { rows, totals, meta };
 }
 
+function collectCrmUnaccountedOrders(){
+  const board=currentBoard();
+  if(!board) return [];
+  const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
+  if(!statuses.length) return [];
+  const statusSet=new Set(statuses.map(normalizeStatusKey).filter(Boolean));
+  if(!statusSet.size) return [];
+  const rows=[];
+  board.orders.forEach((order,index)=>{
+    const statusKey=normalizeStatusKey(order?.status||'');
+    if(!statusKey||!statusSet.has(statusKey)) return;
+    rows.push({
+      order,
+      originalIndex:index,
+      status:order?.status||'—',
+      number:(order?.orderNo||'').toString().trim(),
+      customer:(order?.customer||'').toString().trim(),
+      title:buildCrmOrderTitle(order)
+    });
+  });
+  rows.forEach((row,idx)=>{row.displayIndex=idx+1;});
+  return rows;
+}
+
+function updateCrmAuxButtons(){
+  const unaccounted=collectCrmUnaccountedOrders();
+  if(crmUnaccountedBtn){
+    const labelBase='Не учтённые';
+    const countText=unaccounted.length>0?` (${unaccounted.length})`:'';
+    crmUnaccountedBtn.textContent=labelBase+countText;
+    crmUnaccountedBtn.setAttribute('aria-label',countText?`${labelBase}: ${unaccounted.length}`:labelBase);
+  }
+  const trashCount=Array.isArray(state.trash)?state.trash.length:0;
+  if(crmTrashBadge){
+    if(trashCount>0){
+      crmTrashBadge.hidden=false;
+      crmTrashBadge.textContent=String(trashCount);
+    }else{
+      crmTrashBadge.hidden=true;
+    }
+  }
+  if(crmTrashBtn){
+    const title=trashCount>0?`Корзина (${trashCount})`:'Корзина';
+    crmTrashBtn.title=title;
+    crmTrashBtn.setAttribute('aria-label',title);
+  }
+}
+
+function renderCrmUnaccounted(){
+  const tbody=document.querySelector('#crmUnaccountedTable tbody');
+  if(!tbody) return;
+  tbody.innerHTML='';
+  const rows=collectCrmUnaccountedOrders();
+  if(!rows.length){
+    const tr=document.createElement('tr');
+    const td=document.createElement('td');
+    td.colSpan=4;
+    td.innerHTML='<div class="crm-modal-empty">Нет заказов в разделе «Не учтённые»</div>';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  rows.forEach(row=>{
+    const tr=document.createElement('tr');
+    const cells=[
+      row.displayIndex,
+      row.number||'—',
+      row.customer||'—',
+      row.status||'—'
+    ];
+    cells.forEach((value,idx)=>{
+      const td=document.createElement('td');
+      td.textContent=value;
+      if(idx===1){
+        td.title=row.title;
+      }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function openCrmUnaccounted(){
+  const dlg=document.getElementById('crmUnaccountedDlg');
+  if(!dlg) return;
+  renderCrmUnaccounted();
+  dlg.showModal();
+}
+
+function closeCrmUnaccounted(){
+  document.getElementById('crmUnaccountedDlg')?.close();
+}
+
+function formatTrashTimestamp(value){
+  if(!value) return '—';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('ru-RU');
+}
+
+function formatTrashDetails(entry){
+  if(!entry) return '—';
+  if(entry.type===CRM_TRASH_ENTRY_TYPES.stage){
+    const stage=entry.stage||{};
+    const parts=[];
+    const name=(stage.name||'Передел').toString();
+    parts.push(name);
+    if(stage.value!==undefined && stage.value!=='' && stage.value!==null){
+      parts.push(`${stage.value}ч`);
+    }
+    if(stage.start||stage.end){
+      parts.push(`${stage.start||'—'} → ${stage.end||'—'}`);
+    }
+    return parts.join(' • ');
+  }
+  const order=entry.order||{};
+  const parts=[];
+  if(order.status){
+    parts.push(`Статус: ${order.status}`);
+  }
+  if(order.start||order.end){
+    parts.push(`${order.start||'—'} → ${order.end||'—'}`);
+  }
+  return parts.length?parts.join(' • '):'—';
+}
+
+function renderCrmTrash(){
+  const tbody=document.querySelector('#crmTrashTable tbody');
+  if(!tbody) return;
+  tbody.innerHTML='';
+  const entries=Array.isArray(state.trash)?state.trash:[];
+  const filtered=entries.filter(entry=>{
+    if(currentCrmTrashFilter==='orders') return entry.type===CRM_TRASH_ENTRY_TYPES.order;
+    if(currentCrmTrashFilter==='stages') return entry.type===CRM_TRASH_ENTRY_TYPES.stage;
+    return true;
+  });
+  if(!filtered.length){
+    const tr=document.createElement('tr');
+    const td=document.createElement('td');
+    td.colSpan=5;
+    td.innerHTML='<div class="crm-modal-empty">Корзина пуста</div>';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  filtered.forEach(entry=>{
+    const tr=document.createElement('tr');
+    const restoreTd=document.createElement('td');
+    const restoreBtn=document.createElement('button');
+    restoreBtn.type='button';
+    restoreBtn.className='pc-btn pc-btn--secondary';
+    restoreBtn.textContent='Вернуть';
+    restoreBtn.addEventListener('click',()=>restoreCrmTrashEntry(entry.id));
+    restoreTd.appendChild(restoreBtn);
+    tr.appendChild(restoreTd);
+
+    const typeTd=document.createElement('td');
+    typeTd.textContent=entry.type===CRM_TRASH_ENTRY_TYPES.stage?'Передел':'Заказ';
+    tr.appendChild(typeTd);
+
+    const orderTd=document.createElement('td');
+    const label=entry.type===CRM_TRASH_ENTRY_TYPES.stage?(entry.orderTitle||'—'):buildCrmOrderTitle(entry.order||{});
+    orderTd.textContent=label||'—';
+    tr.appendChild(orderTd);
+
+    const detailTd=document.createElement('td');
+    detailTd.textContent=formatTrashDetails(entry);
+    tr.appendChild(detailTd);
+
+    const timeTd=document.createElement('td');
+    timeTd.textContent=formatTrashTimestamp(entry.removedAt);
+    tr.appendChild(timeTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function openCrmTrash(){
+  const dlg=document.getElementById('crmTrashDlg');
+  if(!dlg) return;
+  renderCrmTrash();
+  dlg.showModal();
+  activateCrmTrashFilterButton(currentCrmTrashFilter);
+}
+
+function closeCrmTrash(){
+  document.getElementById('crmTrashDlg')?.close();
+}
+
+function activateCrmTrashFilterButton(filter){
+  document.querySelectorAll('#crmTrashDlg [data-trash-filter]').forEach(btn=>{
+    btn.classList.toggle('active',btn.dataset.trashFilter===filter);
+  });
+}
+
+function setCrmTrashFilter(filter){
+  const normalized=(filter==='orders'||filter==='stages')?filter:'all';
+  currentCrmTrashFilter=normalized;
+  activateCrmTrashFilterButton(normalized);
+  renderCrmTrash();
+}
+
+function clearCrmTrash(){
+  if(!Array.isArray(state.trash) || !state.trash.length) return;
+  if(!confirm('Очистить корзину без возможности восстановления?')) return;
+  state.trash=[];
+  save('Очистка корзины CRM');
+  renderCrmTrash();
+  updateCrmAuxButtons();
+}
+
+function restoreCrmTrashEntry(entryId){
+  if(!Array.isArray(state.trash)) return;
+  const idx=state.trash.findIndex(entry=>entry && entry.id===entryId);
+  if(idx<0) return;
+  const entry=state.trash[idx];
+  const boardId=entry.boardId||state.currentBoardId;
+  let board=state.boards.find(b=>b.id===boardId);
+  if(!board){
+    board=currentBoard();
+  }
+  if(!board){
+    alert('Не удалось определить доску для восстановления.');
+    return;
+  }
+  let summary='Восстановление из корзины';
+  if(entry.type===CRM_TRASH_ENTRY_TYPES.order){
+    const restored=deepClone(entry.order||{});
+    if(restored && !restored.id){
+      restored.id=entry.orderId||generateBoardId('crm-order');
+    }
+    if(!restored) return;
+    const existingIndex=board.orders.findIndex(o=>o.id===restored.id);
+    if(existingIndex>=0){
+      board.orders[existingIndex]=restored;
+    }else{
+      board.orders.push(restored);
+    }
+    summary='Восстановление заказа из корзины';
+  }else if(entry.type===CRM_TRASH_ENTRY_TYPES.stage){
+    const order=board.orders.find(o=>o.id===entry.orderId);
+    if(!order){
+      alert('Не найден заказ для восстановления передела.');
+      return;
+    }
+    if(!Array.isArray(order.stages)) order.stages=[];
+    const stage=deepClone(entry.stage||{});
+    const stageId=ensureStageIdentity(stage,entry.stageId);
+    const insertIndex=Number.isInteger(entry.position)?Math.max(0,Math.min(order.stages.length,entry.position)):-1;
+    if(insertIndex>=0){
+      order.stages.splice(insertIndex,0,stage);
+    }else{
+      order.stages.push(stage);
+    }
+    computeOrderDatesFromStages(order);
+    order.progress=calcAutoProgress(order.stages);
+    summary='Восстановление передела из корзины';
+  }
+  state.trash.splice(idx,1);
+  applyTrashRetention();
+  save(summary);
+  renderCurrentView();
+  renderCrmTrash();
+  updateCrmAuxButtons();
+}
+
 function renderIndicatorCell(info){
   if(!info) return '<span class="stage-check" data-state="missing"></span>';
   const attrs=[`data-state="${info.state}"`];
@@ -2297,6 +2975,7 @@ function renderOrdersTable(){
     updateSearchUI();
     syncCrmOrdersTotals();
     bindCrmOrdersScrollSync();
+    updateCrmAuxButtons();
     return;
   }
   rows.forEach(entry=>{
@@ -2333,6 +3012,7 @@ function renderOrdersTable(){
   updateSearchUI();
   syncCrmOrdersTotals();
   bindCrmOrdersScrollSync();
+  updateCrmAuxButtons();
 }
 
 function updateCrmOrdersTabUi(){
@@ -2372,6 +3052,7 @@ function renderCurrentView(){
     renderOrdersTable();
   }else{
     renderCards();
+    updateCrmAuxButtons();
   }
 }
 
@@ -2847,9 +3528,21 @@ if(orderDone){
 }
 
 function openOrder(id=null){
-  const b=currentBoard(); statusSel.innerHTML=''; b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)}); stagesTableBody.innerHTML='';
+  const b=currentBoard();
+  statusSel.innerHTML='';
+  b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)});
+  stagesTableBody.innerHTML='';
+  editingOrderId=id||null;
+  stageSourceMap=new Map();
+  pendingStageDeletes=[];
   if(id){
-    dlgTitle.textContent='Редактировать заказ'; const o=b.orders.find(x=>x.id===id); fillOrderForm(o,b);
+    dlgTitle.textContent='Редактировать заказ';
+    const o=b.orders.find(x=>x.id===id);
+    if(!o){
+      alert('Заказ не найден');
+      return;
+    }
+    fillOrderForm(o,b);
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
     deleteOrderBtn.style.display='';
     deleteOrderBtn.onclick=()=>{
@@ -2859,18 +3552,42 @@ function openOrder(id=null){
       orderDlg.close();
     };
   }else{
-    dlgTitle.textContent='Новый заказ'; orderForm.reset(); orderForm.status.value=b.lanes[0]; orderForm.id.value=''; orderForm.progress.value=0; orderDone.checked=false;
-    applyStagePreset(DEFAULT_STAGES); window._editingOrigValues=null; deleteOrderBtn.style.display='none'; deleteOrderBtn.onclick=null;
+    editingOrderId=null;
+    dlgTitle.textContent='Новый заказ';
+    orderForm.reset();
+    orderForm.status.value=b.lanes[0];
+    orderForm.id.value='';
+    orderForm.progress.value=0;
+    orderDone.checked=false;
+    applyStagePreset(DEFAULT_STAGES);
+    window._editingOrigValues=null;
+    deleteOrderBtn.style.display='none';
+    deleteOrderBtn.onclick=null;
   }
   orderDlg.showModal();
 }
 function closeOrder(){orderDlg.close()}
 
+if(orderDlg){
+  orderDlg.addEventListener('close',()=>{
+    editingOrderId=null;
+    pendingStageDeletes=[];
+    stageSourceMap=new Map();
+  });
+}
+
 function fillOrderForm(o,b){
   orderForm.title.value=o.title||''; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
   orderForm.serviceTotal.value=(o.serviceTotal??'')===''?'':Number(o.serviceTotal).toLocaleString('ru-RU');
   orderForm.notes.value=o.notes||''; orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
-  (o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}))).forEach(st=>appendStageRow(st));
+  const stageList=o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}));
+  stageList.forEach(st=>{
+    const stageId=ensureStageIdentity(st);
+    if(editingOrderId){
+      stageSourceMap.set(stageId, deepClone(st));
+    }
+    appendStageRow(st);
+  });
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
 }
 
@@ -2946,6 +3663,8 @@ function appendStageRow(st){
   const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
+  const stageId=ensureStageIdentity(st);
+  tr.dataset.stageId=stageId;
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
@@ -2957,7 +3676,24 @@ function appendStageRow(st){
   const origMap=window._editingOrigValues||null;
   if(origMap&&!suppressValue){const nameNow=nmRaw||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
 
-  const delBtn=tr.querySelector('button'); delBtn.onclick=()=>{if(!confirm('Удалить передел?'))return;tr.remove();syncAutoProgress();syncAutoDates();updateAllStageExpectations()};
+  const delBtn=tr.querySelector('button');
+  delBtn.onclick=()=>{
+    if(!confirm('Удалить передел?'))return;
+    const stageKey=tr.dataset.stageId||'';
+    if(editingOrderId && stageKey && stageSourceMap instanceof Map && stageSourceMap.has(stageKey)){
+      const snapshot=readStageRow(tr) || stageSourceMap.get(stageKey);
+      stageSourceMap.delete(stageKey);
+      const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+      const position=rows.indexOf(tr);
+      if(snapshot){
+        pendingStageDeletes.push({ stageId:stageKey, stage:deepClone(snapshot), position });
+      }
+    }
+    tr.remove();
+    syncAutoProgress();
+    syncAutoDates();
+    updateAllStageExpectations();
+  };
   const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
   if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress();updateStageRowExpectation(tr);})}
   if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress();updateStageRowExpectation(tr);})}
@@ -2989,6 +3725,38 @@ function applyStagePreset(names){
   syncAutoProgress();
   syncAutoDates();
   updateAllStageExpectations();
+}
+
+function readStageRow(tr){
+  if(!tr) return null;
+  const stageId=tr.dataset.stageId||generateStageId();
+  const get=k=>tr.querySelector(`[data-k="${k}"]`);
+  const nameInput=get('name');
+  const doneInput=get('done');
+  const progressInput=get('progress');
+  const startInput=get('start');
+  const endInput=get('end');
+  const valueInput=get('value');
+  const rawName=(nameInput?.value||'').trim();
+  const normalizedName=normalizeStageName(rawName);
+  const boolOnly=BOOL_STAGE_NAMES.has(normalizedName);
+  const done=!!doneInput?.checked;
+  const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progressInput?.value||0)));
+  return {
+    name:rawName||'Передел',
+    done,
+    progress,
+    start:startInput?.value||'',
+    end:endInput?.value||'',
+    originalStart:startInput?.dataset?.original||'',
+    originalEnd:endInput?.dataset?.original||'',
+    value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
+    crmStageId:stageId
+  };
+}
+
+function suppressValueForStage(normalizedName){
+  return HOURLESS_STAGE_NAMES.has(normalizedName);
 }
 
 function showStagePicker(anchor){
@@ -3034,17 +3802,7 @@ function showStagePicker(anchor){
 
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
-  return rows.map(r=>{const get=k=>r.querySelector(`[data-k="${k}"]`);
-    const rawName=(get('name').value.trim()||'Передел');
-    const normalized=normalizeStageName(rawName);
-    const boolOnly=BOOL_STAGE_NAMES.has(normalized);
-    const suppressValue=HOURLESS_STAGE_NAMES.has(normalized);
-    const done=get('done').checked; const progEl=get('progress');
-    const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progEl?.value||0)));
-    const startInput=get('start');
-    const endInput=get('end');
-    return {name:rawName,done,progress,start:startInput?.value||'',end:endInput?.value||'',originalStart:startInput?.dataset?.original||'',originalEnd:endInput?.dataset?.original||'',value:suppressValue?'':(get('value')?.value??'')}
-  })
+  return rows.map(readStageRow).filter(Boolean);
 }
 
 function calcAutoProgress(stages){
@@ -3059,6 +3817,11 @@ function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
   const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const stages=readStages();
+  const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
+  let removedStages=[];
+  if(editingOrderId){
+    removedStages=pendingStageDeletes.filter(entry=>entry&&entry.stageId&&!currentStageIds.has(entry.stageId));
+  }
   const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
   const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
   const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
@@ -3067,14 +3830,55 @@ orderForm.addEventListener('submit',e=>{
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
     parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
-  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)} save(exist?'Обновление заказа':'Создание заказа'); renderCurrentView(); orderDlg.close();
+  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)}
+  if(removedStages.length){
+    const targetOrder=exist||obj;
+    removedStages.forEach(entry=>{
+      pushStageToTrash(targetOrder, entry.stage, b, entry.position);
+    });
+  }
+  pendingStageDeletes=[];
+  stageSourceMap=new Map();
+  save(exist?'Обновление заказа':'Создание заказа'); renderCurrentView(); orderDlg.close();
 });
 
 /* Настройки доски */
 const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
-function openBoard(){const b=currentBoard();boardForm.name.value=b.name;boardForm.lanes.value=b.lanes.join(', ');boardForm.id.value=b.id;boardDlg.showModal()}
+function openBoard(){
+  const b=currentBoard();
+  boardForm.name.value=b.name;
+  boardForm.lanes.value=b.lanes.join(', ');
+  boardForm.id.value=b.id;
+  const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses.join(', '):'';
+  boardForm.unaccountedStatuses.value=statuses;
+  const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
+  boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
+  boardForm.trashRetentionValue.value=retention.value|| (retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
+  boardDlg.showModal();
+}
 function closeBoard(){boardDlg.close()}
-boardForm.addEventListener('submit',e=>{e.preventDefault();const id=boardForm.id.value;const b=state.boards.find(x=>x.id===id);b.name=boardForm.name.value.trim()||'Доска';b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);save('Настройка доски');renderAll();boardDlg.close()});
+boardForm.addEventListener('submit',e=>{
+  e.preventDefault();
+  const id=boardForm.id.value;
+  const b=state.boards.find(x=>x.id===id);
+  b.name=boardForm.name.value.trim()||'Доска';
+  b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);
+  const statusesRaw=boardForm.unaccountedStatuses.value||'';
+  const statusesList=statusesRaw.split(/[\n,;]+/).map(s=>s.trim()).filter(Boolean);
+  state.settings.unaccountedStatuses=statusesList;
+  const modeRaw=boardForm.trashRetentionMode.value==='count'?'count':'days';
+  let retentionValue=Number(boardForm.trashRetentionValue.value);
+  if(!Number.isFinite(retentionValue)||retentionValue<=0){
+    retentionValue=modeRaw==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS;
+  }else{
+    retentionValue=Math.round(retentionValue);
+  }
+  state.settings.trashRetention={mode:modeRaw,value:retentionValue};
+  applyTrashRetention();
+  save('Настройка доски');
+  renderAll();
+  boardDlg.close();
+});
 deleteBoardBtn.onclick=()=>{const id=boardForm.id.value;if(state.boards.length<=1){alert('Нельзя удалить единственную доску');return}if(!confirm('Удалить эту доску и все её заказы?'))return;state.boards=state.boards.filter(b=>b.id!==id);if(!state.boards.find(b=>b.id===state.currentBoardId)){state.currentBoardId=state.boards[0].id}save('Удаление доски');renderAll();boardDlg.close()};
 
 /* Разбивка на подзаказ */
@@ -3288,6 +4092,51 @@ function recalcParentSplitMeta(parent, board){
   }
 }
 
+function recordTrashEntry(entry){
+  if(!entry) return;
+  const list=Array.isArray(state.trash)?state.trash.slice():[];
+  list.unshift(entry);
+  state.trash=list;
+  applyTrashRetention();
+  updateCrmAuxButtons();
+}
+
+function pushOrderToTrash(order, board){
+  if(!order) return;
+  const entry={
+    id:generateTrashId(),
+    type:CRM_TRASH_ENTRY_TYPES.order,
+    removedAt:new Date().toISOString(),
+    boardId:board?.id||state.currentBoardId||'',
+    orderId:order.id||'',
+    order:deepClone(order),
+    title:buildCrmOrderTitle(order)
+  };
+  if(order.parentId!=null){
+    entry.parentId=order.parentId;
+  }
+  recordTrashEntry(entry);
+}
+
+function pushStageToTrash(order, stage, board, position){
+  if(!order||!stage) return;
+  const stageId=ensureStageIdentity(stage);
+  const stageClone=deepClone(stage);
+  ensureStageIdentity(stageClone,stageId);
+  const entry={
+    id:generateTrashId(),
+    type:CRM_TRASH_ENTRY_TYPES.stage,
+    removedAt:new Date().toISOString(),
+    boardId:board?.id||state.currentBoardId||'',
+    orderId:order.id||'',
+    orderTitle:buildCrmOrderTitle(order),
+    stageId,
+    stage:stageClone,
+    position:Number.isFinite(position)?position:null
+  };
+  recordTrashEntry(entry);
+}
+
 function mergeSuborderBack(parent, child, board){
   if(!parent||!child) return;
   const childStages=child.stages||[];
@@ -3322,6 +4171,7 @@ function handleOrderRemoval(order, board){
   if(!order) return;
   const b=board||currentBoard();
   if(!b) return;
+  pushOrderToTrash(order, b);
   if(order.parentId){
     const parent=b.orders.find(x=>x.id===order.parentId);
     if(parent){
@@ -3676,7 +4526,13 @@ document.addEventListener('click',e=>{
 });
 
 /* INIT */
-function renderAll(){renderBoardSelect();renderColumns();renderCurrentView();updateLaneHeightVar();}
+function renderAll(){
+  renderBoardSelect();
+  renderColumns();
+  renderCurrentView();
+  updateLaneHeightVar();
+  updateCrmAuxButtons();
+}
 updateCrmOrdersTabUi();
 if(crmOrdersTabBtn){
   crmOrdersTabBtn.addEventListener('click',()=>setCrmView('orders'));
@@ -3689,6 +4545,43 @@ if(crmOrdersFilter){
     if(currentCrmView==='orders'){
       renderOrdersTable();
     }
+  });
+}
+if(crmUnaccountedBtn){
+  crmUnaccountedBtn.addEventListener('click',()=>openCrmUnaccounted());
+}
+const crmUnaccountedCloseBtn=document.getElementById('crmUnaccountedClose');
+if(crmUnaccountedCloseBtn){
+  crmUnaccountedCloseBtn.addEventListener('click',()=>closeCrmUnaccounted());
+}
+const crmUnaccountedDismiss=document.getElementById('crmUnaccountedDismiss');
+if(crmUnaccountedDismiss){
+  crmUnaccountedDismiss.addEventListener('click',()=>closeCrmUnaccounted());
+}
+const crmUnaccountedDlg=document.getElementById('crmUnaccountedDlg');
+if(crmUnaccountedDlg){
+  crmUnaccountedDlg.addEventListener('cancel',()=>closeCrmUnaccounted());
+}
+if(crmTrashBtn){
+  crmTrashBtn.addEventListener('click',()=>openCrmTrash());
+}
+const crmTrashClose=document.getElementById('crmTrashClose');
+if(crmTrashClose){
+  crmTrashClose.addEventListener('click',()=>closeCrmTrash());
+}
+const crmTrashDismiss=document.getElementById('crmTrashDismiss');
+if(crmTrashDismiss){
+  crmTrashDismiss.addEventListener('click',()=>closeCrmTrash());
+}
+const crmTrashClearBtn=document.getElementById('crmTrashClear');
+if(crmTrashClearBtn){
+  crmTrashClearBtn.addEventListener('click',clearCrmTrash);
+}
+const crmTrashDlg=document.getElementById('crmTrashDlg');
+if(crmTrashDlg){
+  crmTrashDlg.addEventListener('cancel',()=>closeCrmTrash());
+  crmTrashDlg.querySelectorAll('[data-trash-filter]').forEach(btn=>{
+    btn.addEventListener('click',()=>setCrmTrashFilter(btn.dataset.trashFilter));
   });
 }
 window.addEventListener('resize',()=>{
