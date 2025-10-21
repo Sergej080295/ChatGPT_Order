@@ -60,6 +60,19 @@ const CRM_STAGE_DEFAULT_MAP = new Map([
   ['отгрузка', 'ship']
 ]);
 
+const CRM_STAGE_KEYWORDS = new Map([
+  ['draw', ['подготов', 'техпод', 'технол', 'чертеж', 'кд', 'пп', 'препроиз', 'конструкт']],
+  ['proc', ['закуп', 'снабж', 'покуп', 'комплект', 'поставка', 'материал', 'logist', 'логист']],
+  ['shear', ['резк', 'рубк', 'гильот', 'листорез', 'раскро', 'плазм']],
+  ['laser', ['лазер', 'laser', 'лаз.']],
+  ['bend', ['гибк', 'гибка', 'листогиб', 'пресс', 'press']],
+  ['weld', ['свар', 'сб', 'спайк', 'аргон', 'weld']],
+  ['mech', ['мех', 'фрез', 'токар', 'расточ', 'зенк', 'сверл', 'шлиф', 'резьб', 'пукл', 'обработ', 'слесар']],
+  ['coop', ['кооп', 'покрас', 'цинк', 'анод', 'полимер', 'термо', 'гальв', 'outsourc', 'аутсор', 'окрас']],
+  ['pack', ['упаков', 'комплектов', 'тара', 'упак']],
+  ['ship', ['отгруз', 'отправ', 'достав', 'экспед', 'самовыв', 'shipment']]
+]);
+
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: PGSSL ? { rejectUnauthorized: false } : undefined,
@@ -92,6 +105,107 @@ function normalizeStage(value) {
 
 function isCrmTaskUid(uid) {
   return typeof uid === 'string' && uid.startsWith(CRM_TASK_PREFIX);
+}
+
+function collectOrderAliasesForLookup(payload, meta = {}, extras = {}, options = {}) {
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const metaRecord = meta && typeof meta === 'object' ? meta : {};
+  const extra = extras && typeof extras === 'object' ? extras : {};
+  const config = options && typeof options === 'object' ? options : {};
+  const includePayloadUid = config.includePayloadUid !== false;
+  const aliasSet = new Set();
+
+  const addAlias = (prefix, value) => {
+    const normalized = sanitizeString(value);
+    if (!normalized) {
+      return;
+    }
+    aliasSet.add(`${prefix}:${normalized}`);
+  };
+
+  const identityCandidates = [
+    source.orderIdentity,
+    source.identity,
+    source.orderId,
+    source.id,
+    metaRecord.crmOrderId,
+    extra.identity,
+    extra.orderId,
+    extra.crmOrderId,
+    extra.crmDealId,
+    extra.crmLeadId,
+    source?.crmMeta?.orderIdentity,
+    source?.crmMeta?.orderId,
+    source?.crmMeta?.crmOrderId,
+    source?.crm?.orderId,
+    source?.crm?.id,
+    source?.crm?.dealId
+  ];
+  identityCandidates.forEach((value) => addAlias('identity', value));
+
+  const crmCandidates = [
+    metaRecord.crmOrderId,
+    extra.crmOrderId,
+    extra.crmDealId,
+    extra.crmLeadId,
+    source.crmOrderId,
+    source.crm_id,
+    source.crmId,
+    source?.crm?.id,
+    source?.crm?.dealId,
+    source?.crmMeta?.crmOrderId,
+    source?.crmMeta?.orderId
+  ];
+  crmCandidates.forEach((value) => addAlias('crm', value));
+
+  const numberCandidates = [
+    metaRecord.orderNumber,
+    extra.orderNumber,
+    extra.number,
+    source.orderNumber,
+    source.orderNo,
+    source.number,
+    source.code,
+    source.order_code,
+    source.documentNumber,
+    source?.crmMeta?.orderNumber
+  ];
+  numberCandidates.forEach((value) => addAlias('number', value));
+
+  const titleCandidates = [
+    metaRecord.title,
+    extra.title,
+    source.orderTitle,
+    source.title,
+    source.name,
+    source.subject,
+    source?.crmMeta?.title
+  ];
+  const customerCandidates = [
+    metaRecord.customer,
+    extra.customer,
+    source.orderCustomer,
+    source.customer,
+    source.client,
+    source.company,
+    source.organization,
+    source?.crmMeta?.customer
+  ];
+  const titlePrimary = titleCandidates.find((value) => sanitizeString(value));
+  const customerPrimary = customerCandidates.find((value) => sanitizeString(value));
+  if (titlePrimary && customerPrimary) {
+    addAlias('title', `${sanitizeString(titlePrimary)}::${sanitizeString(customerPrimary)}`);
+  }
+  titleCandidates.forEach((value) => addAlias('title', value));
+  customerCandidates.forEach((value) => addAlias('customer', value));
+
+  const uidCandidates = [extra.uid];
+  if (includePayloadUid) {
+    uidCandidates.push(source.uid, source.orderUid, source.id, source.orderId);
+  }
+  uidCandidates.forEach((value) => addAlias('uid', value));
+
+  return Array.from(aliasSet);
 }
 
 function computeHash(input) {
@@ -233,6 +347,14 @@ function mapCrmStageName(name, mapping = {}) {
     }
   }
   let fallback = CRM_STAGE_DEFAULT_MAP.get(normalized) || null;
+  if (!fallback) {
+    for (const [stage, keywords] of CRM_STAGE_KEYWORDS.entries()) {
+      if (keywords.some((keyword) => normalized.includes(keyword))) {
+        fallback = stage;
+        break;
+      }
+    }
+  }
   if (!fallback) {
     if (normalized.includes('кооп') || normalized.includes('кооперац') || normalized.includes('покрас')) {
       fallback = 'coop';
@@ -480,14 +602,37 @@ function extractOrderMetadata(payload) {
       'id',
       'uid',
       'identity',
-      'orderIdentity'
+      'orderIdentity',
+      'crmMeta.orderId',
+      'crmMeta.crmOrderId',
+      'crm.orderId',
+      'crm.id'
     ])
   );
   meta.orderNumber = toNullableString(
-    pickField(record, ['orderNumber', 'number', 'orderNo', 'docNumber', 'code', 'order_code'])
+    pickField(record, [
+      'orderNumber',
+      'number',
+      'orderNo',
+      'docNumber',
+      'documentNumber',
+      'code',
+      'order_code',
+      'crmMeta.orderNumber',
+      'crm.orderNumber'
+    ])
   );
   meta.title = toNullableString(
-    pickField(record, ['orderTitle', 'title', 'name', 'subject', 'orderName', 'displayTitle'])
+    pickField(record, [
+      'orderTitle',
+      'title',
+      'name',
+      'subject',
+      'orderName',
+      'displayTitle',
+      'crmMeta.title',
+      'crm.title'
+    ])
   );
   meta.customer = toNullableString(
     pickField(record, [
@@ -497,13 +642,28 @@ function extractOrderMetadata(payload) {
       'organization',
       'customerName',
       'clientName',
-      'buyer'
+      'buyer',
+      'companyName',
+      'organisation',
+      'crmMeta.customer',
+      'crm.customer'
     ])
   );
   meta.status = toNullableString(
-    pickField(record, ['status', 'state', 'orderStatus', 'stage', 'stageName', 'stageTitle'])
+    pickField(record, [
+      'status',
+      'state',
+      'orderStatus',
+      'stage',
+      'stageName',
+      'stageTitle',
+      'crmMeta.status',
+      'crm.status'
+    ])
   );
-  meta.priority = toNullableString(pickField(record, ['priority', 'orderPriority', 'importance']));
+  meta.priority = toNullableString(
+    pickField(record, ['priority', 'orderPriority', 'importance', 'crmMeta.priority', 'crm.priority'])
+  );
   meta.dueDate = toNullableString(
     pickField(record, [
       'dueDate',
@@ -513,7 +673,9 @@ function extractOrderMetadata(payload) {
       'endDatePlan',
       'expectedDate',
       'due',
-      'deadlineDate'
+      'deadlineDate',
+      'crmMeta.dueDate',
+      'crm.dueDate'
     ])
   );
   meta.plannedStart = toNullableString(
@@ -524,7 +686,9 @@ function extractOrderMetadata(payload) {
       'datePlanStart',
       'planStart',
       'plannedStartDate',
-      'startPlanned'
+      'startPlanned',
+      'crmMeta.plannedStart',
+      'crm.startPlan'
     ])
   );
   meta.plannedFinish = toNullableString(
@@ -535,7 +699,9 @@ function extractOrderMetadata(payload) {
       'datePlanFinish',
       'planFinish',
       'plannedFinishDate',
-      'finishPlanned'
+      'finishPlanned',
+      'crmMeta.plannedFinish',
+      'crm.finishPlan'
     ])
   );
   meta.readyPercent = normalizePercent(
@@ -546,15 +712,35 @@ function extractOrderMetadata(payload) {
       'completeness',
       'donePercent',
       'percentComplete',
-      'completion'
+      'completion',
+      'crmMeta.progress',
+      'crm.progress'
     ])
   );
   meta.manager = toNullableString(
-    pickField(record, ['manager', 'responsible', 'owner', 'assignee', 'responsibleName'])
+    pickField(record, [
+      'manager',
+      'responsible',
+      'owner',
+      'assignee',
+      'responsibleName',
+      'crmMeta.manager',
+      'crm.manager'
+    ])
   );
-  meta.updatedBy = toNullableString(pickField(record, ['updatedBy', 'lastEditor', 'modifiedBy', 'changedBy']));
+  meta.updatedBy = toNullableString(
+    pickField(record, ['updatedBy', 'lastEditor', 'modifiedBy', 'changedBy', 'crmMeta.updatedBy', 'crm.updatedBy'])
+  );
   meta.updatedText = toNullableString(
-    pickField(record, ['updatedAt', 'modifiedAt', 'updated', 'lastUpdate', 'timestamp'])
+    pickField(record, [
+      'updatedAt',
+      'modifiedAt',
+      'updated',
+      'lastUpdate',
+      'timestamp',
+      'crmMeta.updatedAt',
+      'crm.updatedAt'
+    ])
   );
   return meta;
 }
@@ -563,18 +749,65 @@ function extractTaskMetadata(payload) {
   const record = payload && typeof payload === 'object' ? payload : {};
   const meta = {};
   meta.crmOrderId = toNullableString(
-    pickField(record, ['crmOrderId', 'orderId', 'order_id', 'orderIdentity', 'identity', 'id'])
+    pickField(record, [
+      'crmOrderId',
+      'orderId',
+      'order_id',
+      'orderIdentity',
+      'identity',
+      'id',
+      'crmMeta.orderId',
+      'crmMeta.crmOrderId',
+      'crm.orderId',
+      'crm.id',
+      'crmStage.orderId'
+    ])
   );
   meta.orderNumber = toNullableString(
-    pickField(record, ['orderNumber', 'number', 'orderNo', 'docNumber', 'code', 'order_code'])
+    pickField(record, [
+      'orderNumber',
+      'number',
+      'orderNo',
+      'docNumber',
+      'code',
+      'order_code',
+      'crmMeta.orderNumber',
+      'crm.orderNumber'
+    ])
   );
   meta.stageName = toNullableString(
-    pickField(record, ['stageName', 'stageTitle', 'stage', 'name', 'displayStage', 'operation'])
+    pickField(record, [
+      'stageName',
+      'stageTitle',
+      'stage',
+      'name',
+      'displayStage',
+      'operation',
+      'crmMeta.stageName',
+      'crmMeta.stageTitle',
+      'crmStage.stageName',
+      'crmStage.name',
+      'crmStage.stageTitle',
+      'crmStage.stage'
+    ])
   );
-  meta.status = toNullableString(pickField(record, ['status', 'state', 'taskStatus', 'stageStatus']));
-  meta.priority = toNullableString(pickField(record, ['priority', 'taskPriority', 'importance']));
+  meta.status = toNullableString(
+    pickField(record, ['status', 'state', 'taskStatus', 'stageStatus', 'crmMeta.status', 'crmStage.status'])
+  );
+  meta.priority = toNullableString(
+    pickField(record, ['priority', 'taskPriority', 'importance', 'crmMeta.priority', 'crmStage.priority'])
+  );
   meta.executor = toNullableString(
-    pickField(record, ['executor', 'performer', 'assignee', 'worker', 'responsible', 'operator'])
+    pickField(record, [
+      'executor',
+      'performer',
+      'assignee',
+      'worker',
+      'responsible',
+      'operator',
+      'crmMeta.executor',
+      'crmStage.executor'
+    ])
   );
   meta.plannedStart = toNullableString(
     pickField(record, [
@@ -584,7 +817,10 @@ function extractTaskMetadata(payload) {
       'startPlanDate',
       'plannedStartDate',
       'planStartDate',
-      'startPlanned'
+      'startPlanned',
+      'crmMeta.plannedStart',
+      'crmStage.start',
+      'crmStage.plannedStart'
     ])
   );
   meta.plannedFinish = toNullableString(
@@ -595,20 +831,55 @@ function extractTaskMetadata(payload) {
       'finishPlanDate',
       'plannedFinishDate',
       'planFinishDate',
-      'finishPlanned'
+      'finishPlanned',
+      'crmMeta.plannedFinish',
+      'crmStage.end',
+      'crmStage.plannedFinish'
     ])
   );
   meta.actualStart = toNullableString(
-    pickField(record, ['factStart', 'actualStart', 'startFact', 'startActual', 'startedAt'])
+    pickField(record, [
+      'factStart',
+      'actualStart',
+      'startFact',
+      'startActual',
+      'startedAt',
+      'crmMeta.actualStart',
+      'crmStage.actualStart'
+    ])
   );
   meta.actualFinish = toNullableString(
-    pickField(record, ['factFinish', 'actualFinish', 'finishFact', 'finishActual', 'finishedAt'])
+    pickField(record, [
+      'factFinish',
+      'actualFinish',
+      'finishFact',
+      'finishActual',
+      'finishedAt',
+      'crmMeta.actualFinish',
+      'crmStage.actualFinish'
+    ])
   );
   meta.dueDate = toNullableString(
-    pickField(record, ['dueDate', 'deadline', 'finishDate', 'expectedDate', 'due', 'deadlineDate'])
+    pickField(record, [
+      'dueDate',
+      'deadline',
+      'finishDate',
+      'expectedDate',
+      'due',
+      'deadlineDate',
+      'crmMeta.dueDate',
+      'crmStage.dueDate'
+    ])
   );
   meta.expectedPercent = normalizePercent(
-    pickField(record, ['expectedPercent', 'planPercent', 'targetPercent', 'plannedPercent'])
+    pickField(record, [
+      'expectedPercent',
+      'planPercent',
+      'targetPercent',
+      'plannedPercent',
+      'crmMeta.expectedPercent',
+      'crmStage.expectedPercent'
+    ])
   );
   meta.progressPercent = normalizePercent(
     pickField(record, [
@@ -617,7 +888,9 @@ function extractTaskMetadata(payload) {
       'donePercent',
       'percentComplete',
       'completion',
-      'factPercent'
+      'factPercent',
+      'crmMeta.progress',
+      'crmStage.progress'
     ])
   );
   return meta;
@@ -1687,23 +1960,18 @@ function createOrderKeyResolver() {
       return { key: null, merged: [] };
     }
 
-    const identity = sanitizeString(record.orderIdentity);
-    const crmOrderId = sanitizeString(record.orderId || record.crmOrderId);
-    const numberPrimary = sanitizeString(record.orderNumber || record.number || record.orderNo);
-    const numberAlt = sanitizeString(record.orderIdNumber || record.orderRef);
-    const title = sanitizeString(record.orderTitle || record.title || record.orderName);
-    const customer = sanitizeString(record.orderCustomer || record.customer);
-    const uid = sanitizeString(record.uid);
-
-    const aliases = [];
-    if (identity) aliases.push(`identity:${identity}`);
-    if (crmOrderId) aliases.push(`crm:${crmOrderId}`);
-    if (numberPrimary) aliases.push(`number:${numberPrimary}`);
-    if (numberAlt && numberAlt !== numberPrimary) aliases.push(`number:${numberAlt}`);
-    if (title && customer) aliases.push(`title:${title}::${customer}`);
-    if (title) aliases.push(`title:${title}`);
-    if (customer) aliases.push(`customer:${customer}`);
-    if (uid) aliases.push(`uid:${uid}`);
+    const metaRecord = record.meta && typeof record.meta === 'object' ? record.meta : {};
+    const extras = {
+      uid: record.uid,
+      crmOrderId: record.crmOrderId || record.orderId,
+      orderNumber: record.orderNumber || record.number,
+      number: record.number,
+      title: record.orderTitle || record.title || record.orderName,
+      customer: record.orderCustomer || record.customer,
+      identity: record.orderIdentity || record.identity
+    };
+    const includePayloadUid = record.includePayloadUid !== false;
+    const aliases = collectOrderAliasesForLookup(record, metaRecord, extras, { includePayloadUid });
 
     let canonical = null;
     const seenCanonicals = new Set();
@@ -1762,13 +2030,19 @@ function extractStorageParts(snapshot) {
     laneOrders.forEach((order, orderIndex) => {
       const uid = resolveOrderUid(order, orders.length + 1);
       const payload = order && typeof order === 'object' ? { ...order, uid } : { uid };
+      const meta = extractOrderMetadata(payload);
       const keySource = {
         uid,
-        orderId: payload.orderId || payload.crmOrderId,
-        orderNumber: payload.orderNumber || payload.number,
-        orderTitle: payload.orderTitle || payload.title,
-        orderCustomer: payload.orderCustomer || payload.customer,
-        orderIdentity: payload.orderIdentity || payload.identity
+        orderId: payload.orderId || payload.crmOrderId || meta.crmOrderId,
+        orderNumber: payload.orderNumber || payload.number || meta.orderNumber,
+        orderTitle: payload.orderTitle || payload.title || meta.title,
+        orderCustomer: payload.orderCustomer || payload.customer || meta.customer,
+        orderIdentity: payload.orderIdentity || payload.identity || meta.crmOrderId,
+        crmOrderId: payload.crmOrderId || payload.crm_id || meta.crmOrderId,
+        number: payload.number || payload.orderNo || meta.orderNumber,
+        crmMeta: payload.crmMeta || {},
+        crm: payload.crm || {},
+        meta
       };
       const resolution = resolveKey(keySource);
       if (resolution.key) {
@@ -1777,7 +2051,6 @@ function extractStorageParts(snapshot) {
           resolution.merged.forEach((alias) => orderKeyToUid.set(alias, uid));
         }
       }
-      const meta = extractOrderMetadata(payload);
       orders.push({
         uid,
         boardId,
@@ -1818,7 +2091,12 @@ function extractStorageParts(snapshot) {
         orderNumber: payload.orderNumber || payload.number,
         orderTitle: payload.orderTitle || payload.title,
         orderCustomer: payload.orderCustomer || payload.customer,
-        orderIdentity: payload.orderIdentity || payload.identity
+        orderIdentity: payload.orderIdentity || payload.identity,
+        crmOrderId: payload.crmOrderId || payload.crm_id,
+        number: payload.number || payload.orderNo,
+        crmMeta: payload.crmMeta || {},
+        crm: payload.crm || {},
+        includePayloadUid: false
       };
       const resolution = resolveKey(keySource);
       const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
@@ -1888,7 +2166,12 @@ function extractStorageParts(snapshot) {
         orderNumber: payload.orderNumber || payload.number,
         orderTitle: payload.orderTitle || payload.title,
         orderCustomer: payload.orderCustomer || payload.customer,
-        orderIdentity: payload.orderIdentity || payload.identity
+        orderIdentity: payload.orderIdentity || payload.identity,
+        crmOrderId: payload.crmOrderId || payload.crm_id,
+        number: payload.number || payload.orderNo,
+        crmMeta: payload.crmMeta || {},
+        crm: payload.crm || {},
+        includePayloadUid: false
       };
       const resolution = resolveKey(keySource);
       const orderUid = resolution.key ? orderKeyToUid.get(resolution.key) || null : null;
@@ -2142,6 +2425,7 @@ async function loadSnapshotFromDatabase() {
     const boards = boardsRow.rows.length
       ? safeJsonParse(boardsRow.rows[0].payload, [])
       : [];
+    const stageMapping = baseSnapshot?.meta?.settings?.crmStageMapping || {};
 
     const ordersRes = await client.query(
       `SELECT uid, board_id, lane_id, position, payload,
@@ -2152,6 +2436,8 @@ async function loadSnapshotFromDatabase() {
     );
     const orders = [];
     const orderUpdates = [];
+    const orderAliasToUid = new Map();
+    const orderByUid = new Map();
     for (const row of ordersRes.rows) {
       const payload = safeJsonParse(row.payload, {});
       const meta = extractOrderMetadata(payload);
@@ -2208,6 +2494,22 @@ async function loadSnapshotFromDatabase() {
         position: Number(row.position) || 0,
         payload
       });
+      const aliasExtras = {
+        uid: sanitizeString(row.uid),
+        crmOrderId: row.crm_order_id,
+        orderNumber: row.order_number,
+        number: row.order_number,
+        title: row.title,
+        customer: row.customer,
+        identity: payload.orderIdentity || payload.identity || meta.crmOrderId
+      };
+      const orderAliases = collectOrderAliasesForLookup(payload, meta, aliasExtras, { includePayloadUid: true });
+      orderAliases.forEach((alias) => {
+        if (!orderAliasToUid.has(alias)) {
+          orderAliasToUid.set(alias, sanitizeString(row.uid));
+        }
+      });
+      orderByUid.set(sanitizeString(row.uid), { payload, meta });
     }
 
     for (const params of orderUpdates) {
@@ -2242,9 +2544,129 @@ async function loadSnapshotFromDatabase() {
     );
     const tasks = [];
     const taskUpdates = [];
+    const taskLinkUpdates = [];
     for (const row of tasksRes.rows) {
       const payload = safeJsonParse(row.payload, {});
       const meta = extractTaskMetadata(payload);
+      const storedOrderUid = sanitizeString(row.order_uid) || null;
+      const aliasExtras = {
+        uid: storedOrderUid,
+        crmOrderId: row.crm_order_id,
+        orderNumber: row.order_number,
+        number: row.order_number,
+        identity: payload.orderIdentity || payload.identity || meta.crmOrderId || storedOrderUid
+      };
+      const aliasCandidates = collectOrderAliasesForLookup(payload, meta, aliasExtras, { includePayloadUid: false });
+      let linkedOrderUid = storedOrderUid;
+      if (!linkedOrderUid) {
+        for (const alias of aliasCandidates) {
+          const candidate = orderAliasToUid.get(alias);
+          if (candidate) {
+            linkedOrderUid = sanitizeString(candidate) || null;
+            break;
+          }
+        }
+      }
+      if (!linkedOrderUid && meta.crmOrderId) {
+        const directAlias = `crm:${sanitizeString(meta.crmOrderId)}`;
+        const candidate = orderAliasToUid.get(directAlias);
+        if (candidate) {
+          linkedOrderUid = sanitizeString(candidate) || null;
+        }
+      }
+      aliasCandidates.forEach((alias) => {
+        if (!orderAliasToUid.has(alias) && linkedOrderUid) {
+          orderAliasToUid.set(alias, linkedOrderUid);
+        }
+      });
+      const linkedOrder = linkedOrderUid ? orderByUid.get(linkedOrderUid) : null;
+      if (linkedOrder) {
+        const orderPayload = linkedOrder.payload || {};
+        const orderMeta = linkedOrder.meta || extractOrderMetadata(orderPayload);
+        const linkedIdentity = sanitizeString(orderPayload.orderIdentity)
+          || sanitizeString(orderPayload.identity)
+          || orderMeta.crmOrderId
+          || linkedOrderUid;
+        if (!payload.orderIdentity && linkedIdentity) {
+          payload.orderIdentity = linkedIdentity;
+        }
+        if (!payload.orderId && (orderMeta.crmOrderId || orderPayload.orderId)) {
+          payload.orderId = payload.orderId || orderMeta.crmOrderId || orderPayload.orderId;
+        }
+        if (!payload.orderNumber && (orderMeta.orderNumber || orderPayload.orderNumber || orderPayload.number)) {
+          payload.orderNumber = payload.orderNumber || orderMeta.orderNumber || orderPayload.orderNumber || orderPayload.number;
+        }
+        if (!payload.orderCustomer && (orderMeta.customer || orderPayload.orderCustomer || orderPayload.customer)) {
+          payload.orderCustomer = payload.orderCustomer || orderMeta.customer || orderPayload.orderCustomer || orderPayload.customer;
+        }
+        if (!payload.title && (orderMeta.title || orderPayload.title || orderPayload.orderTitle)) {
+          payload.title = payload.title || orderMeta.title || orderPayload.title || orderPayload.orderTitle;
+        }
+        if (!payload.customer && (orderMeta.customer || orderPayload.customer)) {
+          payload.customer = payload.customer || orderMeta.customer || orderPayload.customer;
+        }
+        if (!payload.crmMeta || typeof payload.crmMeta !== 'object') {
+          payload.crmMeta = payload.crmMeta && typeof payload.crmMeta === 'object' ? { ...payload.crmMeta } : {};
+        }
+        if (orderMeta.crmOrderId && !payload.crmMeta.orderId) {
+          payload.crmMeta.orderId = payload.crmMeta.orderId || orderMeta.crmOrderId;
+        }
+        if (orderMeta.orderNumber && !payload.crmMeta.orderNumber) {
+          payload.crmMeta.orderNumber = payload.crmMeta.orderNumber || orderMeta.orderNumber;
+        }
+        if (orderMeta.customer && !payload.crmMeta.customer) {
+          payload.crmMeta.customer = payload.crmMeta.customer || orderMeta.customer;
+        }
+        if (!meta.crmOrderId && orderMeta.crmOrderId) {
+          meta.crmOrderId = orderMeta.crmOrderId;
+        }
+        if (!meta.orderNumber && orderMeta.orderNumber) {
+          meta.orderNumber = orderMeta.orderNumber;
+        }
+        if (!meta.customer && orderMeta.customer) {
+          meta.customer = orderMeta.customer;
+        }
+      }
+      const stageCandidates = [
+        row.stage_code,
+        payload.stage,
+        payload.stageKey,
+        payload.stage_code,
+        payload?.crmMeta?.stageKey,
+        payload?.crmMeta?.stage,
+        payload?.crmMeta?.stageName,
+        payload?.crmStage?.stageKey,
+        payload?.crmStage?.stage,
+        payload?.crmStage?.name,
+        payload?.crmStage?.stageName,
+        meta.stageName,
+        row.stage_name
+      ];
+      let stage = null;
+      for (const candidate of stageCandidates) {
+        const normalized = normalizeStage(candidate);
+        if (!normalized) {
+          continue;
+        }
+        if (STAGE_KEYS.includes(normalized)) {
+          stage = normalized;
+          break;
+        }
+        const mapped = mapCrmStageName(candidate, stageMapping);
+        if (mapped) {
+          stage = mapped;
+          break;
+        }
+        if (!stage) {
+          stage = normalized;
+        }
+      }
+      if (stage && !payload.stage) {
+        payload.stage = stage;
+      }
+      if (stage && !meta.stageName) {
+        meta.stageName = stage;
+      }
       const storedCrmId = toNullableString(row.crm_order_id);
       const storedNumber = toNullableString(row.order_number);
       const storedStageName = toNullableString(row.stage_name);
@@ -2292,10 +2714,19 @@ async function loadSnapshotFromDatabase() {
           sanitizeString(row.uid)
         ]);
       }
+      const sanitizedUid = sanitizeString(row.uid);
+      const normalizedStage = stage || normalizeStage(row.stage_code);
+      const resolvedOrderUid = linkedOrderUid || null;
+      if ((resolvedOrderUid || storedOrderUid) || stage) {
+        const storedStageCode = normalizeStage(row.stage_code);
+        if (resolvedOrderUid !== storedOrderUid || (stage && stage !== storedStageCode)) {
+          taskLinkUpdates.push([resolvedOrderUid, stage || storedStageCode || null, sanitizedUid]);
+        }
+      }
       tasks.push({
-        uid: sanitizeString(row.uid),
-        orderUid: sanitizeString(row.order_uid || null) || null,
-        stage: normalizeStage(row.stage_code),
+        uid: sanitizedUid,
+        orderUid: resolvedOrderUid,
+        stage: normalizedStage,
         bucket: sanitizeString(row.bucket) || 't',
         position: Number(row.position) || 0,
         payload
@@ -2321,6 +2752,18 @@ async function loadSnapshotFromDatabase() {
                 progress_percent = $13,
                 updated_at = NOW()
           WHERE uid = $14`,
+        params
+      );
+    }
+
+    for (const params of taskLinkUpdates) {
+      // eslint-disable-next-line no-await-in-loop
+      await client.query(
+        `UPDATE pc_order_tasks
+            SET order_uid = $1,
+                stage_code = $2,
+                updated_at = NOW()
+          WHERE uid = $3`,
         params
       );
     }
