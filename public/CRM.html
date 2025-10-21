@@ -317,6 +317,15 @@
     main {
       padding: var(--pc-spacing-md);
     }
+    .crm-view-tabs {
+      margin: var(--pc-spacing-sm) var(--pc-spacing-md) 0;
+    }
+    .crm-stage-toolbar {
+      margin: 0 var(--pc-spacing-md) var(--pc-spacing-sm);
+    }
+    .crm-stage-table-wrap {
+      margin: 0 var(--pc-spacing-md) var(--pc-spacing-md);
+    }
   }
 
   @media (max-width: 640px) {
@@ -327,6 +336,11 @@
 
     .crm-toolbar__search-field button {
       min-width: 100%;
+    }
+
+    .crm-view-tab {
+      flex: 1 1 45%;
+      text-align: center;
     }
   }
 
@@ -424,6 +438,103 @@
   .crm-toolbar__actions .pc-icon-btn svg {
     width: 18px;
     height: 18px;
+  }
+
+  .crm-view-tabs {
+    margin: var(--pc-spacing-sm) var(--pc-spacing-lg) 0;
+    display: flex;
+    align-items: stretch;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-view-tab {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    border-radius: var(--pc-radius-pill);
+    padding: 6px 14px;
+    background: color-mix(in srgb, var(--pc-border) 24%, transparent);
+    color: var(--pc-text);
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    cursor: pointer;
+    transition: background var(--pc-transition-short), border-color var(--pc-transition-short), color var(--pc-transition-short);
+  }
+
+  .crm-view-tab:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-info) 70%, transparent);
+    outline-offset: 1px;
+  }
+
+  .crm-view-tab.active {
+    background: var(--pc-info);
+    border-color: color-mix(in srgb, var(--pc-info) 70%, transparent);
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(14, 165, 233, 0.35);
+  }
+
+  .crm-view {
+    display: block;
+  }
+
+  .crm-view[hidden] {
+    display: none !important;
+  }
+
+  .crm-stage-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 var(--pc-spacing-lg) var(--pc-spacing-sm);
+  }
+
+  .crm-stage-stats {
+    font-size: 13px;
+  }
+
+  .crm-stage-table-wrap {
+    margin: 0 var(--pc-spacing-lg) var(--pc-spacing-lg);
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    overflow: auto;
+    background: var(--pc-surface);
+  }
+
+  #crmStageTable {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+    color: var(--pc-text);
+  }
+
+  #crmStageTable thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: color-mix(in srgb, var(--pc-surface) 94%, var(--pc-border));
+    color: var(--pc-text-muted);
+    text-align: left;
+    font-weight: var(--pc-font-weight-semibold);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--pc-border);
+  }
+
+  #crmStageTable tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    vertical-align: middle;
+  }
+
+  #crmStageTable tbody tr:hover {
+    background: color-mix(in srgb, var(--pc-info) 10%, transparent);
+    cursor: pointer;
+  }
+
+  #crmStageTable tbody tr.done {
+    opacity: 0.65;
+  }
+
+  #crmStageTable tbody tr:last-child td {
+    border-bottom: none;
   }
 
   .crm-toolbar__stats {
@@ -1290,8 +1401,35 @@
   </div>
 </section>
 
+<nav class="crm-view-tabs" id="crmViewTabs" aria-label="Режимы отображения" role="tablist"></nav>
+
 <main>
-  <div class="pc-kanban crm-kanban" id="columns" data-animate="fade-in"></div>
+  <div class="crm-view" id="crmKanbanView" data-view-type="kanban">
+    <div class="pc-kanban crm-kanban" id="columns" data-animate="fade-in"></div>
+  </div>
+  <div class="crm-view" id="crmTableView" data-view-type="table" hidden>
+    <div class="crm-stage-toolbar">
+      <span class="pc-badge crm-stage-stats" id="stageStats">—</span>
+    </div>
+    <div class="crm-stage-table-wrap">
+      <table id="crmStageTable">
+        <thead>
+          <tr>
+            <th scope="col">№</th>
+            <th scope="col">Заказ</th>
+            <th scope="col">Клиент</th>
+            <th scope="col">Статус (канбан)</th>
+            <th scope="col">Передел</th>
+            <th scope="col">Прогресс, %</th>
+            <th scope="col">Часов</th>
+            <th scope="col">Начало</th>
+            <th scope="col">Конец</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
 </main>
 
 <div id="toastLayer" class="pc-toast-layer" aria-live="polite"></div>
@@ -1397,6 +1535,71 @@ const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка'
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+const CRM_STAGE_DEFAULT_MAP=new Map([
+  ['подготовка в работу','draw'],
+  ['технологи: подготовка в работу','draw'],
+  ['техподготовка','draw'],
+  ['закупка','proc'],
+  ['покупка','proc'],
+  ['снабжение','proc'],
+  ['рубка','shear'],
+  ['резка','shear'],
+  ['лазер','laser'],
+  ['гибка','bend'],
+  ['сварка','weld'],
+  ['зенковка','mech'],
+  ['зенкование','mech'],
+  ['мехобработка','mech'],
+  ['мех.обработка','mech'],
+  ['мех. обработка','mech'],
+  ['мех-обработка','mech'],
+  ['мехобр','mech'],
+  ['мехобр.','mech'],
+  ['сверловка','mech'],
+  ['сверление','mech'],
+  ['сверл','mech'],
+  ['резьбонарезка','mech'],
+  ['резьба','mech'],
+  ['резьб','mech'],
+  ['пуклевка','mech'],
+  ['пукл','mech'],
+  ['заклепка','mech'],
+  ['заклеп','mech'],
+  ['кооперация','coop'],
+  ['кооп','coop'],
+  ['покраска','coop'],
+  ['цинкование (кооперация)','coop'],
+  ['цинкование','coop'],
+  ['упаковка','pack'],
+  ['отгрузка','ship']
+]);
+const CRM_STAGE_KEYWORDS=new Map([
+  ['draw',['подготов','техпод','технол','чертеж','кд','пп','препроиз','конструкт']],
+  ['proc',['закуп','снабж','покуп','комплект','поставка','материал','logist','логист']],
+  ['shear',['резк','рубк','гильот','листорез','раскро','плазм']],
+  ['laser',['лазер','laser','лаз.']],
+  ['bend',['гибк','гибка','листогиб','пресс','press']],
+  ['weld',['свар','сб','спайк','аргон','weld']],
+  ['mech',['мех','фрез','токар','расточ','зенк','сверл','шлиф','резьб','пукл','обработ','слесар']],
+  ['coop',['кооп','покрас','цинк','анод','полимер','термо','гальв','outsourc','аутсор','окрас']],
+  ['pack',['упаков','комплектов','тара','упак']],
+  ['ship',['отгруз','отправ','достав','экспед','самовыв','shipment']]
+]);
+const CRM_VIEW_DEFS=[
+  {id:'kanban',label:'Канбан',type:'kanban'},
+  {id:'orders',label:'Общий список',type:'table',stageKey:null},
+  {id:'draw',label:'Подготовка',type:'table',stageKey:'draw'},
+  {id:'proc',label:'Закупка',type:'table',stageKey:'proc'},
+  {id:'shear',label:'Рубка',type:'table',stageKey:'shear'},
+  {id:'laser',label:'Лазер',type:'table',stageKey:'laser'},
+  {id:'bend',label:'Гибка',type:'table',stageKey:'bend'},
+  {id:'weld',label:'Сварка',type:'table',stageKey:'weld'},
+  {id:'mech',label:'Мехобработка',type:'table',stageKey:'mech'},
+  {id:'coop',label:'Кооперация',type:'table',stageKey:'coop'},
+  {id:'pack',label:'Упаковка',type:'table',stageKey:'pack'},
+  {id:'ship',label:'Отгрузка',type:'table',stageKey:'ship'}
+];
+const CRM_VIEW_STORAGE_KEY='mini_crm_view_mode_v1';
 function normalizeSearchTerm(value){
   if(value==null) return '';
   return String(value).trim().toLowerCase();
@@ -1498,6 +1701,68 @@ function spanMuted(t){const s=document.createElement('span');s.className='muted'
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
 const boardSelect=$('#boardSelect'),columns=$('#columns'),stats=$('#stats');
+const kanbanView=$('#crmKanbanView');
+const tableView=$('#crmTableView');
+const stageTable=$('#crmStageTable');
+const stageTableBody=stageTable?stageTable.querySelector('tbody'):null;
+const stageStats=$('#stageStats');
+const viewTabs=$('#crmViewTabs');
+const crmViewMap=new Map(CRM_VIEW_DEFS.map(view=>[view.id,view]));
+let currentViewId=(()=>{
+  try{
+    const stored=localStorage.getItem(CRM_VIEW_STORAGE_KEY);
+    if(stored&&crmViewMap.has(stored)) return stored;
+  }catch(_err){/* ignore */}
+  return 'kanban';
+})();
+function currentViewDef(){return crmViewMap.get(currentViewId)||CRM_VIEW_DEFS[0];}
+function updateViewTabs(){
+  if(!viewTabs) return;
+  $$('.crm-view-tab',viewTabs).forEach(btn=>{
+    const id=btn.dataset.viewId;
+    const active=id===currentViewDef().id;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active?'true':'false');
+  });
+}
+function updateViewVisibility(){
+  const def=currentViewDef();
+  if(kanbanView) kanbanView.hidden=def.type!=='kanban';
+  if(tableView) tableView.hidden=def.type!=='table';
+  updateViewTabs();
+  if(document.body){
+    document.body.setAttribute('data-crm-view', def.id);
+  }
+}
+function setCurrentView(viewId,{persist=true,render=true}={}){
+  if(!crmViewMap.has(viewId)) viewId='kanban';
+  if(currentViewId===viewId){
+    updateViewVisibility();
+    if(render) renderActiveView();
+    return;
+  }
+  currentViewId=viewId;
+  if(persist){
+    try{localStorage.setItem(CRM_VIEW_STORAGE_KEY,currentViewId);}catch(_err){/* ignore */}
+  }
+  updateViewVisibility();
+  if(render) renderActiveView();
+}
+function buildViewTabs(){
+  if(!viewTabs) return;
+  viewTabs.innerHTML='';
+  CRM_VIEW_DEFS.forEach(view=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='crm-view-tab';
+    btn.dataset.viewId=view.id;
+    btn.textContent=view.label;
+    btn.setAttribute('role','tab');
+    btn.addEventListener('click',()=>setCurrentView(view.id,{persist:true,render:true}));
+    viewTabs.appendChild(btn);
+  });
+  updateViewVisibility();
+}
 const LANE_PAGE_SIZE=10;
 const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
@@ -1518,7 +1783,7 @@ function ensureLaneRegistry(lanes,boardId){
 function increaseLaneLimit(lane){
   const current=laneVisibleCount.get(lane)||LANE_PAGE_SIZE;
   laneVisibleCount.set(lane,current+LANE_PAGE_SIZE);
-  renderCards();
+  renderActiveView();
 }
 
 function laneLimit(lane){
@@ -1572,6 +1837,177 @@ function renderColumns(){
   enableDnd();
 }
 
+function renderStageView(view){
+  if(!stageTableBody){
+    if(stageStats) stageStats.textContent='—';
+    if(stats) stats.textContent='—';
+    return;
+  }
+  const b=currentBoard();
+  stageTableBody.innerHTML='';
+  if(!b){
+    if(stageStats) stageStats.textContent='—';
+    if(stats) stats.textContent='—';
+    return;
+  }
+  const stageKey=view?.stageKey||null;
+  const rows=[];
+  const orders=b.orders||[];
+  orders.forEach(order=>{
+    computeOrderDatesFromStages(order);
+    if(!orderMatchesSearch(order)) return;
+    const stages=Array.isArray(order?.stages)?order.stages:[];
+    if(stageKey){
+      let matched=null;
+      for(const st of stages){
+        if(resolveStageKey(st)===stageKey){
+          matched=st;
+          break;
+        }
+      }
+      if(!matched) return;
+      const progress=normalizeStageProgress(matched.progress);
+      const hours=parseStageHours(matched.value);
+      const startRaw=matched.start||order.start||'';
+      const endRaw=matched.end||order.end||'';
+      rows.push({
+        order,
+        stage:matched,
+        stageLabel:matched.name||view.label,
+        progress,
+        hours,
+        startRaw,
+        endRaw,
+        done:matched.done===true||progress>=100,
+        lane:order.status||'',
+        ts:pickTimestamp(matched.start,matched.end,order.start,order.end)
+      });
+    }else{
+      const autoProgress=calcAutoProgress(stages);
+      const manualProgress=normalizeStageProgress(order.progress);
+      const progress=(order.progressManual===true)?manualProgress:autoProgress;
+      let totalHours=0;
+      let hasHours=false;
+      stages.forEach(st=>{
+        const val=parseStageHours(st?.value);
+        if(Number.isFinite(val)){
+          totalHours+=val;
+          hasHours=true;
+        }
+      });
+      const effectiveHours=hasHours?totalHours:null;
+      const startRaw=order.start||'';
+      const endRaw=order.end||'';
+      rows.push({
+        order,
+        stage:null,
+        stageLabel:'Все переделы',
+        progress,
+        hours:effectiveHours,
+        startRaw,
+        endRaw,
+        done:order.done===true||progress>=100,
+        lane:order.status||'',
+        ts:pickTimestamp(order.start,order.end)
+      });
+    }
+  });
+
+  rows.sort((a,b)=>{
+    if(a.done!==b.done) return a.done?1:-1;
+    const aTs=Number.isFinite(a.ts)?a.ts:Number.POSITIVE_INFINITY;
+    const bTs=Number.isFinite(b.ts)?b.ts:Number.POSITIVE_INFINITY;
+    if(aTs!==bTs) return aTs-bTs;
+    const nameA=(a.order.title||a.order.orderNo||'').toLowerCase();
+    const nameB=(b.order.title||b.order.orderNo||'').toLowerCase();
+    if(nameA<nameB) return -1;
+    if(nameA>nameB) return 1;
+    return 0;
+  });
+
+  if(!rows.length){
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td colspan="9" class="empty">Нет данных</td>';
+    stageTableBody.appendChild(tr);
+    const emptyText=`Нет данных для «${view.label}»`;
+    if(stageStats){
+      stageStats.textContent=emptyText;
+    }
+    if(stats){
+      stats.textContent=emptyText;
+    }
+    return;
+  }
+
+  const fragment=document.createDocumentFragment();
+  rows.forEach((row,index)=>{
+    const tr=document.createElement('tr');
+    tr.dataset.id=row.order.id||'';
+    if(row.done) tr.classList.add('done');
+    const orderTitle=row.order.title||row.order.orderNo||'—';
+    const customer=row.order.customer||'—';
+    const lane=row.lane||'—';
+    const stageName=row.stageLabel||view.label||'—';
+    const progressText=Number.isFinite(row.progress)?Math.round(row.progress).toString():'—';
+    const hoursText=Number.isFinite(row.hours)?formatHours(row.hours):'—';
+    const startText=row.startRaw?formatDateHuman(row.startRaw)||row.startRaw:'—';
+    const endText=row.endRaw?formatDateHuman(row.endRaw)||row.endRaw:'—';
+    tr.innerHTML=`
+      <td>${index+1}</td>
+      <td>${escapeHtml(orderTitle)}</td>
+      <td>${escapeHtml(customer)}</td>
+      <td>${escapeHtml(lane)}</td>
+      <td>${escapeHtml(stageName)}</td>
+      <td>${escapeHtml(progressText)}</td>
+      <td>${escapeHtml(hoursText)}</td>
+      <td>${escapeHtml(startText||'—')}</td>
+      <td>${escapeHtml(endText||'—')}</td>
+    `;
+    tr.tabIndex=0;
+    tr.addEventListener('click',()=>openOrder(row.order.id));
+    tr.addEventListener('keydown',e=>{
+      if(e.key==='Enter'||e.key===' '){
+        e.preventDefault();
+        openOrder(row.order.id);
+      }
+    });
+    fragment.appendChild(tr);
+  });
+  stageTableBody.appendChild(fragment);
+
+  const total=rows.length;
+  const active=rows.filter(r=>!r.done).length;
+  const hoursSum=rows.reduce((acc,r)=>acc+(Number.isFinite(r.hours)?r.hours:0),0);
+  const hasHours=rows.some(r=>Number.isFinite(r.hours));
+  let summaryText;
+  if(stageKey){
+    const hoursText=hasHours?formatHours(hoursSum):'—';
+    summaryText=`${view.label}: ${total} • Активных: ${active} • Часов: ${hoursText}`;
+  }else{
+    const doneCount=total-active;
+    summaryText=`Всего заказов: ${total} • Готовых: ${doneCount}`;
+  }
+  if(stageStats){
+    stageStats.textContent=summaryText;
+  }
+  if(stats){
+    stats.textContent=summaryText;
+  }
+}
+
+function renderActiveView(){
+  const view=currentViewDef();
+  updateViewVisibility();
+  if(view.type==='kanban'){
+    if(stageStats) stageStats.textContent='—';
+    renderColumns();
+    renderCards();
+    updateLaneHeightVar();
+  }else{
+    renderStageView(view);
+  }
+}
+
 function normalizeStageProgress(value){
   if(typeof value==='number'){
     return Number.isFinite(value)?Math.max(0,Math.min(100,value)):0;
@@ -1591,6 +2027,63 @@ function normalizeStageProgress(value){
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>{if(!x) return false;return x.done||normalizeStageProgress(x.progress)>=100;}).length;return[d,s.length]}
 function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
+function mapCrmStageName(name){
+  const normalized=normalizeStageName(name);
+  if(!normalized) return null;
+  if(CRM_STAGE_DEFAULT_MAP.has(normalized)) return CRM_STAGE_DEFAULT_MAP.get(normalized);
+  for(const [stage,keywords] of CRM_STAGE_KEYWORDS.entries()){
+    if(keywords.some(keyword=>normalized.includes(keyword))){
+      return stage;
+    }
+  }
+  return null;
+}
+function parseStageHours(raw){
+  if(raw===null||raw===undefined||raw==='') return null;
+  if(typeof raw==='number'){return Number.isFinite(raw)?raw:null;}
+  const text=String(raw).trim();
+  if(!text) return null;
+  if(/^[-+]?\d{1,3}:\d{1,2}$/.test(text)){
+    const [h,m]=text.split(':').map(part=>Number(part.replace(/[^0-9-+]/g,'')));
+    if(Number.isFinite(h)&&Number.isFinite(m)){
+      return h+(m/60);
+    }
+  }
+  const cleaned=text.replace(/,/g,'.').replace(/[^0-9.+-]/g,'');
+  if(!cleaned) return null;
+  const parsed=Number(cleaned);
+  return Number.isFinite(parsed)?parsed:null;
+}
+function formatHours(value){
+  if(!Number.isFinite(value)) return '—';
+  if(Math.abs(value)<0.01) return '0';
+  const fraction=Math.abs(value)%1>0.001;
+  return value.toLocaleString('ru-RU',{minimumFractionDigits:fraction?1:0,maximumFractionDigits:1});
+}
+function resolveStageKey(stage){
+  if(!stage) return null;
+  if(stage.stageKey){
+    return normalizeStageName(stage.stageKey);
+  }
+  if(stage.stage){
+    const direct=normalizeStageName(stage.stage);
+    if(direct) return mapCrmStageName(direct)||direct;
+  }
+  return mapCrmStageName(stage.name);
+}
+function parseDateTs(value){
+  if(!value) return Number.NaN;
+  const d=new Date(value);
+  const ts=d.getTime();
+  return Number.isNaN(ts)?Number.NaN:ts;
+}
+function pickTimestamp(...values){
+  for(const value of values){
+    const ts=parseDateTs(value);
+    if(Number.isFinite(ts)) return ts;
+  }
+  return Number.NaN;
+}
 function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
 function updateSearchUI(){
@@ -1623,7 +2116,7 @@ function setOrderSearch(value,{render=true,persist=true}={}){
   }
   updateSearchUI();
   if(render){
-    renderCards();
+    renderActiveView();
   }
 }
 
@@ -1765,7 +2258,7 @@ function renderCards(){
 
         card.addEventListener('click',e=>{
           const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
-          if(act==='toggle-done'){e.stopPropagation();o.done=target.checked;if(o.done){(o.stages||[]).forEach(st=>{st.done=true;st.progress=100})}save('Изменение готовности заказа');renderCards();return}
+          if(act==='toggle-done'){e.stopPropagation();o.done=target.checked;if(o.done){(o.stages||[]).forEach(st=>{st.done=true;st.progress=100})}save('Изменение готовности заказа');renderActiveView();return}
           if(act==='move'){e.stopPropagation();showMoveMenu(target.getBoundingClientRect(),o);return}
           openOrder(o.id);
         });
@@ -1886,7 +2379,7 @@ function enableDnd(){
       if(!lane)return;
       const beforeId=computeDropReference(d,e.clientY);
       const changed=moveOrderToLane(draggingId,lane,beforeId);
-      if(changed){save('Перемещение заказа между статусами');renderCards();}
+      if(changed){save('Перемещение заказа между статусами');renderActiveView();}
     });
   });
 }
@@ -1895,7 +2388,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save('Перемещение заказа между статусами');renderCards();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save('Перемещение заказа между статусами');renderActiveView();closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -1984,7 +2477,7 @@ function openOrder(id=null){
     deleteOrderBtn.onclick=()=>{
       if(!confirm('Удалить этот заказ?'))return;
       handleOrderRemoval(o,b);
-      renderCards();
+      renderActiveView();
       orderDlg.close();
     };
   }else{
@@ -2196,7 +2689,7 @@ orderForm.addEventListener('submit',e=>{
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
     parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
-  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)} save(exist?'Обновление заказа':'Создание заказа'); renderCards(); orderDlg.close();
+  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)} save(exist?'Обновление заказа':'Создание заказа'); renderActiveView(); orderDlg.close();
 });
 
 /* Настройки доски */
@@ -2387,7 +2880,7 @@ splitForm.addEventListener('submit',e=>{
   child._origServiceTotal=childServiceInfo.hasValue?childServiceInfo.number:0;
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
-  b.orders.push(child); save('Создание подзаказа'); renderCards(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
+  b.orders.push(child); save('Создание подзаказа'); renderActiveView(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
 });
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 
@@ -2810,7 +3303,8 @@ document.addEventListener('click',e=>{
 });
 
 /* INIT */
-function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
+function renderAll(){renderBoardSelect();renderActiveView();}
+buildViewTabs();
 renderAll();
 
 document.querySelectorAll('[data-action="open-settings"]').forEach(link => {
