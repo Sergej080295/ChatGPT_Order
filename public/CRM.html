@@ -354,38 +354,156 @@
   }
 
   .crm-settings-group {
-    border: 1px solid var(--pc-border);
-    border-radius: var(--pc-radius-md);
-    padding: var(--pc-spacing-sm);
-    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    border-radius: var(--pc-radius-lg);
+    padding: var(--pc-spacing-md);
+    background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+    box-shadow: var(--pc-shadow-surface);
   }
 
   .crm-settings-group summary {
     font-weight: var(--pc-font-weight-semibold);
     cursor: pointer;
+    font-size: 14px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-group summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .crm-settings-group[open] summary {
+    margin-bottom: var(--pc-spacing-sm);
   }
 
   .crm-settings-group .crm-settings-fields {
     display: grid;
-    gap: var(--pc-spacing-sm);
-    margin-top: var(--pc-spacing-sm);
+    gap: var(--pc-spacing-md);
   }
 
-  .crm-settings-group label {
+  .crm-modal-section {
     display: grid;
-    gap: 4px;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-field {
+    display: grid;
+    gap: 6px;
+  }
+
+  .crm-field__label {
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-field__hint {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-settings-row {
+    display: grid;
+    gap: var(--pc-spacing-xs);
+  }
+
+  @media (min-width: 640px) {
+    .crm-settings-row {
+      grid-template-columns: 220px minmax(0, 1fr);
+      align-items: center;
+    }
+  }
+
+  .crm-settings-label {
     font-size: 13px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .crm-settings-control {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+  }
+
+  .crm-settings-summary {
+    font-size: 13px;
+    color: var(--pc-text-muted);
   }
 
   .crm-settings-inline {
-    display: flex;
+    display: grid;
     gap: var(--pc-spacing-sm);
+  }
+
+  @media (min-width: 640px) {
+    .crm-settings-inline {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: end;
+    }
+  }
+
+  .crm-chip-list {
+    display: flex;
     flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+    min-height: 44px;
     align-items: center;
   }
 
-  .crm-settings-inline > * {
-    flex: 1 1 140px;
+  .crm-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--pc-radius-pill);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 65%, transparent);
+    background: color-mix(in srgb, var(--pc-primary) 8%, transparent);
+    padding: 6px 12px;
+    font-size: 13px;
+    color: var(--pc-text);
+  }
+
+  .crm-chip button {
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+  }
+
+  .crm-chip button:hover {
+    background: color-mix(in srgb, var(--pc-text-muted) 26%, transparent);
+  }
+
+  .crm-chip-input-row {
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+  }
+
+  .crm-chip-input-row .pc-input {
+    flex: 1 1 200px;
+  }
+
+  .crm-chip-input {
+    display: grid;
+    gap: var(--pc-spacing-sm);
+    width: 100%;
   }
 
   .crm-toolbar__row {
@@ -1264,18 +1382,54 @@
   .btn-circle:active {
     transform: translateY(1px);
   }
-  dialog#orderDlg {
+
+  .pc-modal {
     border: none;
-    border-radius: var(--pc-radius-lg);
+    border-radius: var(--pc-radius-xl);
     background: var(--pc-surface);
     color: var(--pc-text);
     padding: 0;
-    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 28px 64px rgba(15, 23, 42, 0.32);
+    width: min(640px, 96vw);
+    overflow: hidden;
+  }
+
+  .pc-modal::backdrop {
+    background: color-mix(in srgb, var(--pc-backdrop) 92%, transparent);
+  }
+
+  .pc-modal .dlg-head {
+    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+  }
+
+  .pc-modal .dlg-body {
+    padding: var(--pc-spacing-lg);
+    display: grid;
+    gap: var(--pc-spacing-md);
+    max-height: 72vh;
+    overflow: auto;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--pc-surface) 98%, transparent) 0%, var(--pc-surface) 100%);
+  }
+
+  .pc-modal .dlg-footer {
+    padding: var(--pc-spacing-md) var(--pc-spacing-lg);
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    justify-content: flex-end;
+    background: color-mix(in srgb, var(--pc-surface) 94%, transparent);
+    border-top: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+  }
+
+  .pc-modal--sm {
+    width: min(440px, 92vw);
+  }
+
+  dialog#orderDlg {
     width: min(1120px, 96vw);
   }
 
   dialog#orderDlg::backdrop {
-    background: var(--pc-backdrop);
+    background: color-mix(in srgb, var(--pc-backdrop) 92%, transparent);
   }
 
   .dlg-head {
@@ -1934,39 +2088,74 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" onclick="closeBoard()" aria-label="Закрыть">✖</button>
   </div>
   <form id="boardForm" class="dlg-body" method="dialog">
-    <div class="rowc" style="flex-direction:column;align-items:stretch;gap:10px">
-      <div><label>Название доски</label><input name="name" required /></div>
-      <div><label>Схема статусов (по столбцам)</label><input name="lanes" placeholder="Не запланированное, Клиент, …, Отгружено" /></div>
+    <div class="crm-modal-section">
+      <label class="crm-field">
+        <span class="crm-field__label">Название доски</span>
+        <input name="name" class="pc-input" required />
+      </label>
+      <label class="crm-field">
+        <span class="crm-field__label">Схема статусов (по столбцам)</span>
+        <input name="lanes" class="pc-input" placeholder="Не запланированное, Клиент, …, Отгружено" />
+        <span class="crm-field__hint">Укажите состояния через запятую.</span>
+      </label>
     </div>
     <details class="crm-settings-group" open>
       <summary>Настройки CRM</summary>
       <div class="crm-settings-fields">
-        <label>
-          Состояния для раздела «Не учтённые»
-          <textarea name="unaccountedStatuses" rows="2" placeholder="Например: Черновик, Отложен"></textarea>
-        </label>
+        <div class="crm-settings-row">
+          <div class="crm-settings-label">Не учитывать состояния</div>
+          <div class="crm-settings-control">
+            <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
+            <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+          </div>
+        </div>
         <div class="crm-settings-inline">
-          <label>
-            Режим очистки корзины
-            <select name="trashRetentionMode">
+          <label class="crm-field">
+            <span class="crm-field__label">Режим очистки корзины</span>
+            <select name="trashRetentionMode" class="pc-select">
               <option value="days">По дням</option>
               <option value="count">По количеству</option>
             </select>
           </label>
-          <label>
-            Порог
-            <input name="trashRetentionValue" type="number" min="1" step="1" />
+          <label class="crm-field">
+            <span class="crm-field__label">Порог</span>
+            <input name="trashRetentionValue" class="pc-input" type="number" min="1" step="1" />
           </label>
         </div>
         <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
       </div>
     </details>
-    <div class="rowc" style="justify-content:flex-end;gap:8px;margin-top:8px">
+    <div class="crm-modal-actions">
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
+    <input type="hidden" name="unaccountedStatuses" id="crmUnaccountedHidden" />
     <input type="hidden" name="id" />
   </form>
+</dialog>
+
+<!-- Диалог настройки состояний -->
+<dialog id="crmUnaccountedSettingsDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong>Не учитывать состояния</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmUnaccountedEditorClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div class="crm-chip-list" id="crmUnaccountedList"></div>
+    <div class="crm-chip-input">
+      <label class="crm-field">
+        <span class="crm-field__label">Добавить состояние</span>
+        <div class="crm-chip-input-row">
+          <input id="crmUnaccountedNew" type="text" class="pc-input" placeholder="Например: Черновик" autocomplete="off" />
+          <button type="button" class="pc-btn pc-btn--primary" id="crmUnaccountedAdd">Добавить</button>
+        </div>
+      </label>
+      <div class="crm-field__hint muted">Новые состояния добавляются в конец списка. Дубликаты игнорируются автоматически.</div>
+    </div>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmUnaccountedEditorDone">Готово</button>
+  </div>
 </dialog>
 
 <!-- Диалог «Не учтённые» -->
@@ -3844,16 +4033,148 @@ orderForm.addEventListener('submit',e=>{
 
 /* Настройки доски */
 const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
+const crmUnaccountedHidden=$('#crmUnaccountedHidden');
+const crmUnaccountedSummary=$('#crmUnaccountedSummary');
+const crmUnaccountedEditBtn=$('#crmUnaccountedEdit');
+const crmUnaccountedDlg=$('#crmUnaccountedSettingsDlg');
+const crmUnaccountedList=$('#crmUnaccountedList');
+const crmUnaccountedInput=$('#crmUnaccountedNew');
+const crmUnaccountedAddBtn=$('#crmUnaccountedAdd');
+const crmUnaccountedEditorClose=$('#crmUnaccountedEditorClose');
+const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
+let crmUnaccountedDraft=[];
+
+function sanitizeCrmStatusList(list){
+  const sanitized=sanitizeCrmSettings({unaccountedStatuses:list}).unaccountedStatuses;
+  return Array.isArray(sanitized)?sanitized:[];
+}
+
+function updateCrmUnaccountedHidden(){
+  if(crmUnaccountedHidden){
+    crmUnaccountedHidden.value=crmUnaccountedDraft.join('\n');
+  }
+}
+
+function updateCrmUnaccountedSummary(){
+  if(!crmUnaccountedSummary) return;
+  if(!crmUnaccountedDraft.length){
+    crmUnaccountedSummary.textContent='Все состояния учитываются';
+    return;
+  }
+  if(crmUnaccountedDraft.length<=3){
+    crmUnaccountedSummary.textContent=`Не учитывать: ${crmUnaccountedDraft.join(', ')}`;
+    return;
+  }
+  crmUnaccountedSummary.textContent=`Не учитывать ${crmUnaccountedDraft.length} состояний`;
+}
+
+function renderCrmUnaccountedEditorList(){
+  if(!crmUnaccountedList) return;
+  crmUnaccountedList.innerHTML='';
+  if(!crmUnaccountedDraft.length){
+    const empty=document.createElement('div');
+    empty.className='crm-modal-empty';
+    empty.textContent='Все состояния учитываются';
+    crmUnaccountedList.appendChild(empty);
+    return;
+  }
+  crmUnaccountedDraft.forEach(status=>{
+    const chip=document.createElement('span');
+    chip.className='crm-chip';
+    chip.textContent=status;
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.setAttribute('aria-label',`Удалить состояние ${status}`);
+    btn.textContent='✕';
+    btn.addEventListener('click',()=>removeCrmUnaccountedStatus(status));
+    chip.appendChild(btn);
+    crmUnaccountedList.appendChild(chip);
+  });
+}
+
+function setCrmUnaccountedDraft(list,options={}){
+  crmUnaccountedDraft=sanitizeCrmStatusList(list);
+  updateCrmUnaccountedHidden();
+  updateCrmUnaccountedSummary();
+  if(options.render!==false){
+    renderCrmUnaccountedEditorList();
+  }
+}
+
+function addCrmUnaccountedStatus(raw){
+  const value=(raw||'').trim();
+  if(!value) return false;
+  const norm=normalizeStatusKey(value);
+  if(!norm) return false;
+  if(crmUnaccountedDraft.some(status=>normalizeStatusKey(status)===norm)) return false;
+  setCrmUnaccountedDraft([...crmUnaccountedDraft,value]);
+  return true;
+}
+
+function removeCrmUnaccountedStatus(raw){
+  const norm=normalizeStatusKey(raw);
+  if(!norm) return;
+  const next=crmUnaccountedDraft.filter(status=>normalizeStatusKey(status)!==norm);
+  setCrmUnaccountedDraft(next);
+}
+
+function openCrmUnaccountedEditor(){
+  if(!crmUnaccountedDlg) return;
+  renderCrmUnaccountedEditorList();
+  crmUnaccountedDlg.showModal();
+  if(crmUnaccountedInput){
+    crmUnaccountedInput.value='';
+    crmUnaccountedInput.focus();
+  }
+}
+
+function closeCrmUnaccountedEditor(){
+  crmUnaccountedDlg?.close();
+}
+
+if(crmUnaccountedEditBtn){
+  crmUnaccountedEditBtn.addEventListener('click',()=>openCrmUnaccountedEditor());
+}
+if(crmUnaccountedAddBtn){
+  crmUnaccountedAddBtn.addEventListener('click',()=>{
+    if(addCrmUnaccountedStatus(crmUnaccountedInput?.value)){
+      if(crmUnaccountedInput){
+        crmUnaccountedInput.value='';
+        crmUnaccountedInput.focus();
+      }
+    }
+  });
+}
+if(crmUnaccountedInput){
+  crmUnaccountedInput.addEventListener('keydown',event=>{
+    if(event.key==='Enter'){
+      event.preventDefault();
+      if(addCrmUnaccountedStatus(crmUnaccountedInput.value)){
+        crmUnaccountedInput.value='';
+      }
+    }
+  });
+}
+if(crmUnaccountedEditorClose){
+  crmUnaccountedEditorClose.addEventListener('click',()=>closeCrmUnaccountedEditor());
+}
+if(crmUnaccountedEditorDone){
+  crmUnaccountedEditorDone.addEventListener('click',()=>closeCrmUnaccountedEditor());
+}
+if(crmUnaccountedDlg){
+  crmUnaccountedDlg.addEventListener('cancel',()=>closeCrmUnaccountedEditor());
+}
+
 function openBoard(){
   const b=currentBoard();
   boardForm.name.value=b.name;
   boardForm.lanes.value=b.lanes.join(', ');
   boardForm.id.value=b.id;
-  const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses.join(', '):'';
-  boardForm.unaccountedStatuses.value=statuses;
+  const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
+  setCrmUnaccountedDraft(statuses,{render:false});
   const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
-  boardForm.trashRetentionValue.value=retention.value|| (retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
+  boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
   boardDlg.showModal();
 }
 function closeBoard(){boardDlg.close()}
@@ -3863,9 +4184,9 @@ boardForm.addEventListener('submit',e=>{
   const b=state.boards.find(x=>x.id===id);
   b.name=boardForm.name.value.trim()||'Доска';
   b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);
-  const statusesRaw=boardForm.unaccountedStatuses.value||'';
-  const statusesList=statusesRaw.split(/[\n,;]+/).map(s=>s.trim()).filter(Boolean);
-  state.settings.unaccountedStatuses=statusesList;
+  const sanitizedStatuses=sanitizeCrmStatusList(crmUnaccountedDraft);
+  state.settings.unaccountedStatuses=sanitizedStatuses;
+  setCrmUnaccountedDraft(sanitizedStatuses,{render:false});
   const modeRaw=boardForm.trashRetentionMode.value==='count'?'count':'days';
   let retentionValue=Number(boardForm.trashRetentionValue.value);
   if(!Number.isFinite(retentionValue)||retentionValue<=0){

@@ -771,8 +771,7 @@ body.overview-fs-active{overflow:hidden}
       <div class="planner-toolbar__process">
         <label for="process">Передел</label>
         <select id="process" class="pc-select">
-                <option value="orders" selected>Общий список заказов</option>
-                <option value="draw">Подготовка в работу</option>
+                <option value="draw" selected>Подготовка в работу</option>
                 <option value="proc">Закупка</option>
                 <option value="shear">Рубка</option>
                 <option value="laser">Лазер</option>
@@ -821,21 +820,10 @@ body.overview-fs-active{overflow:hidden}
   <!-- ЛЕВАЯ КОЛОНКА: Общий список заказов + Подетально -->
   <div class="card">
     <div class="row" style="justify-content:space-between;align-items:center">
-      <h3 id="ordersCardTitle">Общий список заказов</h3>
+      <h3 id="ordersCardTitle">Список заказов</h3>
     </div>
 
     <div class="orders-toolbar-row">
-      <div class="orders-overview-controls" id="ordersOverviewControls" style="display:none">
-        <label>Фильтр:
-          <select id="ordersOverviewFilter" class="pc-select">
-            <option value="current" selected>Текущие</option>
-            <option value="all">Все заказы</option>
-            <option value="done">Готовые</option>
-            <option value="late">С опозданием</option>
-          </select>
-        </label>
-      </div>
-
       <div class="orders-overview-controls" id="stageFilterControls" style="display:none">
         <label>Фильтр:
           <select id="stageOrdersFilter" class="pc-select">
@@ -861,79 +849,6 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
-    </div>
-
-    <div class="table-wrap" id="ordersOverviewPanel" style="display:none">
-      <table id="ordersOverviewTable">
-        <colgroup>
-          <col style="width:56px">
-          <col style="width:52px">
-          <col style="width:240px">
-          <col style="width:92px">
-          <col style="width:92px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:92px">
-          <col style="width:92px">
-          <col style="width:92px">
-        </colgroup>
-        <thead>
-          <tr>
-            <th>№</th>
-            <th></th>
-            <th>Заказ</th>
-            <th>Закупка</th>
-            <th>Рубка</th>
-            <th>Подготовка, ч</th>
-            <th>Лазер, ч</th>
-            <th>Гибка, ч</th>
-            <th>Сварка, ч</th>
-            <th>Мехобр., ч</th>
-            <th>Кооперация</th>
-            <th>Упаковка</th>
-            <th>Отгрузка</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <div class="orders-overview-totals" id="ordersOverviewTotals" style="display:none">
-      <table>
-        <colgroup>
-          <col style="width:56px">
-          <col style="width:52px">
-          <col style="width:240px">
-          <col style="width:92px">
-          <col style="width:92px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:150px">
-          <col style="width:92px">
-          <col style="width:92px">
-          <col style="width:92px">
-        </colgroup>
-        <tbody>
-          <tr>
-            <td class="orders-total" data-total="orders" colspan="3">Итого: 0</td>
-            <td data-total-stage="proc">Закупка: 0 шт</td>
-            <td data-total-stage="shear">Рубка: 0 шт</td>
-            <td data-total-stage="draw">Подготовка: 00:00:00</td>
-            <td data-total-stage="laser">Лазер: 00:00:00</td>
-            <td data-total-stage="bend">Гибка: 00:00:00</td>
-            <td data-total-stage="weld">Сварка: 00:00:00</td>
-            <td data-total-stage="mech">Мехобр.: 00:00:00</td>
-            <td data-total-stage="coop">Кооперация: 0 шт</td>
-            <td data-total-stage="pack">Упаковка: 0 шт</td>
-            <td data-total-stage="ship">Отгрузка: 0 шт</td>
-          </tr>
-        </tbody>
-      </table>
     </div>
 
     <div class="table-wrap" id="ordersScroller">
@@ -1110,7 +1025,6 @@ body.overview-fs-active{overflow:hidden}
       <div class="row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;width:100%">
         <label class="small">Стартовая страница:
           <select id="startStagePreference" class="pc-select">
-            <option value="orders">Общий список заказов</option>
             <option value="draw">Подготовка в работу</option>
             <option value="proc">Закупка</option>
             <option value="shear">Рубка</option>
@@ -1554,7 +1468,7 @@ let remotePreferenceRequested = true;
 let currentDataOrigin = 'unknown';
 let lastSerializedState = '';
 let remoteSubscriptionStop = null;
-let preferredStartStage = 'orders';
+let preferredStartStage = 'draw';
 let plannerMode = PLANNER_MODES.crm;
 let plannerStateReady = false;
 
@@ -7153,10 +7067,11 @@ function resolveProcessFallback(){
 }
 
 function normalizeStartStage(value){
-  if(typeof value !== 'string') return OVERVIEW_STAGE;
+  const fallback = resolveProcessFallback();
+  if(typeof value !== 'string') return fallback;
   const trimmed = value.trim();
-  if(trimmed === OVERVIEW_STAGE) return OVERVIEW_STAGE;
-  return STAGES.includes(trimmed) ? trimmed : OVERVIEW_STAGE;
+  if(trimmed === OVERVIEW_STAGE) return fallback;
+  return STAGES.includes(trimmed) ? trimmed : fallback;
 }
 
 function loadPreferredStartStage(){
@@ -16165,6 +16080,14 @@ function switchProcess(newProc){
   if(prev && prev !== newProc){
     if(tasks.length) rememberStageOrder(prev);
     if(userCanEdit()) persistNow(prev);
+  }
+
+  if(newProc === OVERVIEW_STAGE && !document.getElementById('ordersOverviewPanel')){
+    const fallback = resolveProcessFallback();
+    if(fallback && fallback !== OVERVIEW_STAGE){
+      switchProcess(fallback);
+      return;
+    }
   }
 
   if(isCrmMode()){
