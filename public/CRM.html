@@ -1143,7 +1143,7 @@
   .crm-stage-route-legend {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--pc-spacing-md);
+    gap: var(--pc-spacing-sm);
     font-size: 12px;
     color: var(--pc-text-muted);
     padding: 0 var(--pc-spacing-xs);
@@ -1152,7 +1152,7 @@
   .crm-stage-route-legend label {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     cursor: pointer;
     user-select: none;
   }
@@ -1174,11 +1174,41 @@
     outline-offset: 2px;
   }
 
-  .crm-stage-route-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 4px;
-    background: var(--pc-border);
+  .crm-route-legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: #fff;
+    background: color-mix(in srgb, var(--pc-primary) 60%, #111827);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+    white-space: nowrap;
+  }
+
+  .crm-route-legend-chip:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  }
+
+  .crm-route-legend-letter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 999px;
+    background: color-mix(in srgb, #ffffff 35%, transparent);
+    color: currentColor;
+    font-size: 11px;
+    font-weight: var(--pc-font-weight-bold);
+    text-transform: uppercase;
+  }
+
+  .crm-route-legend-name {
+    line-height: 1.2;
   }
 
   .crm-stage-route-detailed,
@@ -4852,6 +4882,7 @@ function buildCrmStageSchedule(stageKey, rows){
   const calendar=getCrmStageCalendar(stageKey);
   const exceptionMap=isHourless?new Map():calendar.exceptions;
   const reserveMap=isHourless?new Map():calendar.reserves;
+  const errors=[];
   const tasks=rows.map(row=>{
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
     const end=row.endDate instanceof Date?new Date(row.endDate):null;
@@ -4901,7 +4932,8 @@ function buildCrmStageSchedule(stageKey, rows){
           resLim,
           pubRem:pubCap,
           resRem:resLim,
-          excluded:Math.max(0, baseCapacity-capDay)
+          excluded:Math.max(0, baseCapacity-capDay),
+          reserveExclusive:resLim>1e-6
         }
       });
     }
@@ -4916,8 +4948,11 @@ function buildCrmStageSchedule(stageKey, rows){
     let remain=Math.max(0, task.rest);
     let cursor=task.start>minDate?new Date(task.start):new Date(minDate);
     const end=task.end>cursor?new Date(task.end):new Date(cursor);
+    let lastFailReason='';
+    let lastFailDate=null;
     while(cursor<=end && remain>1e-6){
       const day=ensureDay(cursor);
+      let progressed=false;
       if(task.useReserve && day.meta.resRem>1e-6){
         const take=Math.min(remain, day.meta.resRem);
         if(take>0){
@@ -4925,15 +4960,30 @@ function buildCrmStageSchedule(stageKey, rows){
           day.segments.push({ uid:task.id, hours:take, late:false, section:'reserve' });
           record.segments.push({ date:addDays(cursor,0), hours:take, late:false });
           remain-=take;
+          progressed=true;
+          lastFailReason='';
+          lastFailDate=null;
         }
       }
-      if(remain>1e-6 && day.meta.pubRem>1e-6){
-        const take=Math.min(remain, day.meta.pubRem);
-        if(take>0){
-          day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
-          day.segments.push({ uid:task.id, hours:take, late:false, section:'public' });
-          record.segments.push({ date:addDays(cursor,0), hours:take, late:false });
-          remain-=take;
+      if(remain>1e-6){
+        const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
+        if(publicAllowed && day.meta.pubRem>1e-6){
+          const take=Math.min(remain, day.meta.pubRem);
+          if(take>0){
+            day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
+            day.segments.push({ uid:task.id, hours:take, late:false, section:'public' });
+            record.segments.push({ date:addDays(cursor,0), hours:take, late:false });
+            remain-=take;
+            progressed=true;
+            lastFailReason='';
+            lastFailDate=null;
+          }
+        }else if(!publicAllowed && day.meta.pubRem>1e-6){
+          lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
+          lastFailDate=addDays(cursor,0);
+        }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
+          lastFailReason='Нет свободной ёмкости для выбранного интервала.';
+          lastFailDate=addDays(cursor,0);
         }
       }
       cursor=addDays(cursor,1);
@@ -4951,11 +5001,14 @@ function buildCrmStageSchedule(stageKey, rows){
           record.segments.push({ date:addDays(lateCursor,0), hours:take, late:true });
           remain-=take;
           progressed=true;
+          lastFailReason='';
+          lastFailDate=null;
         }
       }
       if(remain>1e-6){
+        const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
         const available=Math.max(0, day.meta.pubRem);
-        if(available>1e-6){
+        if(publicAllowed && available>1e-6){
           const take=Math.min(remain, available);
           if(take>0){
             day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
@@ -4963,7 +5016,15 @@ function buildCrmStageSchedule(stageKey, rows){
             record.segments.push({ date:addDays(lateCursor,0), hours:take, late:true });
             remain-=take;
             progressed=true;
+            lastFailReason='';
+            lastFailDate=null;
           }
+        }else if(!publicAllowed && available>1e-6){
+          lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
+          lastFailDate=addDays(lateCursor,0);
+        }else if(available<=1e-6 && day.meta.resRem<=1e-6){
+          lastFailReason='Нет свободной ёмкости: проверьте исключения и ограничения календаря.';
+          lastFailDate=addDays(lateCursor,0);
         }
       }
       if(progressed && lateCursor>maxDate){
@@ -4975,6 +5036,19 @@ function buildCrmStageSchedule(stageKey, rows){
         console.warn('CRM stage schedule: reached guard limit while allocating late workload', stageKey, task.id);
         break;
       }
+    }
+    if(remain>1e-6){
+      const stageLabel=CRM_STAGE_LABELS[stageKey]||'Передел';
+      const dateHint=lastFailDate?` (дата: ${fmtDateHuman(lastFailDate)})`:'';
+      const reasonText=lastFailReason||'Недостаточно доступных часов для распределения заказа.';
+      errors.push({
+        orderId:task.orderId,
+        stageKey,
+        label:task.label,
+        reason:reasonText,
+        date:lastFailDate?fmtDateISO(lastFailDate):'',
+        message:`Не удалось распределить заказ «${task.label}» в переделе «${stageLabel}»: ${reasonText}${dateHint}`
+      });
     }
   });
   for(let cursor=new Date(minDate); cursor<=maxDate; cursor=addDays(cursor,1)){
@@ -4988,7 +5062,8 @@ function buildCrmStageSchedule(stageKey, rows){
     perDay,
     perTask,
     minDate:addDays(minDate,0),
-    maxDate:addDays(maxDate,0)
+    maxDate:addDays(maxDate,0),
+    errors
   };
 }
 
@@ -6004,11 +6079,18 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
         updateCrmRouteStageVisibility(stage, checkbox.checked);
       });
       label.classList.toggle('is-off', !checkbox.checked);
-      const dot=document.createElement('span');
-      dot.className=['crm-stage-route-dot', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
+      const chip=document.createElement('span');
+      chip.className=['crm-route-legend-chip', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
+      const letter=document.createElement('span');
+      letter.className='crm-route-legend-letter';
+      letter.textContent=CRM_STAGE_LETTERS[stage]||stage.charAt(0).toUpperCase();
+      const name=document.createElement('span');
+      name.className='crm-route-legend-name';
+      name.textContent=CRM_STAGE_LABELS[stage]||stage;
+      chip.appendChild(letter);
+      chip.appendChild(name);
       label.appendChild(checkbox);
-      label.appendChild(dot);
-      label.append(document.createTextNode(` ${CRM_STAGE_LABELS[stage]||stage}`));
+      label.appendChild(chip);
       crmStageRouteLegend.appendChild(label);
     });
   }
@@ -6189,6 +6271,34 @@ function closeCrmStageRouteMini(){
 
 let crmStageScheduleCache=null;
 let crmStageRouteContext={ rows:[], stageKey:'draw', filter:'current' };
+let crmStageScheduleErrorSignature='';
+
+function notifyCrmStageScheduleErrors(schedule){
+  if(!schedule || !Array.isArray(schedule.errors)){
+    crmStageScheduleErrorSignature='';
+    return;
+  }
+  const errors=schedule.errors.filter(err=>err && err.message);
+  if(!errors.length){
+    crmStageScheduleErrorSignature='';
+    return;
+  }
+  const signature=errors
+    .map(err=>`${err.orderId||err.label||'order'}:${err.stageKey||'stage'}:${err.reason||''}:${err.date||''}`)
+    .join('|');
+  if(signature===crmStageScheduleErrorSignature){
+    return;
+  }
+  crmStageScheduleErrorSignature=signature;
+  errors.forEach(err=>{
+    showToast({
+      title:'Ошибка распределения',
+      message:err.message||'Не удалось распределить заказ в расписании передела.',
+      tone:'error',
+      autoClose:8000
+    });
+  });
+}
 
 function renderCrmStageViews(schedule, rows, stageKey, filterMode){
   const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
@@ -6203,6 +6313,7 @@ function renderCrmStageViews(schedule, rows, stageKey, filterMode){
     filter
   };
   renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter);
+  notifyCrmStageScheduleErrors(schedule||null);
   applyCrmStageSelectionHighlight();
 }
 
