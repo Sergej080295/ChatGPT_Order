@@ -1203,8 +1203,10 @@
     min-height: 0;
   }
 
-  .crm-stage-route-left-body {
+  .crm-stage-route-left-body,
+  .crm-stage-route-body {
     overflow: auto;
+    scrollbar-gutter: stable;
   }
 
   .crm-stage-route-right {
@@ -1251,10 +1253,6 @@
     color: color-mix(in srgb, #000 70%, var(--pc-text) 30%);
   }
 
-  .crm-stage-route-body {
-    overflow: auto;
-  }
-
   .crm-route-row {
     --crmRouteDayCount: 1;
     display: grid;
@@ -1286,7 +1284,7 @@
   }
 
   .crm-route-label {
-    height: var(--crmRouteRowHeight);
+    min-height: var(--crmRouteRowHeight);
     display: flex;
     align-items: center;
     gap: 6px;
@@ -1294,6 +1292,10 @@
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 65%, transparent);
     font-size: 13px;
     color: var(--pc-text);
+    box-sizing: border-box;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .crm-route-label--header {
@@ -5095,6 +5097,7 @@ function renderCrmRouteDetailed(dataset){
     const label=document.createElement('div');
     label.className='crm-route-label';
     label.textContent=`${index+1}. ${order.title||'Заказ'}`;
+    label.title=label.textContent;
     leftFragment.appendChild(label);
     const orderRow=createCrmRouteRow(dataset.days);
     bodyFragment.appendChild(orderRow);
@@ -5102,6 +5105,7 @@ function renderCrmRouteDetailed(dataset){
       const stageLabel=document.createElement('div');
       stageLabel.className='crm-route-label stage';
       stageLabel.textContent=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
+      stageLabel.title=stageLabel.textContent.slice(2);
       leftFragment.appendChild(stageLabel);
       const row=createCrmRouteRow(dataset.days);
       const seg=order.stages.get(stageKey);
@@ -5128,6 +5132,7 @@ function renderCrmRouteDetailed(dataset){
   crmStageRouteLeft.appendChild(leftFragment);
   crmStageRouteBody.appendChild(bodyFragment);
   bindCrmRouteScroll(crmStageRouteLeft, crmStageRouteBody, crmStageRouteHead);
+  syncCrmRouteRowHeights(crmStageRouteLeft, crmStageRouteBody);
 }
 
 function renderCrmRouteCompact(dataset){
@@ -5157,6 +5162,7 @@ function renderCrmRouteCompact(dataset){
     const label=document.createElement('div');
     label.className='crm-route-label';
     label.textContent=`${index+1}. ${order.title||'Заказ'}`;
+    label.title=label.textContent;
     leftFragment.appendChild(label);
     const row=createCrmRouteRow(dataset.days);
     const segments=order.stageOrder
@@ -5200,6 +5206,46 @@ function renderCrmRouteCompact(dataset){
   crmStageRouteLeftCompact.appendChild(leftFragment);
   crmStageRouteBodyCompact.appendChild(bodyFragment);
   bindCrmRouteScroll(crmStageRouteLeftCompact, crmStageRouteBodyCompact, crmStageRouteHeadCompact);
+  syncCrmRouteRowHeights(crmStageRouteLeftCompact, crmStageRouteBodyCompact);
+}
+
+function syncCrmRouteRowHeights(leftEl, bodyEl){
+  if(!leftEl || !bodyEl) return;
+  const leftRows=Array.from(leftEl.children||[]);
+  const bodyRows=Array.from(bodyEl.children||[]);
+  leftRows.forEach(row=>{
+    if(row && row.style){
+      row.style.minHeight='';
+      row.style.removeProperty('--crmRouteRowHeight');
+    }
+  });
+  bodyRows.forEach(row=>{
+    if(row && row.style){
+      row.style.minHeight='';
+      row.style.removeProperty('--crmRouteRowHeight');
+    }
+  });
+  const apply=()=>{
+    const newLeftRows=Array.from(leftEl.children||[]);
+    const newBodyRows=Array.from(bodyEl.children||[]);
+    const total=Math.min(newLeftRows.length, newBodyRows.length);
+    for(let i=0;i<total;i+=1){
+      const leftRow=newLeftRows[i];
+      const bodyRow=newBodyRows[i];
+      if(!leftRow || !bodyRow) continue;
+      const height=Math.max(leftRow.offsetHeight||0, bodyRow.offsetHeight||0);
+      if(height>0){
+        leftRow.style.minHeight=`${height}px`;
+        bodyRow.style.minHeight=`${height}px`;
+        bodyRow.style.setProperty('--crmRouteRowHeight', `${height}px`);
+      }
+    }
+  };
+  if(typeof requestAnimationFrame==='function'){
+    requestAnimationFrame(apply);
+  }else{
+    setTimeout(apply,0);
+  }
 }
 
 function bindCrmRouteScroll(leftEl, bodyEl, headEl){
