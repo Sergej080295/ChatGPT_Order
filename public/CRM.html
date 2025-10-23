@@ -3054,7 +3054,7 @@
 const KEY='mini_crm_v13c';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmtDate=d=>d.toISOString().slice(0,10);
+const fmtDateISO=d=>d.toISOString().slice(0,10);
 const formatDateHuman=iso=>{if(!iso)return'';const d=new Date(iso);return Number.isNaN(d.getTime())?iso:d.toLocaleDateString('ru-RU');};
 const applyStageDateHighlight=(input,orig,label)=>{if(!input)return;const original=(orig||'').trim();input.dataset.original=original;const current=input.value||'';if(original&&current&&original!==current){input.classList.add('crm-date-changed');input.title=`${label}: ${formatDateHuman(original)}`;}else{input.classList.remove('crm-date-changed');if(original){input.title=`${label}: ${formatDateHuman(original)}`;}else{input.removeAttribute('title');}}if(!original&&current){input.removeAttribute('title');}};
 const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1b3b68"/><path d="M32 4a28 28 0 0 1 0 56z" fill="#4da3ff"/></svg>`);
@@ -3065,6 +3065,8 @@ const DEFAULT_STAGES=['Подготовка в работу','Закупка','�
 const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
+const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
+const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
 const CRM_STAGE_IGNORE='__ignore__';
 const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, shiftOnProgress:true, cascadeReady:true };
 const CRM_DEFAULT_START_VIEW='kanban';
@@ -3073,6 +3075,8 @@ const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const crmStageFilterByKey=new Map();
+const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 function normalizeSearchTerm(value){
   if(value==null) return '';
@@ -3256,7 +3260,7 @@ function addDays(date, amount){
   return base;
 }
 
-function fmtDate(value){
+function fmtDateHuman(value){
   const date=value instanceof Date?new Date(value):new Date(value||Date.now());
   if(Number.isNaN(date.getTime())) return '';
   const day=String(date.getDate()).padStart(2,'0');
@@ -3650,8 +3654,6 @@ const CRM_STAGE_ALIASES={
   ship:['ship','отгрузка','отгруз','отгр']
 };
 const CRM_PROGRESS_STAGES=['draw','laser','bend','weld','mech'];
-const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
-const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
 const CRM_STAGE_LABELS={
@@ -3666,9 +3668,6 @@ const CRM_STAGE_LABELS={
   pack:'Упаковка',
   ship:'Отгрузка'
 };
-const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
-const crmStageFilterByKey=new Map();
-
 let crmStageRowsCache=[];
 let crmStageSelectionId=null;
 
@@ -4137,7 +4136,7 @@ function buildCrmStageSchedule(stageKey, rows){
   const perDay=new Map();
   const perTask=new Map();
   const ensureDay=(date)=>{
-    const ds=fmtDate(date);
+    const ds=fmtDateISO(date);
     if(!perDay.has(ds)){
       perDay.set(ds,{
         date:addDays(date,0),
@@ -4333,7 +4332,7 @@ function renderCrmStageGantt(rows, schedule){
     dow.className='crm-gantt-dow';
     dow.textContent=weekdayShort(day.date);
     const dateLabel=document.createElement('span');
-    dateLabel.textContent=fmtDate(day.date);
+    dateLabel.textContent=fmtDateHuman(day.date);
     headerCell.append(dow, dateLabel);
     if([0,6].includes(day.date.getDay())){
       headerCell.classList.add('weekend');
@@ -4358,7 +4357,7 @@ function renderCrmStageGantt(rows, schedule){
       if([0,6].includes(day.date.getDay())){
         cell.classList.add('weekend');
       }
-      const segs=record?record.segments.filter(seg=>fmtDate(seg.date)===key):[];
+      const segs=record?record.segments.filter(seg=>fmtDateISO(seg.date)===key):[];
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
       if(total>0){
         const fill=document.createElement('div');
@@ -5666,7 +5665,7 @@ const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'
 function handleDateTodayChange(){
   if(!dateTodayChk || !dateTodayChk.checked) return;
   if(!stagesTableBody) return;
-  const today=fmtDate(new Date());
+  const today=fmtDateISO(new Date());
   stagesTableBody.querySelectorAll('tr').forEach(tr=>{
     const s=tr.querySelector('[data-k="start"]');
     const e=tr.querySelector('[data-k="end"]');
