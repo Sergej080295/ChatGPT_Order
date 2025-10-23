@@ -4942,23 +4942,52 @@ function buildCrmStageSchedule(stageKey, rows){
   for(let cursor=new Date(minDate); cursor<=maxDate; cursor=addDays(cursor,1)){
     ensureDay(cursor);
   }
+  const reserveKeysSorted=isHourless?[]:Array.from(reserveMap.keys()).sort();
+  const hasReserveAhead=date=>{
+    if(isHourless || reserveKeysSorted.length===0){
+      return false;
+    }
+    const fromKey=fmtDateISO(date);
+    for(const [ds, day] of perDay.entries()){
+      if(ds>=fromKey && day?.meta?.resRem>1e-6){
+        return true;
+      }
+    }
+    for(const ds of reserveKeysSorted){
+      if(ds<fromKey) continue;
+      const existing=perDay.get(ds);
+      if(existing){
+        if(existing?.meta?.resRem>1e-6){
+          return true;
+        }
+        continue;
+      }
+      const capDay=isHourless?baseCapacity:(exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity);
+      const reserveWanted=Math.max(0, Number(reserveMap.get(ds))||0);
+      const resLim=Math.min(reserveWanted, capDay);
+      if(resLim>1e-6){
+        return true;
+      }
+    }
+    return false;
+  };
   tasks.forEach(task=>{
     const record={ segments:[] };
     perTask.set(task.id, record);
     let remain=Math.max(0, task.rest);
-    let cursor=task.start>minDate?new Date(task.start):new Date(minDate);
-    const end=task.end>cursor?new Date(task.end):new Date(cursor);
+    const startWindow=task.start>minDate?new Date(task.start):new Date(minDate);
+    const endWindow=task.end>startWindow?new Date(task.end):new Date(startWindow);
     let lastFailReason='';
     let lastFailDate=null;
-    while(cursor<=end && remain>1e-6){
-      const day=ensureDay(cursor);
+    const allocateDay=(dayCursor, late)=>{
+      const day=ensureDay(dayCursor);
       let progressed=false;
-      if(task.useReserve && day.meta.resRem>1e-6){
+      if(task.useReserve && remain>1e-6 && day.meta.resRem>1e-6){
         const take=Math.min(remain, day.meta.resRem);
         if(take>0){
           day.meta.resRem=Math.max(0, day.meta.resRem-take);
-          day.segments.push({ uid:task.id, hours:take, late:false, section:'reserve' });
-          record.segments.push({ date:addDays(cursor,0), hours:take, late:false });
+          day.segments.push({ uid:task.id, hours:take, late, section:'reserve' });
+          record.segments.push({ date:addDays(dayCursor,0), hours:take, late });
           remain-=take;
           progressed=true;
           lastFailReason='';
@@ -4967,12 +4996,16 @@ function buildCrmStageSchedule(stageKey, rows){
       }
       if(remain>1e-6){
         const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
+        const reserveAhead=task.useReserve?hasReserveAhead(addDays(dayCursor,1)):false;
+        if(task.useReserve && reserveAhead){
+          return progressed;
+        }
         if(publicAllowed && day.meta.pubRem>1e-6){
           const take=Math.min(remain, day.meta.pubRem);
           if(take>0){
             day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
-            day.segments.push({ uid:task.id, hours:take, late:false, section:'public' });
-            record.segments.push({ date:addDays(cursor,0), hours:take, late:false });
+            day.segments.push({ uid:task.id, hours:take, late, section:'public' });
+            record.segments.push({ date:addDays(dayCursor,0), hours:take, late });
             remain-=take;
             progressed=true;
             lastFailReason='';
@@ -4980,56 +5013,26 @@ function buildCrmStageSchedule(stageKey, rows){
           }
         }else if(!publicAllowed && day.meta.pubRem>1e-6){
           lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
-          lastFailDate=addDays(cursor,0);
+          lastFailDate=addDays(dayCursor,0);
         }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
-          lastFailReason='Нет свободной ёмкости для выбранного интервала.';
-          lastFailDate=addDays(cursor,0);
+          lastFailReason=late
+            ? 'Нет свободной ёмкости: проверьте исключения и ограничения календаря.'
+            : 'Нет свободной ёмкости для выбранного интервала.';
+          lastFailDate=addDays(dayCursor,0);
         }
       }
-      cursor=addDays(cursor,1);
+      if(progressed && dayCursor>maxDate){
+        maxDate=new Date(dayCursor);
+      }
+      return progressed;
+    };
+    for(let cursor=new Date(startWindow); cursor<=endWindow && remain>1e-6; cursor=addDays(cursor,1)){
+      allocateDay(cursor,false);
     }
-    let lateCursor=new Date(cursor);
+    let lateCursor=addDays(endWindow,1);
     let guard=0;
     while(remain>1e-6){
-      const day=ensureDay(lateCursor);
-      let progressed=false;
-      if(task.useReserve && day.meta.resRem>1e-6){
-        const take=Math.min(remain, day.meta.resRem);
-        if(take>0){
-          day.meta.resRem=Math.max(0, day.meta.resRem-take);
-          day.segments.push({ uid:task.id, hours:take, late:true, section:'reserve' });
-          record.segments.push({ date:addDays(lateCursor,0), hours:take, late:true });
-          remain-=take;
-          progressed=true;
-          lastFailReason='';
-          lastFailDate=null;
-        }
-      }
-      if(remain>1e-6){
-        const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
-        const available=Math.max(0, day.meta.pubRem);
-        if(publicAllowed && available>1e-6){
-          const take=Math.min(remain, available);
-          if(take>0){
-            day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
-            day.segments.push({ uid:task.id, hours:take, late:true, section:'public' });
-            record.segments.push({ date:addDays(lateCursor,0), hours:take, late:true });
-            remain-=take;
-            progressed=true;
-            lastFailReason='';
-            lastFailDate=null;
-          }
-        }else if(!publicAllowed && available>1e-6){
-          lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
-          lastFailDate=addDays(lateCursor,0);
-        }else if(available<=1e-6 && day.meta.resRem<=1e-6){
-          lastFailReason='Нет свободной ёмкости: проверьте исключения и ограничения календаря.';
-          lastFailDate=addDays(lateCursor,0);
-        }
-      }
-      if(progressed && lateCursor>maxDate){
-        maxDate=new Date(lateCursor);
-      }
+      const progressed=allocateDay(lateCursor,true);
       lateCursor=addDays(lateCursor,1);
       guard+=1;
       if(guard>730 && !progressed){
