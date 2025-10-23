@@ -441,6 +441,32 @@
     color: var(--pc-text-muted);
   }
 
+  .crm-settings-row--alert {
+    padding: var(--pc-spacing-sm, 12px);
+    border-radius: var(--pc-radius-lg, 16px);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-danger) 62%, transparent);
+    background: color-mix(in srgb, var(--pc-danger) 6%, transparent);
+  }
+
+  .crm-settings-row--alert .crm-settings-summary {
+    color: color-mix(in srgb, var(--pc-danger) 56%, var(--pc-text) 44%);
+  }
+
+  .crm-settings-label--alert {
+    color: var(--pc-danger);
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs, 8px);
+  }
+
+  .crm-settings-alert {
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--pc-danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-surface) 92%, transparent);
+  }
+
   .crm-settings-inline {
     display: grid;
     gap: var(--pc-spacing-sm);
@@ -1505,31 +1531,55 @@
     background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
   }
 
+  .pc-modal--route {
+    border-radius: var(--pc-radius-xl, 20px);
+    padding: var(--pc-spacing-lg, 24px);
+  }
+
+  .pc-modal--route .pc-modal-actions {
+    justify-content: flex-end;
+    margin-top: var(--pc-spacing-md, 16px);
+  }
+
   .crm-route-mini {
     max-width: 640px;
     max-height: 60vh;
     overflow: auto;
+    padding: var(--pc-spacing-md, 16px);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--pc-surface) 92%, transparent) 0%, var(--pc-surface) 100%);
+    border-radius: var(--pc-radius-lg, 16px);
+    box-shadow: var(--pc-shadow-lg, 0 18px 44px rgba(15, 23, 42, 0.18));
   }
 
   .crm-route-mini table {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
+    border-radius: var(--pc-radius-md, 12px);
+    overflow: hidden;
+    background: var(--pc-surface, #ffffff);
   }
 
   .crm-route-mini thead th {
-    text-align: left;
-    padding: 6px;
+    text-align: center;
+    padding: 10px 8px;
     border-bottom: 1px solid var(--pc-border);
     font-weight: var(--pc-font-weight-semibold);
     color: var(--pc-text-muted);
     text-transform: uppercase;
     letter-spacing: 0.4px;
+    background: color-mix(in srgb, var(--pc-border) 16%, transparent);
   }
 
   .crm-route-mini tbody td {
-    padding: 6px;
+    padding: 10px 8px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 32%, transparent);
+    text-align: center;
+  }
+
+  .crm-route-mini tbody td:first-child {
+    text-align: left;
+    font-weight: var(--pc-font-weight-medium, 600);
   }
 
   .crm-route-mini tbody tr:last-child td {
@@ -1539,14 +1589,17 @@
   .crm-route-mini-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
   }
 
   .crm-route-mini-summary {
     font-size: 12px;
     color: var(--pc-text);
     display: grid;
-    gap: 4px;
+    gap: 6px;
+    background: color-mix(in srgb, var(--pc-border) 10%, transparent);
+    border-radius: var(--pc-radius-md, 12px);
+    padding: 10px 12px;
   }
 
   #crmStageTable tbody tr.crm-stage-row--selected {
@@ -1623,6 +1676,16 @@
 
   .crm-stage-late .crm-stage-row-status {
     color: var(--pc-danger);
+  }
+
+  .status-early {
+    color: var(--pc-success, #2e7d32);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .status-today {
+    color: var(--pc-warning, #f59f00);
+    font-weight: var(--pc-font-weight-semibold);
   }
 
   .status-done {
@@ -3221,7 +3284,7 @@
 <div id="toastLayer" class="pc-toast-layer" aria-live="polite"></div>
 
 
-<dialog id="crmStageRouteDlg" class="pc-modal">
+<dialog id="crmStageRouteDlg" class="pc-modal pc-modal--route">
   <h3 class="pc-modal__title">Маршрут заказа</h3>
   <div id="crmStageRouteDlgContent" class="crm-route-mini"></div>
   <div class="pc-modal-actions">
@@ -4562,6 +4625,20 @@ function formatStageHoursDisplay(base,total,extra){
     return `${toLabel(base)} / ${toLabel(total)}`;
   }
   return toLabel(base);
+}
+
+function formatStageHoursTotal(value){
+  const num=Math.max(0, Math.round((Number(value)||0)*100)/100);
+  return num.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ч';
+}
+
+function formatDayWord(value){
+  const abs=Math.abs(Number(value)||0)%100;
+  const mod10=abs%10;
+  if(abs>=11 && abs<=19) return 'дней';
+  if(mod10===1) return 'день';
+  if(mod10>=2 && mod10<=4) return 'дня';
+  return 'дней';
 }
 
 function formatStageRestLabel(rest){
@@ -6206,10 +6283,12 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
+    const isHourless=CRM_NOHOUR_STAGES.has(key);
+    const hoursLabel=isHourless?'—':formatStageHoursTotal(totalHours);
     const cells=[
       crmStageIconLabel(key, stage?.name||key),
       formatStagePeriod(startRaw, endRaw),
-      formatStageHoursDisplay(baseHours,totalHours,extraHours),
+      hoursLabel,
       stage?`${progress}%`:'—',
       statusLabel
     ];
@@ -6226,7 +6305,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   wrapper.appendChild(table);
   const fragments=[];
   const hasHours=totalBase>0||totalExtra>0;
-  const totalHoursLabel=hasHours?formatStageHoursDisplay(totalBase, totalBase+totalExtra, totalExtra):'—';
+  const totalHoursLabel=hasHours?formatStageHoursTotal(totalBase+totalExtra):'—';
   fragments.push(`<div><strong>Всего по заказу:</strong> ${totalHoursLabel}</div>`);
   fragments.push(`<div>Этапов: ${orderedKeys.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedKeys.length-doneCount)}</div>`);
   if(lateCount>0){
@@ -6721,6 +6800,63 @@ function renderOrdersTable(){
   updateCrmAuxButtons();
 }
 
+function computeCrmStageStatus(entry,schedule){
+  if(!entry) return { label:'—', className:'', title:'' };
+  if(entry.done){
+    return { label:'Готово', className:'status-done', title:'Этап завершён' };
+  }
+  const plannedEnd=entry.endDate instanceof Date?entry.endDate:null;
+  let lastDate=null;
+  if(schedule && schedule.perTask instanceof Map && entry.identity){
+    const record=schedule.perTask.get(entry.identity);
+    if(record && Array.isArray(record.segments)){
+      record.segments.forEach(segment=>{
+        const segDate=segment?.date instanceof Date
+          ? segment.date
+          : (segment?.date?new Date(segment.date):null);
+        if(segDate && !Number.isNaN(segDate.getTime())){
+          if(!lastDate || segDate>lastDate){
+            lastDate=new Date(segDate);
+          }
+        }
+      });
+    }
+  }
+  if(!lastDate && plannedEnd){
+    lastDate=new Date(plannedEnd);
+  }
+  if(!plannedEnd){
+    if(lastDate){
+      const label=formatStageDateLabel(lastDate);
+      return { label, className:'', title:`Распределено на ${label}` };
+    }
+    return { label:'—', className:'', title:'' };
+  }
+  if(!lastDate){
+    const today=today0();
+    const diffMs=today.getTime()-plannedEnd.getTime();
+    if(diffMs===0){
+      return { label:'0дн', className:'status-today', title:'В срок' };
+    }
+    const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
+    const word=formatDayWord(days);
+    if(diffMs>0){
+      return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+    }
+    return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+  }
+  const diffMs=lastDate.getTime()-plannedEnd.getTime();
+  if(diffMs===0){
+    return { label:'0дн', className:'status-today', title:'В срок' };
+  }
+  const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
+  const word=formatDayWord(days);
+  if(diffMs>0){
+    return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+  }
+  return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+}
+
 function renderCrmStageTable(){
   if(!crmStageTableBody) return;
   const stageKey=crmStageSelect?.value || 'draw';
@@ -6743,6 +6879,7 @@ function renderCrmStageTable(){
     if(crmStageEmpty){
       crmStageEmpty.hidden=false;
     }
+    crmStageScheduleCache=null;
     updateCrmStageTotals(totals);
     renderCrmStageOverdue([]);
     renderCrmStageViews(null, [], stageKey, activeFilter);
@@ -6753,6 +6890,8 @@ function renderCrmStageTable(){
   if(crmStageEmpty){
     crmStageEmpty.hidden=true;
   }
+  const schedule=buildCrmStageSchedule(stageKey, rows);
+  crmStageScheduleCache=schedule||null;
   rows.forEach(entry=>{
     const tr=document.createElement('tr');
     tr.dataset.identity=entry.identity;
@@ -6762,14 +6901,17 @@ function renderCrmStageTable(){
     if(Number.isInteger(entry.orderIndex)) tr.dataset.orderIndex=String(entry.orderIndex);
     if(entry.done) tr.classList.add('crm-stage-done');
     if(entry.isLate) tr.classList.add('crm-stage-late');
-    const statusClass=entry.done?'status-done':entry.isLate?'status-late':'';
-    const statusCellClass=['crm-stage-row-status', statusClass].filter(Boolean).join(' ');
+    const statusInfo=computeCrmStageStatus(entry, schedule);
+    entry.statusLabel=statusInfo.label;
+    entry.statusClass=statusInfo.className;
+    entry.statusTitle=statusInfo.title;
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
     const reserveDisabled=isHourless?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
+    const statusCellClass=['crm-stage-row-status', statusInfo.className].filter(Boolean).join(' ');
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
@@ -6781,7 +6923,7 @@ function renderCrmStageTable(){
       <td>${escapeHtml(formatStageDateLabel(entry.startRaw))}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.endRaw))}</td>
       <td>${escapeHtml(entry.stateLabel||'—')}</td>
-      <td class="${statusCellClass}">${escapeHtml(entry.statusLabel||'—')}</td>
+      <td class="${statusCellClass}">${escapeHtml(statusInfo.label||'—')}</td>
       <td><input type="checkbox" class="crm-stage-reserve" ${reserveChecked} ${reserveDisabled}></td>
       <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked}></td>
       <td><button class="crm-stage-delete" type="button" title="Удалить из передела">×</button></td>
@@ -6834,9 +6976,16 @@ function renderCrmStageTable(){
         openOrder(entry.order.id);
       }
     });
+    const statusCell=tr.querySelector('.crm-stage-row-status');
+    if(statusCell){
+      if(statusInfo.title){
+        statusCell.title=statusInfo.title;
+      }else{
+        statusCell.removeAttribute('title');
+      }
+    }
     crmStageTableBody.appendChild(tr);
   });
-  const schedule=buildCrmStageSchedule(stageKey, rows);
   ensureCrmStageSelection(rows);
   applyCrmStageSelectionHighlight();
   updateCrmStageTotals(totals);
@@ -8168,6 +8317,7 @@ function renderCrmMappingSettingsUI(){
   row.appendChild(label);
   row.appendChild(control);
   crmMappingContainer.appendChild(row);
+  updateCrmMappingAlertState();
 }
 
 if(crmMappingContainer){
@@ -8184,7 +8334,32 @@ if(crmMappingContainer){
         ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
         : 'Настройте сопоставление названий стадий CRM с переделами.';
     }
+    updateCrmMappingAlertState();
   });
+}
+
+function updateCrmMappingAlertState(){
+  if(!crmMappingContainer) return;
+  const wrapper=crmMappingContainer.closest('.crm-settings-row');
+  if(!wrapper) return;
+  const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
+  wrapper.classList.toggle('crm-settings-row--alert', hasUnmapped);
+  const label=wrapper.querySelector('.crm-settings-label');
+  if(label){
+    label.classList.toggle('crm-settings-label--alert', hasUnmapped);
+    let badge=label.querySelector('.crm-settings-alert');
+    if(hasUnmapped){
+      if(!badge){
+        badge=document.createElement('span');
+        badge.className='crm-settings-alert';
+        badge.title='Есть несопоставленные стадии';
+        badge.setAttribute('aria-hidden','true');
+        label.appendChild(badge);
+      }
+    }else if(badge){
+      badge.remove();
+    }
+  }
 }
 
 function sanitizeCrmStatusList(list){
