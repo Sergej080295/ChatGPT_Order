@@ -320,7 +320,8 @@
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
     min-height: 0;
   }
 
@@ -2721,7 +2722,7 @@
         <button id="crmStageBackBtn" class="pc-btn pc-btn--ghost" type="button" hidden>Канбан</button>
       </div>
     </div>
-    <div class="crm-stage-main">
+    <div class="crm-stage-layout">
       <section class="crm-stage-card">
         <div class="crm-stage-table-wrap" id="crmStageTableWrap">
           <table id="crmStageTable">
@@ -3054,7 +3055,14 @@
 const KEY='mini_crm_v13c';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmtDateISO=d=>d.toISOString().slice(0,10);
+const fmtDateISO=d=>{
+  const date=d instanceof Date?new Date(d):new Date(d||Date.now());
+  if(Number.isNaN(date.getTime())) return '';
+  const year=date.getFullYear();
+  const month=String(date.getMonth()+1).padStart(2,'0');
+  const day=String(date.getDate()).padStart(2,'0');
+  return `${year}-${month}-${day}`;
+};
 const formatDateHuman=iso=>{if(!iso)return'';const d=new Date(iso);return Number.isNaN(d.getTime())?iso:d.toLocaleDateString('ru-RU');};
 const applyStageDateHighlight=(input,orig,label)=>{if(!input)return;const original=(orig||'').trim();input.dataset.original=original;const current=input.value||'';if(original&&current&&original!==current){input.classList.add('crm-date-changed');input.title=`${label}: ${formatDateHuman(original)}`;}else{input.classList.remove('crm-date-changed');if(original){input.title=`${label}: ${formatDateHuman(original)}`;}else{input.removeAttribute('title');}}if(!original&&current){input.removeAttribute('title');}};
 const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#1b3b68"/><path d="M32 4a28 28 0 0 1 0 56z" fill="#4da3ff"/></svg>`);
@@ -3261,8 +3269,8 @@ function addDays(date, amount){
 }
 
 function fmtDateHuman(value){
-  const date=value instanceof Date?new Date(value):new Date(value||Date.now());
-  if(Number.isNaN(date.getTime())) return '';
+  const date=normalizeDate(value||Date.now());
+  if(!date) return '';
   const day=String(date.getDate()).padStart(2,'0');
   const month=String(date.getMonth()+1).padStart(2,'0');
   const year=date.getFullYear();
@@ -3816,8 +3824,28 @@ function formatStageRestLabel(rest){
 
 function normalizeDate(value){
   if(!value) return null;
+  if(value instanceof Date){
+    const clone=new Date(value);
+    if(Number.isNaN(clone.getTime())) return null;
+    clone.setHours(0,0,0,0);
+    return clone;
+  }
+  if(typeof value==='string'){
+    const trimmed=value.trim();
+    if(!trimmed) return null;
+    const isoMatch=/^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if(isoMatch){
+      const year=Number(isoMatch[1]);
+      const month=Number(isoMatch[2])-1;
+      const day=Number(isoMatch[3]);
+      const date=new Date(year,month,day,0,0,0,0);
+      if(Number.isNaN(date.getTime())) return null;
+      return date;
+    }
+  }
   const date=new Date(value);
   if(Number.isNaN(date.getTime())) return null;
+  date.setHours(0,0,0,0);
   return date;
 }
 
@@ -4133,6 +4161,7 @@ function buildCrmStageSchedule(stageKey, rows){
   let maxDate=new Date(tasks[0].end);
   const today=today0();
   if(minDate<today) minDate=today;
+  if(maxDate<minDate) maxDate=new Date(minDate);
   const perDay=new Map();
   const perTask=new Map();
   const ensureDay=(date)=>{
@@ -4225,8 +4254,10 @@ function renderCrmStageStack(schedule){
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
     return;
   }
+  const today=today0();
   const entries=Array.from(schedule.perDay.entries())
     .map(([ds,day])=>({ key:ds, day }))
+    .filter(entry=>entry.day.date>=today)
     .sort((a,b)=>a.day.date-b.day.date);
   if(!entries.length){
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
@@ -4302,8 +4333,10 @@ function renderCrmStageGantt(rows, schedule){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
+  const today=today0();
   const dayEntries=Array.from(schedule.perDay.entries())
     .map(([ds,day])=>({ key:ds, day }))
+    .filter(entry=>entry.day.date>=today)
     .sort((a,b)=>a.day.date-b.day.date);
   if(!dayEntries.length){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
