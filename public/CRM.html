@@ -879,6 +879,15 @@
     gap: 8px;
   }
 
+  .crm-stage-stack-col[data-today="1"] {
+    border-color: color-mix(in srgb, var(--pc-primary) 60%, var(--pc-border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-primary) 35%, transparent);
+  }
+
+  .crm-stage-stack-col[data-today="1"] .crm-stage-stack-title {
+    color: var(--pc-primary);
+  }
+
   .crm-stage-stack-title {
     font-weight: var(--pc-font-weight-semibold);
     text-align: center;
@@ -1052,6 +1061,12 @@
     gap: 4px;
   }
 
+  .crm-stage-gantt-header-row span.today {
+    background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
+    color: var(--pc-primary);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
   .crm-stage-gantt-header-row .crm-gantt-dow {
     font-size: 11px;
     color: var(--pc-text-muted);
@@ -1082,6 +1097,10 @@
 
   .crm-stage-gantt-cell.weekend {
     background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+  }
+
+  .crm-stage-gantt-cell.today {
+    background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
   }
 
   .crm-stage-gantt-fill {
@@ -3296,6 +3315,23 @@ function hashColor(key){
   return `hsl(${hue}deg 65% 75%)`;
 }
 
+function fitCrmSliceText(el,label,hours,pct){
+  if(!el) return;
+  const baseLabel=String(label??'');
+  const safeHours=Number(hours||0);
+  const pctValue=Math.max(0,Math.min(100,Number(pct)||0));
+  const suffix=` — ${safeHours.toFixed(1)}ч (${pctValue.toFixed(0)}%)`;
+  const fits=()=>el.scrollWidth<=el.clientWidth && el.scrollHeight<=el.clientHeight;
+  el.textContent=baseLabel+suffix;
+  if(fits()) return;
+  for(let i=baseLabel.length;i>0;i-=1){
+    const candidate=`${baseLabel.slice(0,i)}…${suffix}`;
+    el.textContent=candidate;
+    if(fits()) return;
+  }
+  el.textContent=suffix.trimStart();
+}
+
 const WEEKDAY_SHORT=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
 
 function weekdayShort(date){
@@ -4255,6 +4291,7 @@ function renderCrmStageStack(schedule){
     return;
   }
   const today=today0();
+  const todayKey=fmtDateISO(today);
   const entries=Array.from(schedule.perDay.entries())
     .map(([ds,day])=>({ key:ds, day }))
     .filter(entry=>entry.day.date>=today)
@@ -4266,15 +4303,20 @@ function renderCrmStageStack(schedule){
   if(crmStageStackEmpty) crmStageStackEmpty.hidden=true;
   const totalBy=new Map(schedule.tasks.map(task=>[task.id, Math.max(task.total, schedule.isHourless?1:0)]));
   const cumulative=new Map(schedule.tasks.map(task=>[task.id,0]));
+  const labelMap=new Map(schedule.tasks.map(task=>[task.id, task.label||'Заказ']));
   const hasReserve=entries.some(entry=>entry.day.segments.some(seg=>seg.section==='reserve'));
   entries.forEach(({ key, day })=>{
     const col=document.createElement('div');
     col.className='crm-stage-stack-col';
+    if(key===todayKey){
+      col.dataset.today='1';
+    }
     const meta=day.meta||{ capDay:schedule.baseCapacity, pubCap:schedule.baseCapacity };
     const title=document.createElement('div');
     title.className='crm-stage-stack-title';
     const excluded=Math.max(0, Number(meta.capDay||0)-Number(meta.pubCap||0));
-    title.textContent=excluded>0?`${key}  ·  Исключение: −${excluded.toFixed(1)}ч`:key;
+    const humanDate=fmtDateHuman(day.date);
+    title.textContent=excluded>0?`${humanDate}  ·  Исключение: −${excluded.toFixed(1)}ч`:humanDate;
     col.appendChild(title);
 
     const renderSection=(sectionName, segments, capacity)=>{
@@ -4297,7 +4339,10 @@ function renderCrmStageStack(schedule){
         slice.style.height=`${Math.min(100,height)}%`;
         slice.style.background=hashColor(seg.uid);
         const pct=taskTotal>0?Math.min(100,(next/taskTotal)*100):0;
-        slice.textContent=`${schedule.tasks.find(t=>t.id===seg.uid)?.label||'Заказ'} — ${seg.hours.toFixed(1)}ч (${pct.toFixed(0)}%)`;
+        const sliceLabel=labelMap.get(seg.uid)||'Заказ';
+        slice.title=`${sliceLabel} — ${seg.hours.toFixed(1)}ч (${pct.toFixed(0)}%)`;
+        fitCrmSliceText(slice, sliceLabel, seg.hours, pct);
+        requestAnimationFrame(()=>fitCrmSliceText(slice, sliceLabel, seg.hours, pct));
         stack.appendChild(slice);
       });
       const free=Math.max(0, capacity-used);
@@ -4305,7 +4350,9 @@ function renderCrmStageStack(schedule){
         const freeSlice=document.createElement('div');
         freeSlice.className='crm-stage-slice free';
         freeSlice.style.height=`${Math.min(100,Math.max(6,(free/Math.max(capacity,0.0001))*100))}%`;
-        freeSlice.textContent=`Свободно — ${free.toFixed(1)}ч`;
+        const freeLabel=`Свободно — ${free.toFixed(1)}ч`;
+        freeSlice.textContent=freeLabel;
+        freeSlice.title=freeLabel;
         stack.appendChild(freeSlice);
       }
       section.appendChild(stack);
@@ -4334,6 +4381,7 @@ function renderCrmStageGantt(rows, schedule){
     return;
   }
   const today=today0();
+  const todayKey=fmtDateISO(today);
   const dayEntries=Array.from(schedule.perDay.entries())
     .map(([ds,day])=>({ key:ds, day }))
     .filter(entry=>entry.day.date>=today)
@@ -4359,7 +4407,7 @@ function renderCrmStageGantt(rows, schedule){
     return;
   }
   if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=true;
-  filteredDays.forEach(({ day })=>{
+  filteredDays.forEach(({ key, day })=>{
     const headerCell=document.createElement('span');
     const dow=document.createElement('span');
     dow.className='crm-gantt-dow';
@@ -4369,6 +4417,9 @@ function renderCrmStageGantt(rows, schedule){
     headerCell.append(dow, dateLabel);
     if([0,6].includes(day.date.getDay())){
       headerCell.classList.add('weekend');
+    }
+    if(key===todayKey){
+      headerCell.classList.add('today');
     }
     crmStageGanttHeader.appendChild(headerCell);
   });
@@ -4390,6 +4441,9 @@ function renderCrmStageGantt(rows, schedule){
       if([0,6].includes(day.date.getDay())){
         cell.classList.add('weekend');
       }
+      if(key===todayKey){
+        cell.classList.add('today');
+      }
       const segs=record?record.segments.filter(seg=>fmtDateISO(seg.date)===key):[];
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
       if(total>0){
@@ -4409,19 +4463,35 @@ function renderCrmStageGantt(rows, schedule){
   crmStageGanttBody.appendChild(fragmentBody);
   let syncLock=false;
   const headerEl=crmStageGanttHeader;
-  crmStageGanttBody.addEventListener('scroll',()=>{
-    if(syncLock) return;
-    syncLock=true;
-    crmStageGanttLeft.scrollTop=crmStageGanttBody.scrollTop;
-    headerEl.style.transform=`translateX(${-crmStageGanttBody.scrollLeft}px)`;
-    syncLock=false;
-  },{passive:true});
-  crmStageGanttLeft.addEventListener('scroll',()=>{
-    if(syncLock) return;
-    syncLock=true;
-    crmStageGanttBody.scrollTop=crmStageGanttLeft.scrollTop;
-    syncLock=false;
-  },{passive:true});
+  if(crmStageGanttBody){
+    crmStageGanttBody.onscroll=null;
+  }
+  if(crmStageGanttLeft){
+    crmStageGanttLeft.onscroll=null;
+  }
+  if(crmStageGanttBody){
+    crmStageGanttBody.onscroll=()=>{
+      if(syncLock) return;
+      syncLock=true;
+      if(crmStageGanttLeft){
+        crmStageGanttLeft.scrollTop=crmStageGanttBody.scrollTop;
+      }
+      if(headerEl){
+        headerEl.style.transform=`translateX(${-crmStageGanttBody.scrollLeft}px)`;
+      }
+      syncLock=false;
+    };
+  }
+  if(crmStageGanttLeft){
+    crmStageGanttLeft.onscroll=()=>{
+      if(syncLock) return;
+      syncLock=true;
+      if(crmStageGanttBody){
+        crmStageGanttBody.scrollTop=crmStageGanttLeft.scrollTop;
+      }
+      syncLock=false;
+    };
+  }
 }
 
 function getCurrentStageSelection(){
