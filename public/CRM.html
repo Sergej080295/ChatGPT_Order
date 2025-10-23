@@ -743,10 +743,9 @@
     display: none;
     flex-direction: column;
     gap: var(--pc-spacing-md);
-    height: 100%;
-    flex: 1 1 auto;
+    flex: 1 0 auto;
     min-height: 0;
-    overflow: auto;
+    overflow: visible;
     padding-bottom: var(--pc-spacing-lg);
   }
 
@@ -961,10 +960,15 @@
   }
 
   .crm-stage-secondary {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: var(--pc-spacing-md);
-    align-items: start;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .crm-stage-secondary > * {
+    flex: 0 0 auto;
   }
 
   .crm-stage-gantt-card,
@@ -1125,59 +1129,265 @@
   }
 
   .crm-stage-route {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
-    overflow: hidden;
+    background: var(--pc-surface);
+    padding: var(--pc-spacing-sm);
   }
 
-  .crm-stage-route table {
-    width: 100%;
-    border-collapse: collapse;
+  .crm-stage-route-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-md);
+    font-size: 12px;
+    color: var(--pc-text-muted);
+    padding: 0 var(--pc-spacing-xs);
+  }
+
+  .crm-stage-route-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .crm-stage-route-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 4px;
+    background: var(--pc-border);
+  }
+
+  .crm-stage-route-detailed,
+  .crm-stage-route-compact {
+    --crmRouteOrderWidth: 260px;
+    --crmRouteDayWidth: 68px;
+    --crmRouteRowHeight: 32px;
+    display: grid;
+    grid-template-columns: var(--crmRouteOrderWidth) 1fr;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 60%, transparent);
+    border-radius: var(--pc-radius-md);
+    overflow: hidden;
+    background: var(--pc-surface);
+  }
+
+  .crm-stage-route-left {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--pc-surface);
+    border-right: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    min-height: 0;
+  }
+
+  .crm-stage-route-left-body {
+    overflow: auto;
+  }
+
+  .crm-stage-route-right {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .crm-stage-route-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--pc-surface);
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+  }
+
+  .crm-route-head-row {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: var(--crmRouteDayWidth);
+  }
+
+  .crm-route-head-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px;
+    font-size: 12px;
+    color: var(--pc-text);
+    border-left: 1px solid color-mix(in srgb, var(--pc-border) 55%, transparent);
+    min-height: 34px;
+    background: var(--pc-surface);
+  }
+
+  .crm-route-head-cell.weekend:not(.today) {
+    background: color-mix(in srgb, var(--pc-border) 22%, transparent);
+  }
+
+  .crm-route-head-cell.today {
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 18%, transparent);
+  }
+
+  .crm-stage-route-body {
+    overflow: auto;
+  }
+
+  .crm-route-row {
+    --crmRouteDayCount: 1;
+    display: grid;
+    grid-template-columns: repeat(var(--crmRouteDayCount), var(--crmRouteDayWidth));
+    position: relative;
+    min-height: var(--crmRouteRowHeight);
+  }
+
+  .crm-route-cell {
+    border-left: 1px solid color-mix(in srgb, var(--pc-border) 55%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 55%, transparent);
+    background: var(--pc-surface);
+  }
+
+  .crm-route-cell.weekend:not(.today) {
+    background: color-mix(in srgb, var(--pc-border) 18%, transparent);
+  }
+
+  .crm-route-cell.today::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 12%, transparent);
+    pointer-events: none;
+  }
+
+  .crm-route-label {
+    height: var(--crmRouteRowHeight);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 65%, transparent);
+    font-size: 13px;
+    color: var(--pc-text);
+  }
+
+  .crm-route-label--header {
+    font-weight: var(--pc-font-weight-semibold);
+    background: color-mix(in srgb, var(--pc-border) 18%, transparent);
+  }
+
+  .crm-route-label.stage {
+    color: var(--pc-text-muted);
+    font-size: 12px;
+    padding-left: 22px;
+  }
+
+  .crm-route-bar,
+  .crm-route-combo {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    border-radius: var(--pc-radius-md);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: #fff;
+    box-shadow: 0 2px 6px rgba(15, 17, 21, 0.12);
+  }
+
+  .crm-route-bar.is-done {
+    opacity: 0.7;
+  }
+
+  .crm-route-bar.is-late::after {
+    content: '⚠';
     font-size: 12px;
   }
 
-  .crm-stage-route thead th {
-    text-align: left;
-    padding: 6px;
-    background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+  .crm-route-combo {
+    position: absolute;
+    display: flex;
+    padding: 2px;
+    gap: 4px;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 60%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 94%, transparent);
+    color: inherit;
+  }
+
+  .crm-route-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    border-radius: 10px;
     font-weight: var(--pc-font-weight-semibold);
-    color: var(--pc-text-muted);
+    color: #fff;
+    white-space: nowrap;
+  }
+
+  .crm-stage-route-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-sm);
+    font-size: 12px;
+  }
+
+  .crm-stage-route-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 60%, transparent);
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-border) 18%, transparent);
+  }
+
+  .crm-stage-route-stat strong {
+    font-size: 14px;
+    color: var(--pc-text);
+  }
+
+  .crm-route-seg-label {
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-route-weekday {
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.05em;
+    font-weight: var(--pc-font-weight-semibold);
   }
 
-  .crm-stage-route tbody td {
-    padding: 6px;
-    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 30%, transparent);
-  }
-
-  .crm-stage-route tbody tr:last-child td {
-    border-bottom: none;
-  }
-
-  .crm-stage-route .status-done {
-    color: var(--pc-success);
-  }
-
-  .crm-stage-route .status-late {
-    color: var(--pc-danger);
-  }
-
-  .crm-stage-route-toggle {
+  .crm-route-toggle {
     display: inline-flex;
     gap: var(--pc-spacing-xs);
   }
 
-  .crm-stage-route-toggle .pc-btn[aria-pressed="true"] {
-    background: color-mix(in srgb, var(--pc-primary) 15%, transparent);
+  .crm-route-toggle .pc-btn[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
     color: var(--pc-primary);
   }
 
-  .crm-stage-overdue h3 {
-    margin: 0;
-    font-size: 15px;
-    font-weight: var(--pc-font-weight-semibold);
+  .crm-stage-route-empty {
+    font-size: 13px;
+    color: var(--pc-text-muted);
+    padding: 12px;
+    text-align: center;
   }
+
+  .crm-route-stage--draw { background: #38bdf8; }
+  .crm-route-stage--proc { background: #22c55e; }
+  .crm-route-stage--shear { background: #fde047; color: #5b4100; }
+  .crm-route-stage--laser { background: #f97316; }
+  .crm-route-stage--bend { background: #ef4444; }
+  .crm-route-stage--weld { background: #7f1d1d; }
+  .crm-route-stage--mech { background: #6b7280; }
+  .crm-route-stage--coop { background: #14b8a6; }
+  .crm-route-stage--pack { background: #8b5e3c; }
+  .crm-route-stage--ship { background: #8b5cf6; }
 
   .crm-stage-overdue__list {
     font-size: 13px;
@@ -1213,13 +1423,19 @@
     background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
   }
 
-  .crm-stage-route-table {
+  .crm-route-mini {
+    max-width: 640px;
+    max-height: 60vh;
+    overflow: auto;
+  }
+
+  .crm-route-mini table {
     width: 100%;
     border-collapse: collapse;
     font-size: 12px;
   }
 
-  .crm-stage-route-table thead th {
+  .crm-route-mini thead th {
     text-align: left;
     padding: 6px;
     border-bottom: 1px solid var(--pc-border);
@@ -1229,41 +1445,26 @@
     letter-spacing: 0.4px;
   }
 
-  .crm-stage-route-table tbody td {
+  .crm-route-mini tbody td {
     padding: 6px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 32%, transparent);
   }
 
-  .crm-stage-route-table tbody tr:last-child td {
+  .crm-route-mini tbody tr:last-child td {
     border-bottom: none;
   }
 
-  .crm-stage-route-label {
-    font-weight: var(--pc-font-weight-semibold);
+  .crm-route-mini-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
 
-  .crm-stage-route-table .status-done {
-    color: var(--pc-success);
-  }
-
-  .crm-stage-route-table .status-late {
-    color: var(--pc-danger);
-  }
-
-  .crm-stage-route-summary {
+  .crm-route-mini-summary {
     font-size: 12px;
-    color: var(--pc-text-muted);
+    color: var(--pc-text);
     display: grid;
     gap: 4px;
-  }
-
-  .crm-stage-route-summary strong {
-    color: var(--pc-text);
-  }
-
-  .crm-stage-route-table tr[data-current-stage='1'] td:first-child {
-    color: var(--pc-primary);
-    font-weight: var(--pc-font-weight-semibold);
   }
 
   #crmStageTable tbody tr.crm-stage-row--selected {
@@ -2767,6 +2968,7 @@
             <colgroup>
               <col style="width:52px">
               <col style="width:48px">
+              <col style="width:44px">
               <col style="width:260px">
               <col style="width:96px">
               <col style="width:120px">
@@ -2783,6 +2985,7 @@
               <tr>
                 <th>№</th>
                 <th>👁</th>
+                <th title="Маршрут заказа">⇆</th>
                 <th>Заказ</th>
                 <th>Прогресс, %</th>
                 <th>Часов</th>
@@ -2799,7 +3002,7 @@
             <tbody></tbody>
             <tfoot>
               <tr>
-                <td colspan="4" class="crm-stage-total-label">Итого:</td>
+                <td colspan="5" class="crm-stage-total-label">Итого:</td>
                 <td id="crmStageTotalHours">0 ч</td>
                 <td id="crmStageTotalRest">0 ч</td>
                 <td colspan="7"></td>
@@ -2855,14 +3058,40 @@
       <section class="crm-stage-route-card">
         <div class="crm-stage-route-header">
           <h3>Общий маршрут заказов</h3>
-          <div class="crm-stage-route-toggle" role="tablist">
+          <div class="crm-route-toggle" role="tablist">
             <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
             <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
           </div>
         </div>
-        <div class="crm-stage-route" id="crmStageRoute"></div>
+        <div class="crm-stage-route" id="crmStageRoute">
+          <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
+          <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
+            <div class="crm-stage-route-left">
+              <div class="crm-route-label crm-route-label--header">Заказ</div>
+              <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
+            </div>
+            <div class="crm-stage-route-right">
+              <div class="crm-stage-route-head">
+                <div class="crm-route-head-row" id="crmStageRouteHead"></div>
+              </div>
+              <div class="crm-stage-route-body" id="crmStageRouteBody"></div>
+            </div>
+          </div>
+          <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
+            <div class="crm-stage-route-left">
+              <div class="crm-route-label crm-route-label--header">Заказ</div>
+              <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
+            </div>
+            <div class="crm-stage-route-right">
+              <div class="crm-stage-route-head">
+                <div class="crm-route-head-row" id="crmStageRouteHeadCompact"></div>
+              </div>
+              <div class="crm-stage-route-body" id="crmStageRouteBodyCompact"></div>
+            </div>
+          </div>
+        </div>
         <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
-        <div class="crm-stage-detail-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
+        <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
       </section>
     </div>
   </div>
@@ -2870,6 +3099,15 @@
 </main>
 
 <div id="toastLayer" class="pc-toast-layer" aria-live="polite"></div>
+
+
+<dialog id="crmStageRouteDlg" class="pc-modal">
+  <h3 class="pc-modal__title">Маршрут заказа</h3>
+  <div id="crmStageRouteDlgContent" class="crm-route-mini"></div>
+  <div class="pc-modal-actions">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageRouteDlgClose">Закрыть</button>
+  </div>
+</dialog>
 
 
 <!-- Диалог заказа -->
@@ -3667,6 +3905,15 @@ const boardSelect=$('#boardSelect'),
       crmStageGanttBody=$('#crmStageGanttBody'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
       crmStageRouteWrap=$('#crmStageRoute'),
+      crmStageRouteLegend=$('#crmStageRouteLegend'),
+      crmStageRouteDetailed=$('#crmStageRouteDetailed'),
+      crmStageRouteLeft=$('#crmStageRouteLeft'),
+      crmStageRouteHead=$('#crmStageRouteHead'),
+      crmStageRouteBody=$('#crmStageRouteBody'),
+      crmStageRouteCompact=$('#crmStageRouteCompact'),
+      crmStageRouteLeftCompact=$('#crmStageRouteLeftCompact'),
+      crmStageRouteHeadCompact=$('#crmStageRouteHeadCompact'),
+      crmStageRouteBodyCompact=$('#crmStageRouteBodyCompact'),
       crmStageRouteSummary=$('#crmStageRouteSummary'),
       crmStageRouteEmpty=$('#crmStageRouteEmpty'),
       crmStageTotalHours=$('#crmStageTotalHours'),
@@ -3674,7 +3921,10 @@ const boardSelect=$('#boardSelect'),
       crmStageOverdueList=$('#crmStageOverdueList'),
       crmUnaccountedBtn=$('#crmUnaccountedBtn'),
       crmTrashBtn=$('#crmTrashBtn'),
-      crmTrashBadge=$('#crmTrashBadge');
+      crmTrashBadge=$('#crmTrashBadge'),
+      crmStageRouteDialog=$('#crmStageRouteDlg'),
+      crmStageRouteDialogContent=$('#crmStageRouteDlgContent'),
+      crmStageRouteDialogClose=$('#crmStageRouteDlgClose');
 const LANE_PAGE_SIZE=10;
 const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
@@ -3745,6 +3995,36 @@ const CRM_STAGE_ICONS={
   pack:'📦',
   ship:'🚚'
 };
+const CRM_STAGE_LETTERS={
+  draw:'П',
+  proc:'З',
+  shear:'Р',
+  laser:'Л',
+  bend:'Г',
+  weld:'С',
+  mech:'М',
+  coop:'К',
+  pack:'У',
+  ship:'О'
+};
+const CRM_ROUTE_STAGE_CLASS={
+  draw:'crm-route-stage--draw',
+  proc:'crm-route-stage--proc',
+  shear:'crm-route-stage--shear',
+  laser:'crm-route-stage--laser',
+  bend:'crm-route-stage--bend',
+  weld:'crm-route-stage--weld',
+  mech:'crm-route-stage--mech',
+  coop:'crm-route-stage--coop',
+  pack:'crm-route-stage--pack',
+  ship:'crm-route-stage--ship'
+};
+const CRM_STAGE_FILTER_LABELS={
+  current:'Текущие',
+  all:'Все',
+  done:'Готовые',
+  late:'С опозданием'
+};
 let crmStageRowsCache=[];
 let crmStageSelectionId=null;
 
@@ -3783,6 +4063,10 @@ function setCrmStageFilter(stageKey,mode){
   const key=stageKey||'draw';
   const normalized=CRM_STAGE_FILTERS.has(mode)?mode:'current';
   crmStageFilterByKey.set(key,normalized);
+}
+
+function crmStageFilterLabel(mode){
+  return CRM_STAGE_FILTER_LABELS[mode]||CRM_STAGE_FILTER_LABELS.current;
 }
 
 function sanitizeExtraPercent(value){
@@ -4558,8 +4842,6 @@ function setCrmStageSelection(identity){
     ensureCrmStageSelection(crmStageRowsCache);
   }
   applyCrmStageSelectionHighlight();
-  const selected=getCurrentStageSelection();
-  renderCrmStageRoute(selected?.order||null, selected?.stageKey||null);
 }
 
 function applyCrmStageSelectionHighlight(){
@@ -4570,17 +4852,440 @@ function applyCrmStageSelectionHighlight(){
   });
 }
 
-function renderCrmStageRoute(order,currentStageKey){
-  if(!crmStageRouteWrap) return;
-  crmStageRouteWrap.innerHTML='';
-  if(crmStageRouteSummary){
-    crmStageRouteSummary.innerHTML='';
-    crmStageRouteSummary.style.display='none';
+function buildCrmRouteDataset(rows, filterMode){
+  const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
+  const safeRows=Array.isArray(rows)?rows:[];
+  const board=currentBoard();
+  const today=today0();
+  const todayIso=fmtDateISO(today);
+  const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
+    ? state.settings.unaccountedStatuses.map(normalizeStatusKey).filter(Boolean)
+    : [];
+  const ignoredSet=new Set(ignoredStatuses);
+  const displayIndexHints=new Map();
+  safeRows.forEach((row,index)=>{
+    if(!row||typeof row!=='object') return;
+    let display=Number(row.displayIndex);
+    if(!Number.isFinite(display)) display=index+1;
+    if(row.identity){
+      const key=`identity:${row.identity}`;
+      const prev=displayIndexHints.get(key);
+      displayIndexHints.set(key, prev===undefined?display:Math.min(prev, display));
+    }
+    if(row.orderId){
+      const key=`id:${row.orderId}`;
+      const prev=displayIndexHints.get(key);
+      displayIndexHints.set(key, prev===undefined?display:Math.min(prev, display));
+    }
+    const orderNo=row?.order?.orderNo;
+    if(orderNo!==undefined&&orderNo!==null){
+      const trimmed=String(orderNo).trim();
+      if(trimmed){
+        const key=`order:${trimmed}`;
+        const prev=displayIndexHints.get(key);
+        displayIndexHints.set(key, prev===undefined?display:Math.min(prev, display));
+      }
+    }
+    const title=row?.order?.title;
+    if(title!==undefined&&title!==null){
+      const trimmed=String(title).trim();
+      if(trimmed){
+        const key=`title:${trimmed}`;
+        const prev=displayIndexHints.get(key);
+        displayIndexHints.set(key, prev===undefined?display:Math.min(prev, display));
+      }
+    }
+  });
+  const ordersMap=new Map();
+  const sourceOrders=Array.isArray(board?.orders)?board.orders:[];
+  const ensureEntry=(order,index)=>{
+    if(!order||typeof order!=='object') return null;
+    if(ignoredSet.size){
+      const statusKey=normalizeStatusKey(order.status||'');
+      if(statusKey && ignoredSet.has(statusKey)) return null;
+    }
+    if(orderSearchNormalized && !orderMatchesSearch(order)) return null;
+    const key=resolveOrderIdentity(order,index,'route');
+    if(!key) return null;
+    if(ordersMap.has(key)) return ordersMap.get(key);
+    const displayHints=[];
+    if(order.id){
+      displayHints.push(`id:${order.id}`);
+    }
+    const orderNo=order.orderNo!==undefined&&order.orderNo!==null?String(order.orderNo).trim():'';
+    if(orderNo){
+      displayHints.push(`order:${orderNo}`);
+    }
+    const title=order.title!==undefined&&order.title!==null?String(order.title).trim():'';
+    if(title){
+      displayHints.push(`title:${title}`);
+    }
+    displayHints.push(`identity:${key}`);
+    let displayIndex=index+1;
+    for(const hint of displayHints){
+      if(displayIndexHints.has(hint)){
+        displayIndex=displayIndexHints.get(hint);
+        break;
+      }
+    }
+    const entry={
+      key,
+      order,
+      orderId:order.id||'',
+      displayIndex,
+      title:buildCrmOrderTitle(order)||'Заказ',
+      stages:new Map(),
+      stageOrder:[]
+    };
+    const stageList=Array.isArray(order.stages)?order.stages:[];
+    stageList.forEach(stage=>{
+      if(!stage||typeof stage!=='object') return;
+      const stageKey=resolveCrmStageKey(stage.name);
+      if(!stageKey) return;
+      const start=normalizeDate(stage.start);
+      const end=normalizeDate(stage.end);
+      const baseHours=parseStageHours(stage);
+      const extraHours=CRM_NOHOUR_STAGES.has(stageKey)?0:roundExtraForStage(stageKey, computeAutoExtra(baseHours));
+      const totalHours=CRM_NOHOUR_STAGES.has(stageKey)?0:Math.max(0, baseHours+extraHours);
+      const progress=normalizeStageProgress(stage.progress??0);
+      const done=!!stage.done||progress>=100;
+      if(!entry.stages.has(stageKey)){
+        entry.stages.set(stageKey,{ stageKey, start, end, baseHours, extraHours, totalHours, progress, done });
+      }else{
+        const existing=entry.stages.get(stageKey);
+        if(start instanceof Date && (!(existing.start instanceof Date)||start<existing.start)) existing.start=start;
+        if(end instanceof Date && (!(existing.end instanceof Date)||end>existing.end)) existing.end=end;
+        existing.baseHours=Math.max(existing.baseHours||0, baseHours);
+        existing.extraHours=Math.max(existing.extraHours||0, extraHours);
+        existing.totalHours=Math.max(existing.totalHours||0, totalHours);
+        existing.progress=Math.max(existing.progress||0, progress);
+        existing.done=existing.done||done;
+      }
+    });
+    if(!entry.stages.size) return null;
+    const stageValues=Array.from(entry.stages.values());
+    const hasUndone=stageValues.some(seg=>!seg.done);
+    const hasLate=stageValues.some(seg=>!seg.done && seg.end instanceof Date && seg.end<today);
+    if(filter==='current' && !hasUndone) return null;
+    if(filter==='done' && hasUndone) return null;
+    if(filter==='late' && !hasLate) return null;
+    entry.stageOrder=CRM_STAGE_SEQUENCE.filter(stage=>entry.stages.has(stage));
+    if(!entry.stageOrder.length) return null;
+    ordersMap.set(key, entry);
+    return entry;
+  };
+  sourceOrders.forEach((order,index)=>{ ensureEntry(order,index); });
+  if(!ordersMap.size && safeRows.length){
+    safeRows.forEach((row,index)=>{
+      if(row&&row.order){
+        ensureEntry(row.order,index);
+      }
+    });
   }
-  if(!order){
-    if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=false;
+  const orders=Array.from(ordersMap.values()).sort((a,b)=>{
+    if(a.displayIndex!==b.displayIndex) return a.displayIndex-b.displayIndex;
+    return (a.title||'').localeCompare(b.title||'', 'ru', { sensitivity:'base' });
+  });
+  let minDate=null;
+  let maxDate=null;
+  orders.forEach(order=>{
+    order.stageOrder.forEach(stage=>{
+      const seg=order.stages.get(stage);
+      if(!seg) return;
+      if(seg.start instanceof Date){
+        if(!minDate||seg.start<minDate) minDate=new Date(seg.start);
+      }
+      if(seg.end instanceof Date){
+        if(!maxDate||seg.end>maxDate) maxDate=new Date(seg.end);
+      }
+    });
+  });
+  if(minDate && minDate>today) minDate=new Date(today);
+  const hasTimeline=minDate instanceof Date && maxDate instanceof Date;
+  const days=[];
+  if(hasTimeline){
+    const totalDays=Math.max(0, daysBetween(minDate, maxDate));
+    for(let i=0;i<=totalDays;i+=1){
+      const date=addDays(minDate, i);
+      const iso=fmtDateISO(date);
+      days.push({
+        date,
+        iso,
+        label:fmtDateHuman(date),
+        dow:weekdayShort(date),
+        weekend:[0,6].includes(date.getDay()),
+        today:iso===todayIso
+      });
+    }
+  }
+  return {
+    orders,
+    days,
+    minDate:hasTimeline?addDays(minDate,0):null,
+    maxDate:hasTimeline?addDays(maxDate,0):null,
+    hasTimeline:hasTimeline && days.length>0
+  };
+}
+
+function createCrmRouteRow(days){
+  const row=document.createElement('div');
+  row.className='crm-route-row';
+  row.style.setProperty('--crmRouteDayCount', String(days.length));
+  days.forEach(day=>{
+    const cell=document.createElement('div');
+    cell.className='crm-route-cell';
+    if(day.weekend) cell.classList.add('weekend');
+    if(day.today) cell.classList.add('today');
+    row.appendChild(cell);
+  });
+  return row;
+}
+
+function renderCrmRouteDetailed(dataset){
+  if(!crmStageRouteDetailed || !crmStageRouteLeft || !crmStageRouteHead || !crmStageRouteBody) return;
+  if(!(dataset.minDate instanceof Date)) return;
+  crmStageRouteLeft.innerHTML='';
+  crmStageRouteBody.innerHTML='';
+  crmStageRouteHead.innerHTML='';
+  const headFragment=document.createDocumentFragment();
+  dataset.days.forEach(day=>{
+    const cell=document.createElement('div');
+    cell.className='crm-route-head-cell';
+    if(day.weekend) cell.classList.add('weekend');
+    if(day.today) cell.classList.add('today');
+    const dow=document.createElement('span');
+    dow.className='crm-route-weekday';
+    dow.textContent=day.dow;
+    const date=document.createElement('span');
+    date.textContent=day.label;
+    cell.append(dow,date);
+    headFragment.appendChild(cell);
+  });
+  crmStageRouteHead.appendChild(headFragment);
+  const leftFragment=document.createDocumentFragment();
+  const bodyFragment=document.createDocumentFragment();
+  const today=today0();
+  dataset.orders.forEach((order,index)=>{
+    const label=document.createElement('div');
+    label.className='crm-route-label';
+    label.textContent=`${index+1}. ${order.title||'Заказ'}`;
+    leftFragment.appendChild(label);
+    const orderRow=createCrmRouteRow(dataset.days);
+    bodyFragment.appendChild(orderRow);
+    order.stageOrder.forEach(stageKey=>{
+      const stageLabel=document.createElement('div');
+      stageLabel.className='crm-route-label stage';
+      stageLabel.textContent=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
+      leftFragment.appendChild(stageLabel);
+      const row=createCrmRouteRow(dataset.days);
+      const seg=order.stages.get(stageKey);
+      if(seg && seg.start instanceof Date && seg.end instanceof Date){
+        const startIdx=Math.max(0, daysBetween(dataset.minDate, seg.start));
+        const span=Math.max(1, daysBetween(seg.start, seg.end)+1);
+        const bar=document.createElement('div');
+        bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
+        bar.style.left=`calc(${startIdx} * var(--crmRouteDayWidth))`;
+        bar.style.width=`calc(${span} * var(--crmRouteDayWidth) - 6px)`;
+        if(seg.done) bar.classList.add('is-done');
+        if(!seg.done && seg.end instanceof Date && seg.end<today){
+          bar.classList.add('is-late');
+        }
+        const letter=CRM_STAGE_LETTERS[stageKey]||stageKey.slice(0,1).toUpperCase();
+        const hoursLabel=seg.totalHours>0?`${seg.totalHours.toFixed(1)}ч`:'';
+        bar.innerHTML=`<span class="crm-route-seg-label">${letter}</span>${hoursLabel?`<span>${hoursLabel}</span>`:''}`;
+        bar.title=`${CRM_STAGE_LABELS[stageKey]||stageKey}: ${formatStagePeriod(seg.start, seg.end)}${hoursLabel?` • ${hoursLabel}`:''}`;
+        row.appendChild(bar);
+      }
+      bodyFragment.appendChild(row);
+    });
+  });
+  crmStageRouteLeft.appendChild(leftFragment);
+  crmStageRouteBody.appendChild(bodyFragment);
+  bindCrmRouteScroll(crmStageRouteLeft, crmStageRouteBody, crmStageRouteHead);
+}
+
+function renderCrmRouteCompact(dataset){
+  if(!crmStageRouteCompact || !crmStageRouteLeftCompact || !crmStageRouteHeadCompact || !crmStageRouteBodyCompact) return;
+  if(!(dataset.minDate instanceof Date)) return;
+  crmStageRouteLeftCompact.innerHTML='';
+  crmStageRouteBodyCompact.innerHTML='';
+  crmStageRouteHeadCompact.innerHTML='';
+  const headFragment=document.createDocumentFragment();
+  dataset.days.forEach(day=>{
+    const cell=document.createElement('div');
+    cell.className='crm-route-head-cell';
+    if(day.weekend) cell.classList.add('weekend');
+    if(day.today) cell.classList.add('today');
+    const dow=document.createElement('span');
+    dow.className='crm-route-weekday';
+    dow.textContent=day.dow;
+    const date=document.createElement('span');
+    date.textContent=day.label;
+    cell.append(dow,date);
+    headFragment.appendChild(cell);
+  });
+  crmStageRouteHeadCompact.appendChild(headFragment);
+  const leftFragment=document.createDocumentFragment();
+  const bodyFragment=document.createDocumentFragment();
+  dataset.orders.forEach((order,index)=>{
+    const label=document.createElement('div');
+    label.className='crm-route-label';
+    label.textContent=`${index+1}. ${order.title||'Заказ'}`;
+    leftFragment.appendChild(label);
+    const row=createCrmRouteRow(dataset.days);
+    const segments=order.stageOrder
+      .map(stageKey=>order.stages.get(stageKey))
+      .filter(seg=>seg && seg.start instanceof Date && seg.end instanceof Date);
+    if(segments.length){
+      let earliest=segments[0].start;
+      let latest=segments[0].end;
+      segments.forEach(seg=>{
+        if(seg.start instanceof Date && seg.start<earliest) earliest=seg.start;
+        if(seg.end instanceof Date && seg.end>latest) latest=seg.end;
+      });
+      if(earliest instanceof Date && latest instanceof Date){
+        const startIdx=Math.max(0, daysBetween(dataset.minDate, earliest));
+        const span=Math.max(1, daysBetween(earliest, latest)+1);
+        const combo=document.createElement('div');
+        combo.className='crm-route-combo';
+        combo.style.left=`calc(${startIdx} * var(--crmRouteDayWidth))`;
+        combo.style.width=`calc(${span} * var(--crmRouteDayWidth) - 6px)`;
+        const totalWeight=segments.reduce((sum,seg)=>{
+          if(seg.totalHours>0) return sum+seg.totalHours;
+          return sum+Math.max(1, daysBetween(seg.start, seg.end)+1);
+        },0);
+        const fallbackShare=segments.length?100/segments.length:100;
+        segments.forEach(seg=>{
+          const part=document.createElement('div');
+          part.className=['crm-route-seg', CRM_ROUTE_STAGE_CLASS[seg.stageKey]].filter(Boolean).join(' ');
+          const weight=seg.totalHours>0?seg.totalHours:Math.max(1, daysBetween(seg.start, seg.end)+1);
+          const share=totalWeight>0?(weight/totalWeight)*100:fallbackShare;
+          part.style.flex=`0 0 ${share.toFixed(2)}%`;
+          const letter=CRM_STAGE_LETTERS[seg.stageKey]||seg.stageKey.slice(0,1).toUpperCase();
+          part.textContent=seg.totalHours>0?`${letter} ${Math.round(seg.totalHours)}ч`:`${letter}`;
+          part.title=`${CRM_STAGE_LABELS[seg.stageKey]||seg.stageKey}: ${formatStagePeriod(seg.start, seg.end)}`;
+          combo.appendChild(part);
+        });
+        row.appendChild(combo);
+      }
+    }
+    bodyFragment.appendChild(row);
+  });
+  crmStageRouteLeftCompact.appendChild(leftFragment);
+  crmStageRouteBodyCompact.appendChild(bodyFragment);
+  bindCrmRouteScroll(crmStageRouteLeftCompact, crmStageRouteBodyCompact, crmStageRouteHeadCompact);
+}
+
+function bindCrmRouteScroll(leftEl, bodyEl, headEl){
+  if(!bodyEl) return;
+  let lock=false;
+  bodyEl.onscroll=null;
+  if(leftEl) leftEl.onscroll=null;
+  bodyEl.onscroll=()=>{
+    if(lock) return;
+    lock=true;
+    if(leftEl) leftEl.scrollTop=bodyEl.scrollTop;
+    if(headEl) headEl.style.transform=`translateX(${-bodyEl.scrollLeft}px)`;
+    lock=false;
+  };
+  if(leftEl){
+    leftEl.onscroll=()=>{
+      if(lock) return;
+      lock=true;
+      bodyEl.scrollTop=leftEl.scrollTop;
+      lock=false;
+    };
+  }
+}
+
+function updateCrmStageRouteSummary(dataset, filterMode){
+  if(!crmStageRouteSummary) return;
+  if(!dataset.orders.length){
+    crmStageRouteSummary.innerHTML='';
     return;
   }
+  const today=today0();
+  let totalStages=0;
+  let doneStages=0;
+  let lateStages=0;
+  let totalHours=0;
+  let activeOrders=0;
+  dataset.orders.forEach(order=>{
+    let hasActive=false;
+    order.stageOrder.forEach(stageKey=>{
+      const seg=order.stages.get(stageKey);
+      if(!seg) return;
+      totalStages+=1;
+      if(seg.totalHours>0) totalHours+=seg.totalHours;
+      if(seg.done){
+        doneStages+=1;
+      }else{
+        hasActive=true;
+        if(seg.end instanceof Date && seg.end<today){
+          lateStages+=1;
+        }
+      }
+    });
+    if(hasActive) activeOrders+=1;
+  });
+  const filterLabel=crmStageFilterLabel(filterMode);
+  const stats=[
+    `<div class="crm-stage-route-stat"><span>Фильтр</span><strong>${filterLabel}</strong></div>`,
+    `<div class="crm-stage-route-stat"><span>Заказов</span><strong>${dataset.orders.length}</strong></div>`,
+    `<div class="crm-stage-route-stat"><span>Активные</span><strong>${activeOrders}</strong></div>`,
+    `<div class="crm-stage-route-stat"><span>Этапов</span><strong>${totalStages}</strong></div>`,
+    `<div class="crm-stage-route-stat"><span>Готово</span><strong>${doneStages}</strong></div>`
+  ];
+  if(lateStages>0){
+    stats.push(`<div class="crm-stage-route-stat"><span>Просрочено</span><strong class="status-late">${lateStages}</strong></div>`);
+  }
+  if(totalHours>0){
+    stats.push(`<div class="crm-stage-route-stat"><span>Плановые часы</span><strong>${totalHours.toFixed(1)} ч</strong></div>`);
+  }
+  crmStageRouteSummary.innerHTML=stats.join('');
+}
+
+function renderCrmStageRouteOverview(rows, stageKey, filterMode){
+  if(!crmStageRouteWrap) return;
+  const dataset=buildCrmRouteDataset(rows, filterMode);
+  if(crmStageRouteLegend){
+    crmStageRouteLegend.innerHTML='';
+    CRM_STAGE_SEQUENCE.forEach(stage=>{
+      const item=document.createElement('span');
+      const dot=document.createElement('span');
+      dot.className=['crm-stage-route-dot', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
+      item.appendChild(dot);
+      item.append(document.createTextNode(` ${CRM_STAGE_LABELS[stage]||stage}`));
+      crmStageRouteLegend.appendChild(item);
+    });
+  }
+  if(!dataset.hasTimeline){
+    if(crmStageRouteDetailed) crmStageRouteDetailed.hidden=true;
+    if(crmStageRouteCompact) crmStageRouteCompact.hidden=true;
+    if(crmStageRouteLeft) crmStageRouteLeft.innerHTML='';
+    if(crmStageRouteBody) crmStageRouteBody.innerHTML='';
+    if(crmStageRouteLeftCompact) crmStageRouteLeftCompact.innerHTML='';
+    if(crmStageRouteBodyCompact) crmStageRouteBodyCompact.innerHTML='';
+    if(crmStageRouteHead) crmStageRouteHead.innerHTML='';
+    if(crmStageRouteHeadCompact) crmStageRouteHeadCompact.innerHTML='';
+    if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=false;
+    if(crmStageRouteSummary) crmStageRouteSummary.innerHTML='';
+    return;
+  }
+  if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=true;
+  const mode=crmStageRouteMode==='compact'?'compact':'detailed';
+  if(crmStageRouteDetailed) crmStageRouteDetailed.hidden=mode!=='detailed';
+  if(crmStageRouteCompact) crmStageRouteCompact.hidden=mode!=='compact';
+  if(mode==='detailed'){
+    renderCrmRouteDetailed(dataset);
+  }else{
+    renderCrmRouteCompact(dataset);
+  }
+  updateCrmStageRouteSummary(dataset, filterMode);
+}
+
+function buildCrmOrderRouteContent(order,currentStageKey){
+  if(!order||typeof order!=='object') return null;
   const stages=Array.isArray(order.stages)?order.stages:[];
   const stageMap=new Map();
   stages.forEach(stage=>{
@@ -4592,18 +5297,12 @@ function renderCrmStageRoute(order,currentStageKey){
   const orderedKeys=[];
   CRM_STAGE_SEQUENCE.forEach(key=>{ if(stageMap.has(key)) orderedKeys.push(key); });
   stageMap.forEach((_,key)=>{ if(!orderedKeys.includes(key)) orderedKeys.push(key); });
-  if(!orderedKeys.length){
-    if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=false;
-    return;
-  }
-  if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=true;
+  if(!orderedKeys.length) return null;
+  const wrapper=document.createElement('div');
+  wrapper.className='crm-route-mini-wrapper';
   const table=document.createElement('table');
-  table.className='crm-stage-route-table';
-  const compact=crmStageRouteMode==='compact';
   const thead=document.createElement('thead');
-  thead.innerHTML=compact
-    ? '<tr><th>Передел</th><th>Сроки</th><th>Статус</th></tr>'
-    : '<tr><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
+  thead.innerHTML='<tr><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
   table.appendChild(thead);
   const tbody=document.createElement('tbody');
   let totalBase=0;
@@ -4613,7 +5312,6 @@ function renderCrmStageRoute(order,currentStageKey){
   let lastPlannedEnd=null;
   orderedKeys.forEach(key=>{
     const stage=stageMap.get(key);
-    const label=crmStageIconLabel(key, stage?.name||key);
     const baseHours=parseStageHours(stage);
     const extraHours=roundExtraForStage(key, computeAutoExtra(baseHours));
     const totalHours=Math.max(0, baseHours+extraHours);
@@ -4649,64 +5347,88 @@ function renderCrmStageRoute(order,currentStageKey){
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
-    const cells=compact
-      ? [
-          label,
-          formatStagePeriod(startRaw, endRaw),
-          statusLabel
-        ]
-      : [
-          label,
-          formatStagePeriod(startRaw, endRaw),
-          formatStageHoursDisplay(baseHours,totalHours,extraHours),
-          stage?`${progress}%`:'—',
-          statusLabel
-        ];
+    const cells=[
+      crmStageIconLabel(key, stage?.name||key),
+      formatStagePeriod(startRaw, endRaw),
+      formatStageHoursDisplay(baseHours,totalHours,extraHours),
+      stage?`${progress}%`:'—',
+      statusLabel
+    ];
     cells.forEach((value,idx)=>{
       const td=document.createElement('td');
       td.textContent=value||'—';
-      if(idx===0){
-        td.classList.add('crm-stage-route-label');
-      }
-      if(!compact && idx===4 && statusClass){
-        td.classList.add(statusClass);
-      }
-      if(compact && idx===2 && statusClass){
-        td.classList.add(statusClass);
-      }
+      if(idx===0) td.classList.add('crm-stage-route-label');
+      if(idx===4 && statusClass) td.classList.add(statusClass);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
-  crmStageRouteWrap.appendChild(table);
-  if(crmStageRouteSummary){
-    const fragments=[];
-    const hasHours=totalBase>0 || totalExtra>0;
-    const totalHours=hasHours
-      ? formatStageHoursDisplay(totalBase, totalBase+totalExtra, totalExtra)
-      : '—';
-    fragments.push(`<div><strong>Всего по заказу:</strong> ${totalHours}</div>`);
-    fragments.push(`<div>Этапов: ${orderedKeys.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedKeys.length-doneCount)}</div>`);
-    if(lateCount>0){
-      fragments.push(`<div class="status-late">Просрочено этапов: ${lateCount}</div>`);
-    }
-    if(lastPlannedEnd){
-      fragments.push(`<div>Плановая дата завершения: ${formatStageDateLabel(lastPlannedEnd)}</div>`);
-    }
-    crmStageRouteSummary.innerHTML=fragments.join('');
-    crmStageRouteSummary.style.display='grid';
+  wrapper.appendChild(table);
+  const fragments=[];
+  const hasHours=totalBase>0||totalExtra>0;
+  const totalHoursLabel=hasHours?formatStageHoursDisplay(totalBase, totalBase+totalExtra, totalExtra):'—';
+  fragments.push(`<div><strong>Всего по заказу:</strong> ${totalHoursLabel}</div>`);
+  fragments.push(`<div>Этапов: ${orderedKeys.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedKeys.length-doneCount)}</div>`);
+  if(lateCount>0){
+    fragments.push(`<div class="status-late">Просрочено этапов: ${lateCount}</div>`);
+  }
+  if(lastPlannedEnd){
+    fragments.push(`<div>Плановая дата завершения: ${formatStageDateLabel(lastPlannedEnd)}</div>`);
+  }
+  if(fragments.length){
+    const summary=document.createElement('div');
+    summary.className='crm-route-mini-summary';
+    summary.innerHTML=fragments.join('');
+    wrapper.appendChild(summary);
+  }
+  return wrapper;
+}
+
+function openCrmStageRouteMini(order,currentStageKey){
+  if(!crmStageRouteDialog||!crmStageRouteDialogContent) return;
+  crmStageRouteDialogContent.innerHTML='';
+  const content=buildCrmOrderRouteContent(order,currentStageKey);
+  if(content){
+    crmStageRouteDialogContent.appendChild(content);
+  }else{
+    const empty=document.createElement('div');
+    empty.className='crm-stage-route-empty';
+    empty.textContent='Нет данных по маршруту';
+    crmStageRouteDialogContent.appendChild(empty);
+  }
+  try{
+    crmStageRouteDialog.showModal();
+  }catch(_err){
+    crmStageRouteDialog.open=true;
+  }
+}
+
+function closeCrmStageRouteMini(){
+  if(!crmStageRouteDialog) return;
+  try{
+    crmStageRouteDialog.close();
+  }catch(_err){
+    crmStageRouteDialog.open=false;
   }
 }
 
 let crmStageScheduleCache=null;
+let crmStageRouteContext={ rows:[], stageKey:'draw', filter:'current' };
 
-function renderCrmStageViews(schedule){
+function renderCrmStageViews(schedule, rows, stageKey, filterMode){
+  const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
+  const key=stageKey||crmStageSelect?.value||'draw';
+  const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:getCrmStageFilter(key);
   crmStageScheduleCache=schedule||null;
   renderCrmStageStack(schedule||null);
-  renderCrmStageGantt(crmStageRowsCache, schedule||null);
-  const selected=getCurrentStageSelection();
-  renderCrmStageRoute(selected?.order||null, selected?.stageKey||null);
+  renderCrmStageGantt(effectiveRows, schedule||null);
+  crmStageRouteContext={
+    rows:effectiveRows.slice(),
+    stageKey:key,
+    filter
+  };
+  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter);
   applyCrmStageSelectionHighlight();
 }
 
@@ -5135,7 +5857,7 @@ function renderCrmStageTable(){
     }
     updateCrmStageTotals(totals);
     renderCrmStageOverdue([]);
-    renderCrmStageViews(null);
+    renderCrmStageViews(null, [], stageKey, activeFilter);
     updateSearchUI();
     updateCrmAuxButtons();
     return;
@@ -5163,6 +5885,7 @@ function renderCrmStageTable(){
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
+      <td><button class="crm-stage-route-mini" type="button" title="Маршрут заказа">⇆</button></td>
       <td>${escapeHtml(entry.orderTitle||'Заказ')}</td>
       <td>${escapeHtml(`${entry.progress}%`)}</td>
       <td>${escapeHtml(hoursCell)}</td>
@@ -5181,6 +5904,17 @@ function renderCrmStageTable(){
         btn.addEventListener('click',evt=>{evt.stopPropagation();openOrder(entry.order.id);});
       }else{
         btn.disabled=true;
+      }
+    }
+    const routeBtn=tr.querySelector('.crm-stage-route-mini');
+    if(routeBtn){
+      if(entry.order){
+        routeBtn.addEventListener('click',evt=>{
+          evt.stopPropagation();
+          openCrmStageRouteMini(entry.order, entry.stageKey);
+        });
+      }else{
+        routeBtn.disabled=true;
       }
     }
     const reserveInput=tr.querySelector('.crm-stage-reserve');
@@ -5219,7 +5953,7 @@ function renderCrmStageTable(){
   applyCrmStageSelectionHighlight();
   updateCrmStageTotals(totals);
   renderCrmStageOverdue(overdue);
-  renderCrmStageViews(schedule);
+  renderCrmStageViews(schedule, rows, stageKey, activeFilter);
   updateSearchUI();
   updateCrmAuxButtons();
 }
@@ -7477,20 +8211,19 @@ if(crmStageFilter){
 }
 if(crmStageGanttFilter){
   crmStageGanttFilter.addEventListener('change',()=>{
-    renderCrmStageGantt(crmStageRowsCache, crmStageScheduleCache);
+    renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
   });
 }
 
-document.querySelectorAll('.crm-stage-route-toggle [data-route-mode]').forEach(btn=>{
+document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     const mode=btn.dataset.routeMode==='compact'?'compact':'detailed';
     if(crmStageRouteMode===mode) return;
     crmStageRouteMode=mode;
-    document.querySelectorAll('.crm-stage-route-toggle [data-route-mode]').forEach(other=>{
+    document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(other=>{
       other.setAttribute('aria-pressed', other===btn?'true':'false');
     });
-    const selected=getCurrentStageSelection();
-    renderCrmStageRoute(selected?.order||null, selected?.stageKey||null);
+    renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter);
   });
 });
 if(crmOrdersFilter){
@@ -7510,6 +8243,15 @@ if(crmUnaccountedCloseBtn){
 const crmUnaccountedDismiss=document.getElementById('crmUnaccountedDismiss');
 if(crmUnaccountedDismiss){
   crmUnaccountedDismiss.addEventListener('click',()=>closeCrmUnaccounted());
+}
+if(crmStageRouteDialogClose){
+  crmStageRouteDialogClose.addEventListener('click',()=>closeCrmStageRouteMini());
+}
+if(crmStageRouteDialog){
+  crmStageRouteDialog.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmStageRouteMini();
+  });
 }
 const crmUnaccountedDlg=document.getElementById('crmUnaccountedDlg');
 if(crmUnaccountedDlg){
