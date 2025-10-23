@@ -1147,10 +1147,29 @@
     padding: 0 var(--pc-spacing-xs);
   }
 
-  .crm-stage-route-legend span {
+  .crm-stage-route-legend label {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .crm-stage-route-legend label.is-off {
+    opacity: 0.5;
+  }
+
+  .crm-stage-route-legend input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    accent-color: var(--pc-accent, #3b82f6);
+  }
+
+  .crm-stage-route-legend input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--pc-accent, #3b82f6);
+    outline-offset: 2px;
   }
 
   .crm-stage-route-dot {
@@ -1223,11 +1242,13 @@
   }
 
   .crm-route-head-cell.weekend:not(.today) {
-    background: color-mix(in srgb, var(--pc-border) 22%, transparent);
+    background: color-mix(in srgb, var(--pc-danger, #fa5252) 14%, transparent);
+    color: color-mix(in srgb, var(--pc-text) 80%, #611818 20%);
   }
 
   .crm-route-head-cell.today {
-    background: color-mix(in srgb, var(--pc-warning, #f59f00) 18%, transparent);
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 24%, transparent);
+    color: color-mix(in srgb, #000 70%, var(--pc-text) 30%);
   }
 
   .crm-stage-route-body {
@@ -1243,20 +1264,24 @@
   }
 
   .crm-route-cell {
+    position: relative;
     border-left: 1px solid color-mix(in srgb, var(--pc-border) 55%, transparent);
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 55%, transparent);
     background: var(--pc-surface);
   }
 
   .crm-route-cell.weekend:not(.today) {
-    background: color-mix(in srgb, var(--pc-border) 18%, transparent);
+    background: color-mix(in srgb, var(--pc-danger, #fa5252) 10%, transparent);
   }
 
-  .crm-route-cell.today::before {
+  .crm-route-cell.today::after {
     content: '';
     position: absolute;
-    inset: 0;
-    background: color-mix(in srgb, var(--pc-warning, #f59f00) 12%, transparent);
+    top: 0;
+    bottom: 0;
+    left: calc(50% - 1px);
+    width: 2px;
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 60%, transparent);
     pointer-events: none;
   }
 
@@ -3955,6 +3980,7 @@ if(document.body){
 }
 let currentCrmTrashFilter='all';
 let crmStageRouteMode='detailed';
+const crmRouteHiddenStages=new Set();
 
 const CRM_STAGE_ALIASES={
   proc:['proc','закупка','закуп','поставка','закупки'],
@@ -4969,7 +4995,7 @@ function buildCrmRouteDataset(rows, filterMode){
     if(filter==='current' && !hasUndone) return null;
     if(filter==='done' && hasUndone) return null;
     if(filter==='late' && !hasLate) return null;
-    entry.stageOrder=CRM_STAGE_SEQUENCE.filter(stage=>entry.stages.has(stage));
+    entry.stageOrder=CRM_STAGE_SEQUENCE.filter(stage=>entry.stages.has(stage) && !crmRouteHiddenStages.has(stage));
     if(!entry.stageOrder.length) return null;
     ordersMap.set(key, entry);
     return entry;
@@ -5245,23 +5271,52 @@ function updateCrmStageRouteSummary(dataset, filterMode){
   crmStageRouteSummary.innerHTML=stats.join('');
 }
 
+function updateCrmRouteStageVisibility(stageKey, isVisible){
+  if(!stageKey) return;
+  const wasHidden=crmRouteHiddenStages.has(stageKey);
+  if(isVisible){
+    if(!wasHidden) return;
+    crmRouteHiddenStages.delete(stageKey);
+  }else{
+    if(wasHidden) return;
+    crmRouteHiddenStages.add(stageKey);
+  }
+  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter);
+}
+
 function renderCrmStageRouteOverview(rows, stageKey, filterMode){
   if(!crmStageRouteWrap) return;
   const dataset=buildCrmRouteDataset(rows, filterMode);
   if(crmStageRouteLegend){
     crmStageRouteLegend.innerHTML='';
     CRM_STAGE_SEQUENCE.forEach(stage=>{
-      const item=document.createElement('span');
+      const label=document.createElement('label');
+      label.className='crm-route-legend-item';
+      const checkbox=document.createElement('input');
+      checkbox.type='checkbox';
+      checkbox.checked=!crmRouteHiddenStages.has(stage);
+      checkbox.addEventListener('change',()=>{
+        label.classList.toggle('is-off', !checkbox.checked);
+        updateCrmRouteStageVisibility(stage, checkbox.checked);
+      });
+      label.classList.toggle('is-off', !checkbox.checked);
       const dot=document.createElement('span');
       dot.className=['crm-stage-route-dot', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
-      item.appendChild(dot);
-      item.append(document.createTextNode(` ${CRM_STAGE_LABELS[stage]||stage}`));
-      crmStageRouteLegend.appendChild(item);
+      label.appendChild(checkbox);
+      label.appendChild(dot);
+      label.append(document.createTextNode(` ${CRM_STAGE_LABELS[stage]||stage}`));
+      crmStageRouteLegend.appendChild(label);
     });
   }
   if(!dataset.hasTimeline){
-    if(crmStageRouteDetailed) crmStageRouteDetailed.hidden=true;
-    if(crmStageRouteCompact) crmStageRouteCompact.hidden=true;
+    if(crmStageRouteDetailed){
+      crmStageRouteDetailed.hidden=true;
+      crmStageRouteDetailed.style.display='none';
+    }
+    if(crmStageRouteCompact){
+      crmStageRouteCompact.hidden=true;
+      crmStageRouteCompact.style.display='none';
+    }
     if(crmStageRouteLeft) crmStageRouteLeft.innerHTML='';
     if(crmStageRouteBody) crmStageRouteBody.innerHTML='';
     if(crmStageRouteLeftCompact) crmStageRouteLeftCompact.innerHTML='';
@@ -5274,8 +5329,14 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode){
   }
   if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=true;
   const mode=crmStageRouteMode==='compact'?'compact':'detailed';
-  if(crmStageRouteDetailed) crmStageRouteDetailed.hidden=mode!=='detailed';
-  if(crmStageRouteCompact) crmStageRouteCompact.hidden=mode!=='compact';
+  if(crmStageRouteDetailed){
+    crmStageRouteDetailed.hidden=mode!=='detailed';
+    crmStageRouteDetailed.style.display=mode==='detailed'?'grid':'none';
+  }
+  if(crmStageRouteCompact){
+    crmStageRouteCompact.hidden=mode!=='compact';
+    crmStageRouteCompact.style.display=mode==='compact'?'grid':'none';
+  }
   if(mode==='detailed'){
     renderCrmRouteDetailed(dataset);
   }else{
