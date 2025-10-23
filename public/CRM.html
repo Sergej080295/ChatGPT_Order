@@ -1029,6 +1029,8 @@
     font-size: 12px;
     font-weight: var(--pc-font-weight-semibold);
     background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    display: flex;
+    align-items: center;
   }
 
   .crm-stage-gantt-left-body {
@@ -3072,7 +3074,7 @@
         </div>
         <div class="crm-stage-gantt-grid" id="crmStageGantt">
           <div class="crm-stage-gantt-left">
-            <div class="crm-stage-gantt-left-header">Заказ / Дата</div>
+            <div class="crm-stage-gantt-left-header" id="crmStageGanttLeftHeader">Заказ / Дата</div>
             <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
           </div>
           <div class="crm-stage-gantt-right">
@@ -3094,7 +3096,7 @@
           <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
           <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
             <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header">Заказ</div>
+              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeader">Заказ</div>
               <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
             </div>
             <div class="crm-stage-route-right">
@@ -3106,7 +3108,7 @@
           </div>
           <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
             <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header">Заказ</div>
+              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeaderCompact">Заказ</div>
               <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
             </div>
             <div class="crm-stage-route-right">
@@ -3927,6 +3929,7 @@ const boardSelect=$('#boardSelect'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
+      crmStageGanttLeftHeader=$('#crmStageGanttLeftHeader'),
       crmStageGanttLeft=$('#crmStageGanttLeft'),
       crmStageGanttHeader=$('#crmStageGanttHeader'),
       crmStageGanttBody=$('#crmStageGanttBody'),
@@ -3935,10 +3938,12 @@ const boardSelect=$('#boardSelect'),
       crmStageRouteLegend=$('#crmStageRouteLegend'),
       crmStageRouteDetailed=$('#crmStageRouteDetailed'),
       crmStageRouteLeft=$('#crmStageRouteLeft'),
+      crmStageRouteLeftHeader=$('#crmStageRouteLeftHeader'),
       crmStageRouteHead=$('#crmStageRouteHead'),
       crmStageRouteBody=$('#crmStageRouteBody'),
       crmStageRouteCompact=$('#crmStageRouteCompact'),
       crmStageRouteLeftCompact=$('#crmStageRouteLeftCompact'),
+      crmStageRouteLeftHeaderCompact=$('#crmStageRouteLeftHeaderCompact'),
       crmStageRouteHeadCompact=$('#crmStageRouteHeadCompact'),
       crmStageRouteBodyCompact=$('#crmStageRouteBodyCompact'),
       crmStageRouteSummary=$('#crmStageRouteSummary'),
@@ -4727,6 +4732,9 @@ function renderCrmStageGantt(rows, schedule){
   crmStageGanttLeft.innerHTML='';
   crmStageGanttHeader.innerHTML='';
   crmStageGanttBody.innerHTML='';
+  if(crmStageGanttLeftHeader){
+    crmStageGanttLeftHeader.style.removeProperty('min-height');
+  }
   if(!schedule || !Array.isArray(rows) || !rows.length){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
@@ -4842,6 +4850,51 @@ function renderCrmStageGantt(rows, schedule){
       }
       syncLock=false;
     };
+  }
+  syncCrmGanttLayout();
+}
+
+function syncCrmGanttLayout(){
+  const apply=()=>{
+    syncCrmGanttHeaderHeight();
+    syncCrmGanttRowHeights();
+  };
+  if(typeof requestAnimationFrame==='function'){
+    requestAnimationFrame(apply);
+  }else{
+    setTimeout(apply,0);
+  }
+}
+
+function syncCrmGanttHeaderHeight(){
+  if(!crmStageGanttLeftHeader || !crmStageGanttHeader){
+    return;
+  }
+  crmStageGanttLeftHeader.style.removeProperty('min-height');
+  const height=crmStageGanttHeader.offsetHeight||0;
+  if(height>0){
+    crmStageGanttLeftHeader.style.minHeight=`${height}px`;
+  }
+}
+
+function syncCrmGanttRowHeights(){
+  if(!crmStageGanttLeft || !crmStageGanttBody){
+    return;
+  }
+  const leftRows=Array.from(crmStageGanttLeft.children||[]);
+  const bodyRows=Array.from(crmStageGanttBody.children||[]);
+  leftRows.forEach(row=>{ if(row && row.style) row.style.minHeight=''; });
+  bodyRows.forEach(row=>{ if(row && row.style) row.style.minHeight=''; });
+  const total=Math.min(leftRows.length, bodyRows.length);
+  for(let i=0;i<total;i+=1){
+    const leftRow=leftRows[i];
+    const bodyRow=bodyRows[i];
+    if(!leftRow || !bodyRow) continue;
+    const height=Math.max(leftRow.offsetHeight||0, bodyRow.offsetHeight||0);
+    if(height>0){
+      leftRow.style.minHeight=`${height}px`;
+      bodyRow.style.minHeight=`${height}px`;
+    }
   }
 }
 
@@ -5075,6 +5128,9 @@ function renderCrmRouteDetailed(dataset){
   crmStageRouteLeft.innerHTML='';
   crmStageRouteBody.innerHTML='';
   crmStageRouteHead.innerHTML='';
+  if(crmStageRouteLeftHeader){
+    crmStageRouteLeftHeader.style.removeProperty('min-height');
+  }
   const headFragment=document.createDocumentFragment();
   dataset.days.forEach(day=>{
     const cell=document.createElement('div');
@@ -5133,6 +5189,7 @@ function renderCrmRouteDetailed(dataset){
   crmStageRouteBody.appendChild(bodyFragment);
   bindCrmRouteScroll(crmStageRouteLeft, crmStageRouteBody, crmStageRouteHead);
   syncCrmRouteRowHeights(crmStageRouteLeft, crmStageRouteBody);
+  syncCrmRouteHeaders();
 }
 
 function renderCrmRouteCompact(dataset){
@@ -5141,6 +5198,9 @@ function renderCrmRouteCompact(dataset){
   crmStageRouteLeftCompact.innerHTML='';
   crmStageRouteBodyCompact.innerHTML='';
   crmStageRouteHeadCompact.innerHTML='';
+  if(crmStageRouteLeftHeaderCompact){
+    crmStageRouteLeftHeaderCompact.style.removeProperty('min-height');
+  }
   const headFragment=document.createDocumentFragment();
   dataset.days.forEach(day=>{
     const cell=document.createElement('div');
@@ -5207,6 +5267,7 @@ function renderCrmRouteCompact(dataset){
   crmStageRouteBodyCompact.appendChild(bodyFragment);
   bindCrmRouteScroll(crmStageRouteLeftCompact, crmStageRouteBodyCompact, crmStageRouteHeadCompact);
   syncCrmRouteRowHeights(crmStageRouteLeftCompact, crmStageRouteBodyCompact);
+  syncCrmRouteHeaders();
 }
 
 function syncCrmRouteRowHeights(leftEl, bodyEl){
@@ -5245,6 +5306,32 @@ function syncCrmRouteRowHeights(leftEl, bodyEl){
     requestAnimationFrame(apply);
   }else{
     setTimeout(apply,0);
+  }
+}
+
+function syncCrmRouteHeaders(){
+  const apply=()=>{
+    syncCrmRouteHeaderPair(crmStageRouteLeftHeader, crmStageRouteHead);
+    syncCrmRouteHeaderPair(crmStageRouteLeftHeaderCompact, crmStageRouteHeadCompact);
+  };
+  if(typeof requestAnimationFrame==='function'){
+    requestAnimationFrame(apply);
+  }else{
+    setTimeout(apply,0);
+  }
+}
+
+function syncCrmRouteHeaderPair(leftEl, headEl){
+  if(!leftEl){
+    return;
+  }
+  leftEl.style.removeProperty('min-height');
+  if(!headEl){
+    return;
+  }
+  const height=headEl.offsetHeight||0;
+  if(height>0){
+    leftEl.style.minHeight=`${height}px`;
   }
 }
 
@@ -5369,6 +5456,8 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode){
     if(crmStageRouteBodyCompact) crmStageRouteBodyCompact.innerHTML='';
     if(crmStageRouteHead) crmStageRouteHead.innerHTML='';
     if(crmStageRouteHeadCompact) crmStageRouteHeadCompact.innerHTML='';
+    if(crmStageRouteLeftHeader) crmStageRouteLeftHeader.style.removeProperty('min-height');
+    if(crmStageRouteLeftHeaderCompact) crmStageRouteLeftHeaderCompact.style.removeProperty('min-height');
     if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=false;
     if(crmStageRouteSummary) crmStageRouteSummary.innerHTML='';
     return;
@@ -8390,6 +8479,8 @@ window.addEventListener('resize',()=>{
   if(currentCrmView==='orders'){
     syncCrmOrdersTotals();
   }
+  syncCrmGanttLayout();
+  syncCrmRouteHeaders();
 });
 renderAll();
 
