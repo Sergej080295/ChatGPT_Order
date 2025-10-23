@@ -746,6 +746,8 @@
     height: 100%;
     flex: 1 1 auto;
     min-height: 0;
+    overflow: auto;
+    padding-bottom: var(--pc-spacing-lg);
   }
 
   body[data-crm-view="stage"] .crm-stage-view {
@@ -795,6 +797,7 @@
     align-items: stretch;
   }
 
+  .crm-stage-card,
   .crm-stage-table-section {
     flex: 3 1 0;
     min-width: 0;
@@ -959,8 +962,9 @@
 
   .crm-stage-secondary {
     display: grid;
-    grid-template-columns: minmax(320px, 2fr) minmax(320px, 3fr);
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     gap: var(--pc-spacing-md);
+    align-items: start;
   }
 
   .crm-stage-gantt-card,
@@ -1234,12 +1238,27 @@
     border-bottom: none;
   }
 
+  .crm-stage-route-label {
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
   .crm-stage-route-table .status-done {
     color: var(--pc-success);
   }
 
   .crm-stage-route-table .status-late {
     color: var(--pc-danger);
+  }
+
+  .crm-stage-route-summary {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+    display: grid;
+    gap: 4px;
+  }
+
+  .crm-stage-route-summary strong {
+    color: var(--pc-text);
   }
 
   .crm-stage-route-table tr[data-current-stage='1'] td:first-child {
@@ -2842,6 +2861,7 @@
           </div>
         </div>
         <div class="crm-stage-route" id="crmStageRoute"></div>
+        <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
         <div class="crm-stage-detail-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
       </section>
     </div>
@@ -3647,6 +3667,7 @@ const boardSelect=$('#boardSelect'),
       crmStageGanttBody=$('#crmStageGanttBody'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
       crmStageRouteWrap=$('#crmStageRoute'),
+      crmStageRouteSummary=$('#crmStageRouteSummary'),
       crmStageRouteEmpty=$('#crmStageRouteEmpty'),
       crmStageTotalHours=$('#crmStageTotalHours'),
       crmStageTotalRest=$('#crmStageTotalRest'),
@@ -3712,6 +3733,18 @@ const CRM_STAGE_LABELS={
   pack:'Упаковка',
   ship:'Отгрузка'
 };
+const CRM_STAGE_ICONS={
+  draw:'📐',
+  proc:'🛒',
+  shear:'✂️',
+  laser:'🔦',
+  bend:'🗜️',
+  weld:'🔩',
+  mech:'⚙️',
+  coop:'🤝',
+  pack:'📦',
+  ship:'🚚'
+};
 let crmStageRowsCache=[];
 let crmStageSelectionId=null;
 
@@ -3732,6 +3765,12 @@ function resolveCrmStageKey(name){
     if(aliases.includes(normalized)) return key;
   }
   return null;
+}
+
+function crmStageIconLabel(stageKey, fallback){
+  const icon=CRM_STAGE_ICONS[stageKey]||'◻︎';
+  const label=CRM_STAGE_LABELS[stageKey]||fallback||stageKey||'Передел';
+  return `${icon} ${label}`;
 }
 
 function getCrmStageFilter(stageKey){
@@ -4534,6 +4573,10 @@ function applyCrmStageSelectionHighlight(){
 function renderCrmStageRoute(order,currentStageKey){
   if(!crmStageRouteWrap) return;
   crmStageRouteWrap.innerHTML='';
+  if(crmStageRouteSummary){
+    crmStageRouteSummary.innerHTML='';
+    crmStageRouteSummary.style.display='none';
+  }
   if(!order){
     if(crmStageRouteEmpty) crmStageRouteEmpty.hidden=false;
     return;
@@ -4563,20 +4606,32 @@ function renderCrmStageRoute(order,currentStageKey){
     : '<tr><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
   table.appendChild(thead);
   const tbody=document.createElement('tbody');
+  let totalBase=0;
+  let totalExtra=0;
+  let doneCount=0;
+  let lateCount=0;
+  let lastPlannedEnd=null;
   orderedKeys.forEach(key=>{
     const stage=stageMap.get(key);
-    const label=CRM_STAGE_LABELS[key]||stage?.name||key;
-    const row=document.createElement('tr');
-    if(key===currentStageKey){
-      row.dataset.currentStage='1';
-    }
+    const label=crmStageIconLabel(key, stage?.name||key);
     const baseHours=parseStageHours(stage);
     const extraHours=roundExtraForStage(key, computeAutoExtra(baseHours));
     const totalHours=Math.max(0, baseHours+extraHours);
     const progress=stage?normalizeStageProgress(stage.progress??0):0;
     const done=stage?(!!stage.done || progress>=100):false;
-    const endDate=stage?normalizeDate(stage.end||''):null;
-    const isLate=!done && endDate && endDate<new Date();
+    const startRaw=stage?.start||'';
+    const endRaw=stage?.end||'';
+    const endDate=stage?normalizeDate(endRaw):null;
+    if(!CRM_NOHOUR_STAGES.has(key)){
+      totalBase+=Math.max(0, baseHours);
+      totalExtra+=Math.max(0, extraHours);
+    }
+    if(done) doneCount+=1;
+    const isLate=!done && endDate && endDate<today0();
+    if(isLate) lateCount+=1;
+    if(endDate && (!lastPlannedEnd || endDate>lastPlannedEnd)){
+      lastPlannedEnd=endDate;
+    }
     let statusLabel='—';
     let statusClass='';
     if(stage){
@@ -4597,12 +4652,12 @@ function renderCrmStageRoute(order,currentStageKey){
     const cells=compact
       ? [
           label,
-          formatStagePeriod(stage?.start||'', stage?.end||''),
+          formatStagePeriod(startRaw, endRaw),
           statusLabel
         ]
       : [
           label,
-          formatStagePeriod(stage?.start||'', stage?.end||''),
+          formatStagePeriod(startRaw, endRaw),
           formatStageHoursDisplay(baseHours,totalHours,extraHours),
           stage?`${progress}%`:'—',
           statusLabel
@@ -4610,6 +4665,9 @@ function renderCrmStageRoute(order,currentStageKey){
     cells.forEach((value,idx)=>{
       const td=document.createElement('td');
       td.textContent=value||'—';
+      if(idx===0){
+        td.classList.add('crm-stage-route-label');
+      }
       if(!compact && idx===4 && statusClass){
         td.classList.add(statusClass);
       }
@@ -4622,6 +4680,23 @@ function renderCrmStageRoute(order,currentStageKey){
   });
   table.appendChild(tbody);
   crmStageRouteWrap.appendChild(table);
+  if(crmStageRouteSummary){
+    const fragments=[];
+    const hasHours=totalBase>0 || totalExtra>0;
+    const totalHours=hasHours
+      ? formatStageHoursDisplay(totalBase, totalBase+totalExtra, totalExtra)
+      : '—';
+    fragments.push(`<div><strong>Всего по заказу:</strong> ${totalHours}</div>`);
+    fragments.push(`<div>Этапов: ${orderedKeys.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedKeys.length-doneCount)}</div>`);
+    if(lateCount>0){
+      fragments.push(`<div class="status-late">Просрочено этапов: ${lateCount}</div>`);
+    }
+    if(lastPlannedEnd){
+      fragments.push(`<div>Плановая дата завершения: ${formatStageDateLabel(lastPlannedEnd)}</div>`);
+    }
+    crmStageRouteSummary.innerHTML=fragments.join('');
+    crmStageRouteSummary.style.display='grid';
+  }
 }
 
 let crmStageScheduleCache=null;
