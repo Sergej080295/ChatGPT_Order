@@ -3555,6 +3555,7 @@
         </div>
         <div id="crmCapacitySettings"></div>
         <div id="crmParallelSettings"></div>
+        <div id="crmHourlessScheduleSettings"></div>
         <div id="crmPreferencesSettings"></div>
         <div id="crmStartViewSettings"></div>
         <div id="crmMappingSettings"></div>
@@ -3743,6 +3744,15 @@ const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
+const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
+  { key:'daily', label:'Без выходных', type:'weekly', pattern:[true,true,true,true,true,true,true] },
+  { key:'five_two', label:'5/2 (пн–пт)', type:'weekly', pattern:[false,true,true,true,true,true,false] },
+  { key:'two_two', label:'2/2', type:'cycle', length:4, work:[0,1] },
+  { key:'three_three', label:'3/3', type:'cycle', length:6, work:[0,1,2] },
+  { key:'four_two', label:'4/2', type:'cycle', length:6, work:[0,1,2,3] }
+]);
+const CRM_HOURLESS_SCHEDULE_PRESET_MAP=new Map(CRM_HOURLESS_SCHEDULE_PRESETS.map(item=>[item.key,item]));
+const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-01-01', extras:[] });
 const CRM_STAGE_IGNORE='__ignore__';
 const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, shiftOnProgress:true, cascadeReady:true };
 const CRM_DEFAULT_START_VIEW='kanban';
@@ -3816,6 +3826,36 @@ function ensureStageIdentity(stage,fallbackId){
   return resolved;
 }
 const generateTrashId=()=>`trash-${Date.now().toString(16)}-${Math.random().toString(16).slice(2,8)}`;
+function sanitizeHourlessExtrasList(list){
+  const source=Array.isArray(list)
+    ? list
+    : typeof list==='string'
+      ? list.split(/[\s,;]+/)
+      : [];
+  const seen=new Set();
+  const result=[];
+  source.forEach(item=>{
+    const iso=coerceCalendarIso(item);
+    if(!iso || seen.has(iso)) return;
+    seen.add(iso);
+    result.push(iso);
+  });
+  result.sort((a,b)=>a.localeCompare(b));
+  return result;
+}
+function sanitizeCrmHourlessSchedule(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  let preset=typeof base.preset==='string'?base.preset.trim().toLowerCase():'';
+  if(!CRM_HOURLESS_SCHEDULE_PRESET_MAP.has(preset)){
+    preset=CRM_HOURLESS_SCHEDULE_DEFAULT.preset;
+  }
+  let start=coerceCalendarIso(base.start||base.anchor||base.begin);
+  if(!start){
+    start=CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  }
+  const extras=sanitizeHourlessExtrasList(base.extras||base.extraDates||base.dates||base.additional);
+  return { preset, start, extras };
+}
 function sanitizeCrmSettings(raw){
   const base=raw&&typeof raw==='object'?raw:{};
   const statusesSource=base.unaccountedStatuses;
@@ -3855,6 +3895,7 @@ function sanitizeCrmSettings(raw){
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
   result.mapping=sanitizeCrmStageMapping(base.mapping);
+  result.hourlessSchedule=sanitizeCrmHourlessSchedule(base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
   result.trashRetention=retention;
   return result;
@@ -3963,6 +4004,42 @@ function sanitizeCrmStartView(value){
 
 function getCrmStartViewSetting(){
   return sanitizeCrmStartView(state?.settings?.startView);
+}
+
+function getCrmHourlessSchedule(){
+  return sanitizeCrmHourlessSchedule(state?.settings?.hourlessSchedule);
+}
+
+function getCrmHourlessScheduleEvaluator(){
+  const config=getCrmHourlessSchedule();
+  const preset=CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(config.preset)||CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(CRM_HOURLESS_SCHEDULE_DEFAULT.preset);
+  const extras=new Set(Array.isArray(config.extras)?config.extras:[]);
+  const anchorIso=coerceCalendarIso(config.start)||CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  const anchorDate=anchorIso?new Date(`${anchorIso}T00:00:00`):null;
+  const pattern=Array.isArray(preset?.pattern)?preset.pattern:[true,true,true,true,true,true,true];
+  const workIndexes=Array.isArray(preset?.work)?preset.work:[];
+  const cycleLength=Number(preset?.length)||0;
+  const hasValidAnchor=anchorDate instanceof Date && !Number.isNaN(anchorDate.getTime());
+  return {
+    isWorking(dateInput){
+      const date=dateInput instanceof Date?dateInput:new Date(dateInput||Date.now());
+      const iso=fmtDateISO(date);
+      if(extras.has(iso)) return true;
+      if(!preset){
+        return true;
+      }
+      if(preset.type==='weekly'){
+        const dayIndex=date.getDay();
+        return !!pattern[dayIndex];
+      }
+      if(preset.type==='cycle' && cycleLength>0 && hasValidAnchor){
+        const diff=daysBetween(anchorDate, date);
+        const normalized=((diff%cycleLength)+cycleLength)%cycleLength;
+        return workIndexes.includes(normalized);
+      }
+      return true;
+    }
+  };
 }
 
 function getCrmStageMapping(){
@@ -5149,6 +5226,7 @@ function buildCrmStageSchedule(stageKey, rows){
   const calendar=getCrmStageCalendar(stageKey);
   const exceptionMap=isHourless?new Map():calendar.exceptions;
   const reserveMap=isHourless?new Map():calendar.reserves;
+  const hourlessEvaluator=isHourless?getCrmHourlessScheduleEvaluator():null;
   const errors=[];
   const tasks=rows.map(row=>{
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
@@ -5186,7 +5264,15 @@ function buildCrmStageSchedule(stageKey, rows){
   const ensureDay=(date)=>{
     const ds=fmtDateISO(date);
     if(!perDay.has(ds)){
-      const capDay=isHourless?baseCapacity:(exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity);
+      let capDay;
+      let patternOff=false;
+      if(isHourless){
+        const working=!hourlessEvaluator || hourlessEvaluator.isWorking(date);
+        capDay=working?baseCapacity:0;
+        patternOff=!working;
+      }else{
+        capDay=exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity;
+      }
       const reserveWanted=isHourless?0:(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0);
       const resLim=Math.min(reserveWanted, capDay);
       const pubCap=Math.max(0, capDay-resLim);
@@ -5200,6 +5286,7 @@ function buildCrmStageSchedule(stageKey, rows){
           pubRem:pubCap,
           resRem:resLim,
           excluded:Math.max(0, baseCapacity-capDay),
+          patternOff,
           reserveExclusive:resLim>1e-6
         }
       });
@@ -8475,10 +8562,18 @@ const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]'
 const crmExtraMinimumInput=boardForm?.querySelector('input[name="extraMinimum"]')||null;
 const crmCapacityContainer=boardForm?.querySelector('#crmCapacitySettings')||null;
 const crmParallelContainer=boardForm?.querySelector('#crmParallelSettings')||null;
+const crmHourlessScheduleContainer=boardForm?.querySelector('#crmHourlessScheduleSettings')||null;
 const crmPreferencesContainer=boardForm?.querySelector('#crmPreferencesSettings')||null;
 const crmStartViewContainer=boardForm?.querySelector('#crmStartViewSettings')||null;
 const crmMappingContainer=boardForm?.querySelector('#crmMappingSettings')||null;
 let crmUnaccountedDraft=[];
+let crmHourlessExtrasDraft=[];
+let crmHourlessPresetSelect=null;
+let crmHourlessStartInput=null;
+let crmHourlessStartWrapper=null;
+let crmHourlessExtrasList=null;
+let crmHourlessExtrasInput=null;
+let crmHourlessExtrasAddBtn=null;
 
 function renderCrmCapacitySettingsUI(){
   if(!crmCapacityContainer) return;
@@ -8554,6 +8649,173 @@ function renderCrmParallelSettingsUI(){
   row.appendChild(label);
   row.appendChild(control);
   crmParallelContainer.appendChild(row);
+}
+
+function setCrmHourlessExtrasDraft(list,{render=true}={}){
+  crmHourlessExtrasDraft=sanitizeHourlessExtrasList(list);
+  if(render){
+    renderCrmHourlessExtrasList();
+  }
+}
+
+function renderCrmHourlessExtrasList(){
+  if(!crmHourlessExtrasList) return;
+  crmHourlessExtrasList.innerHTML='';
+  if(!Array.isArray(crmHourlessExtrasDraft) || crmHourlessExtrasDraft.length===0){
+    const empty=document.createElement('span');
+    empty.className='muted';
+    empty.textContent='Дополнительных смен нет';
+    crmHourlessExtrasList.appendChild(empty);
+    return;
+  }
+  crmHourlessExtrasDraft.forEach(iso=>{
+    const chip=document.createElement('span');
+    chip.className='crm-chip';
+    const text=document.createElement('span');
+    text.textContent=formatCalendarIso(iso);
+    chip.appendChild(text);
+    const remove=document.createElement('button');
+    remove.type='button';
+    remove.setAttribute('aria-label','Удалить смену');
+    remove.textContent='✕';
+    remove.addEventListener('click',()=>{
+      crmHourlessExtrasDraft=crmHourlessExtrasDraft.filter(item=>item!==iso);
+      renderCrmHourlessExtrasList();
+    });
+    chip.appendChild(remove);
+    crmHourlessExtrasList.appendChild(chip);
+  });
+}
+
+function addCrmHourlessExtra(value){
+  const iso=coerceCalendarIso(value);
+  if(!iso){
+    showToast({ title:'CRM', message:'Введите корректную дату дополнительной смены.', tone:'danger' });
+    return false;
+  }
+  if(crmHourlessExtrasDraft.includes(iso)){
+    showToast({ title:'CRM', message:'Такая смена уже добавлена.', tone:'warning' });
+    return false;
+  }
+  crmHourlessExtrasDraft=[...crmHourlessExtrasDraft, iso].sort((a,b)=>a.localeCompare(b));
+  renderCrmHourlessExtrasList();
+  return true;
+}
+
+function updateCrmHourlessStartVisibility(){
+  if(!crmHourlessStartWrapper) return;
+  const presetKey=crmHourlessPresetSelect?crmHourlessPresetSelect.value:'';
+  const preset=CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(presetKey);
+  const isCycle=!!preset && preset.type==='cycle';
+  crmHourlessStartWrapper.style.display=isCycle?'flex':'none';
+}
+
+function renderCrmHourlessScheduleUI(config){
+  if(!crmHourlessScheduleContainer) return;
+  const schedule=sanitizeCrmHourlessSchedule(config||getCrmHourlessSchedule());
+  setCrmHourlessExtrasDraft(schedule.extras||[], { render:false });
+  crmHourlessScheduleContainer.innerHTML='';
+  const row=document.createElement('div');
+  row.className='crm-settings-row';
+  const label=document.createElement('div');
+  label.className='crm-settings-label';
+  label.textContent='График не часовых операций';
+  const control=document.createElement('div');
+  control.className='crm-settings-control';
+
+  const presetField=document.createElement('label');
+  presetField.className='crm-field';
+  const presetLabel=document.createElement('span');
+  presetLabel.className='crm-field__label';
+  presetLabel.textContent='Базовый график';
+  const presetSelect=document.createElement('select');
+  presetSelect.className='pc-select';
+  presetSelect.name='hourlessPreset';
+  CRM_HOURLESS_SCHEDULE_PRESETS.forEach(option=>{
+    const opt=new Option(option.label, option.key);
+    presetSelect.appendChild(opt);
+  });
+  presetSelect.value=schedule.preset;
+  presetField.append(presetLabel, presetSelect);
+
+  const startField=document.createElement('label');
+  startField.className='crm-field';
+  startField.dataset.hourlessStart='1';
+  const startLabel=document.createElement('span');
+  startLabel.className='crm-field__label';
+  startLabel.textContent='Начало цикла';
+  const startInput=document.createElement('input');
+  startInput.type='date';
+  startInput.className='pc-input';
+  startInput.name='hourlessStart';
+  startInput.value=schedule.start||'';
+  startField.append(startLabel, startInput);
+
+  const extrasGroup=document.createElement('div');
+  extrasGroup.className='crm-chip-input';
+  const extrasLabel=document.createElement('span');
+  extrasLabel.className='crm-field__label';
+  extrasLabel.textContent='Дополнительные смены';
+  const extrasRow=document.createElement('div');
+  extrasRow.className='crm-chip-input-row';
+  const extrasInput=document.createElement('input');
+  extrasInput.type='date';
+  extrasInput.className='pc-input';
+  extrasInput.placeholder='Выберите дату';
+  const extrasAdd=document.createElement('button');
+  extrasAdd.type='button';
+  extrasAdd.className='pc-btn pc-btn--primary';
+  extrasAdd.textContent='Добавить';
+  extrasRow.append(extrasInput, extrasAdd);
+  const extrasList=document.createElement('div');
+  extrasList.className='crm-chip-list';
+  const extrasHint=document.createElement('div');
+  extrasHint.className='crm-field__hint muted';
+  extrasHint.textContent='Выходные по графику будут считаться исключениями. Здесь можно указать рабочие дни сверх графика.';
+  extrasGroup.append(extrasLabel, extrasRow, extrasList, extrasHint);
+
+  const summary=document.createElement('div');
+  summary.className='crm-settings-summary';
+  summary.textContent='График применяется ко всем переделам без указанных часов.';
+
+  control.append(presetField, startField, extrasGroup, summary);
+  row.append(label, control);
+  crmHourlessScheduleContainer.appendChild(row);
+
+  crmHourlessPresetSelect=presetSelect;
+  crmHourlessStartInput=startInput;
+  crmHourlessStartWrapper=startField;
+  crmHourlessExtrasInput=extrasInput;
+  crmHourlessExtrasAddBtn=extrasAdd;
+  crmHourlessExtrasList=extrasList;
+
+  if(crmHourlessExtrasAddBtn){
+    crmHourlessExtrasAddBtn.onclick=()=>{
+      if(addCrmHourlessExtra(crmHourlessExtrasInput?.value)){
+        if(crmHourlessExtrasInput){
+          crmHourlessExtrasInput.value='';
+        }
+      }
+    };
+  }
+  if(crmHourlessExtrasInput){
+    crmHourlessExtrasInput.onkeydown=event=>{
+      if(event.key==='Enter'){
+        event.preventDefault();
+        if(addCrmHourlessExtra(crmHourlessExtrasInput.value)){
+          crmHourlessExtrasInput.value='';
+        }
+      }
+    };
+  }
+  if(crmHourlessPresetSelect){
+    crmHourlessPresetSelect.onchange=()=>{
+      updateCrmHourlessStartVisibility();
+    };
+  }
+
+  renderCrmHourlessExtrasList();
+  updateCrmHourlessStartVisibility();
 }
 
 function renderCrmPreferencesSettingsUI(){
@@ -8961,6 +9223,7 @@ function openBoard(){
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
   const extraSettings=getExtraTimeSettings();
+  const schedule=getCrmHourlessSchedule();
   if(crmExtraPercentInput){
     crmExtraPercentInput.value=String(extraSettings.percent);
   }
@@ -8969,6 +9232,7 @@ function openBoard(){
   }
   renderCrmCapacitySettingsUI();
   renderCrmParallelSettingsUI();
+  renderCrmHourlessScheduleUI(schedule);
   renderCrmPreferencesSettingsUI();
   renderCrmStartViewSettingsUI();
   renderCrmMappingSettingsUI();
@@ -9027,6 +9291,11 @@ boardForm.addEventListener('submit',e=>{
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
+  state.settings.hourlessSchedule=sanitizeCrmHourlessSchedule({
+    preset:crmHourlessPresetSelect?crmHourlessPresetSelect.value:'',
+    start:crmHourlessStartInput?crmHourlessStartInput.value:'',
+    extras:crmHourlessExtrasDraft
+  });
   const mappingSelects=[...boardForm.querySelectorAll('select[name="crmMappingSelect"]')];
   const mappingDraft={};
   mappingSelects.forEach(select=>{
