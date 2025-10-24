@@ -255,6 +255,7 @@
 (function bootstrapCrmSnapshot(){
   const KEY = 'mini_crm_v13c';
   try {
+    window.__CRM_DATA_SOURCE__ = 'local';
     const xhr = new XMLHttpRequest();
     xhr.open('GET', '/api/state', false);
     xhr.setRequestHeader('Accept', 'application/json,text/plain');
@@ -270,6 +271,7 @@
       if (window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function') {
         window.plannerRemote.applyFingerprint({ etag, hash: parsed?.hash });
       }
+      window.__CRM_DATA_SOURCE__ = 'remote';
       if (parsed && typeof parsed === 'object') {
         const muted = (() => {
           if (typeof parsed.notificationsMuted === 'boolean') return parsed.notificationsMuted;
@@ -323,6 +325,79 @@
     overflow-x: hidden;
     overflow-y: auto;
     min-height: 0;
+  }
+
+  .pc-nav__link {
+    position: relative;
+  }
+
+  .pc-nav__link--alert {
+    color: var(--pc-danger);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .pc-nav__link--alert::after {
+    content: '';
+    position: absolute;
+    top: 6px;
+    right: -10px;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--pc-danger);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-danger) 25%, transparent);
+  }
+
+  .crm-db-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--pc-text-muted);
+    background: color-mix(in srgb, var(--pc-border) 20%, transparent);
+    transition: background var(--pc-transition-short), color var(--pc-transition-short);
+    white-space: nowrap;
+    margin-right: var(--pc-spacing-sm);
+  }
+
+  .crm-db-indicator__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--pc-border) 65%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-border) 25%, transparent);
+    transition: background var(--pc-transition-short), box-shadow var(--pc-transition-short);
+  }
+
+  .crm-db-indicator--online {
+    color: color-mix(in srgb, var(--pc-success, #2e7d32) 88%, black 12%);
+    background: color-mix(in srgb, var(--pc-success, #2e7d32) 18%, transparent);
+  }
+
+  .crm-db-indicator--online .crm-db-indicator__dot {
+    background: var(--pc-success, #2e7d32);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-success, #2e7d32) 30%, transparent);
+  }
+
+  .crm-db-indicator--readonly {
+    color: color-mix(in srgb, var(--pc-warning, #f59f00) 88%, black 12%);
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 20%, transparent);
+  }
+
+  .crm-db-indicator--readonly .crm-db-indicator__dot {
+    background: var(--pc-warning, #f59f00);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-warning, #f59f00) 32%, transparent);
+  }
+
+  .crm-db-indicator--local {
+    color: var(--pc-text-muted);
+    background: color-mix(in srgb, var(--pc-border) 24%, transparent);
+  }
+
+  .crm-db-indicator--local .crm-db-indicator__dot {
+    background: color-mix(in srgb, var(--pc-border) 65%, transparent);
   }
 
   @media (max-width: 1023px) {
@@ -1532,23 +1607,44 @@
   }
 
   .pc-modal--route {
-    border-radius: var(--pc-radius-xl, 20px);
-    padding: var(--pc-spacing-lg, 24px);
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    border-radius: 0;
+    width: auto;
   }
 
-  .pc-modal--route .pc-modal-actions {
-    justify-content: flex-end;
-    margin-top: var(--pc-spacing-md, 16px);
+  .crm-route-modal {
+    position: relative;
+    padding: var(--pc-spacing-xl) var(--pc-spacing-xl) var(--pc-spacing-lg);
+    background: var(--pc-surface);
+    border-radius: var(--pc-radius-xxl, 28px);
+    box-shadow: 0 26px 58px rgba(15, 23, 42, 0.26);
+    min-width: min(520px, 92vw);
+    max-width: min(680px, 96vw);
+    width: min(640px, 94vw);
+  }
+
+  .crm-route-modal__close {
+    position: absolute;
+    top: 16px;
+    right: 24px;
+    border-radius: var(--pc-radius-pill, 999px);
+    padding-inline: 18px;
+    font-size: 12px;
+    z-index: 2;
+  }
+
+  .crm-route-modal__close:hover {
+    background: color-mix(in srgb, var(--pc-border) 24%, transparent);
   }
 
   .crm-route-mini {
-    max-width: 640px;
-    max-height: 60vh;
+    max-height: 56vh;
     overflow: auto;
-    padding: var(--pc-spacing-md, 16px);
-    background: linear-gradient(180deg, color-mix(in srgb, var(--pc-surface) 92%, transparent) 0%, var(--pc-surface) 100%);
-    border-radius: var(--pc-radius-lg, 16px);
-    box-shadow: var(--pc-shadow-lg, 0 18px 44px rgba(15, 23, 42, 0.18));
+    padding-right: 4px;
+    width: 100%;
+    margin-top: var(--pc-spacing-lg);
   }
 
   .crm-route-mini table {
@@ -1571,6 +1667,10 @@
     background: color-mix(in srgb, var(--pc-border) 16%, transparent);
   }
 
+  .crm-route-mini thead th:first-child {
+    text-align: left;
+  }
+
   .crm-route-mini tbody td {
     padding: 10px 8px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 32%, transparent);
@@ -1590,6 +1690,10 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .crm-route-status {
+    font-weight: var(--pc-font-weight-semibold);
   }
 
   .crm-route-mini-summary {
@@ -2949,6 +3053,10 @@
     <a class="pc-nav__link" data-section="journal" data-action="open-log" href="#journal">Журнал</a>
   </nav>
   <div class="pc-header__actions">
+    <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
+      <span class="crm-db-indicator__dot" aria-hidden="true"></span>
+      <span class="crm-db-indicator__label">Локальный режим</span>
+    </div>
     <button class="pc-icon-btn pc-theme-toggle" type="button" data-action="toggle-theme" aria-pressed="false" aria-label="Переключить тему">
       <svg data-icon="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6" />
@@ -3284,11 +3392,10 @@
 <div id="toastLayer" class="pc-toast-layer" aria-live="polite"></div>
 
 
-<dialog id="crmStageRouteDlg" class="pc-modal pc-modal--route">
-  <h3 class="pc-modal__title">Маршрут заказа</h3>
-  <div id="crmStageRouteDlgContent" class="crm-route-mini"></div>
-  <div class="pc-modal-actions">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageRouteDlgClose">Закрыть</button>
+<dialog id="crmStageRouteDlg" class="pc-modal pc-modal--route" aria-label="Маршрут заказа">
+  <div class="crm-route-modal">
+    <button type="button" class="pc-btn pc-btn--ghost crm-route-modal__close" id="crmStageRouteDlgClose">Закрыть</button>
+    <div id="crmStageRouteDlgContent" class="crm-route-mini"></div>
   </div>
 </dialog>
 
@@ -4071,6 +4178,10 @@ function ensureCrmStateShape(value){
   applyTrashRetentionToTarget(base);
   return base;
 }
+const CRM_DATA_SOURCE={ remote:'remote', local:'local' };
+let crmDataSource=window.__CRM_DATA_SOURCE__==='remote'?CRM_DATA_SOURCE.remote:CRM_DATA_SOURCE.local;
+let crmDbIndicator=null;
+let crmSettingsLinks=[];
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
 const normalizeWriteMode=value=>{
   if(value===null||value===undefined) return DATA_WRITE_MODES.both;
@@ -4081,6 +4192,32 @@ const normalizeWriteMode=value=>{
 };
 let currentWriteMode=DATA_WRITE_MODES.both;
 const crmWriteAccessEnabled=()=> currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
+function updateCrmDbIndicator(){
+  if(!crmDbIndicator) return;
+  const label=crmDbIndicator.querySelector('.crm-db-indicator__label');
+  const stateClass=crmDataSource===CRM_DATA_SOURCE.remote
+    ? (crmWriteAccessEnabled()? 'crm-db-indicator--online':'crm-db-indicator--readonly')
+    : 'crm-db-indicator--local';
+  crmDbIndicator.classList.remove('crm-db-indicator--online','crm-db-indicator--readonly','crm-db-indicator--local');
+  crmDbIndicator.classList.add(stateClass);
+  if(label){
+    if(stateClass==='crm-db-indicator--online'){
+      label.textContent='БД онлайн';
+    }else if(stateClass==='crm-db-indicator--readonly'){
+      label.textContent='БД только чтение';
+    }else{
+      label.textContent='Локальный режим';
+    }
+  }
+}
+function setCrmDataSource(source){
+  const normalized=source===CRM_DATA_SOURCE.remote?CRM_DATA_SOURCE.remote:CRM_DATA_SOURCE.local;
+  if(crmDataSource!==normalized){
+    crmDataSource=normalized;
+  }
+  window.__CRM_DATA_SOURCE__=crmDataSource;
+  updateCrmDbIndicator();
+}
 let lastCrmWriteBlockedAt=0;
 const applyCrmWriteAccess=()=>{
   const canWrite=crmWriteAccessEnabled();
@@ -4093,6 +4230,7 @@ const applyCrmWriteAccess=()=>{
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canWrite; }
   if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canWrite; }
   if(crmStageReserveApply){ crmStageReserveApply.disabled=!canWrite; }
+  updateCrmDbIndicator();
 };
 
 const CRM_SEARCH_STORAGE_KEY='mini_crm_search_v1';
@@ -4369,6 +4507,10 @@ const boardSelect=$('#boardSelect'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
       crmStageReserveApply=$('#crmStageReserveApply');
+crmDbIndicator=$('#crmDbIndicator');
+crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
+updateCrmDbIndicator();
+recalcCrmMappingAlert();
 const LANE_PAGE_SIZE=10;
 const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
@@ -6220,6 +6362,56 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
   }
 }
 
+function snapshotCrmStageRowForRoute(order, stageKey, stageEntry){
+  if(!order||!stageEntry) return null;
+  const resolved=resolveCrmStageKey(stageEntry.name)||stageKey;
+  if(!resolved) return null;
+  const fallbackIdentity=resolveOrderIdentity(order,0,resolved);
+  const stageId=ensureStageIdentity(stageEntry,fallbackIdentity);
+  const progress=normalizeStageProgress(stageEntry.progress??0);
+  const done=!!stageEntry.done || progress>=100;
+  const baseHours=parseStageHours(stageEntry);
+  const extraHours=roundExtraForStage(resolved, computeAutoExtra(baseHours));
+  const totalHours=Math.max(0, baseHours+extraHours);
+  const startRaw=stageEntry.start||'';
+  const endRaw=stageEntry.end||'';
+  const startDate=normalizeDate(startRaw);
+  const endDate=normalizeDate(endRaw);
+  const isHourless=CRM_NOHOUR_STAGES.has(resolved);
+  const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
+  const now=new Date();
+  const isLate=!done && endDate && endDate<now;
+  return {
+    order,
+    orderId:order?.id||'',
+    stage:stageEntry,
+    stageId,
+    identity:stageId||fallbackIdentity,
+    orderIndex:0,
+    stageKey:resolved,
+    progress,
+    done,
+    baseHours,
+    extraHours,
+    totalHours,
+    restHours,
+    startRaw,
+    endRaw,
+    startDate,
+    endDate,
+    isLate,
+    orderTitle:buildCrmOrderTitle(order),
+    stateLabel:order?.status||'—',
+    useReserve:!!stageEntry.useReserve
+  };
+}
+
+function computeCrmRouteStatusInfo(snapshot){
+  if(!snapshot) return { label:'—', className:'', title:'' };
+  const schedule=buildCrmStageSchedule(snapshot.stageKey, [{ ...snapshot }]);
+  return computeCrmStageStatus(snapshot, schedule);
+}
+
 function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
   const stages=Array.isArray(order.stages)?order.stages:[];
@@ -6248,55 +6440,46 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   let lastPlannedEnd=null;
   orderedKeys.forEach(key=>{
     const stage=stageMap.get(key);
-    const baseHours=parseStageHours(stage);
-    const extraHours=roundExtraForStage(key, computeAutoExtra(baseHours));
-    const totalHours=Math.max(0, baseHours+extraHours);
-    const progress=stage?normalizeStageProgress(stage.progress??0):0;
-    const done=stage?(!!stage.done || progress>=100):false;
-    const startRaw=stage?.start||'';
-    const endRaw=stage?.end||'';
-    const endDate=stage?normalizeDate(endRaw):null;
-    if(!CRM_NOHOUR_STAGES.has(key)){
-      totalBase+=Math.max(0, baseHours);
-      totalExtra+=Math.max(0, extraHours);
+    const snapshot=snapshotCrmStageRowForRoute(order, key, stage);
+    if(!snapshot) return;
+    const isHourless=CRM_NOHOUR_STAGES.has(snapshot.stageKey);
+    if(!isHourless){
+      totalBase+=Math.max(0, snapshot.baseHours);
+      totalExtra+=Math.max(0, snapshot.extraHours);
     }
-    if(done) doneCount+=1;
-    const isLate=!done && endDate && endDate<today0();
-    if(isLate) lateCount+=1;
-    if(endDate && (!lastPlannedEnd || endDate>lastPlannedEnd)){
-      lastPlannedEnd=endDate;
+    if(snapshot.done) doneCount+=1;
+    if(snapshot.endDate && (!lastPlannedEnd || snapshot.endDate>lastPlannedEnd)){
+      lastPlannedEnd=new Date(snapshot.endDate);
     }
-    let statusLabel='—';
-    let statusClass='';
-    if(stage){
-      if(done){
-        statusLabel='Готово';
-        statusClass='status-done';
-      }else if(isLate){
-        statusLabel='Просрочено';
-        statusClass='status-late';
-      }else{
-        statusLabel='В работе';
-      }
+    const statusInfo=computeCrmRouteStatusInfo(snapshot);
+    if(statusInfo.className==='status-late'){
+      lateCount+=1;
     }
+    const hoursLabel=isHourless?'—':formatStageHoursTotal(snapshot.totalHours);
     const tr=document.createElement('tr');
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
-    const isHourless=CRM_NOHOUR_STAGES.has(key);
-    const hoursLabel=isHourless?'—':formatStageHoursTotal(totalHours);
     const cells=[
       crmStageIconLabel(key, stage?.name||key),
-      formatStagePeriod(startRaw, endRaw),
+      formatStagePeriod(snapshot.startRaw, snapshot.endRaw),
       hoursLabel,
-      stage?`${progress}%`:'—',
-      statusLabel
+      stage?`${snapshot.progress}%`:'—',
+      statusInfo.label||'—'
     ];
     cells.forEach((value,idx)=>{
       const td=document.createElement('td');
       td.textContent=value||'—';
       if(idx===0) td.classList.add('crm-stage-route-label');
-      if(idx===4 && statusClass) td.classList.add(statusClass);
+      if(idx===4){
+        td.classList.add('crm-route-status');
+        if(statusInfo.className){
+          td.classList.add(statusInfo.className);
+        }
+        if(statusInfo.title){
+          td.title=statusInfo.title;
+        }
+      }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -8338,6 +8521,16 @@ if(crmMappingContainer){
   });
 }
 
+function setCrmMappingAlertState(active){
+  if(Array.isArray(crmSettingsLinks) && crmSettingsLinks.length){
+    crmSettingsLinks.forEach(link=>{
+      if(link){
+        link.classList.toggle('pc-nav__link--alert', !!active);
+      }
+    });
+  }
+}
+
 function updateCrmMappingAlertState(){
   if(!crmMappingContainer) return;
   const wrapper=crmMappingContainer.closest('.crm-settings-row');
@@ -8359,6 +8552,30 @@ function updateCrmMappingAlertState(){
     }else if(badge){
       badge.remove();
     }
+  }
+  setCrmMappingAlertState(hasUnmapped);
+}
+
+function recalcCrmMappingAlert(){
+  try{
+    const entries=collectCrmMappingEntries();
+    const mapping=getCrmStageMapping();
+    const hasUnmapped=entries.some(entry=>{
+      const normalized=entry?.normalized;
+      if(!normalized) return false;
+      const value=mapping?.[normalized];
+      if(value===CRM_STAGE_IGNORE) return false;
+      if(typeof value==='string' && value){
+        return false;
+      }
+      if(entry.fallback){
+        return false;
+      }
+      return true;
+    });
+    setCrmMappingAlertState(hasUnmapped);
+  }catch(err){
+    console.warn('CRM mapping alert calc failed', err);
   }
 }
 
@@ -9028,6 +9245,7 @@ async function pushCrmToServer(){
   }
   crmSyncInFlight=true;
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
+    setCrmDataSource(CRM_DATA_SOURCE.local);
     crmSyncInFlight=false;
     return;
   }
@@ -9052,10 +9270,12 @@ async function pushCrmToServer(){
         if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
       }
       plannerSnapshot=raw?JSON.parse(raw):{};
+      setCrmDataSource(CRM_DATA_SOURCE.remote);
     }catch(err){
       const loadError=new Error('CRM planner state load failed');
       loadError.code='CRM_PLANNER_LOAD_FAILED';
       loadError.originalError=err;
+      setCrmDataSource(CRM_DATA_SOURCE.local);
       throw loadError;
     }
     if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
@@ -9144,6 +9364,7 @@ async function pushCrmToServer(){
     try{
       crmSuppressNext=true;
       await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
+      setCrmDataSource(CRM_DATA_SOURCE.remote);
       success=true;
     }catch(err){
       crmSuppressNext=false;
@@ -9165,6 +9386,7 @@ async function pushCrmToServer(){
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
       console.error('CRM: load planner state failed',lastError.originalError||lastError);
       showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+      setCrmDataSource(CRM_DATA_SOURCE.local);
     }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
       const now=Date.now();
       if(now - lastCrmWriteBlockedAt > 5000){
@@ -9202,6 +9424,7 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
       syncCrmNotificationsMutedFromPlanner(parsed);
       currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
       applyCrmWriteAccess();
+      setCrmDataSource(CRM_DATA_SOURCE.remote);
       if(parsed&&parsed.crm){
         applyRemoteCrm(parsed.crm);
         showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
@@ -9233,6 +9456,7 @@ function renderAll(){
   renderCurrentView();
   updateLaneHeightVar();
   updateCrmAuxButtons();
+  recalcCrmMappingAlert();
 }
 updateCrmOrdersTabUi();
 if(crmOrdersTabBtn){
@@ -9395,7 +9619,8 @@ window.addEventListener('resize',()=>{
 });
 renderAll();
 
-document.querySelectorAll('[data-action="open-settings"]').forEach(link => {
+crmSettingsLinks.forEach(link => {
+  if(!link) return;
   link.addEventListener('click', evt => {
     evt.preventDefault();
     if(typeof openBoard === 'function'){
