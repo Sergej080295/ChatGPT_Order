@@ -920,6 +920,19 @@
     min-height: 0;
   }
 
+  .crm-stage-dup-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text-muted);
+    background: color-mix(in srgb, var(--pc-border) 26%, transparent);
+  }
+
   .crm-stage-legend {
     display: flex;
     gap: var(--pc-spacing-md);
@@ -5003,84 +5016,103 @@ function collectCrmStageRows(stageKey,filterMode){
     const statusKey=normalizeStatusKey(order.status||'');
     if(ignoredSet.size && statusKey && ignoredSet.has(statusKey)) return;
     if(orderSearchNormalized && !orderMatchesSearch(order)) return;
-    const stages=Array.isArray(order.stages)?order.stages:[];
-    const stageEntry=stages.find(st=>resolveCrmStageKey(st?.name)===stage);
-    if(!stageEntry) return;
-    const stageKeyResolved=resolveCrmStageKey(stageEntry.name)||stage;
-    const stageId=ensureStageIdentity(stageEntry, `${order?.id||index}:${stageKeyResolved}`);
-    const progress=normalizeStageProgress(stageEntry.progress??0);
-    const done=!!stageEntry.done || progress>=100;
-    const baseHours=parseStageHours(stageEntry);
-    const extraHours=roundExtraForStage(stageKeyResolved, computeAutoExtra(baseHours));
-    const totalHours=Math.max(0, baseHours+extraHours);
-    const startRaw=stageEntry.start||'';
-    const endRaw=stageEntry.end||'';
-    const startDate=normalizeDate(startRaw);
-    const endDate=normalizeDate(endRaw);
-    let isLate=false;
-    if(!done && endDate){
-      isLate=endDate<now;
-    }
-    const isHourless=CRM_NOHOUR_STAGES.has(stageKeyResolved);
-    const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
-    switch(filter){
-      case 'current':
-        if(done) return;
-        break;
-      case 'done':
-        if(!done) return;
-        break;
-      case 'late':
-        if(!isLate) return;
-        break;
-      default:
-        break;
-    }
-    const identity=stageId || resolveOrderIdentity(order,index,stageKeyResolved);
-    const title=buildCrmOrderTitle(order);
-    const statusLabel=done?'Готово':(isLate?'Просрочено':'В работе');
-    if(!isHourless){
-      totalBase+=baseHours;
-      totalExtra+=extraHours;
-      totalRest+=restHours||0;
-    }
-    if(isLate){
-      const lateDays=endDate?Math.max(1, Math.ceil((now.getTime()-endDate.getTime())/86400000)):null;
-      overdue.push({
-        orderTitle:title,
-        endDate,
-        lateDays,
+  const stages=Array.isArray(order.stages)?order.stages:[];
+    const matching=stages
+      .map((stageEntry, stagePosition)=>({
+        stageEntry,
+        stagePosition,
+        stageKeyResolved:resolveCrmStageKey(stageEntry?.name)
+      }))
+      .filter(entry=>entry.stageKeyResolved===stage);
+    if(!matching.length) return;
+    matching.forEach(({ stageEntry, stagePosition, stageKeyResolved }, occurrenceIdx)=>{
+      const stageId=ensureStageIdentity(stageEntry, `${order?.id||index}:${stageKeyResolved}:${occurrenceIdx}`);
+      const progress=normalizeStageProgress(stageEntry.progress??0);
+      const done=!!stageEntry.done || progress>=100;
+      const baseHours=parseStageHours(stageEntry);
+      const extraHours=roundExtraForStage(stageKeyResolved, computeAutoExtra(baseHours));
+      const totalHours=Math.max(0, baseHours+extraHours);
+      const startRaw=stageEntry.start||'';
+      const endRaw=stageEntry.end||'';
+      const startDate=normalizeDate(startRaw);
+      const endDate=normalizeDate(endRaw);
+      let isLate=false;
+      if(!done && endDate){
+        isLate=endDate<now;
+      }
+      const isHourless=CRM_NOHOUR_STAGES.has(stageKeyResolved);
+      const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
+      switch(filter){
+        case 'current':
+          if(done) return;
+          break;
+        case 'done':
+          if(!done) return;
+          break;
+        case 'late':
+          if(!isLate) return;
+          break;
+        default:
+          break;
+      }
+      const identity=stageId || resolveOrderIdentity(order,index,stageKeyResolved);
+      const title=buildCrmOrderTitle(order);
+      const statusLabel=done?'Готово':(isLate?'Просрочено':'В работе');
+      const expectedProgress=computeExpectedPercentForInputs(startRaw, endRaw);
+      const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
+      if(!isHourless){
+        totalBase+=baseHours;
+        totalExtra+=extraHours;
+        totalRest+=restHours||0;
+      }
+      if(isLate){
+        const lateDays=endDate?Math.max(1, Math.ceil((now.getTime()-endDate.getTime())/86400000)):null;
+        overdue.push({
+          orderTitle:title,
+          endDate,
+          lateDays,
+          orderId:order?.id||'',
+          stageKey:stageKeyResolved
+        });
+      }
+      rows.push({
+        order,
         orderId:order?.id||'',
-        stageKey:stageKeyResolved
+        stage:stageEntry,
+        stageId,
+        identity,
+        orderIndex:index,
+        stageKey:stageKeyResolved,
+        stagePosition,
+        occurrenceIndex:occurrenceIdx+1,
+        occurrenceTotal:matching.length,
+        progress,
+        expectedProgress,
+        expectedBehind,
+        done,
+        baseHours,
+        extraHours,
+        totalHours,
+        restHours,
+        startRaw,
+        endRaw,
+        startDate,
+        endDate,
+        isLate,
+        orderTitle:title,
+        stateLabel:order?.status||'—',
+        statusLabel,
+        useReserve:!!stageEntry.useReserve
       });
-    }
-    rows.push({
-      order,
-      orderId:order?.id||'',
-      stage:stageEntry,
-      stageId,
-      identity,
-      orderIndex:index,
-      stageKey:stageKeyResolved,
-      progress,
-      done,
-      baseHours,
-      extraHours,
-      totalHours,
-      restHours,
-      startRaw,
-      endRaw,
-      startDate,
-      endDate,
-      isLate,
-      orderTitle:title,
-      stateLabel:order?.status||'—',
-      statusLabel,
-      useReserve:!!stageEntry.useReserve
     });
   });
   rows.sort((a,b)=>{
     if(a.done!==b.done) return a.done?1:-1;
+    if(a.orderId&&b.orderId&&a.orderId===b.orderId&&a.stageKey===b.stageKey){
+      const aPos=Number.isFinite(a.stagePosition)?a.stagePosition:Number.MAX_SAFE_INTEGER;
+      const bPos=Number.isFinite(b.stagePosition)?b.stagePosition:Number.MAX_SAFE_INTEGER;
+      if(aPos!==bPos) return aPos-bPos;
+    }
     const aStart=a.startDate? a.startDate.getTime():Number.MAX_SAFE_INTEGER;
     const bStart=b.startDate? b.startDate.getTime():Number.MAX_SAFE_INTEGER;
     if(aStart!==bStart) return aStart-bStart;
@@ -5700,7 +5732,8 @@ function buildCrmRouteDataset(rows, filterMode){
       stageOrder:[]
     };
     const stageList=Array.isArray(order.stages)?order.stages:[];
-    stageList.forEach(stage=>{
+    const stageInstancesRaw=[];
+    stageList.forEach((stage, stageIndex)=>{
       if(!stage||typeof stage!=='object') return;
       const stageKey=resolveCrmStageKey(stage.name);
       if(!stageKey) return;
@@ -5711,6 +5744,28 @@ function buildCrmRouteDataset(rows, filterMode){
       const totalHours=CRM_NOHOUR_STAGES.has(stageKey)?0:Math.max(0, baseHours+extraHours);
       const progress=normalizeStageProgress(stage.progress??0);
       const done=!!stage.done||progress>=100;
+      const expectedProgress=computeExpectedPercentForInputs(stage.start||'', stage.end||'');
+      const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
+      const instance={
+        stageKey,
+        stage,
+        stageId:ensureStageIdentity(stage, `${key}:${stageKey}:${stageIndex}`),
+        start,
+        end,
+        startRaw:stage.start||'',
+        endRaw:stage.end||'',
+        baseHours,
+        extraHours,
+        totalHours,
+        progress,
+        expectedProgress,
+        expectedBehind,
+        done,
+        stagePosition:stageIndex,
+        occurrenceIndex:1,
+        occurrenceTotal:1
+      };
+      stageInstancesRaw.push(instance);
       if(!entry.stages.has(stageKey)){
         entry.stages.set(stageKey,{ stageKey, start, end, baseHours, extraHours, totalHours, progress, done });
       }else{
@@ -5724,19 +5779,60 @@ function buildCrmRouteDataset(rows, filterMode){
         existing.done=existing.done||done;
       }
     });
-    if(!entry.stages.size) return null;
+    if(!entry.stages.size || !stageInstancesRaw.length) return null;
+    const groupedInstances=new Map();
+    stageInstancesRaw.forEach(instance=>{
+      const bucket=groupedInstances.get(instance.stageKey);
+      if(bucket){
+        bucket.push(instance);
+      }else{
+        groupedInstances.set(instance.stageKey,[instance]);
+      }
+    });
+    groupedInstances.forEach(bucket=>{
+      bucket.sort((a,b)=>{
+        const aPos=Number.isFinite(a.stagePosition)?a.stagePosition:Number.MAX_SAFE_INTEGER;
+        const bPos=Number.isFinite(b.stagePosition)?b.stagePosition:Number.MAX_SAFE_INTEGER;
+        return aPos-bPos;
+      });
+      bucket.forEach((inst, idx)=>{
+        inst.occurrenceIndex=idx+1;
+        inst.occurrenceTotal=bucket.length;
+      });
+    });
+    const stageInstances=[];
+    const stageOrderUnique=[];
+    const pushStageKey=stageKey=>{
+      if(!stageOrderUnique.includes(stageKey)) stageOrderUnique.push(stageKey);
+    };
+    CRM_STAGE_SEQUENCE.forEach(stageKey=>{
+      const bucket=groupedInstances.get(stageKey);
+      if(!bucket) return;
+      bucket.forEach(instance=>{
+        if(crmRouteHiddenStages.has(stageKey)) return;
+        if(instance.done) return;
+        stageInstances.push(instance);
+        pushStageKey(stageKey);
+      });
+      groupedInstances.delete(stageKey);
+    });
+    groupedInstances.forEach((bucket, stageKey)=>{
+      bucket.forEach(instance=>{
+        if(crmRouteHiddenStages.has(stageKey)) return;
+        if(instance.done) return;
+        stageInstances.push(instance);
+        pushStageKey(stageKey);
+      });
+    });
     const stageValues=Array.from(entry.stages.values());
     const hasUndone=stageValues.some(seg=>!seg.done);
     const hasLate=stageValues.some(seg=>!seg.done && seg.end instanceof Date && seg.end<today);
     if(filter==='current' && !hasUndone) return null;
     if(filter==='done' && hasUndone) return null;
     if(filter==='late' && !hasLate) return null;
-    entry.stageOrder=CRM_STAGE_SEQUENCE.filter(stage=>{
-      if(!entry.stages.has(stage) || crmRouteHiddenStages.has(stage)) return false;
-      const seg=entry.stages.get(stage);
-      return !(seg && seg.done);
-    });
-    if(!entry.stageOrder.length) return null;
+    if(!stageInstances.length) return null;
+    entry.stageOrder=stageOrderUnique;
+    entry.stageInstances=stageInstances;
     ordersMap.set(key, entry);
     return entry;
   };
@@ -5755,9 +5851,15 @@ function buildCrmRouteDataset(rows, filterMode){
   let minDate=null;
   let maxDate=null;
   orders.forEach(order=>{
-    order.stageOrder.forEach(stage=>{
-      const seg=order.stages.get(stage);
-      if(!seg) return;
+    let segments=[];
+    if(Array.isArray(order.stageInstances) && order.stageInstances.length){
+      segments=order.stageInstances;
+    }else if(Array.isArray(order.stageOrder)){
+      segments=order.stageOrder
+        .map(stage=>order.stages.get(stage))
+        .filter(seg=>seg);
+    }
+    segments.forEach(seg=>{
       if(seg.start instanceof Date){
         if(!minDate||seg.start<minDate) minDate=new Date(seg.start);
       }
@@ -5903,32 +6005,74 @@ function renderCrmRouteDetailed(dataset, days){
     leftFragment.appendChild(label);
     const orderRow=createCrmRouteRow(days);
     bodyFragment.appendChild(orderRow);
-    order.stageOrder.forEach(stageKey=>{
-      const stageLabel=document.createElement('div');
-      stageLabel.className='crm-route-label stage';
-      stageLabel.textContent=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
-      stageLabel.title=stageLabel.textContent.slice(2);
-      leftFragment.appendChild(stageLabel);
-      const row=createCrmRouteRow(days);
-      const seg=order.stages.get(stageKey);
-      const spanInfo=computeCrmRouteSpan(seg, dayIndexMap);
-      if(spanInfo){
-        const bar=document.createElement('div');
-        bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
-        bar.style.left=`calc(${spanInfo.start} * var(--crmRouteDayWidth))`;
-        bar.style.width=`calc(${spanInfo.span} * var(--crmRouteDayWidth) - 6px)`;
-        if(seg.done) bar.classList.add('is-done');
-        if(!seg.done && seg.end instanceof Date && seg.end<today){
-          bar.classList.add('is-late');
+    const stageInstances=Array.isArray(order.stageInstances)?order.stageInstances:[];
+    if(stageInstances.length){
+      stageInstances.forEach(instance=>{
+        const stageKey=instance.stageKey;
+        const stageLabel=document.createElement('div');
+        stageLabel.className='crm-route-label stage';
+        let text=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
+        if(instance.occurrenceTotal>1){
+          text+=` №${instance.occurrenceIndex}`;
         }
-        const letter=CRM_STAGE_LETTERS[stageKey]||stageKey.slice(0,1).toUpperCase();
-        const hoursLabel=seg.totalHours>0?`${seg.totalHours.toFixed(1)}ч`:'';
-        bar.innerHTML=`<span class="crm-route-seg-label">${letter}</span>${hoursLabel?`<span>${hoursLabel}</span>`:''}`;
-        bar.title=`${CRM_STAGE_LABELS[stageKey]||stageKey}: ${formatStagePeriod(seg.start, seg.end)}${hoursLabel?` • ${hoursLabel}`:''}`;
-        row.appendChild(bar);
-      }
-      bodyFragment.appendChild(row);
-    });
+        stageLabel.textContent=text;
+        stageLabel.title=text.slice(2);
+        leftFragment.appendChild(stageLabel);
+        const row=createCrmRouteRow(days);
+        const seg=instance;
+        const spanInfo=computeCrmRouteSpan(seg, dayIndexMap);
+        if(spanInfo){
+          const bar=document.createElement('div');
+          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
+          bar.style.left=`calc(${spanInfo.start} * var(--crmRouteDayWidth))`;
+          bar.style.width=`calc(${spanInfo.span} * var(--crmRouteDayWidth) - 6px)`;
+          if(seg.done) bar.classList.add('is-done');
+          if(!seg.done && seg.end instanceof Date && seg.end<today){
+            bar.classList.add('is-late');
+          }
+          const letter=CRM_STAGE_LETTERS[stageKey]||stageKey.slice(0,1).toUpperCase();
+          const hoursLabel=seg.totalHours>0?`${seg.totalHours.toFixed(1)}ч`:'';
+          bar.innerHTML=`<span class="crm-route-seg-label">${letter}</span>${hoursLabel?`<span>${hoursLabel}</span>`:''}`;
+          let titleText=`${CRM_STAGE_LABELS[stageKey]||stageKey}: ${formatStagePeriod(seg.start, seg.end)}`;
+          if(hoursLabel){
+            titleText+=` • ${hoursLabel}`;
+          }
+          if(seg.occurrenceTotal>1){
+            titleText+=` • №${seg.occurrenceIndex}`;
+          }
+          bar.title=titleText;
+          row.appendChild(bar);
+        }
+        bodyFragment.appendChild(row);
+      });
+    }else if(Array.isArray(order.stageOrder)){ // fallback for legacy data
+      order.stageOrder.forEach(stageKey=>{
+        const stageLabel=document.createElement('div');
+        stageLabel.className='crm-route-label stage';
+        stageLabel.textContent=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
+        stageLabel.title=stageLabel.textContent.slice(2);
+        leftFragment.appendChild(stageLabel);
+        const row=createCrmRouteRow(days);
+        const seg=order.stages.get(stageKey);
+        const spanInfo=computeCrmRouteSpan(seg, dayIndexMap);
+        if(spanInfo){
+          const bar=document.createElement('div');
+          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
+          bar.style.left=`calc(${spanInfo.start} * var(--crmRouteDayWidth))`;
+          bar.style.width=`calc(${spanInfo.span} * var(--crmRouteDayWidth) - 6px)`;
+          if(seg.done) bar.classList.add('is-done');
+          if(!seg.done && seg.end instanceof Date && seg.end<today){
+            bar.classList.add('is-late');
+          }
+          const letter=CRM_STAGE_LETTERS[stageKey]||stageKey.slice(0,1).toUpperCase();
+          const hoursLabel=seg.totalHours>0?`${seg.totalHours.toFixed(1)}ч`:'';
+          bar.innerHTML=`<span class="crm-route-seg-label">${letter}</span>${hoursLabel?`<span>${hoursLabel}</span>`:''}`;
+          bar.title=`${CRM_STAGE_LABELS[stageKey]||stageKey}: ${formatStagePeriod(seg.start, seg.end)}${hoursLabel?` • ${hoursLabel}`:''}`;
+          row.appendChild(bar);
+        }
+        bodyFragment.appendChild(row);
+      });
+    }
   });
   crmStageRouteLeft.appendChild(leftFragment);
   crmStageRouteBody.appendChild(bodyFragment);
@@ -5971,10 +6115,20 @@ function renderCrmRouteCompact(dataset, days){
     label.title=label.textContent;
     leftFragment.appendChild(label);
     const row=createCrmRouteRow(days);
-    const segments=order.stageOrder
-      .map(stageKey=>order.stages.get(stageKey))
-      .map(seg=>({ seg, span:computeCrmRouteSpan(seg, dayIndexMap) }))
-      .filter(entry=>entry.span);
+    const stageInstances=Array.isArray(order.stageInstances)?order.stageInstances:[];
+    let segments=[];
+    if(stageInstances.length){
+      segments=stageInstances
+        .map(seg=>({ seg, span:computeCrmRouteSpan(seg, dayIndexMap) }))
+        .filter(entry=>entry.span);
+    }
+    if(!segments.length && Array.isArray(order.stageOrder)){
+      segments=order.stageOrder
+        .map(stageKey=>order.stages.get(stageKey))
+        .filter(Boolean)
+        .map(seg=>({ seg, span:computeCrmRouteSpan(seg, dayIndexMap) }))
+        .filter(entry=>entry.span);
+    }
     if(segments.length){
       const startIndex=Math.min(...segments.map(entry=>entry.span.start));
       const endIndex=Math.max(...segments.map(entry=>entry.span.start+entry.span.span-1));
@@ -5998,8 +6152,13 @@ function renderCrmRouteCompact(dataset, days){
         const share=totalWeight>0?(weight/totalWeight)*100:fallbackShare;
         part.style.flex=`0 0 ${share.toFixed(2)}%`;
         const letter=CRM_STAGE_LETTERS[seg.stageKey]||seg.stageKey.slice(0,1).toUpperCase();
-        part.textContent=seg.totalHours>0?`${letter} ${Math.round(seg.totalHours)}ч`:`${letter}`;
-        part.title=`${CRM_STAGE_LABELS[seg.stageKey]||seg.stageKey}: ${formatStagePeriod(seg.start, seg.end)}`;
+        const hoursText=seg.totalHours>0?`${Math.round(seg.totalHours)}ч`:'';
+        part.textContent=hoursText?`${letter} ${hoursText}`:`${letter}`;
+        let title=`${CRM_STAGE_LABELS[seg.stageKey]||seg.stageKey}: ${formatStagePeriod(seg.start, seg.end)}`;
+        if(seg.occurrenceTotal>1){
+          title+=` • №${seg.occurrenceIndex}`;
+        }
+        part.title=title;
         combo.appendChild(part);
       });
       row.appendChild(combo);
@@ -6371,11 +6530,11 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
   }
 }
 
-function snapshotCrmStageRowForRoute(order, stageKey, stageEntry){
+function snapshotCrmStageRowForRoute(order, stageKey, stageEntry, stageIndex){
   if(!order||!stageEntry) return null;
   const resolved=resolveCrmStageKey(stageEntry.name)||stageKey;
   if(!resolved) return null;
-  const fallbackIdentity=resolveOrderIdentity(order,0,resolved);
+  const fallbackIdentity=`${resolveOrderIdentity(order,Number.isInteger(stageIndex)?stageIndex:0,resolved)}:${Number.isInteger(stageIndex)?stageIndex:0}`;
   const stageId=ensureStageIdentity(stageEntry,fallbackIdentity);
   const progress=normalizeStageProgress(stageEntry.progress??0);
   const done=!!stageEntry.done || progress>=100;
@@ -6390,6 +6549,8 @@ function snapshotCrmStageRowForRoute(order, stageKey, stageEntry){
   const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
   const now=new Date();
   const isLate=!done && endDate && endDate<now;
+  const expectedProgress=computeExpectedPercentForInputs(startRaw, endRaw);
+  const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
   return {
     order,
     orderId:order?.id||'',
@@ -6398,7 +6559,12 @@ function snapshotCrmStageRowForRoute(order, stageKey, stageEntry){
     identity:stageId||fallbackIdentity,
     orderIndex:0,
     stageKey:resolved,
+    stagePosition:Number.isInteger(stageIndex)?stageIndex:null,
+    occurrenceIndex:1,
+    occurrenceTotal:1,
     progress,
+    expectedProgress,
+    expectedBehind,
     done,
     baseHours,
     extraHours,
@@ -6424,17 +6590,41 @@ function computeCrmRouteStatusInfo(snapshot){
 function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
   const stages=Array.isArray(order.stages)?order.stages:[];
-  const stageMap=new Map();
-  stages.forEach(stage=>{
+  const entries=[];
+  stages.forEach((stage, stageIndex)=>{
     if(!stage||typeof stage!=='object') return;
     const key=resolveCrmStageKey(stage.name);
     if(!key) return;
-    if(!stageMap.has(key)) stageMap.set(key,stage);
+    const snapshot=snapshotCrmStageRowForRoute(order, key, stage, stageIndex);
+    if(!snapshot) return;
+    entries.push({ key, stage, snapshot });
   });
-  const orderedKeys=[];
-  CRM_STAGE_SEQUENCE.forEach(key=>{ if(stageMap.has(key)) orderedKeys.push(key); });
-  stageMap.forEach((_,key)=>{ if(!orderedKeys.includes(key)) orderedKeys.push(key); });
-  if(!orderedKeys.length) return null;
+  if(!entries.length) return null;
+  const grouped=new Map();
+  entries.forEach(entry=>{
+    const bucket=grouped.get(entry.key);
+    if(bucket){
+      bucket.push(entry);
+    }else{
+      grouped.set(entry.key,[entry]);
+    }
+  });
+  grouped.forEach(list=>{
+    list.forEach((entry,idx)=>{
+      entry.snapshot.occurrenceIndex=idx+1;
+      entry.snapshot.occurrenceTotal=list.length;
+    });
+  });
+  const orderedEntries=[];
+  CRM_STAGE_SEQUENCE.forEach(stageKey=>{
+    const bucket=grouped.get(stageKey);
+    if(bucket){
+      bucket.forEach(entry=>orderedEntries.push(entry));
+      grouped.delete(stageKey);
+    }
+  });
+  grouped.forEach(bucket=>bucket.forEach(entry=>orderedEntries.push(entry)));
+  if(!orderedEntries.length) return null;
   const wrapper=document.createElement('div');
   wrapper.className='crm-route-mini-wrapper';
   const table=document.createElement('table');
@@ -6447,10 +6637,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   let doneCount=0;
   let lateCount=0;
   let lastPlannedEnd=null;
-  orderedKeys.forEach(key=>{
-    const stage=stageMap.get(key);
-    const snapshot=snapshotCrmStageRowForRoute(order, key, stage);
-    if(!snapshot) return;
+  orderedEntries.forEach(({ key, stage, snapshot })=>{
     const isHourless=CRM_NOHOUR_STAGES.has(snapshot.stageKey);
     if(!isHourless){
       totalBase+=Math.max(0, snapshot.baseHours);
@@ -6469,28 +6656,42 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
-    const cells=[
-      crmStageIconLabel(key, stage?.name||key),
-      formatStagePeriod(snapshot.startRaw, snapshot.endRaw),
-      hoursLabel,
-      stage?`${snapshot.progress}%`:'—',
-      statusInfo.label||'—'
-    ];
-    cells.forEach((value,idx)=>{
-      const td=document.createElement('td');
-      td.textContent=value||'—';
-      if(idx===0) td.classList.add('crm-stage-route-label');
-      if(idx===4){
-        td.classList.add('crm-route-status');
-        if(statusInfo.className){
-          td.classList.add(statusInfo.className);
-        }
-        if(statusInfo.title){
-          td.title=statusInfo.title;
-        }
-      }
-      tr.appendChild(td);
-    });
+    const labelCell=document.createElement('td');
+    labelCell.classList.add('crm-stage-route-label');
+    let labelText=crmStageIconLabel(key, stage?.name||key);
+    if(snapshot.occurrenceTotal>1){
+      labelText+=` №${snapshot.occurrenceIndex}`;
+    }
+    labelCell.textContent=labelText;
+    tr.appendChild(labelCell);
+
+    const periodCell=document.createElement('td');
+    periodCell.textContent=formatStagePeriod(snapshot.startRaw, snapshot.endRaw) || '—';
+    tr.appendChild(periodCell);
+
+    const hoursCell=document.createElement('td');
+    hoursCell.textContent=hoursLabel||'—';
+    tr.appendChild(hoursCell);
+
+    const progressCell=document.createElement('td');
+    if(stage){
+      progressCell.innerHTML=renderCrmProgressLabelSimple(snapshot.progress, snapshot.expectedProgress, snapshot.done, snapshot.expectedBehind);
+    }else{
+      progressCell.textContent='—';
+    }
+    tr.appendChild(progressCell);
+
+    const statusCell=document.createElement('td');
+    statusCell.classList.add('crm-route-status');
+    statusCell.textContent=statusInfo.label||'—';
+    if(statusInfo.className){
+      statusCell.classList.add(statusInfo.className);
+    }
+    if(statusInfo.title){
+      statusCell.title=statusInfo.title;
+    }
+    tr.appendChild(statusCell);
+
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
@@ -6499,7 +6700,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   const hasHours=totalBase>0||totalExtra>0;
   const totalHoursLabel=hasHours?formatStageHoursTotal(totalBase+totalExtra):'—';
   fragments.push(`<div><strong>Всего по заказу:</strong> ${totalHoursLabel}</div>`);
-  fragments.push(`<div>Этапов: ${orderedKeys.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedKeys.length-doneCount)}</div>`);
+  fragments.push(`<div>Этапов: ${orderedEntries.length}, готово: ${doneCount}, в работе: ${Math.max(0, orderedEntries.length-doneCount)}</div>`);
   if(lateCount>0){
     fragments.push(`<div class="status-late">Просрочено этапов: ${lateCount}</div>`);
   }
@@ -6862,6 +7063,16 @@ function renderProgressCell(info){
   `;
 }
 
+function renderCrmProgressLabelSimple(actual, expected, done, behind){
+  const pct=Math.round(Math.max(0, Number(actual)||0));
+  const hasExpected=!done && expected!=null && Number.isFinite(expected);
+  const expectedRounded=hasExpected?Math.round(Math.max(0, Number(expected)||0)):null;
+  const expectedMarkup=expectedRounded!=null
+    ? `<span class="progress-expected${behind?' behind':''}">/${expectedRounded}%</span>`
+    : '';
+  return `<span class="progress-label"><span class="progress-actual">${pct}%</span>${expectedMarkup}</span>`;
+}
+
 function updateCrmOrdersTotals(totals){
   if(!crmOrdersTotalsBox) return;
   const setText=(stage,text)=>{
@@ -7104,12 +7315,16 @@ function renderCrmStageTable(){
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
     const statusCellClass=['crm-stage-row-status', statusInfo.className].filter(Boolean).join(' ');
+    const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
+    const titleMarkup=entry.occurrenceTotal>1
+      ? `${escapeHtml(entry.orderTitle||'Заказ')} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
+      : escapeHtml(entry.orderTitle||'Заказ');
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
       <td><button class="crm-stage-route-mini" type="button" title="Маршрут заказа">⇆</button></td>
-      <td>${escapeHtml(entry.orderTitle||'Заказ')}</td>
-      <td>${escapeHtml(`${entry.progress}%`)}</td>
+      <td>${titleMarkup}</td>
+      <td>${progressMarkup}</td>
       <td>${escapeHtml(hoursCell)}</td>
       <td>${escapeHtml(restCell)}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.startRaw))}</td>
