@@ -329,6 +329,36 @@
 
   .pc-nav__link {
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    border-radius: var(--pc-radius-lg, 14px);
+    transition: background-color 0.2s ease, color 0.2s ease;
+    appearance: none;
+    text-decoration: none;
+  }
+
+  .pc-nav__link:hover,
+  .pc-nav__link:focus-visible {
+    background: color-mix(in srgb, var(--pc-primary) 8%, transparent);
+    color: var(--pc-primary);
+  }
+
+  .pc-nav__link--active {
+    color: var(--pc-primary);
+    font-weight: var(--pc-font-weight-semibold);
+    background: color-mix(in srgb, var(--pc-primary) 14%, transparent);
+  }
+
+  .pc-nav__link:disabled,
+  .pc-nav__link[aria-pressed="true"] {
+    cursor: default;
   }
 
   .pc-nav__link--alert {
@@ -718,32 +748,20 @@
     flex: 1 1 auto;
   }
 
-  .crm-toolbar__board {
-    display: grid;
-    gap: 4px;
-    min-width: 220px;
-  }
-
-  .crm-toolbar__board label {
-    font-size: 12px;
-    font-weight: var(--pc-font-weight-semibold);
-    color: var(--pc-text-muted);
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-  }
-
-  .crm-toolbar__orders-tab {
-    display: grid;
-    gap: 4px;
-  }
-
-  .crm-toolbar__orders-buttons {
-    display: inline-flex;
+  .crm-toolbar__stage-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
-    gap: var(--pc-spacing-xs);
   }
 
-  .crm-toolbar__orders-tab label {
+  .crm-toolbar__stage-field {
+    display: grid;
+    gap: 4px;
+  }
+
+  .crm-toolbar__stage-field > span,
+  .crm-toolbar__stage-field {
     font-size: 12px;
     font-weight: var(--pc-font-weight-semibold);
     color: var(--pc-text-muted);
@@ -751,8 +769,22 @@
     text-transform: uppercase;
   }
 
-  .crm-toolbar__orders-tab button {
-    white-space: nowrap;
+  .crm-toolbar__stage-field select {
+    min-width: 180px;
+  }
+
+  .crm-toolbar__stage-buttons {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs);
+    flex-wrap: wrap;
+    padding-top: 18px;
+  }
+
+  @media (max-width: 960px) {
+    .crm-toolbar__stage-buttons {
+      padding-top: var(--pc-spacing-xs);
+    }
   }
 
   .crm-toolbar__search {
@@ -796,6 +828,16 @@
     align-items: center;
     flex-wrap: wrap;
     justify-content: flex-end;
+  }
+
+  .pc-btn.crm-toolbar__alert,
+  .pc-btn--ghost.crm-toolbar__alert,
+  .pc-btn--secondary.crm-toolbar__alert {
+    color: var(--pc-danger);
+    background: color-mix(in srgb, var(--pc-danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--pc-danger) 32%, transparent);
+    font-weight: var(--pc-font-weight-semibold);
+    box-shadow: 0 10px 24px -18px color-mix(in srgb, var(--pc-danger) 55%, transparent);
   }
 
   .crm-toolbar__actions .pc-icon-btn {
@@ -860,36 +902,6 @@
   body[data-crm-view="stage"] .crm-orders-view,
   body[data-crm-view="stage"] .crm-kanban {
     display: none;
-  }
-
-  .crm-stage-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--pc-spacing-md);
-    flex-wrap: wrap;
-  }
-
-  .crm-stage-toolbar__left {
-    display: inline-flex;
-    gap: var(--pc-spacing-sm);
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .crm-stage-field {
-    display: grid;
-    gap: 4px;
-    min-width: 180px;
-    font-size: 12px;
-    font-weight: var(--pc-font-weight-semibold);
-    color: var(--pc-text-muted);
-    letter-spacing: 0.3px;
-    text-transform: uppercase;
-  }
-
-  .crm-stage-field select {
-    min-width: 0;
   }
 
   .crm-stage-layout {
@@ -1116,6 +1128,16 @@
     margin: 0;
     font-size: 15px;
     font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-stage-overdue--active {
+    border-color: color-mix(in srgb, var(--pc-danger) 40%, var(--pc-border));
+    box-shadow: 0 18px 32px -18px color-mix(in srgb, var(--pc-danger) 55%, transparent);
+    background: color-mix(in srgb, var(--pc-danger) 6%, var(--pc-surface));
+  }
+
+  .crm-stage-overdue--active h3 {
+    color: var(--pc-danger);
   }
 
   .crm-stage-gantt-controls label {
@@ -3067,7 +3089,9 @@
     <span class="pc-logo-text">PlanCore</span>
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
-    <a class="pc-nav__link" data-section="crm" href="/CRM.html">CRM</a>
+    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
     <a class="pc-nav__link" data-section="settings" data-action="open-settings" href="#settings">Настройки</a>
     <a class="pc-nav__link" data-section="journal" href="#journal">Журнал</a>
   </nav>
@@ -3099,15 +3123,32 @@
   <div class="pc-surface">
     <div class="crm-toolbar__row">
       <div class="crm-toolbar__left">
-        <div class="crm-toolbar__board">
-          <label for="boardSelect">Доска</label>
-          <select id="boardSelect" class="pc-select"></select>
-        </div>
-        <div class="crm-toolbar__orders-tab">
-          <label>Вкладки</label>
-          <div class="crm-toolbar__orders-buttons" role="group" aria-label="Переключение представления">
-            <button id="crmOrdersTabBtn" class="pc-btn pc-btn--secondary" type="button" data-view="orders">Общий список заказов</button>
-            <button id="crmStageTabBtn" class="pc-btn pc-btn--secondary" type="button" data-view="stage">Переделы</button>
+        <div class="crm-toolbar__stage-controls" id="crmStageControls" hidden>
+          <label class="crm-toolbar__stage-field" for="crmStageSelect">Передел
+            <select id="crmStageSelect" class="pc-select">
+              <option value="draw">Подготовка в работу</option>
+              <option value="proc">Закупка</option>
+              <option value="shear">Рубка</option>
+              <option value="laser">Лазер</option>
+              <option value="bend">Гибка</option>
+              <option value="weld">Сварка</option>
+              <option value="mech">Мехобработка</option>
+              <option value="coop">Кооперация</option>
+              <option value="pack">Упаковка</option>
+              <option value="ship">Отгрузка</option>
+            </select>
+          </label>
+          <label class="crm-toolbar__stage-field" for="crmStageFilter">Фильтр
+            <select id="crmStageFilter" class="pc-select">
+              <option value="current">Текущие</option>
+              <option value="all">Все</option>
+              <option value="done">Готовые</option>
+              <option value="late">С опозданием</option>
+            </select>
+          </label>
+          <div class="crm-toolbar__stage-buttons">
+            <button id="crmStageExceptionsBtn" class="pc-btn pc-btn--secondary" type="button">Исключения</button>
+            <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button">Бронь</button>
           </div>
         </div>
         <div class="crm-toolbar__search" id="crmSearchRow">
@@ -3160,9 +3201,6 @@
             </select>
           </label>
         </div>
-      </div>
-      <div class="crm-orders-toolbar__actions">
-        <button id="crmOrdersBackBtn" class="pc-btn pc-btn--ghost" type="button">Канбан</button>
       </div>
     </div>
     <div class="crm-orders-panel" id="crmOrdersPanel">
@@ -3240,37 +3278,6 @@
     </div>
   </div>
   <div id="crmStageView" class="crm-stage-view" hidden>
-    <div class="crm-stage-toolbar">
-      <div class="crm-stage-toolbar__left">
-        <label class="crm-stage-field" for="crmStageSelect">Передел
-          <select id="crmStageSelect" class="pc-select">
-            <option value="draw">Подготовка в работу</option>
-            <option value="proc">Закупка</option>
-            <option value="shear">Рубка</option>
-            <option value="laser">Лазер</option>
-            <option value="bend">Гибка</option>
-            <option value="weld">Сварка</option>
-            <option value="mech">Мехобработка</option>
-            <option value="coop">Кооперация</option>
-            <option value="pack">Упаковка</option>
-            <option value="ship">Отгрузка</option>
-          </select>
-        </label>
-        <label class="crm-stage-field" for="crmStageFilter">Фильтр
-          <select id="crmStageFilter" class="pc-select">
-            <option value="current">Текущие</option>
-            <option value="all">Все</option>
-            <option value="done">Готовые</option>
-            <option value="late">С опозданием</option>
-          </select>
-        </label>
-      </div>
-      <div class="crm-stage-toolbar__actions">
-        <button id="crmStageExceptionsBtn" class="pc-btn pc-btn--secondary" type="button">Исключения</button>
-        <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button">Бронь</button>
-        <button id="crmStageBackBtn" class="pc-btn pc-btn--ghost" type="button" hidden>Канбан</button>
-      </div>
-    </div>
     <div class="crm-stage-layout">
       <section class="crm-stage-card">
         <div class="crm-stage-table-wrap" id="crmStageTableWrap">
@@ -4467,7 +4474,8 @@ function setCrmStageCalendar(stageKey, payload){
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
-const boardSelect=$('#boardSelect'),
+const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
+      boardSelect=$('#boardSelect'),
       columns=$('#columns'),
       stats=$('#stats'),
       crmOrdersViewEl=$('#crmOrdersView'),
@@ -4476,14 +4484,13 @@ const boardSelect=$('#boardSelect'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
+      crmStageControls=$('#crmStageControls'),
       crmOrdersFilter=$('#crmOrdersFilter'),
-      crmOrdersBackBtn=$('#crmOrdersBackBtn'),
       crmStageViewEl=$('#crmStageView'),
       crmStageTableBody=$('#crmStageTable tbody'),
       crmStageEmpty=$('#crmStageEmpty'),
       crmStageSelect=$('#crmStageSelect'),
       crmStageFilter=$('#crmStageFilter'),
-      crmStageBackBtn=$('#crmStageBackBtn'),
       crmStageExceptionsBtn=$('#crmStageExceptionsBtn'),
       crmStageReserveBtn=$('#crmStageReserveBtn'),
       crmStageStackWrap=$('#crmStageStackWrap'),
@@ -4510,6 +4517,7 @@ const boardSelect=$('#boardSelect'),
       crmStageRouteEmpty=$('#crmStageRouteEmpty'),
       crmStageTotalHours=$('#crmStageTotalHours'),
       crmStageTotalRest=$('#crmStageTotalRest'),
+      crmStageOverdueSection=$('#crmStageOverdue'),
       crmStageOverdueList=$('#crmStageOverdueList'),
       crmUnaccountedBtn=$('#crmUnaccountedBtn'),
       crmTrashBtn=$('#crmTrashBtn'),
@@ -4781,8 +4789,8 @@ function formatStageBaseHours(base){
 
 function formatStageHoursDisplay(base,total,extra){
   const toLabel=value=>{
-    const num=Math.max(0, Math.round((Number(value)||0)*100)/100);
-    return num.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ч';
+    const num=Math.max(0, Math.round(Number(value)||0));
+    return num.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:0})+' ч';
   };
   if(extra>0.0001){
     return `${toLabel(base)} / ${toLabel(total)}`;
@@ -4791,8 +4799,8 @@ function formatStageHoursDisplay(base,total,extra){
 }
 
 function formatStageHoursTotal(value){
-  const num=Math.max(0, Math.round((Number(value)||0)*100)/100);
-  return num.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ч';
+  const num=Math.max(0, Math.round(Number(value)||0));
+  return num.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:0})+' ч';
 }
 
 function formatDayWord(value){
@@ -6798,6 +6806,7 @@ function updateCrmAuxButtons(){
     const countText=unaccounted.length>0?` (${unaccounted.length})`:'';
     crmUnaccountedBtn.textContent=labelBase+countText;
     crmUnaccountedBtn.setAttribute('aria-label',countText?`${labelBase}: ${unaccounted.length}`:labelBase);
+    crmUnaccountedBtn.classList.toggle('crm-toolbar__alert', unaccounted.length>0);
   }
   const trashCount=Array.isArray(state.trash)?state.trash.length:0;
   if(crmTrashBadge){
@@ -7425,6 +7434,9 @@ function renderCrmStageOverdue(entries){
   if(!crmStageOverdueList) return;
   crmStageOverdueList.innerHTML='';
   const list=Array.isArray(entries)?entries.filter(Boolean):[];
+  if(crmStageOverdueSection){
+    crmStageOverdueSection.classList.toggle('crm-stage-overdue--active', list.length>0);
+  }
   if(!list.length){
     crmStageOverdueList.textContent='Нет просроченных заказов';
     return;
@@ -7550,16 +7562,17 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
 function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
+  const inKanban=currentCrmView==='kanban';
+  if(crmNavKanbanBtn){
+    crmNavKanbanBtn.classList.toggle('pc-nav__link--active',inKanban);
+    crmNavKanbanBtn.setAttribute('aria-pressed',inKanban?'true':'false');
+  }
   if(crmOrdersTabBtn){
-    crmOrdersTabBtn.classList.toggle('pc-btn--primary',inOrders);
-    crmOrdersTabBtn.classList.toggle('pc-btn--secondary',!inOrders);
-    crmOrdersTabBtn.disabled=inOrders;
+    crmOrdersTabBtn.classList.toggle('pc-nav__link--active',inOrders);
     crmOrdersTabBtn.setAttribute('aria-pressed',inOrders?'true':'false');
   }
   if(crmStageTabBtn){
-    crmStageTabBtn.classList.toggle('pc-btn--primary',inStage);
-    crmStageTabBtn.classList.toggle('pc-btn--secondary',!inStage);
-    crmStageTabBtn.disabled=inStage;
+    crmStageTabBtn.classList.toggle('pc-nav__link--active',inStage);
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
     if(inStage){
       const stageKey=crmStageSelect?.value||'draw';
@@ -7569,11 +7582,9 @@ function updateCrmOrdersTabUi(){
       crmStageTabBtn.textContent='Переделы';
     }
   }
-  if(crmOrdersBackBtn){
-    crmOrdersBackBtn.hidden=!inOrders;
-  }
-  if(crmStageBackBtn){
-    crmStageBackBtn.hidden=!inStage;
+  if(crmStageControls){
+    crmStageControls.hidden=!inStage;
+    crmStageControls.setAttribute('aria-hidden',inStage?'false':'true');
   }
   if(crmOrdersViewEl){
     crmOrdersViewEl.setAttribute('aria-hidden',inOrders?'false':'true');
@@ -7635,7 +7646,17 @@ function laneLimit(lane){
   return laneVisibleCount.get(lane);
 }
 
-function renderBoardSelect(){boardSelect.innerHTML='';state.boards.forEach(b=>{const o=document.createElement('option');o.value=b.id;o.textContent=b.name;if(b.id===state.currentBoardId)o.selected=true;boardSelect.appendChild(o)})}
+function renderBoardSelect(){
+  if(!boardSelect) return;
+  boardSelect.innerHTML='';
+  state.boards.forEach(b=>{
+    const o=document.createElement('option');
+    o.value=b.id;
+    o.textContent=b.name;
+    if(b.id===state.currentBoardId) o.selected=true;
+    boardSelect.appendChild(o);
+  });
+}
 function renderColumns(){
   const b=currentBoard();
   columns.innerHTML='';
@@ -9336,7 +9357,13 @@ if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Нова
 const editBoardBtn=$('#editBoardBtn');
 if(editBoardBtn){editBoardBtn.onclick=openBoard;}
 $('#newOrderBtn').onclick=()=>openOrder(null);
-boardSelect.onchange=e=>{state.currentBoardId=e.target.value;save('Переключение доски');renderAll()};
+if(boardSelect){
+  boardSelect.onchange=e=>{
+    state.currentBoardId=e.target.value;
+    save('Переключение доски');
+    renderAll();
+  };
+}
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
@@ -9688,17 +9715,14 @@ function renderAll(){
   recalcCrmMappingAlert();
 }
 updateCrmOrdersTabUi();
+if(crmNavKanbanBtn){
+  crmNavKanbanBtn.addEventListener('click',()=>setCrmView('kanban'));
+}
 if(crmOrdersTabBtn){
   crmOrdersTabBtn.addEventListener('click',()=>setCrmView('orders'));
 }
-if(crmOrdersBackBtn){
-  crmOrdersBackBtn.addEventListener('click',()=>setCrmView('kanban'));
-}
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
-}
-if(crmStageBackBtn){
-  crmStageBackBtn.addEventListener('click',()=>setCrmView('kanban'));
 }
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
