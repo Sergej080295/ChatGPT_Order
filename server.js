@@ -4354,11 +4354,11 @@ app.post('/api/admin/rollback', (_req, res) => {
 });
 
 
-app.use(express.static(PUBLIC_DIR, { index: 'Planner_Codex_v3.html' }));
+app.use(express.static(PUBLIC_DIR, { index: 'CRM.html' }));
 
 app.use((req, res, next) => {
   if (req.method === 'GET' && !req.path.startsWith('/api/')) {
-    res.sendFile(path.join(PUBLIC_DIR, 'Planner_Codex_v3.html'));
+    res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
     return;
   }
   next();
