@@ -1793,12 +1793,12 @@
   }
 
   .status-early {
-    color: var(--pc-success, #2e7d32);
+    color: var(--pc-warning, #f59f00);
     font-weight: var(--pc-font-weight-semibold);
   }
 
   .status-today {
-    color: var(--pc-warning, #f59f00);
+    color: var(--pc-success, #2e7d32);
     font-weight: var(--pc-font-weight-semibold);
   }
 
@@ -3324,7 +3324,7 @@
         <div class="crm-stage-empty" id="crmStageEmpty" hidden>Нет заказов</div>
         <div class="crm-stage-legend" id="crmStageLegend">
           <span><i class="crm-stage-chip crm-stage-chip--ok"></i> В срок</span>
-          <span><i class="crm-stage-chip crm-stage-chip--warning"></i> Срок сегодня</span>
+          <span><i class="crm-stage-chip crm-stage-chip--warning"></i> Раньше срока</span>
           <span><i class="crm-stage-chip crm-stage-chip--late"></i> Просрочено</span>
         </div>
         <section class="crm-stage-detail-card">
@@ -7246,6 +7246,9 @@ function computeCrmStageStatus(entry,schedule){
     if(diffMs>0){
       return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
     }
+    if(days<=2){
+      return { label:`-${days}дн`, className:'status-today', title:'В срок' };
+    }
     return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
   }
   const diffMs=lastDate.getTime()-plannedEnd.getTime();
@@ -7256,6 +7259,9 @@ function computeCrmStageStatus(entry,schedule){
   const word=formatDayWord(days);
   if(diffMs>0){
     return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+  }
+  if(days<=2){
+    return { label:`-${days}дн`, className:'status-today', title:'В срок' };
   }
   return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
 }
