@@ -2464,6 +2464,110 @@
     max-width: 640px;
   }
 
+  .crm-journal-modal__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-journal-modal__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-journal-modal__controls .pc-btn {
+    white-space: nowrap;
+  }
+
+  .crm-order-history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+    max-height: clamp(240px, 55vh, 460px);
+    overflow-y: auto;
+  }
+
+  .crm-order-history__item {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 85%, transparent);
+    border-radius: var(--pc-radius-md);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-order-history__header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+    align-items: flex-start;
+  }
+
+  .crm-order-history__summary {
+    margin: 0;
+    font-size: 14px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+  }
+
+  .crm-order-history__time {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+    white-space: nowrap;
+  }
+
+  .crm-order-history__meta {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-order-history__events {
+    list-style: none;
+    margin: var(--pc-spacing-xs) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .crm-order-history__event-stage {
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+  }
+
+  .crm-order-history__event-date {
+    margin-left: 8px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-order-history__changes {
+    list-style: none;
+    margin: var(--pc-spacing-xs) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-order-history__changes span {
+    display: inline;
+  }
+
+  .crm-order-history__changes-label {
+    color: var(--pc-text);
+    font-weight: var(--pc-font-weight-medium);
+  }
+
+  .crm-order-history-btn--empty {
+    opacity: 0.75;
+  }
+
   .crm-journal-list {
     list-style: none;
     margin: 0;
@@ -3880,6 +3984,7 @@
     <div class="rowc">
       <label class="rowc"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
       <button class="pc-btn pc-btn--ghost" type="button" id="splitBtn" title="Разбить на подзаказ">➗ Подзаказ</button>
+      <button class="pc-btn pc-btn--ghost" type="button" id="orderHistoryBtn" title="История изменений" hidden>🕘 История</button>
       <button class="pc-icon-btn" data-variant="ghost" type="button" onclick="closeOrder()" aria-label="Закрыть">✖</button>
     </div>
   </div>
@@ -3993,6 +4098,19 @@
                 </div>
                 <div class="crm-settings-inline">
                   <label class="crm-field">
+                    <span class="crm-field__label">Режим очистки журнала</span>
+                    <select name="journalRetentionMode" class="pc-select">
+                      <option value="days">По дням</option>
+                      <option value="count">По количеству</option>
+                    </select>
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Порог</span>
+                    <input name="journalRetentionValue" class="pc-input" type="number" min="1" step="1" />
+                  </label>
+                </div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
                     <span class="crm-field__label">Автодовес, %</span>
                     <input name="extraPercent" class="pc-input" type="number" min="0" step="0.01" />
                   </label>
@@ -4001,7 +4119,7 @@
                     <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
                   </label>
                 </div>
-                <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+                <small class="muted">Старые записи из корзины и журнала будут удаляться автоматически по выбранным правилам.</small>
               </div>
             </details>
           </div>
@@ -4143,9 +4261,12 @@
 
 <!-- Журнал изменений -->
 <dialog id="crmJournalDlg" class="pc-modal crm-journal-modal">
-  <div class="dlg-head">
+  <div class="dlg-head crm-journal-modal__head">
     <strong>Журнал изменений</strong>
-    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalClose" aria-label="Закрыть">✖</button>
+    <div class="crm-journal-modal__controls">
+      <button class="pc-btn pc-btn--ghost" type="button" id="crmJournalClear">Очистить</button>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalClose" aria-label="Закрыть">✖</button>
+    </div>
   </div>
   <div class="dlg-body">
     <div id="crmJournalEmpty" class="crm-modal-empty" hidden>Изменений пока нет.</div>
@@ -4163,6 +4284,20 @@
     <div id="crmJournalDetailContent" class="crm-journal-detail__section"></div>
     <div class="crm-modal-actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmJournalDetailClose">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="crmOrderHistoryDlg" class="pc-modal crm-journal-detail-modal">
+  <div class="crm-journal-detail">
+    <div class="crm-journal-detail__head">
+      <h2 class="crm-journal-detail__title" id="crmOrderHistoryTitle">История заказа</h2>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOrderHistoryCloseIcon" aria-label="Закрыть">✖</button>
+    </div>
+    <div class="crm-journal-detail__meta" id="crmOrderHistoryMeta"></div>
+    <div id="crmOrderHistoryContent" class="crm-journal-detail__section"></div>
+    <div class="crm-modal-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderHistoryClose">Закрыть</button>
     </div>
   </div>
 </dialog>
@@ -4296,6 +4431,8 @@ function sanitizeCrmJournalEntry(raw){
   const createdAt=typeof raw.createdAt==='string'&&raw.createdAt.trim()?raw.createdAt.trim():new Date().toISOString();
   const actor=typeof raw.actor==='string'?raw.actor.trim():'';
   const type=typeof raw.type==='string'?raw.type.trim():CRM_JOURNAL_TYPES.orderUpdated;
+  const orderId=typeof raw.orderId==='string'?raw.orderId.trim():'';
+  const orderTitle=typeof raw.orderTitle==='string'?raw.orderTitle.trim():'';
   let details={};
   if(raw.details && typeof raw.details==='object'){
     try{details=JSON.parse(JSON.stringify(raw.details));}
@@ -4308,6 +4445,8 @@ function sanitizeCrmJournalEntry(raw){
     createdAt,
     actor,
     unread:raw.unread===true,
+    orderId,
+    orderTitle,
     details
   };
 }
@@ -4333,6 +4472,9 @@ function sanitizeCrmJournal(source){
 const DEFAULT_TRASH_RETENTION_DAYS=30;
 const DEFAULT_TRASH_RETENTION_COUNT=200;
 const DEFAULT_TRASH_RETENTION=Object.freeze({mode:'days',value:DEFAULT_TRASH_RETENTION_DAYS});
+const DEFAULT_JOURNAL_RETENTION_DAYS=30;
+const DEFAULT_JOURNAL_RETENTION_COUNT=400;
+const DEFAULT_JOURNAL_RETENTION=Object.freeze({mode:'days',value:DEFAULT_JOURNAL_RETENTION_DAYS});
 const normalizeStatusKey=value=>{
   if(value==null) return '';
   return String(value).trim().toLowerCase();
@@ -4450,9 +4592,16 @@ function sanitizeCrmSettings(raw){
     valueRaw=mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS;
   }
   const retention={mode,value:Math.max(1,Math.round(valueRaw))};
+  const journalSource=base.journalRetention&&typeof base.journalRetention==='object'?base.journalRetention:{};
+  const journalMode=journalSource.mode==='count'?'count':'days';
+  let journalValue=Number(journalSource.value);
+  if(!Number.isFinite(journalValue)||journalValue<=0){
+    journalValue=journalMode==='count'?DEFAULT_JOURNAL_RETENTION_COUNT:DEFAULT_JOURNAL_RETENTION_DAYS;
+  }
+  const journalRetention={mode:journalMode,value:Math.max(1,Math.round(journalValue))};
   const result={};
   Object.keys(base).forEach(key=>{
-    if(key==='unaccountedStatuses'||key==='trashRetention') return;
+    if(key==='unaccountedStatuses'||key==='trashRetention'||key==='journalRetention') return;
     result[key]=base[key];
   });
   const extraSource=base.extraTime&&typeof base.extraTime==='object'?base.extraTime:{};
@@ -4468,6 +4617,7 @@ function sanitizeCrmSettings(raw){
   result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
   result.trashRetention=retention;
+  result.journalRetention=journalRetention;
   return result;
 }
 
@@ -4552,6 +4702,7 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   result.unaccountedStatuses=statuses;
 
   result.trashRetention=preferred.trashRetention||fallback.trashRetention;
+  result.journalRetention=preferred.journalRetention||fallback.journalRetention;
 
   return sanitizeCrmSettings(result);
 }
@@ -4932,6 +5083,35 @@ function applyTrashRetentionToTarget(target){
   target.trash=filtered;
   return filtered;
 }
+function applyJournalRetentionToTarget(target){
+  if(!target||typeof target!=='object') return;
+  target.settings=sanitizeCrmSettings(target.settings);
+  const entries=Array.isArray(target.journal)?target.journal.slice():[];
+  entries.sort((a,b)=>{
+    const aDate=a?.createdAt||'';
+    const bDate=b?.createdAt||'';
+    return bDate.localeCompare(aDate);
+  });
+  const retention=target.settings.journalRetention||DEFAULT_JOURNAL_RETENTION;
+  let filtered=entries;
+  if(retention.mode==='days'){
+    const limitDays=Math.max(1,Number(retention.value)||DEFAULT_JOURNAL_RETENTION_DAYS);
+    const threshold=Date.now()-limitDays*86400000;
+    filtered=entries.filter(entry=>{
+      const time=Date.parse(entry?.createdAt||'');
+      if(Number.isNaN(time)) return true;
+      return time>=threshold;
+    });
+  }else if(retention.mode==='count'){
+    const limitCount=Math.max(1,Number(retention.value)||DEFAULT_JOURNAL_RETENTION_COUNT);
+    filtered=entries.slice(0,limitCount);
+  }
+  if(filtered.length>CRM_JOURNAL_LIMIT){
+    filtered=filtered.slice(0,CRM_JOURNAL_LIMIT);
+  }
+  target.journal=filtered;
+  return filtered;
+}
 function ensureCrmStateShape(value){
   const base=(value&&typeof value==='object')?value:{};
   if(!Array.isArray(base.boards)){
@@ -4996,6 +5176,7 @@ function ensureCrmStateShape(value){
   base.trash=sanitizeCrmTrash(base.trash);
   base.journal=sanitizeCrmJournal(base.journal);
   applyTrashRetentionToTarget(base);
+  applyJournalRetentionToTarget(base);
   return base;
 }
 const CRM_DATA_SOURCE={ remote:'remote', local:'local' };
@@ -5285,6 +5466,9 @@ persistLocal();
 function applyTrashRetention(){
   applyTrashRetentionToTarget(state);
 }
+function applyJournalRetention(){
+  applyJournalRetentionToTarget(state);
+}
 function load(){
   if(window.__CRM_INITIAL_STATE__){
     const initial=deepClone(window.__CRM_INITIAL_STATE__);
@@ -5485,12 +5669,20 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmJournalList=$('#crmJournalList'),
       crmJournalEmpty=$('#crmJournalEmpty'),
       crmJournalClose=$('#crmJournalClose'),
+      crmJournalClear=$('#crmJournalClear'),
       crmJournalDetailDlg=$('#crmJournalDetailDlg'),
       crmJournalDetailTitle=$('#crmJournalDetailTitle'),
       crmJournalDetailMeta=$('#crmJournalDetailMeta'),
       crmJournalDetailContent=$('#crmJournalDetailContent'),
       crmJournalDetailClose=$('#crmJournalDetailClose'),
-      crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon');
+      crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon'),
+      crmOrderHistoryDlg=$('#crmOrderHistoryDlg'),
+      crmOrderHistoryTitle=$('#crmOrderHistoryTitle'),
+      crmOrderHistoryMeta=$('#crmOrderHistoryMeta'),
+      crmOrderHistoryContent=$('#crmOrderHistoryContent'),
+      crmOrderHistoryClose=$('#crmOrderHistoryClose'),
+      crmOrderHistoryCloseIcon=$('#crmOrderHistoryCloseIcon'),
+      orderHistoryBtn=$('#orderHistoryBtn');
 crmDbIndicator=$('#crmDbIndicator');
 crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
 updateCrmDbIndicator();
@@ -5503,6 +5695,14 @@ let draggingId=null;
 let editingOrderId=null;
 let stageSourceMap=new Map();
 let pendingStageDeletes=[];
+let orderHistoryBtn=null;
+let crmOrderHistoryDlg=null;
+let crmOrderHistoryTitle=null;
+let crmOrderHistoryMeta=null;
+let crmOrderHistoryContent=null;
+let crmOrderHistoryClose=null;
+let crmOrderHistoryCloseIcon=null;
+let crmJournalClear=null;
 
 const crmStartViewMode=getCrmStartViewSetting();
 let currentCrmView='kanban';
@@ -5904,6 +6104,103 @@ function formatJournalFieldValue(key,value){
   return String(value);
 }
 
+function resolveJournalOrderId(entry){
+  if(!entry||typeof entry!=='object') return '';
+  if(typeof entry.orderId==='string'&&entry.orderId.trim()){
+    return entry.orderId.trim();
+  }
+  const details=entry.details&&typeof entry.details==='object'?entry.details:null;
+  const fromCurrent=details?.order?.id;
+  if(typeof fromCurrent==='string'&&fromCurrent.trim()){
+    return fromCurrent.trim();
+  }
+  const fromPrev=details?.previous?.id;
+  if(typeof fromPrev==='string'&&fromPrev.trim()){
+    return fromPrev.trim();
+  }
+  return '';
+}
+
+function resolveJournalOrderTitle(entry){
+  if(!entry||typeof entry!=='object') return '';
+  if(typeof entry.orderTitle==='string'&&entry.orderTitle.trim()){
+    return entry.orderTitle.trim();
+  }
+  const details=entry.details&&typeof entry.details==='object'?entry.details:null;
+  const title=details?.order?.title;
+  if(typeof title==='string'&&title.trim()){
+    return title.trim();
+  }
+  return '';
+}
+
+function hasOrderHistory(orderId){
+  if(!orderId) return false;
+  const id=String(orderId).trim();
+  if(!id) return false;
+  return getCrmJournalEntries().some(entry=>resolveJournalOrderId(entry)===id);
+}
+
+function collectOrderHistoryEntries(orderId){
+  const id=String(orderId||'').trim();
+  if(!id) return [];
+  return getCrmJournalEntries()
+    .filter(entry=>resolveJournalOrderId(entry)===id)
+    .sort((a,b)=>{
+      const aDate=a?.createdAt||'';
+      const bDate=b?.createdAt||'';
+      return bDate.localeCompare(aDate);
+    });
+}
+
+function extractJournalStageCompletions(entry){
+  const changes=entry?.details?.changes;
+  if(!Array.isArray(changes)) return [];
+  const stageChange=changes.find(change=>change.field==='stages'&&change.details);
+  if(!stageChange||!stageChange.details) return [];
+  const beforeMap=new Map();
+  (Array.isArray(stageChange.details.before)?stageChange.details.before:[]).forEach(item=>{
+    const key=`${item.key||''}#${item.index||0}`;
+    beforeMap.set(key,item);
+  });
+  const completions=[];
+  (Array.isArray(stageChange.details.after)?stageChange.details.after:[]).forEach(item=>{
+    const key=`${item.key||''}#${item.index||0}`;
+    const prev=beforeMap.get(key);
+    const doneNow=item?.done===true && (!prev || !prev.done);
+    if(doneNow){
+      completions.push({
+        label:item?.label||`Передел ${item?.index||''}`,
+        end:item?.end||item?.start||'',
+        progress:typeof item?.progress==='number'?item.progress:null,
+        hours:typeof item?.hours==='number'?item.hours:null
+      });
+    }
+  });
+  return completions;
+}
+
+function formatHistoryDate(iso){
+  return formatJournalFieldValue('end', iso);
+}
+
+function refreshOrderHistoryButton(orderId){
+  if(!orderHistoryBtn) return;
+  const id=orderId?String(orderId).trim():'';
+  if(!id){
+    orderHistoryBtn.hidden=true;
+    orderHistoryBtn.dataset.orderId='';
+    orderHistoryBtn.classList.add('crm-order-history-btn--empty');
+    orderHistoryBtn.setAttribute('aria-label','История изменений заказа');
+    return;
+  }
+  orderHistoryBtn.hidden=false;
+  orderHistoryBtn.dataset.orderId=id;
+  const hasEntries=hasOrderHistory(id);
+  orderHistoryBtn.classList.toggle('crm-order-history-btn--empty',!hasEntries);
+  orderHistoryBtn.setAttribute('aria-label',hasEntries?'История изменений заказа':'История изменений заказа (записей пока нет)');
+}
+
 function summarizeStagesForJournal(stages){
   const list=Array.isArray(stages)?stages:[];
   return list.map((stage,index)=>{
@@ -6083,6 +6380,8 @@ function buildCrmJournalEntry(type,context,actor){
     const snapshot=summarizeOrderForJournal(context?.order);
     if(!snapshot) return null;
     entry.summary=`Добавлен заказ «${snapshot.title}»`;
+    entry.orderId=snapshot.id||'';
+    entry.orderTitle=snapshot.title||'';
     entry.details={ order:snapshot };
   }else if(normalizedType===CRM_JOURNAL_TYPES.orderUpdated){
     const snapshot=summarizeOrderForJournal(context?.order);
@@ -6092,16 +6391,22 @@ function buildCrmJournalEntry(type,context,actor){
     const labels=computedChanges.map(change=>change.label).filter(Boolean);
     const changeLabel=labels.length?` — изменено: ${labels.slice(0,3).join(', ')}${labels.length>3?'…':''}`:'';
     entry.summary=`Обновлён заказ «${snapshot.title}»${changeLabel}`;
+    entry.orderId=snapshot.id||'';
+    entry.orderTitle=snapshot.title||'';
     entry.details={ order:snapshot, previous:prevSnapshot, changes:computedChanges };
   }else if(normalizedType===CRM_JOURNAL_TYPES.orderDeleted){
     const snapshot=summarizeOrderForJournal(context?.order);
     if(!snapshot) return null;
     entry.summary=`Удалён заказ «${snapshot.title}»`;
+    entry.orderId=snapshot.id||'';
+    entry.orderTitle=snapshot.title||'';
     entry.details={ order:snapshot };
   }else if(normalizedType===CRM_JOURNAL_TYPES.orderRestored){
     const snapshot=summarizeOrderForJournal(context?.order);
     if(!snapshot) return null;
     entry.summary=`Восстановлен заказ «${snapshot.title}» из корзины`;
+    entry.orderId=snapshot.id||'';
+    entry.orderTitle=snapshot.title||'';
     entry.details={ order:snapshot };
   }else if(normalizedType===CRM_JOURNAL_TYPES.settingsUpdated){
     const sections=Array.isArray(context?.sections)?context.sections.filter(Boolean):[];
@@ -6112,6 +6417,12 @@ function buildCrmJournalEntry(type,context,actor){
   }else{
     entry.summary=context?.summary?String(context.summary):'';
     entry.details=context?.details&&typeof context.details==='object'?context.details:{};
+  }
+  if(!entry.orderId && context?.orderId){
+    entry.orderId=String(context.orderId).trim();
+  }
+  if(!entry.orderTitle && context?.orderTitle){
+    entry.orderTitle=String(context.orderTitle).trim();
   }
   if(!entry.summary){
     return null;
@@ -6163,6 +6474,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   }
   if(JSON.stringify(prevSanitized.trashRetention)!==JSON.stringify(nextSanitized.trashRetention)){
     sections.push('Корзина');
+  }
+  if(JSON.stringify(prevSanitized.journalRetention)!==JSON.stringify(nextSanitized.journalRetention)){
+    sections.push('Журнал');
   }
   return sections;
 }
@@ -9656,6 +9970,7 @@ function openOrder(id=null){
     deleteOrderBtn.style.display='none';
     deleteOrderBtn.onclick=null;
   }
+  refreshOrderHistoryButton(editingOrderId);
   orderDlg.showModal();
 }
 function closeOrder(){orderDlg.close()}
@@ -9665,6 +9980,7 @@ if(orderDlg){
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
+    refreshOrderHistoryButton(null);
   });
 }
 
@@ -10896,6 +11212,9 @@ function openBoard(){
   const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
+  const journalRetention=state.settings?.journalRetention||DEFAULT_JOURNAL_RETENTION;
+  boardForm.journalRetentionMode.value=journalRetention.mode==='count'?'count':'days';
+  boardForm.journalRetentionValue.value=journalRetention.value||(journalRetention.mode==='count'?DEFAULT_JOURNAL_RETENTION_COUNT:DEFAULT_JOURNAL_RETENTION_DAYS);
   const extraSettings=getExtraTimeSettings();
   const scheduleMap=getCrmStageSchedules();
   if(crmExtraPercentInput){
@@ -10933,6 +11252,14 @@ boardForm.addEventListener('submit',e=>{
     retentionValue=Math.round(retentionValue);
   }
   state.settings.trashRetention={mode:modeRaw,value:retentionValue};
+  const journalModeRaw=boardForm.journalRetentionMode.value==='count'?'count':'days';
+  let journalRetentionValue=Number(boardForm.journalRetentionValue.value);
+  if(!Number.isFinite(journalRetentionValue)||journalRetentionValue<=0){
+    journalRetentionValue=journalModeRaw==='count'?DEFAULT_JOURNAL_RETENTION_COUNT:DEFAULT_JOURNAL_RETENTION_DAYS;
+  }else{
+    journalRetentionValue=Math.round(journalRetentionValue);
+  }
+  state.settings.journalRetention={mode:journalModeRaw,value:journalRetentionValue};
   const extraPercentRaw=crmExtraPercentInput?crmExtraPercentInput.value:'';
   const extraMinimumRaw=crmExtraMinimumInput?crmExtraMinimumInput.value:'';
   state.settings.extraTime={
@@ -10995,6 +11322,7 @@ boardForm.addEventListener('submit',e=>{
   });
   state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
   applyTrashRetention();
+  applyJournalRetention();
   updateAllStageExpectations();
   const sectionsChanged=describeCrmSettingsChanges(prevSettings,state.settings,prevBoardMeta,{ name:b.name, lanes:Array.isArray(b.lanes)?b.lanes.slice():[] });
   if(sectionsChanged.length){
@@ -11431,8 +11759,12 @@ function recordCrmJournalEntry(type,context){
   if(!entry) return;
   state=ensureCrmStateShape(state);
   const next=[entry, ...getCrmJournalEntries()];
-  state.journal=next.slice(0,CRM_JOURNAL_LIMIT);
+  state.journal=next;
+  applyJournalRetentionToTarget(state);
   updateCrmJournalUi();
+  if(editingOrderId){
+    refreshOrderHistoryButton(editingOrderId);
+  }
   return entry;
 }
 
@@ -11440,6 +11772,9 @@ function renderCrmJournalList(){
   if(!crmJournalList) return;
   const entries=getCrmJournalEntries();
   crmJournalList.innerHTML='';
+  if(crmJournalClear){
+    crmJournalClear.disabled=entries.length===0;
+  }
   if(crmJournalEmpty){
     crmJournalEmpty.hidden=entries.length>0;
   }
@@ -11501,6 +11836,9 @@ function updateCrmJournalUi(){
     const ariaLabel=unread>0?`${baseLabel}: ${unread} новых`:`${baseLabel}`;
     crmJournalBtn.setAttribute('aria-label',ariaLabel);
   }
+  if(editingOrderId){
+    refreshOrderHistoryButton(editingOrderId);
+  }
   if(crmJournalDlg?.open){
     renderCrmJournalList();
   }
@@ -11541,6 +11879,20 @@ function closeCrmJournal(){
     crmJournalBtn.setAttribute('aria-expanded','false');
   }
   updateCrmJournalUi();
+}
+
+function handleCrmJournalClear(){
+  if(!state||!Array.isArray(state.journal)||!state.journal.length) return;
+  if(!window.confirm('Очистить журнал изменений?')) return;
+  state=ensureCrmStateShape(state);
+  state.journal=[];
+  applyJournalRetentionToTarget(state);
+  updateCrmJournalUi();
+  renderCrmJournalList();
+  try{persistLocal();}
+  catch(_err){/* ignore */}
+  try{queueSync('Очистка журнала CRM');}
+  catch(_err){/* ignore */}
 }
 
 function closeCrmJournalDetail(){
@@ -11766,6 +12118,132 @@ function renderCrmJournalDetail(entry){
         crmJournalDetailContent.appendChild(changesSection);
       }
     }
+  }
+}
+
+function renderCrmOrderHistoryEntry(entry){
+  const item=document.createElement('article');
+  item.className='crm-order-history__item';
+  const header=document.createElement('div');
+  header.className='crm-order-history__header';
+  const summary=document.createElement('div');
+  summary.className='crm-order-history__summary';
+  summary.textContent=entry?.summary||'—';
+  const time=document.createElement('time');
+  time.className='crm-order-history__time';
+  if(entry?.createdAt){
+    time.dateTime=entry.createdAt;
+  }
+  time.textContent=formatJournalTimestamp(entry?.createdAt);
+  header.append(summary,time);
+  item.appendChild(header);
+  if(entry?.actor){
+    const meta=document.createElement('div');
+    meta.className='crm-order-history__meta';
+    meta.textContent=`Автор: ${entry.actor}`;
+    item.appendChild(meta);
+  }
+  const completions=extractJournalStageCompletions(entry);
+  if(completions.length){
+    const events=document.createElement('ul');
+    events.className='crm-order-history__events';
+    completions.forEach(ev=>{
+      const li=document.createElement('li');
+      const stageSpan=document.createElement('span');
+      stageSpan.className='crm-order-history__event-stage';
+      stageSpan.textContent=ev.label||'Передел';
+      const dateSpan=document.createElement('span');
+      dateSpan.className='crm-order-history__event-date';
+      const details=[];
+      const dateLabel=formatHistoryDate(ev.end);
+      if(dateLabel && dateLabel!=='—'){
+        details.push(dateLabel);
+      }
+      if(typeof ev.hours==='number'&&Number.isFinite(ev.hours)&&ev.hours>0){
+        details.push(`${formatHoursRu(ev.hours)} ч`);
+      }
+      if(typeof ev.progress==='number'&&Number.isFinite(ev.progress)){
+        details.push(`${Math.round(ev.progress)}%`);
+      }
+      dateSpan.textContent=details.length?details.join(' • '):'—';
+      li.append(stageSpan,dateSpan);
+      events.appendChild(li);
+    });
+    item.appendChild(events);
+  }
+  const changes=Array.isArray(entry?.details?.changes)?entry.details.changes:[];
+  if(changes.length){
+    const list=document.createElement('ul');
+    list.className='crm-order-history__changes';
+    changes.forEach(change=>{
+      const li=document.createElement('li');
+      const labelSpan=document.createElement('span');
+      labelSpan.className='crm-order-history__changes-label';
+      labelSpan.textContent=`${change?.label||change?.field||'Поле'}:`;
+      li.appendChild(labelSpan);
+      const before=change?.before==null?'—':String(change.before);
+      const after=change?.after==null?'—':String(change.after);
+      const valueSpan=document.createElement('span');
+      valueSpan.textContent=` ${before} → ${after}`;
+      li.appendChild(valueSpan);
+      list.appendChild(li);
+    });
+    item.appendChild(list);
+  }
+  return item;
+}
+
+function openCrmOrderHistory(orderId){
+  if(!crmOrderHistoryDlg) return;
+  const id=orderId?String(orderId).trim():'';
+  if(!id){
+    return;
+  }
+  const entries=collectOrderHistoryEntries(id);
+  const board=currentBoard();
+  const order=board?.orders?.find(o=>o.id===id) || null;
+  const fallbackTitle=entries.length?resolveJournalOrderTitle(entries[0]):'';
+  const title=order?buildCrmOrderTitle(order):(fallbackTitle||'Заказ');
+  if(crmOrderHistoryTitle){
+    crmOrderHistoryTitle.textContent=`История заказа «${title}»`;
+  }
+  if(crmOrderHistoryMeta){
+    const metaParts=[];
+    const snapshot=entries[0]?.details?.order;
+    const orderNo=order?.orderNo||snapshot?.orderNo;
+    const customer=order?.customer||snapshot?.customer;
+    if(orderNo){
+      metaParts.push(`№ ${orderNo}`);
+    }
+    if(customer){
+      metaParts.push(customer);
+    }
+    metaParts.push(`${entries.length} записей`);
+    crmOrderHistoryMeta.textContent=metaParts.join(' • ');
+  }
+  if(crmOrderHistoryContent){
+    crmOrderHistoryContent.innerHTML='';
+    if(!entries.length){
+      const empty=document.createElement('div');
+      empty.className='crm-journal-empty';
+      empty.textContent='Для этого заказа пока нет записей в журнале.';
+      crmOrderHistoryContent.appendChild(empty);
+    }else{
+      const list=document.createElement('div');
+      list.className='crm-order-history';
+      entries.forEach(entry=>{
+        list.appendChild(renderCrmOrderHistoryEntry(entry));
+      });
+      crmOrderHistoryContent.appendChild(list);
+    }
+  }
+  try{crmOrderHistoryDlg.showModal();}
+  catch(_err){crmOrderHistoryDlg.open=true;}
+}
+
+function closeCrmOrderHistory(){
+  if(crmOrderHistoryDlg){
+    crmOrderHistoryDlg.close();
   }
 }
 
@@ -12178,6 +12656,9 @@ if(crmJournalBtn){
 if(crmJournalClose){
   crmJournalClose.addEventListener('click',()=>closeCrmJournal());
 }
+if(crmJournalClear){
+  crmJournalClear.addEventListener('click',()=>handleCrmJournalClear());
+}
 if(crmJournalDlg){
   crmJournalDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
@@ -12194,6 +12675,26 @@ if(crmJournalDetailDlg){
   crmJournalDetailDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
     closeCrmJournalDetail();
+  });
+}
+if(orderHistoryBtn){
+  orderHistoryBtn.addEventListener('click',()=>{
+    const targetId=orderHistoryBtn.dataset?.orderId||orderForm?.id?.value||editingOrderId||'';
+    if(targetId){
+      openCrmOrderHistory(targetId);
+    }
+  });
+}
+if(crmOrderHistoryClose){
+  crmOrderHistoryClose.addEventListener('click',()=>closeCrmOrderHistory());
+}
+if(crmOrderHistoryCloseIcon){
+  crmOrderHistoryCloseIcon.addEventListener('click',()=>closeCrmOrderHistory());
+}
+if(crmOrderHistoryDlg){
+  crmOrderHistoryDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmOrderHistory();
   });
 }
 const crmUnaccountedDlg=document.getElementById('crmUnaccountedDlg');
