@@ -629,6 +629,15 @@
     }
   }
 
+  .crm-settings-row--stack {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .crm-settings-row--stack .crm-settings-label {
+    margin-bottom: 2px;
+  }
+
   .crm-settings-label {
     font-size: 13px;
     font-weight: var(--pc-font-weight-semibold);
@@ -642,6 +651,15 @@
     align-items: center;
     gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
+  }
+
+  .crm-settings-control--column {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .crm-settings-control--column > * {
+    width: 100%;
   }
 
   .crm-settings-summary {
@@ -721,10 +739,10 @@
   }
 
   .crm-mapping-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 200px 160px;
-    gap: var(--pc-spacing-sm);
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+    align-items: stretch;
     padding: 6px 8px;
     border-radius: var(--pc-radius-md);
     background: color-mix(in srgb, var(--pc-surface) 90%, transparent);
@@ -732,13 +750,17 @@
   }
 
   .crm-mapping-row__controls {
-    display: contents;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+    align-items: center;
   }
 
   .crm-mapping-row__select {
     display: flex;
     align-items: center;
-    width: 100%;
+    flex: 1 1 200px;
+    min-width: 200px;
   }
 
   .crm-mapping-row__select select {
@@ -781,20 +803,25 @@
     color: var(--pc-text-muted);
   }
 
-  @media (max-width: 1280px) {
+  @media (min-width: 960px) {
     .crm-mapping-row {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .crm-mapping-row__controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--pc-spacing-xs);
+      flex-direction: row;
       align-items: center;
     }
 
+    .crm-mapping-row__title {
+      flex: 1 1 0;
+      min-width: 220px;
+    }
+
+    .crm-mapping-row__controls {
+      flex-wrap: nowrap;
+      gap: var(--pc-spacing-sm);
+    }
+
     .crm-mapping-row__select {
-      flex: 1 1 220px;
+      flex: 0 1 260px;
+      min-width: 220px;
     }
 
     .crm-mapping-row__hours {
@@ -9630,12 +9657,12 @@ function renderCrmStageSchedulesUI(config){
   crmStageScheduleActiveStage=availableStages[0]||CRM_STAGE_KEYS[0]||'';
   crmStageScheduleContainer.innerHTML='';
   const row=document.createElement('div');
-  row.className='crm-settings-row';
+  row.className='crm-settings-row crm-settings-row--stack';
   const label=document.createElement('div');
   label.className='crm-settings-label';
   label.textContent='Графики работы переделов';
   const control=document.createElement('div');
-  control.className='crm-settings-control';
+  control.className='crm-settings-control crm-settings-control--column';
 
   const stageField=document.createElement('label');
   stageField.className='crm-field';
@@ -9910,12 +9937,12 @@ function renderCrmMappingSettingsUI(){
   if(!crmMappingContainer) return;
   crmMappingContainer.innerHTML='';
   const row=document.createElement('div');
-  row.className='crm-settings-row';
+  row.className='crm-settings-row crm-settings-row--stack';
   const label=document.createElement('div');
   label.className='crm-settings-label';
   label.textContent='Сопоставление данных';
   const control=document.createElement('div');
-  control.className='crm-settings-control';
+  control.className='crm-settings-control crm-settings-control--column';
   const list=document.createElement('div');
   list.className='crm-mapping-list';
   const entries=collectCrmMappingEntries();
