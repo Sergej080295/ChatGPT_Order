@@ -3735,6 +3735,7 @@
 
 <script>
 const KEY='mini_crm_v13c';
+const SETTINGS_KEY='mini_crm_settings_v1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -3979,10 +3980,130 @@ function sanitizeCrmSettings(raw){
   return result;
 }
 
-function mergeCrmSettings(currentSettings,incomingSettings){
-  const currentSanitized=sanitizeCrmSettings(currentSettings);
-  const incomingSanitized=sanitizeCrmSettings(incomingSettings);
-  return sanitizeCrmSettings({ ...incomingSanitized, ...currentSanitized });
+function mergeCrmScheduleEntry(preferredEntry, fallbackEntry){
+  const preferred=preferredEntry&&typeof preferredEntry==='object'?preferredEntry:null;
+  const fallback=fallbackEntry&&typeof fallbackEntry==='object'?fallbackEntry:null;
+  const preset=preferred?.preset||fallback?.preset||CRM_HOURLESS_SCHEDULE_DEFAULT.preset;
+  const start=preferred?.start||fallback?.start||CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  const extras=[];
+  const extrasSet=new Set();
+  const collect=list=>{
+    if(!Array.isArray(list)) return;
+    list.forEach(item=>{
+      const iso=coerceCalendarIso(item);
+      if(!iso||extrasSet.has(iso)) return;
+      extrasSet.add(iso);
+      extras.push(iso);
+    });
+  };
+  collect(fallback?.extras);
+  collect(preferred?.extras);
+  extras.sort((a,b)=>a.localeCompare(b));
+  return { preset, start, extras };
+}
+
+function mergeCrmSettings(preferredSettings, fallbackSettings){
+  const hasPreferred=preferredSettings&&typeof preferredSettings==='object';
+  const hasFallback=fallbackSettings&&typeof fallbackSettings==='object';
+  if(!hasPreferred && !hasFallback){
+    return sanitizeCrmSettings({});
+  }
+  if(!hasPreferred){
+    return sanitizeCrmSettings(fallbackSettings);
+  }
+  if(!hasFallback){
+    return sanitizeCrmSettings(preferredSettings);
+  }
+
+  const preferred=sanitizeCrmSettings(preferredSettings);
+  const fallback=sanitizeCrmSettings(fallbackSettings);
+  const result={ ...fallback, ...preferred };
+
+  result.extraTime={
+    percent:typeof preferred.extraTime?.percent==='number'?preferred.extraTime.percent:(fallback.extraTime?.percent??0),
+    minimum:typeof preferred.extraTime?.minimum==='number'?preferred.extraTime.minimum:(fallback.extraTime?.minimum??0)
+  };
+
+  result.capacity={ ...fallback.capacity, ...preferred.capacity };
+  result.parallel={ ...fallback.parallel, ...preferred.parallel };
+  result.preferences={ ...fallback.preferences, ...preferred.preferences };
+  result.startView=preferred.startView||fallback.startView;
+
+  const mergedMapping={ ...fallback.mapping };
+  Object.keys(preferred.mapping||{}).forEach(key=>{
+    const baseRecord=fallback.mapping?.[key]||{};
+    mergedMapping[key]={ ...baseRecord, ...preferred.mapping[key] };
+  });
+  result.mapping=mergedMapping;
+
+  const mergedSchedules={};
+  const stages=new Set([
+    ...Object.keys(fallback.stageSchedules||{}),
+    ...Object.keys(preferred.stageSchedules||{})
+  ]);
+  stages.forEach(stage=>{
+    mergedSchedules[stage]=mergeCrmScheduleEntry(preferred.stageSchedules?.[stage], fallback.stageSchedules?.[stage]);
+  });
+  result.stageSchedules=mergedSchedules;
+
+  const statuses=[];
+  const seen=new Set();
+  const append=list=>{
+    (Array.isArray(list)?list:[]).forEach(status=>{
+      const key=normalizeStatusKey(status);
+      if(!key||seen.has(key)) return;
+      seen.add(key);
+      statuses.push(status);
+    });
+  };
+  append(preferred.unaccountedStatuses);
+  append(fallback.unaccountedStatuses);
+  result.unaccountedStatuses=statuses;
+
+  result.trashRetention=preferred.trashRetention||fallback.trashRetention;
+
+  return sanitizeCrmSettings(result);
+}
+
+let cachedStoredCrmSettings=null;
+let cachedStoredCrmSettingsLoaded=false;
+
+function loadStoredCrmSettings(){
+  if(cachedStoredCrmSettingsLoaded){
+    return cachedStoredCrmSettings;
+  }
+  cachedStoredCrmSettingsLoaded=true;
+  try{
+    const raw=localStorage.getItem(SETTINGS_KEY);
+    if(!raw){
+      cachedStoredCrmSettings=null;
+      return null;
+    }
+    const parsed=JSON.parse(raw);
+    cachedStoredCrmSettings=sanitizeCrmSettings(parsed);
+    return cachedStoredCrmSettings;
+  }catch(err){
+    console.warn('CRM settings load failed', err);
+    cachedStoredCrmSettings=null;
+    return null;
+  }
+}
+
+function persistStoredCrmSettings(settings){
+  try{
+    if(!settings||typeof settings!=='object'){
+      localStorage.removeItem(SETTINGS_KEY);
+      cachedStoredCrmSettings=null;
+      cachedStoredCrmSettingsLoaded=true;
+      return;
+    }
+    const sanitized=sanitizeCrmSettings(settings);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(sanitized));
+    cachedStoredCrmSettings=sanitized;
+    cachedStoredCrmSettingsLoaded=true;
+  }catch(err){
+    console.warn('CRM settings save failed', err);
+  }
 }
 
 function sanitizeCrmCalendarEntries(list, allowZero){
@@ -4664,6 +4785,10 @@ function ensureStageHoursPreference(normalized, label){
 
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
 state=ensureCrmStateShape(state);
+const storedCrmSettings=loadStoredCrmSettings();
+if(storedCrmSettings){
+  state.settings=mergeCrmSettings(storedCrmSettings, state.settings);
+}
 persistLocal();
 function applyTrashRetention(){
   applyTrashRetentionToTarget(state);
@@ -4678,6 +4803,7 @@ function load(){
 }
 function persistLocal(){
   state=ensureCrmStateShape(state);
+  persistStoredCrmSettings(state.settings);
   try{localStorage.setItem(KEY,JSON.stringify(state));}
   catch(err){console.warn('CRM local save failed',err);}
 }
@@ -10322,7 +10448,7 @@ if(boardSelect){
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
-$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;const prevSettings=state?.settings;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');const imported=ensureCrmStateShape(obj);if(prevSettings){imported.settings=mergeCrmSettings(prevSettings, imported.settings);}state=imported;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;const prevSettings=state?.settings;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');const imported=ensureCrmStateShape(obj);let mergedSettings=imported.settings;if(prevSettings){mergedSettings=mergeCrmSettings(prevSettings, mergedSettings);}const storedSettings=loadStoredCrmSettings();if(storedSettings){mergedSettings=mergeCrmSettings(storedSettings, mergedSettings);}imported.settings=mergedSettings;state=imported;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
 const orderSearchInput=document.getElementById('orderSearchInput');
 if(orderSearchInput){
@@ -10622,6 +10748,10 @@ function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  const storedSettings=loadStoredCrmSettings();
+  if(storedSettings){
+    state.settings=mergeCrmSettings(storedSettings, state.settings);
+  }
   persistLocal();
   renderAll();
 }
