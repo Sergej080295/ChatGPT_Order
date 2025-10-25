@@ -545,7 +545,6 @@ const DEFAULT_WRITE_MODE = WRITE_MODES.BOTH;
 
 const SHARED_BOOLEAN_PREF_KEYS = [
   'autosaveOn',
-  'shiftOnProgress',
   'autoOptimizeOn',
   'cascadeReadyOn'
 ];
@@ -1854,7 +1853,6 @@ function extractBaseState(snapshot) {
   copy('priorityChangeLoggingOn', false);
   copy('routeDateChangeLoggingOn', false);
   copy('notificationsMuted', false);
-  copy('shiftOnProgress', true);
   copy('ignoredStates', []);
   copy('meta', {});
   copy('modeScoped', {});
@@ -1915,7 +1913,6 @@ function applyBaseSnapshot(target, base) {
   assignValue('priorityChangeLoggingOn');
   assignValue('routeDateChangeLoggingOn');
   assignValue('notificationsMuted');
-  assignValue('shiftOnProgress');
 
   if (!isPlainObject(target.crm)) {
     target.crm = { boards: [], currentBoardId: null };
@@ -2635,7 +2632,6 @@ function buildEmptySnapshot() {
     routeDateChangeLoggingOn: false,
     notificationsMuted: false,
     crm: { boards: [], currentBoardId: null },
-    shiftOnProgress: true,
     ignoredStates: [],
     meta: {
       versions: {},

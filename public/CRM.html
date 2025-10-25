@@ -4378,7 +4378,7 @@ const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
 const CRM_HOURLESS_SCHEDULE_PRESET_MAP=new Map(CRM_HOURLESS_SCHEDULE_PRESETS.map(item=>[item.key,item]));
 const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-01-01', extras:[] });
 const CRM_STAGE_IGNORE='__ignore__';
-const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, shiftOnProgress:true, cascadeReady:true, showLateTips:true };
+const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, cascadeReady:true, showLateTips:true };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
@@ -4835,7 +4835,6 @@ function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
-    if(typeof raw.shiftOnProgress==='boolean') result.shiftOnProgress=raw.shiftOnProgress;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
   }
@@ -10765,15 +10764,6 @@ function renderCrmPreferencesSettingsUI(){
   const autoText=document.createElement('span');
   autoText.textContent='Автооптимизация';
   autoOption.append(autoCheckbox, autoText);
-  const shiftOption=document.createElement('label');
-  shiftOption.className='crm-settings-checkbox';
-  const shiftCheckbox=document.createElement('input');
-  shiftCheckbox.type='checkbox';
-  shiftCheckbox.name='prefShiftOnProgress';
-  shiftCheckbox.checked=!!prefs.shiftOnProgress;
-  const shiftText=document.createElement('span');
-  shiftText.textContent='Сдвигать старт при прогрессе';
-  shiftOption.append(shiftCheckbox, shiftText);
   const cascadeOption=document.createElement('label');
   cascadeOption.className='crm-settings-checkbox';
   const cascadeCheckbox=document.createElement('input');
@@ -10792,7 +10782,7 @@ function renderCrmPreferencesSettingsUI(){
   const tipsText=document.createElement('span');
   tipsText.textContent='Показывать советы по просроченным заказам';
   tipsOption.append(tipsCheckbox, tipsText);
-  control.append(autoOption, shiftOption, cascadeOption, tipsOption);
+  control.append(autoOption, cascadeOption, tipsOption);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -11290,7 +11280,6 @@ boardForm.addEventListener('submit',e=>{
   state.settings.parallel=normalizeParallelMap(parallelDraft, state.settings?.parallel||CRM_DEFAULT_PARALLEL);
   state.settings.preferences=sanitizeCrmPreferences({
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
-    shiftOnProgress:!!boardForm.prefShiftOnProgress?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked
   });
