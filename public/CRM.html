@@ -3979,6 +3979,12 @@ function sanitizeCrmSettings(raw){
   return result;
 }
 
+function mergeCrmSettings(currentSettings,incomingSettings){
+  const currentSanitized=sanitizeCrmSettings(currentSettings);
+  const incomingSanitized=sanitizeCrmSettings(incomingSettings);
+  return sanitizeCrmSettings({ ...incomingSanitized, ...currentSanitized });
+}
+
 function sanitizeCrmCalendarEntries(list, allowZero){
   const source=Array.isArray(list)
     ? list
@@ -10316,7 +10322,7 @@ if(boardSelect){
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
-$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');state=ensureCrmStateShape(obj);save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;const prevSettings=state?.settings;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');const imported=ensureCrmStateShape(obj);if(prevSettings){imported.settings=mergeCrmSettings(prevSettings, imported.settings);}state=imported;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
 const orderSearchInput=document.getElementById('orderSearchInput');
 if(orderSearchInput){
