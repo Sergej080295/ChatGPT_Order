@@ -462,6 +462,106 @@
     gap: var(--pc-spacing-sm);
   }
 
+  .crm-settings-layout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-tab {
+    border: none;
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    color: var(--pc-text-secondary, var(--pc-text-muted));
+    font-size: 14px;
+    font-weight: var(--pc-font-weight-medium);
+    padding: 10px 18px;
+    border-radius: var(--pc-radius-xl);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: var(--pc-shadow-soft, var(--pc-shadow-surface));
+  }
+
+  .crm-settings-tab:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-primary) 40%, transparent);
+    outline-offset: 2px;
+  }
+
+  .crm-settings-tab[aria-selected="true"],
+  .crm-settings-tab.is-active {
+    background: color-mix(in srgb, var(--pc-primary) 18%, var(--pc-surface));
+    color: var(--pc-text);
+    box-shadow: var(--pc-shadow-surface);
+  }
+
+  .crm-settings-panels {
+    display: grid;
+  }
+
+  .crm-settings-panel {
+    display: none;
+  }
+
+  .crm-settings-panel.is-active {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-stack {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-card {
+    border-radius: var(--pc-radius-xxl);
+    padding: var(--pc-spacing-lg);
+    background: var(--pc-surface);
+    box-shadow: var(--pc-shadow-surface);
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-settings-card__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-card__title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-settings-card__hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-settings-card__body {
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-settings-grid {
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  @media (min-width: 768px) {
+    .crm-settings-grid--two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   .crm-settings-group {
     border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
     border-radius: var(--pc-radius-lg);
@@ -3586,59 +3686,108 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" onclick="closeBoard()" aria-label="Закрыть">✖</button>
   </div>
   <form id="boardForm" class="dlg-body" method="dialog">
-    <div class="crm-modal-section">
-      <label class="crm-field">
-        <span class="crm-field__label">Название доски</span>
-        <input name="name" class="pc-input" required />
-      </label>
-      <label class="crm-field">
-        <span class="crm-field__label">Схема статусов (по столбцам)</span>
-        <input name="lanes" class="pc-input" placeholder="Не запланированное, Клиент, …, Отгружено" />
-        <span class="crm-field__hint">Укажите состояния через запятую.</span>
-      </label>
-    </div>
-    <details class="crm-settings-group" open>
-      <summary>Настройки CRM</summary>
-      <div class="crm-settings-fields">
-        <div class="crm-settings-row">
-          <div class="crm-settings-label">Не учитывать состояния</div>
-          <div class="crm-settings-control">
-            <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
-            <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
-          </div>
-        </div>
-        <div id="crmCapacitySettings"></div>
-        <div id="crmParallelSettings"></div>
-        <div id="crmHourlessScheduleSettings"></div>
-        <div id="crmPreferencesSettings"></div>
-        <div id="crmStartViewSettings"></div>
-        <div id="crmMappingSettings"></div>
-        <div class="crm-settings-inline">
-          <label class="crm-field">
-            <span class="crm-field__label">Режим очистки корзины</span>
-            <select name="trashRetentionMode" class="pc-select">
-              <option value="days">По дням</option>
-              <option value="count">По количеству</option>
-            </select>
-          </label>
-          <label class="crm-field">
-            <span class="crm-field__label">Порог</span>
-            <input name="trashRetentionValue" class="pc-input" type="number" min="1" step="1" />
-          </label>
-        </div>
-        <div class="crm-settings-inline">
-          <label class="crm-field">
-            <span class="crm-field__label">Автодовес, %</span>
-            <input name="extraPercent" class="pc-input" type="number" min="0" step="0.01" />
-          </label>
-          <label class="crm-field">
-            <span class="crm-field__label">Мин. доп. время, ч</span>
-            <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
-          </label>
-        </div>
-        <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+    <div class="crm-settings-layout">
+      <div class="crm-settings-tabs" role="tablist" aria-label="Категории настроек">
+        <button type="button" class="crm-settings-tab is-active" role="tab" aria-selected="true" aria-controls="crmSettingsPanelGeneral" id="crmSettingsTabGeneral" data-tab="general">Основное</button>
+        <button type="button" class="crm-settings-tab" role="tab" aria-selected="false" aria-controls="crmSettingsPanelProduction" id="crmSettingsTabProduction" data-tab="production">Производство</button>
+        <button type="button" class="crm-settings-tab" role="tab" aria-selected="false" aria-controls="crmSettingsPanelStages" id="crmSettingsTabStages" data-tab="stages">Статусы и переделы</button>
       </div>
-    </details>
+      <div class="crm-settings-panels">
+        <section class="crm-settings-panel is-active" id="crmSettingsPanelGeneral" role="tabpanel" aria-labelledby="crmSettingsTabGeneral" data-panel="general">
+          <div class="crm-settings-stack">
+            <div class="crm-settings-card surface">
+              <div class="crm-settings-card__header">
+                <h3 class="crm-settings-card__title">Общие параметры</h3>
+                <p class="crm-settings-card__hint">Название доски и схема колонок CRM.</p>
+              </div>
+              <div class="crm-settings-card__body">
+                <div class="crm-settings-grid crm-settings-grid--two">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Название доски</span>
+                    <input name="name" class="pc-input" required />
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Схема статусов (по столбцам)</span>
+                    <input name="lanes" class="pc-input" placeholder="Не запланированное, Клиент, …, Отгружено" />
+                    <span class="crm-field__hint">Укажите состояния через запятую.</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <details class="crm-settings-group" open>
+              <summary>Отображение и автоматизация</summary>
+              <div class="crm-settings-fields">
+                <div id="crmStartViewSettings"></div>
+                <div id="crmPreferencesSettings"></div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Режим очистки корзины</span>
+                    <select name="trashRetentionMode" class="pc-select">
+                      <option value="days">По дням</option>
+                      <option value="count">По количеству</option>
+                    </select>
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Порог</span>
+                    <input name="trashRetentionValue" class="pc-input" type="number" min="1" step="1" />
+                  </label>
+                </div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Автодовес, %</span>
+                    <input name="extraPercent" class="pc-input" type="number" min="0" step="0.01" />
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Мин. доп. время, ч</span>
+                    <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
+                  </label>
+                </div>
+                <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="crm-settings-panel" id="crmSettingsPanelProduction" role="tabpanel" aria-labelledby="crmSettingsTabProduction" data-panel="production" hidden>
+          <div class="crm-settings-stack">
+            <details class="crm-settings-group" open>
+              <summary>Вместимость и параллельные операции</summary>
+              <div class="crm-settings-fields">
+                <div id="crmCapacitySettings"></div>
+                <div id="crmParallelSettings"></div>
+              </div>
+            </details>
+            <details class="crm-settings-group" open>
+              <summary>Графики работы переделов</summary>
+              <div class="crm-settings-fields">
+                <div id="crmHourlessScheduleSettings"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="crm-settings-panel" id="crmSettingsPanelStages" role="tabpanel" aria-labelledby="crmSettingsTabStages" data-panel="stages" hidden>
+          <div class="crm-settings-stack">
+            <details class="crm-settings-group" open>
+              <summary>Фильтры и статусы</summary>
+              <div class="crm-settings-fields">
+                <div class="crm-settings-row">
+                  <div class="crm-settings-label">Не учитывать состояния</div>
+                  <div class="crm-settings-control">
+                    <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
+                    <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="crm-settings-group" open>
+              <summary>Сопоставление переделов</summary>
+              <div class="crm-settings-fields">
+                <div id="crmMappingSettings"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
     <div class="crm-modal-actions">
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
@@ -9190,6 +9339,43 @@ const crmStageScheduleContainer=boardForm?.querySelector('#crmHourlessScheduleSe
 const crmPreferencesContainer=boardForm?.querySelector('#crmPreferencesSettings')||null;
 const crmStartViewContainer=boardForm?.querySelector('#crmStartViewSettings')||null;
 const crmMappingContainer=boardForm?.querySelector('#crmMappingSettings')||null;
+const crmSettingsTabButtons=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-tab')):[];
+const crmSettingsPanels=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-panel')):[];
+let crmSettingsActiveTabId=crmSettingsPanels[0]?.dataset?.panel||'general';
+
+function setCrmSettingsActiveTab(tabId){
+  if(!crmSettingsPanels.length) return;
+  const fallback=crmSettingsPanels[0]?.dataset?.panel||'general';
+  const target=crmSettingsPanels.some(panel=>panel.dataset?.panel===tabId)?tabId:fallback;
+  crmSettingsActiveTabId=target;
+  crmSettingsTabButtons.forEach(btn=>{
+    const isActive=btn?.dataset?.tab===target;
+    if(!btn) return;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-selected', isActive?'true':'false');
+    btn.setAttribute('tabindex', isActive?'0':'-1');
+  });
+  crmSettingsPanels.forEach(panel=>{
+    const isActive=panel?.dataset?.panel===target;
+    panel.classList.toggle('is-active', isActive);
+    if(isActive){
+      panel.removeAttribute('hidden');
+    }else{
+      panel.setAttribute('hidden','');
+    }
+  });
+}
+
+crmSettingsTabButtons.forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    setCrmSettingsActiveTab(btn.dataset?.tab||'');
+    btn.focus();
+  });
+});
+
+if(crmSettingsPanels.length){
+  setCrmSettingsActiveTab(crmSettingsActiveTabId);
+}
 let crmUnaccountedDraft=[];
 let crmStageScheduleDrafts={};
 let crmStageScheduleActiveStage=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'';
@@ -10041,6 +10227,7 @@ function openBoard(){
   renderCrmPreferencesSettingsUI();
   renderCrmStartViewSettingsUI();
   renderCrmMappingSettingsUI();
+  setCrmSettingsActiveTab(crmSettingsActiveTabId);
   boardDlg.showModal();
 }
 function closeBoard(){boardDlg.close()}
