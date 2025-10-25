@@ -622,13 +622,38 @@
 
   .crm-mapping-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 200px;
+    grid-template-columns: minmax(0, 1fr) 200px 160px;
     gap: var(--pc-spacing-sm);
     align-items: center;
     padding: 6px 8px;
     border-radius: var(--pc-radius-md);
     background: color-mix(in srgb, var(--pc-surface) 90%, transparent);
     border: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+  }
+
+  .crm-mapping-row__controls {
+    display: contents;
+  }
+
+  .crm-mapping-row__select {
+    display: flex;
+    align-items: center;
+  }
+
+  .crm-mapping-row__hours {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-xxs);
+    font-size: 13px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-mapping-row__hours input[type="checkbox"] {
+    transform: translateY(1px);
+  }
+
+  .crm-mapping-row__hours[data-disabled="1"] {
+    opacity: 0.5;
   }
 
   .crm-mapping-row[data-state="unmapped"] {
@@ -4491,21 +4516,141 @@ function normalizeCrmStageKey(value){
   return String(value??'').trim().toLowerCase();
 }
 
+function sanitizeCrmMappingRecord(value){
+  if(!value) return null;
+  if(value===CRM_STAGE_IGNORE){
+    return { stage:CRM_STAGE_IGNORE, hasHours:false };
+  }
+  if(typeof value==='string'){
+    if(CRM_STAGE_KEYS.includes(value)){
+      return { stage:value, hasHours:null };
+    }
+    return null;
+  }
+  if(typeof value==='object'){
+    let stage='';
+    if(value.stage===CRM_STAGE_IGNORE){
+      stage=CRM_STAGE_IGNORE;
+    }else if(typeof value.stage==='string' && CRM_STAGE_KEYS.includes(value.stage)){
+      stage=value.stage;
+    }else if(typeof value.stage==='string' && value.stage.trim()===''){
+      stage='';
+    }
+    let hasHours=null;
+    if(value.hasHours===true){
+      hasHours=true;
+    }else if(value.hasHours===false){
+      hasHours=false;
+    }
+    if(stage===CRM_STAGE_IGNORE){
+      return { stage:CRM_STAGE_IGNORE, hasHours:false };
+    }
+    if(stage || hasHours!==null){
+      return { stage, hasHours };
+    }
+  }
+  return null;
+}
+
 function sanitizeCrmStageMapping(raw){
   const source=raw&&typeof raw==='object'?raw:{};
   const result={};
   Object.entries(source).forEach(([key,value])=>{
     const normalized=normalizeCrmStageKey(key);
     if(!normalized) return;
-    if(value===CRM_STAGE_IGNORE){
-      result[normalized]=CRM_STAGE_IGNORE;
-      return;
-    }
-    if(typeof value==='string' && CRM_STAGE_KEYS.includes(value)){
-      result[normalized]=value;
+    const record=sanitizeCrmMappingRecord(value);
+    if(record){
+      result[normalized]=record;
     }
   });
   return result;
+}
+
+function getCrmStageMappingEntry(normalized){
+  const key=normalizeCrmStageKey(normalized);
+  if(!key) return null;
+  const mapping=state?.settings?.mapping;
+  if(mapping && Object.prototype.hasOwnProperty.call(mapping,key)){
+    const sanitized=sanitizeCrmMappingRecord(mapping[key]);
+    if(sanitized){
+      if(mapping[key]!==sanitized){
+        state.settings.mapping={...mapping,[key]:sanitized};
+      }
+      return sanitized;
+    }
+  }
+  return null;
+}
+
+function setCrmStageMappingEntry(normalized, updater){
+  const key=normalizeCrmStageKey(normalized);
+  if(!key) return null;
+  if(!state.settings) state.settings={};
+  if(!state.settings.mapping || typeof state.settings.mapping!=='object'){
+    state.settings.mapping={};
+  }
+  const current=getCrmStageMappingEntry(key);
+  const nextValue=typeof updater==='function'?updater(current):updater;
+  const sanitized=sanitizeCrmMappingRecord(nextValue);
+  if(sanitized){
+    state.settings.mapping={...state.settings.mapping,[key]:sanitized};
+    return sanitized;
+  }
+  if(Object.prototype.hasOwnProperty.call(state.settings.mapping,key)){
+    const next={...state.settings.mapping};
+    delete next[key];
+    state.settings.mapping=next;
+  }
+  return null;
+}
+
+function getStageHoursPreference(normalized){
+  const entry=getCrmStageMappingEntry(normalized);
+  if(entry){
+    if(entry.stage===CRM_STAGE_IGNORE) return false;
+    if(entry.hasHours===true) return true;
+    if(entry.hasHours===false) return false;
+  }
+  return null;
+}
+
+function stageNameHasHours(normalized){
+  const key=normalizeStageName(normalized||'');
+  if(!key) return false;
+  const preference=getStageHoursPreference(key);
+  if(preference!==null) return preference;
+  if(HOURLESS_STAGE_NAMES.has(key)) return false;
+  const entry=getCrmStageMappingEntry(key);
+  const mappedStage=entry&&typeof entry.stage==='string'?entry.stage:'';
+  if(mappedStage===CRM_STAGE_IGNORE) return false;
+  const fallback=mappedStage&&CRM_STAGE_KEYS.includes(mappedStage)
+    ? mappedStage
+    : resolveCrmStageKey(key)||'';
+  if(fallback){
+    return !CRM_NOHOUR_STAGES.has(fallback);
+  }
+  return true;
+}
+
+function isStageNameHourless(normalized){
+  return !stageNameHasHours(normalized);
+}
+
+function ensureStageHoursPreference(normalized, label){
+  const key=normalizeStageName(normalized||'');
+  if(!key) return;
+  if(getStageHoursPreference(key)!==null) return;
+  if(resolveCrmStageKey(key)) return;
+  const display=label&&label.trim()?label.trim():key;
+  const message=`Передел «${display}»: учитывать часы?\nНажмите «ОК», если необходимо вводить часы. «Отмена» — если этот передел без часов.`;
+  const hasHours=window.confirm(message);
+  const result=setCrmStageMappingEntry(key, entry=>({
+    stage:entry&&typeof entry.stage==='string'?entry.stage:'',
+    hasHours:hasHours
+  }));
+  if(result){
+    save('Уточнение часов передела');
+  }
 }
 
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
@@ -7892,7 +8037,7 @@ function normalizeStageProgress(value){
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>{if(!x) return false;return x.done||normalizeStageProgress(x.progress)>=100;}).length;return[d,s.length]}
-function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
+function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&stageNameHasHours(nm);}
 function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
 function updateSearchUI(){
@@ -8441,7 +8586,10 @@ function appendStageRow(st){
   const nmRaw=(st.name||'').trim();
   const nmNormalized=normalizeStageName(st.name);
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
-  const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
+  if(nmNormalized && getStageHoursPreference(nmNormalized)===null){
+    ensureStageHoursPreference(nmNormalized, nmRaw);
+  }
+  const suppressValue=isStageNameHourless(nmNormalized);
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
   const stageId=ensureStageIdentity(st);
@@ -8546,7 +8694,7 @@ function readStageRow(tr){
 }
 
 function suppressValueForStage(normalizedName){
-  return HOURLESS_STAGE_NAMES.has(normalizedName);
+  return isStageNameHourless(normalizedName);
 }
 
 function showStagePicker(anchor){
@@ -9171,6 +9319,7 @@ function renderCrmMappingSettingsUI(){
       const rowEl=document.createElement('div');
       rowEl.className='crm-mapping-row';
       rowEl.dataset.fallback=entry.fallback||'';
+      rowEl.dataset.normalized=entry.normalized||'';
       const title=document.createElement('div');
       title.className='crm-mapping-row__title';
       title.textContent=entry.label||entry.normalized;
@@ -9180,6 +9329,10 @@ function renderCrmMappingSettingsUI(){
         fallback.textContent=`По умолчанию: ${CRM_STAGE_LABELS[entry.fallback]||entry.fallback}`;
         title.appendChild(fallback);
       }
+      const controls=document.createElement('div');
+      controls.className='crm-mapping-row__controls';
+      const selectWrap=document.createElement('div');
+      selectWrap.className='crm-mapping-row__select';
       const select=document.createElement('select');
       select.className='pc-select';
       select.dataset.crmMapping=entry.normalized;
@@ -9191,18 +9344,43 @@ function renderCrmMappingSettingsUI(){
         const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
         select.appendChild(opt);
       });
-      const current=mapping?.[entry.normalized];
-      if(typeof current==='string' && current){
-        select.value=current;
+      const currentRecord=mapping?.[entry.normalized];
+      const stageValue=currentRecord&&typeof currentRecord==='object'?currentRecord.stage:'';
+      if(stageValue===CRM_STAGE_IGNORE){
+        select.value=CRM_STAGE_IGNORE;
+      }else if(stageValue && CRM_STAGE_KEYS.includes(stageValue)){
+        select.value=stageValue;
       }else{
         select.value='';
       }
-      if(!select.value && !entry.fallback){
+      if(select.value!==CRM_STAGE_IGNORE && !select.value && !entry.fallback){
         hasUnmapped=true;
       }
+      selectWrap.appendChild(select);
+      const hoursLabel=document.createElement('label');
+      hoursLabel.className='crm-mapping-row__hours';
+      const hoursInput=document.createElement('input');
+      hoursInput.type='checkbox';
+      hoursInput.name='crmMappingHours';
+      hoursInput.dataset.crmMapping=entry.normalized;
+      const hasHours=stageNameHasHours(entry.normalized);
+      hoursInput.checked=hasHours;
+      if(currentRecord&&typeof currentRecord==='object'&&typeof currentRecord.hasHours==='boolean'){
+        hoursInput.dataset.manual='1';
+      }
+      if(select.value===CRM_STAGE_IGNORE){
+        hoursInput.checked=false;
+        hoursInput.disabled=true;
+        hoursLabel.dataset.disabled='1';
+      }else{
+        hoursLabel.dataset.disabled='';
+      }
+      const hoursText=document.createElement('span');
+      hoursText.textContent='Есть часы';
+      hoursLabel.append(hoursInput, hoursText);
+      controls.append(selectWrap, hoursLabel);
       updateCrmMappingRowState(rowEl, select.value);
-      rowEl.appendChild(title);
-      rowEl.appendChild(select);
+      rowEl.append(title, controls);
       list.appendChild(rowEl);
     });
   }
@@ -9221,19 +9399,41 @@ function renderCrmMappingSettingsUI(){
 
 if(crmMappingContainer){
   crmMappingContainer.addEventListener('change',event=>{
-    const select=event.target;
-    if(!(select instanceof HTMLSelectElement)) return;
-    if(!select.dataset.crmMapping) return;
-    const row=select.closest('.crm-mapping-row');
-    updateCrmMappingRowState(row, select.value);
-    const note=crmMappingContainer.querySelector('.crm-mapping-note');
-    if(note){
-      const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
-      note.textContent=hasUnmapped
-        ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
-        : 'Настройте сопоставление названий стадий CRM с переделами.';
+    const target=event.target;
+    if(target instanceof HTMLSelectElement && target.name==='crmMappingSelect'){
+      if(!target.dataset.crmMapping) return;
+      const row=target.closest('.crm-mapping-row');
+      updateCrmMappingRowState(row, target.value);
+      const hoursInput=row?.querySelector('input[name="crmMappingHours"]');
+      const hoursWrapper=hoursInput?.closest('.crm-mapping-row__hours');
+      if(hoursInput){
+        if(target.value===CRM_STAGE_IGNORE){
+          hoursInput.checked=false;
+          hoursInput.disabled=true;
+          hoursInput.dataset.manual='1';
+          if(hoursWrapper) hoursWrapper.dataset.disabled='1';
+        }else{
+          hoursInput.disabled=false;
+          if(hoursWrapper) hoursWrapper.dataset.disabled='';
+          hoursInput.removeAttribute('data-manual');
+          if(!hoursInput.dataset.manual){
+            hoursInput.checked=stageNameHasHours(target.dataset.crmMapping||'');
+          }
+        }
+      }
+      const note=crmMappingContainer.querySelector('.crm-mapping-note');
+      if(note){
+        const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
+        note.textContent=hasUnmapped
+          ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
+          : 'Настройте сопоставление названий стадий CRM с переделами.';
+      }
+      updateCrmMappingAlertState();
+      return;
     }
-    updateCrmMappingAlertState();
+    if(target instanceof HTMLInputElement && target.name==='crmMappingHours'){
+      target.dataset.manual='1';
+    }
   });
 }
 
@@ -9280,8 +9480,9 @@ function recalcCrmMappingAlert(){
       const normalized=entry?.normalized;
       if(!normalized) return false;
       const value=mapping?.[normalized];
-      if(value===CRM_STAGE_IGNORE) return false;
-      if(typeof value==='string' && value){
+      const stageValue=value&&typeof value==='object'?value.stage:(typeof value==='string'?value:'');
+      if(stageValue===CRM_STAGE_IGNORE) return false;
+      if(stageValue && CRM_STAGE_KEYS.includes(stageValue)){
         return false;
       }
       if(entry.fallback){
@@ -9501,18 +9702,23 @@ boardForm.addEventListener('submit',e=>{
   if(state.settings && Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
     delete state.settings.hourlessSchedule;
   }
-  const mappingSelects=[...boardForm.querySelectorAll('select[name="crmMappingSelect"]')];
+  const mappingRows=[...boardForm.querySelectorAll('.crm-mapping-row')];
   const mappingDraft={};
-  mappingSelects.forEach(select=>{
-    const normalized=select.dataset.crmMapping?normalizeCrmStageKey(select.dataset.crmMapping):'';
+  mappingRows.forEach(row=>{
+    const normalized=row?.dataset?.normalized?normalizeCrmStageKey(row.dataset.normalized):'';
     if(!normalized) return;
-    if(select.value===CRM_STAGE_IGNORE){
-      mappingDraft[normalized]=CRM_STAGE_IGNORE;
+    const select=row.querySelector('select[name="crmMappingSelect"]');
+    const hoursInput=row.querySelector('input[name="crmMappingHours"]');
+    const stageValue=select?select.value:'';
+    if(stageValue===CRM_STAGE_IGNORE){
+      mappingDraft[normalized]={ stage:CRM_STAGE_IGNORE, hasHours:false };
       return;
     }
-    if(CRM_STAGE_KEYS.includes(select.value)){
-      mappingDraft[normalized]=select.value;
-    }
+    const record={
+      stage:CRM_STAGE_KEYS.includes(stageValue)?stageValue:'',
+      hasHours:hoursInput?!!hoursInput.checked:true
+    };
+    mappingDraft[normalized]=record;
   });
   state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
   applyTrashRetention();
@@ -9560,7 +9766,7 @@ function openSplitDialog(){
   stages.forEach(st=>{
     const tr=document.createElement('tr');
     const normalized=normalizeStageName(st.name);
-    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    const hourless=isStageNameHourless(normalized);
     tr.dataset.stageName=st.name||'';
     tr.dataset.stageNormalized=normalized;
     tr.dataset.hourless=hourless?'1':'0';
@@ -9622,7 +9828,7 @@ splitForm.addEventListener('submit',e=>{
   const stageShareResults=[];
   child.stages=(parent.stages||[]).map((st,i)=>{
     const normalized=normalizeStageName(st.name);
-    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    const hourless=isStageNameHourless(normalized);
     if(hourless){
       const parsedHourless=parseNumericValue(st.value);
       stageShareResults[i]={share:0,current:parsedHourless.number,hourless:true,hadValue:parsedHourless.hasValue};
@@ -9786,7 +9992,7 @@ function mergeSuborderBack(parent, child, board){
   childStages.forEach(st=>{childMap.set(normalizeStageName(st.name||''),st);});
   parent.stages=(parent.stages||[]).map(st=>{
     const normalized=normalizeStageName(st.name);
-    if(HOURLESS_STAGE_NAMES.has(normalized)){
+    if(isStageNameHourless(normalized)){
       return {...st};
     }
     const childStage=childMap.get(normalized);
