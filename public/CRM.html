@@ -381,6 +381,25 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-danger) 25%, transparent);
   }
 
+  .pc-nav__badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--pc-danger);
+    color: var(--pc-on-danger, #fff);
+    font-size: 11px;
+    font-weight: var(--pc-font-weight-semibold);
+    line-height: 1;
+  }
+
+  .pc-nav__badge[hidden] {
+    display: none;
+  }
+
   .crm-db-indicator {
     display: inline-flex;
     align-items: center;
@@ -462,6 +481,106 @@
     gap: var(--pc-spacing-sm);
   }
 
+  .crm-settings-layout {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-tab {
+    border: none;
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    color: var(--pc-text-secondary, var(--pc-text-muted));
+    font-size: 14px;
+    font-weight: var(--pc-font-weight-medium);
+    padding: 10px 18px;
+    border-radius: var(--pc-radius-xl);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: var(--pc-shadow-soft, var(--pc-shadow-surface));
+  }
+
+  .crm-settings-tab:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-primary) 40%, transparent);
+    outline-offset: 2px;
+  }
+
+  .crm-settings-tab[aria-selected="true"],
+  .crm-settings-tab.is-active {
+    background: color-mix(in srgb, var(--pc-primary) 18%, var(--pc-surface));
+    color: var(--pc-text);
+    box-shadow: var(--pc-shadow-surface);
+  }
+
+  .crm-settings-panels {
+    display: grid;
+  }
+
+  .crm-settings-panel {
+    display: none;
+  }
+
+  .crm-settings-panel.is-active {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-stack {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-settings-card {
+    border-radius: var(--pc-radius-xxl);
+    padding: var(--pc-spacing-lg);
+    background: var(--pc-surface);
+    box-shadow: var(--pc-shadow-surface);
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-settings-card__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-card__title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-settings-card__hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-settings-card__body {
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-settings-grid {
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  @media (min-width: 768px) {
+    .crm-settings-grid--two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   .crm-settings-group {
     border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
     border-radius: var(--pc-radius-lg);
@@ -529,6 +648,15 @@
     }
   }
 
+  .crm-settings-row--stack {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .crm-settings-row--stack .crm-settings-label {
+    margin-bottom: 2px;
+  }
+
   .crm-settings-label {
     font-size: 13px;
     font-weight: var(--pc-font-weight-semibold);
@@ -542,6 +670,15 @@
     align-items: center;
     gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
+  }
+
+  .crm-settings-control--column {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .crm-settings-control--column > * {
+    width: 100%;
   }
 
   .crm-settings-summary {
@@ -621,14 +758,48 @@
   }
 
   .crm-mapping-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 200px;
-    gap: var(--pc-spacing-sm);
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+    align-items: stretch;
     padding: 6px 8px;
     border-radius: var(--pc-radius-md);
     background: color-mix(in srgb, var(--pc-surface) 90%, transparent);
     border: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+  }
+
+  .crm-mapping-row__controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+    align-items: center;
+  }
+
+  .crm-mapping-row__select {
+    display: flex;
+    align-items: center;
+    flex: 1 1 200px;
+    min-width: 200px;
+  }
+
+  .crm-mapping-row__select select {
+    width: 100%;
+  }
+
+  .crm-mapping-row__hours {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-xxs);
+    font-size: 13px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-mapping-row__hours input[type="checkbox"] {
+    transform: translateY(1px);
+  }
+
+  .crm-mapping-row__hours[data-disabled="1"] {
+    opacity: 0.5;
   }
 
   .crm-mapping-row[data-state="unmapped"] {
@@ -649,6 +820,32 @@
   .crm-mapping-row__fallback {
     font-size: 12px;
     color: var(--pc-text-muted);
+  }
+
+  @media (min-width: 960px) {
+    .crm-mapping-row {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .crm-mapping-row__title {
+      flex: 1 1 0;
+      min-width: 220px;
+    }
+
+    .crm-mapping-row__controls {
+      flex-wrap: nowrap;
+      gap: var(--pc-spacing-sm);
+    }
+
+    .crm-mapping-row__select {
+      flex: 0 1 260px;
+      min-width: 220px;
+    }
+
+    .crm-mapping-row__hours {
+      flex: 0 0 auto;
+    }
   }
 
   .crm-mapping-empty {
@@ -1019,6 +1216,16 @@
     color: var(--pc-primary);
   }
 
+  .crm-stage-stack-col[data-offday="1"] {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--pc-danger, #fa5252) 40%, var(--pc-border));
+    background: color-mix(in srgb, var(--pc-danger, #fa5252) 14%, var(--pc-surface));
+  }
+
+  .crm-stage-stack-col[data-offday="1"] .crm-stage-stack-title {
+    color: color-mix(in srgb, var(--pc-danger, #fa5252) 45%, var(--pc-text));
+  }
+
   .crm-stage-stack-title {
     font-weight: var(--pc-font-weight-semibold);
     text-align: center;
@@ -1216,6 +1423,16 @@
     font-weight: var(--pc-font-weight-semibold);
   }
 
+  .crm-stage-gantt-header-row span.offday {
+    background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--pc-danger, #fa5252) 22%, transparent) 0 12px, transparent 12px 24px);
+    color: color-mix(in srgb, var(--pc-danger, #fa5252) 60%, var(--pc-text));
+  }
+
+  .crm-stage-gantt-header-row span.offday.today {
+    background: color-mix(in srgb, var(--pc-primary) 18%, color-mix(in srgb, var(--pc-danger, #fa5252) 15%, transparent));
+    color: var(--pc-primary);
+  }
+
   .crm-stage-gantt-header-row .crm-gantt-dow {
     font-size: 11px;
     color: var(--pc-text-muted);
@@ -1250,6 +1467,14 @@
 
   .crm-stage-gantt-cell.today {
     background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+  }
+
+  .crm-stage-gantt-cell.offday {
+    background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--pc-danger, #fa5252) 16%, transparent) 0 10px, transparent 10px 20px);
+  }
+
+  .crm-stage-gantt-cell.offday.today {
+    background: color-mix(in srgb, var(--pc-primary) 15%, color-mix(in srgb, var(--pc-danger, #fa5252) 12%, transparent));
   }
 
   .crm-stage-gantt-fill {
@@ -2233,6 +2458,188 @@
     font-size: 13px;
   }
 
+  .crm-journal-modal,
+  .crm-journal-detail-modal {
+    width: min(520px, 92vw);
+    max-width: 640px;
+  }
+
+  .crm-journal-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+    max-height: clamp(240px, 55vh, 460px);
+    overflow-y: auto;
+  }
+
+  .crm-journal-item {
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    align-items: flex-start;
+    justify-content: space-between;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 85%, transparent);
+    border-radius: var(--pc-radius-md);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+    transition: border-color var(--pc-transition-short), background var(--pc-transition-short);
+  }
+
+  .crm-journal-item[data-unread="true"] {
+    border-color: color-mix(in srgb, var(--pc-primary) 45%, var(--pc-border));
+    background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+  }
+
+  .crm-journal-item__content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .crm-journal-item__summary {
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+    word-break: break-word;
+  }
+
+  .crm-journal-item__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-journal-item__type {
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-border) 35%, transparent);
+    font-weight: var(--pc-font-weight-semibold);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .crm-journal-item__actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .crm-journal-empty {
+    margin-top: var(--pc-spacing-sm);
+    color: var(--pc-text-muted);
+    font-size: 13px;
+  }
+
+  .crm-journal-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
+    padding: var(--pc-spacing-md);
+  }
+
+  .crm-journal-detail__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-journal-detail__title {
+    margin: 0;
+    font-size: 20px;
+    line-height: 1.25;
+  }
+
+  .crm-journal-detail__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs) var(--pc-spacing-sm);
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-journal-detail__section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .crm-journal-detail__subtitle {
+    margin: 0;
+    font-size: 14px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text-muted);
+    letter-spacing: 0.01em;
+  }
+
+  .crm-journal-detail__table {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    overflow: hidden;
+  }
+
+  .crm-journal-detail__table table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .crm-journal-detail__table th,
+  .crm-journal-detail__table td {
+    padding: 8px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 60%, transparent);
+    text-align: left;
+  }
+
+  .crm-journal-detail__table th {
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-journal-detail__table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .crm-journal-detail__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-journal-chip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+    color: color-mix(in srgb, var(--pc-primary) 80%, #0f1a33);
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-journal-stage-diff {
+    display: grid;
+    gap: var(--pc-spacing-sm);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .crm-journal-stage-diff strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+  }
+
+  .crm-journal-stage-diff ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
   #columns {
     min-height: 0;
   }
@@ -2659,6 +3066,8 @@
 
   dialog#orderDlg {
     width: min(1120px, 96vw);
+    border-radius: var(--pc-radius-xxl, 32px);
+    overflow: hidden;
   }
 
   dialog#orderDlg::backdrop {
@@ -3092,8 +3501,11 @@
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
     <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
-    <a class="pc-nav__link" data-section="settings" data-action="open-settings" href="#settings">Настройки</a>
-    <a class="pc-nav__link" data-section="journal" href="#journal">Журнал</a>
+    <button class="pc-nav__link" type="button" data-section="settings" data-action="open-settings">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false">
+      Журнал
+      <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
+    </button>
   </nav>
   <div class="pc-header__actions">
     <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
@@ -3149,6 +3561,7 @@
           <div class="crm-toolbar__stage-buttons">
             <button id="crmStageExceptionsBtn" class="pc-btn pc-btn--secondary" type="button">Исключения</button>
             <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button">Бронь</button>
+            <button id="crmStageOptimizeBtn" class="pc-btn pc-btn--primary" type="button" title="Оптимизировать очередь передела">Оптимизировать очередь</button>
           </div>
         </div>
         <div class="crm-toolbar__search" id="crmSearchRow">
@@ -3472,12 +3885,12 @@
   </div>
   <form id="orderForm" class="dlg-body" method="dialog">
     <div class="gridHead surface">
-      <div class="title"><label>Название заказа</label><input name="title" required placeholder="ВЗПС-021612 АБХМ (Фортес Групп)" /></div>
+      <div class="title"><label>Название заказа</label><input name="title" required /></div>
       <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
       <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
 
-      <div class="customer"><label>Клиент</label><input name="customer" placeholder="АБХМ" /></div>
-      <div class="orderNo"><label>№ заказа</label><input name="orderNo" required placeholder="ВЗПС-021612" /></div>
+      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <div class="orderNo"><label>№ заказа</label><input name="orderNo" required /></div>
       <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
       <div class="end"><label>Конец (авто)</label><input name="end" type="date" disabled /></div>
     </div>
@@ -3532,58 +3945,108 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" onclick="closeBoard()" aria-label="Закрыть">✖</button>
   </div>
   <form id="boardForm" class="dlg-body" method="dialog">
-    <div class="crm-modal-section">
-      <label class="crm-field">
-        <span class="crm-field__label">Название доски</span>
-        <input name="name" class="pc-input" required />
-      </label>
-      <label class="crm-field">
-        <span class="crm-field__label">Схема статусов (по столбцам)</span>
-        <input name="lanes" class="pc-input" placeholder="Не запланированное, Клиент, …, Отгружено" />
-        <span class="crm-field__hint">Укажите состояния через запятую.</span>
-      </label>
-    </div>
-    <details class="crm-settings-group" open>
-      <summary>Настройки CRM</summary>
-      <div class="crm-settings-fields">
-        <div class="crm-settings-row">
-          <div class="crm-settings-label">Не учитывать состояния</div>
-          <div class="crm-settings-control">
-            <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
-            <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
-          </div>
-        </div>
-        <div id="crmCapacitySettings"></div>
-        <div id="crmParallelSettings"></div>
-        <div id="crmPreferencesSettings"></div>
-        <div id="crmStartViewSettings"></div>
-        <div id="crmMappingSettings"></div>
-        <div class="crm-settings-inline">
-          <label class="crm-field">
-            <span class="crm-field__label">Режим очистки корзины</span>
-            <select name="trashRetentionMode" class="pc-select">
-              <option value="days">По дням</option>
-              <option value="count">По количеству</option>
-            </select>
-          </label>
-          <label class="crm-field">
-            <span class="crm-field__label">Порог</span>
-            <input name="trashRetentionValue" class="pc-input" type="number" min="1" step="1" />
-          </label>
-        </div>
-        <div class="crm-settings-inline">
-          <label class="crm-field">
-            <span class="crm-field__label">Автодовес, %</span>
-            <input name="extraPercent" class="pc-input" type="number" min="0" step="0.01" />
-          </label>
-          <label class="crm-field">
-            <span class="crm-field__label">Мин. доп. время, ч</span>
-            <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
-          </label>
-        </div>
-        <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+    <div class="crm-settings-layout">
+      <div class="crm-settings-tabs" role="tablist" aria-label="Категории настроек">
+        <button type="button" class="crm-settings-tab is-active" role="tab" aria-selected="true" aria-controls="crmSettingsPanelGeneral" id="crmSettingsTabGeneral" data-tab="general">Основное</button>
+        <button type="button" class="crm-settings-tab" role="tab" aria-selected="false" aria-controls="crmSettingsPanelProduction" id="crmSettingsTabProduction" data-tab="production">Производство</button>
+        <button type="button" class="crm-settings-tab" role="tab" aria-selected="false" aria-controls="crmSettingsPanelStages" id="crmSettingsTabStages" data-tab="stages">Статусы и переделы</button>
       </div>
-    </details>
+      <div class="crm-settings-panels">
+        <section class="crm-settings-panel is-active" id="crmSettingsPanelGeneral" role="tabpanel" aria-labelledby="crmSettingsTabGeneral" data-panel="general">
+          <div class="crm-settings-stack">
+            <div class="crm-settings-card surface">
+              <div class="crm-settings-card__header">
+                <h3 class="crm-settings-card__title">Общие параметры</h3>
+                <p class="crm-settings-card__hint">Название доски и схема колонок CRM.</p>
+              </div>
+              <div class="crm-settings-card__body">
+                <div class="crm-settings-grid crm-settings-grid--two">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Название доски</span>
+                    <input name="name" class="pc-input" required />
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Схема статусов (по столбцам)</span>
+                    <input name="lanes" class="pc-input" placeholder="Не запланированное, Клиент, …, Отгружено" />
+                    <span class="crm-field__hint">Укажите состояния через запятую.</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <details class="crm-settings-group" open>
+              <summary>Отображение и автоматизация</summary>
+              <div class="crm-settings-fields">
+                <div id="crmStartViewSettings"></div>
+                <div id="crmPreferencesSettings"></div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Режим очистки корзины</span>
+                    <select name="trashRetentionMode" class="pc-select">
+                      <option value="days">По дням</option>
+                      <option value="count">По количеству</option>
+                    </select>
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Порог</span>
+                    <input name="trashRetentionValue" class="pc-input" type="number" min="1" step="1" />
+                  </label>
+                </div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Автодовес, %</span>
+                    <input name="extraPercent" class="pc-input" type="number" min="0" step="0.01" />
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Мин. доп. время, ч</span>
+                    <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
+                  </label>
+                </div>
+                <small class="muted">Старые записи из корзины будут удаляться автоматически по выбранному правилу.</small>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="crm-settings-panel" id="crmSettingsPanelProduction" role="tabpanel" aria-labelledby="crmSettingsTabProduction" data-panel="production" hidden>
+          <div class="crm-settings-stack">
+            <details class="crm-settings-group" open>
+              <summary>Вместимость и параллельные операции</summary>
+              <div class="crm-settings-fields">
+                <div id="crmCapacitySettings"></div>
+                <div id="crmParallelSettings"></div>
+              </div>
+            </details>
+            <details class="crm-settings-group" open>
+              <summary>Графики работы переделов</summary>
+              <div class="crm-settings-fields">
+                <div id="crmHourlessScheduleSettings"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section class="crm-settings-panel" id="crmSettingsPanelStages" role="tabpanel" aria-labelledby="crmSettingsTabStages" data-panel="stages" hidden>
+          <div class="crm-settings-stack">
+            <details class="crm-settings-group" open>
+              <summary>Фильтры и статусы</summary>
+              <div class="crm-settings-fields">
+                <div class="crm-settings-row">
+                  <div class="crm-settings-label">Не учитывать состояния</div>
+                  <div class="crm-settings-control">
+                    <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
+                    <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="crm-settings-group" open>
+              <summary>Сопоставление переделов</summary>
+              <div class="crm-settings-fields">
+                <div id="crmMappingSettings"></div>
+              </div>
+            </details>
+          </div>
+        </section>
+      </div>
+    </div>
     <div class="crm-modal-actions">
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
@@ -3678,8 +4141,35 @@
   </div>
 </dialog>
 
+<!-- Журнал изменений -->
+<dialog id="crmJournalDlg" class="pc-modal crm-journal-modal">
+  <div class="dlg-head">
+    <strong>Журнал изменений</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div id="crmJournalEmpty" class="crm-modal-empty" hidden>Изменений пока нет.</div>
+    <ul id="crmJournalList" class="crm-journal-list"></ul>
+  </div>
+</dialog>
+
+<dialog id="crmJournalDetailDlg" class="pc-modal crm-journal-detail-modal">
+  <div class="crm-journal-detail">
+    <div class="crm-journal-detail__head">
+      <h2 class="crm-journal-detail__title" id="crmJournalDetailTitle">Подробности изменения</h2>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalDetailCloseIcon" aria-label="Закрыть">✖</button>
+    </div>
+    <div class="crm-journal-detail__meta" id="crmJournalDetailMeta"></div>
+    <div id="crmJournalDetailContent" class="crm-journal-detail__section"></div>
+    <div class="crm-modal-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmJournalDetailClose">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
 <script>
 const KEY='mini_crm_v13c';
+const SETTINGS_KEY='mini_crm_settings_v1';
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -3743,8 +4233,17 @@ const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
+const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
+  { key:'daily', label:'Без выходных', type:'weekly', pattern:[true,true,true,true,true,true,true] },
+  { key:'five_two', label:'5/2 (пн–пт)', type:'weekly', pattern:[false,true,true,true,true,true,false] },
+  { key:'two_two', label:'2/2', type:'cycle', length:4, work:[0,1] },
+  { key:'three_three', label:'3/3', type:'cycle', length:6, work:[0,1,2] },
+  { key:'four_two', label:'4/2', type:'cycle', length:6, work:[0,1,2,3] }
+]);
+const CRM_HOURLESS_SCHEDULE_PRESET_MAP=new Map(CRM_HOURLESS_SCHEDULE_PRESETS.map(item=>[item.key,item]));
+const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-01-01', extras:[] });
 const CRM_STAGE_IGNORE='__ignore__';
-const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, shiftOnProgress:true, cascadeReady:true };
+const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, shiftOnProgress:true, cascadeReady:true, showLateTips:true };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
@@ -3774,6 +4273,63 @@ const generateBoardId=(hint)=>{
 };
 const defaultBoard=(idHint)=>({id:generateBoardId(idHint),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const CRM_TRASH_ENTRY_TYPES=Object.freeze({order:'order',stage:'stage'});
+const CRM_JOURNAL_TYPES=Object.freeze({
+  orderCreated:'order-created',
+  orderUpdated:'order-updated',
+  orderDeleted:'order-deleted',
+  orderRestored:'order-restored',
+  settingsUpdated:'settings-updated'
+});
+const CRM_JOURNAL_LIMIT=400;
+const generateJournalId=()=>{
+  if(typeof crypto!=='undefined' && typeof crypto.randomUUID==='function'){
+    try{return crypto.randomUUID();}
+    catch(_err){/* ignore */}
+  }
+  return `jn-${Date.now().toString(16)}-${Math.random().toString(16).slice(2,8)}`;
+};
+function sanitizeCrmJournalEntry(raw){
+  if(!raw||typeof raw!=='object') return null;
+  const summary=typeof raw.summary==='string'?raw.summary.trim():'';
+  if(!summary) return null;
+  const entryId=typeof raw.id==='string'&&raw.id.trim()?raw.id.trim():generateJournalId();
+  const createdAt=typeof raw.createdAt==='string'&&raw.createdAt.trim()?raw.createdAt.trim():new Date().toISOString();
+  const actor=typeof raw.actor==='string'?raw.actor.trim():'';
+  const type=typeof raw.type==='string'?raw.type.trim():CRM_JOURNAL_TYPES.orderUpdated;
+  let details={};
+  if(raw.details && typeof raw.details==='object'){
+    try{details=JSON.parse(JSON.stringify(raw.details));}
+    catch(_err){details={};}
+  }
+  return {
+    id:entryId,
+    type,
+    summary,
+    createdAt,
+    actor,
+    unread:raw.unread===true,
+    details
+  };
+}
+function sanitizeCrmJournal(source){
+  const list=Array.isArray(source)?source:[];
+  const sanitized=[];
+  list.forEach(item=>{
+    const entry=sanitizeCrmJournalEntry(item);
+    if(entry){
+      sanitized.push(entry);
+    }
+  });
+  sanitized.sort((a,b)=>{
+    const aDate=a.createdAt||'';
+    const bDate=b.createdAt||'';
+    return bDate.localeCompare(aDate);
+  });
+  if(sanitized.length>CRM_JOURNAL_LIMIT){
+    return sanitized.slice(0,CRM_JOURNAL_LIMIT);
+  }
+  return sanitized;
+}
 const DEFAULT_TRASH_RETENTION_DAYS=30;
 const DEFAULT_TRASH_RETENTION_COUNT=200;
 const DEFAULT_TRASH_RETENTION=Object.freeze({mode:'days',value:DEFAULT_TRASH_RETENTION_DAYS});
@@ -3816,6 +4372,60 @@ function ensureStageIdentity(stage,fallbackId){
   return resolved;
 }
 const generateTrashId=()=>`trash-${Date.now().toString(16)}-${Math.random().toString(16).slice(2,8)}`;
+function sanitizeHourlessExtrasList(list){
+  const source=Array.isArray(list)
+    ? list
+    : typeof list==='string'
+      ? list.split(/[\s,;]+/)
+      : [];
+  const seen=new Set();
+  const result=[];
+  source.forEach(item=>{
+    const iso=coerceCalendarIso(item);
+    if(!iso || seen.has(iso)) return;
+    seen.add(iso);
+    result.push(iso);
+  });
+  result.sort((a,b)=>a.localeCompare(b));
+  return result;
+}
+function sanitizeCrmHourlessSchedule(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  let preset=typeof base.preset==='string'?base.preset.trim().toLowerCase():'';
+  if(!CRM_HOURLESS_SCHEDULE_PRESET_MAP.has(preset)){
+    preset=CRM_HOURLESS_SCHEDULE_DEFAULT.preset;
+  }
+  let start=coerceCalendarIso(base.start||base.anchor||base.begin);
+  if(!start){
+    start=CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  }
+  const extras=sanitizeHourlessExtrasList(base.extras||base.extraDates||base.dates||base.additional);
+  return { preset, start, extras };
+}
+
+function cloneCrmScheduleEntry(entry){
+  const source=entry&&typeof entry==='object'?entry:CRM_HOURLESS_SCHEDULE_DEFAULT;
+  const extras=Array.isArray(source.extras)?source.extras.slice():[];
+  return {
+    preset:typeof source.preset==='string'?source.preset:CRM_HOURLESS_SCHEDULE_DEFAULT.preset,
+    start:typeof source.start==='string'?source.start:CRM_HOURLESS_SCHEDULE_DEFAULT.start,
+    extras
+  };
+}
+
+function sanitizeCrmStageSchedules(source, fallback){
+  const raw=source&&typeof source==='object'?source:{};
+  const fallbackEntry=cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule(fallback));
+  const result={};
+  CRM_STAGE_KEYS.forEach(stage=>{
+    if(raw && Object.prototype.hasOwnProperty.call(raw, stage)){
+      result[stage]=cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule(raw[stage]));
+    }else{
+      result[stage]=cloneCrmScheduleEntry(fallbackEntry);
+    }
+  });
+  return result;
+}
 function sanitizeCrmSettings(raw){
   const base=raw&&typeof raw==='object'?raw:{};
   const statusesSource=base.unaccountedStatuses;
@@ -3855,9 +4465,136 @@ function sanitizeCrmSettings(raw){
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
   result.mapping=sanitizeCrmStageMapping(base.mapping);
+  result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
   result.trashRetention=retention;
   return result;
+}
+
+function mergeCrmScheduleEntry(preferredEntry, fallbackEntry){
+  const preferred=preferredEntry&&typeof preferredEntry==='object'?preferredEntry:null;
+  const fallback=fallbackEntry&&typeof fallbackEntry==='object'?fallbackEntry:null;
+  const preset=preferred?.preset||fallback?.preset||CRM_HOURLESS_SCHEDULE_DEFAULT.preset;
+  const start=preferred?.start||fallback?.start||CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  const extras=[];
+  const extrasSet=new Set();
+  const collect=list=>{
+    if(!Array.isArray(list)) return;
+    list.forEach(item=>{
+      const iso=coerceCalendarIso(item);
+      if(!iso||extrasSet.has(iso)) return;
+      extrasSet.add(iso);
+      extras.push(iso);
+    });
+  };
+  collect(fallback?.extras);
+  collect(preferred?.extras);
+  extras.sort((a,b)=>a.localeCompare(b));
+  return { preset, start, extras };
+}
+
+function mergeCrmSettings(preferredSettings, fallbackSettings){
+  const hasPreferred=preferredSettings&&typeof preferredSettings==='object';
+  const hasFallback=fallbackSettings&&typeof fallbackSettings==='object';
+  if(!hasPreferred && !hasFallback){
+    return sanitizeCrmSettings({});
+  }
+  if(!hasPreferred){
+    return sanitizeCrmSettings(fallbackSettings);
+  }
+  if(!hasFallback){
+    return sanitizeCrmSettings(preferredSettings);
+  }
+
+  const preferred=sanitizeCrmSettings(preferredSettings);
+  const fallback=sanitizeCrmSettings(fallbackSettings);
+  const result={ ...fallback, ...preferred };
+
+  result.extraTime={
+    percent:typeof preferred.extraTime?.percent==='number'?preferred.extraTime.percent:(fallback.extraTime?.percent??0),
+    minimum:typeof preferred.extraTime?.minimum==='number'?preferred.extraTime.minimum:(fallback.extraTime?.minimum??0)
+  };
+
+  result.capacity={ ...fallback.capacity, ...preferred.capacity };
+  result.parallel={ ...fallback.parallel, ...preferred.parallel };
+  result.preferences={ ...fallback.preferences, ...preferred.preferences };
+  result.startView=preferred.startView||fallback.startView;
+
+  const mergedMapping={ ...fallback.mapping };
+  Object.keys(preferred.mapping||{}).forEach(key=>{
+    const baseRecord=fallback.mapping?.[key]||{};
+    mergedMapping[key]={ ...baseRecord, ...preferred.mapping[key] };
+  });
+  result.mapping=mergedMapping;
+
+  const mergedSchedules={};
+  const stages=new Set([
+    ...Object.keys(fallback.stageSchedules||{}),
+    ...Object.keys(preferred.stageSchedules||{})
+  ]);
+  stages.forEach(stage=>{
+    mergedSchedules[stage]=mergeCrmScheduleEntry(preferred.stageSchedules?.[stage], fallback.stageSchedules?.[stage]);
+  });
+  result.stageSchedules=mergedSchedules;
+
+  const statuses=[];
+  const seen=new Set();
+  const append=list=>{
+    (Array.isArray(list)?list:[]).forEach(status=>{
+      const key=normalizeStatusKey(status);
+      if(!key||seen.has(key)) return;
+      seen.add(key);
+      statuses.push(status);
+    });
+  };
+  append(preferred.unaccountedStatuses);
+  append(fallback.unaccountedStatuses);
+  result.unaccountedStatuses=statuses;
+
+  result.trashRetention=preferred.trashRetention||fallback.trashRetention;
+
+  return sanitizeCrmSettings(result);
+}
+
+let cachedStoredCrmSettings=null;
+let cachedStoredCrmSettingsLoaded=false;
+
+function loadStoredCrmSettings(){
+  if(cachedStoredCrmSettingsLoaded){
+    return cachedStoredCrmSettings;
+  }
+  cachedStoredCrmSettingsLoaded=true;
+  try{
+    const raw=localStorage.getItem(SETTINGS_KEY);
+    if(!raw){
+      cachedStoredCrmSettings=null;
+      return null;
+    }
+    const parsed=JSON.parse(raw);
+    cachedStoredCrmSettings=sanitizeCrmSettings(parsed);
+    return cachedStoredCrmSettings;
+  }catch(err){
+    console.warn('CRM settings load failed', err);
+    cachedStoredCrmSettings=null;
+    return null;
+  }
+}
+
+function persistStoredCrmSettings(settings){
+  try{
+    if(!settings||typeof settings!=='object'){
+      localStorage.removeItem(SETTINGS_KEY);
+      cachedStoredCrmSettings=null;
+      cachedStoredCrmSettingsLoaded=true;
+      return;
+    }
+    const sanitized=sanitizeCrmSettings(settings);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(sanitized));
+    cachedStoredCrmSettings=sanitized;
+    cachedStoredCrmSettingsLoaded=true;
+  }catch(err){
+    console.warn('CRM settings save failed', err);
+  }
 }
 
 function sanitizeCrmCalendarEntries(list, allowZero){
@@ -3949,6 +4686,7 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.shiftOnProgress==='boolean') result.shiftOnProgress=raw.shiftOnProgress;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
+    if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
   }
   return result;
 }
@@ -3963,6 +4701,59 @@ function sanitizeCrmStartView(value){
 
 function getCrmStartViewSetting(){
   return sanitizeCrmStartView(state?.settings?.startView);
+}
+
+function getCrmStageSchedules(){
+  const fallback=state?.settings?.hourlessSchedule;
+  const sanitized=sanitizeCrmStageSchedules(state?.settings?.stageSchedules, fallback);
+  if(state && state.settings){
+    state.settings.stageSchedules=sanitized;
+  }
+  return sanitized;
+}
+
+function getCrmStageSchedule(stageKey){
+  const map=getCrmStageSchedules();
+  if(stageKey && Object.prototype.hasOwnProperty.call(map, stageKey)){
+    return map[stageKey];
+  }
+  const fallbackKey=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0];
+  if(fallbackKey && Object.prototype.hasOwnProperty.call(map, fallbackKey)){
+    return map[fallbackKey];
+  }
+  return cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule({}));
+}
+
+function getCrmStageScheduleEvaluator(stageKey){
+  const config=getCrmStageSchedule(stageKey);
+  const preset=CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(config.preset)||CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(CRM_HOURLESS_SCHEDULE_DEFAULT.preset);
+  const extras=new Set(Array.isArray(config.extras)?config.extras:[]);
+  const anchorIso=coerceCalendarIso(config.start)||CRM_HOURLESS_SCHEDULE_DEFAULT.start;
+  const anchorDate=anchorIso?new Date(`${anchorIso}T00:00:00`):null;
+  const pattern=Array.isArray(preset?.pattern)?preset.pattern:[true,true,true,true,true,true,true];
+  const workIndexes=Array.isArray(preset?.work)?preset.work:[];
+  const cycleLength=Number(preset?.length)||0;
+  const hasValidAnchor=anchorDate instanceof Date && !Number.isNaN(anchorDate.getTime());
+  return {
+    isWorking(dateInput){
+      const date=dateInput instanceof Date?dateInput:new Date(dateInput||Date.now());
+      const iso=fmtDateISO(date);
+      if(extras.has(iso)) return true;
+      if(!preset){
+        return true;
+      }
+      if(preset.type==='weekly'){
+        const dayIndex=date.getDay();
+        return !!pattern[dayIndex];
+      }
+      if(preset.type==='cycle' && cycleLength>0 && hasValidAnchor){
+        const diff=daysBetween(anchorDate, date);
+        const normalized=((diff%cycleLength)+cycleLength)%cycleLength;
+        return workIndexes.includes(normalized);
+      }
+      return true;
+    }
+  };
 }
 
 function getCrmStageMapping(){
@@ -4203,6 +4994,7 @@ function ensureCrmStateShape(value){
   }
   base.settings=sanitizeCrmSettings(base.settings);
   base.trash=sanitizeCrmTrash(base.trash);
+  base.journal=sanitizeCrmJournal(base.journal);
   applyTrashRetentionToTarget(base);
   return base;
 }
@@ -4256,6 +5048,7 @@ const applyCrmWriteAccess=()=>{
   if(newOrderBtn){ newOrderBtn.disabled = !canWrite; }
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canWrite; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canWrite; }
+  if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canWrite; }
   if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canWrite; }
   if(crmStageReserveApply){ crmStageReserveApply.disabled=!canWrite; }
   updateCrmDbIndicator();
@@ -4345,25 +5138,149 @@ function normalizeCrmStageKey(value){
   return String(value??'').trim().toLowerCase();
 }
 
+function sanitizeCrmMappingRecord(value){
+  if(!value) return null;
+  if(value===CRM_STAGE_IGNORE){
+    return { stage:CRM_STAGE_IGNORE, hasHours:false };
+  }
+  if(typeof value==='string'){
+    if(CRM_STAGE_KEYS.includes(value)){
+      return { stage:value, hasHours:null };
+    }
+    return null;
+  }
+  if(typeof value==='object'){
+    let stage='';
+    if(value.stage===CRM_STAGE_IGNORE){
+      stage=CRM_STAGE_IGNORE;
+    }else if(typeof value.stage==='string' && CRM_STAGE_KEYS.includes(value.stage)){
+      stage=value.stage;
+    }else if(typeof value.stage==='string' && value.stage.trim()===''){
+      stage='';
+    }
+    let hasHours=null;
+    if(value.hasHours===true){
+      hasHours=true;
+    }else if(value.hasHours===false){
+      hasHours=false;
+    }
+    if(stage===CRM_STAGE_IGNORE){
+      return { stage:CRM_STAGE_IGNORE, hasHours:false };
+    }
+    if(stage || hasHours!==null){
+      return { stage, hasHours };
+    }
+  }
+  return null;
+}
+
 function sanitizeCrmStageMapping(raw){
   const source=raw&&typeof raw==='object'?raw:{};
   const result={};
   Object.entries(source).forEach(([key,value])=>{
     const normalized=normalizeCrmStageKey(key);
     if(!normalized) return;
-    if(value===CRM_STAGE_IGNORE){
-      result[normalized]=CRM_STAGE_IGNORE;
-      return;
-    }
-    if(typeof value==='string' && CRM_STAGE_KEYS.includes(value)){
-      result[normalized]=value;
+    const record=sanitizeCrmMappingRecord(value);
+    if(record){
+      result[normalized]=record;
     }
   });
   return result;
 }
 
+function getCrmStageMappingEntry(normalized){
+  const key=normalizeCrmStageKey(normalized);
+  if(!key) return null;
+  const mapping=state?.settings?.mapping;
+  if(mapping && Object.prototype.hasOwnProperty.call(mapping,key)){
+    const sanitized=sanitizeCrmMappingRecord(mapping[key]);
+    if(sanitized){
+      if(mapping[key]!==sanitized){
+        state.settings.mapping={...mapping,[key]:sanitized};
+      }
+      return sanitized;
+    }
+  }
+  return null;
+}
+
+function setCrmStageMappingEntry(normalized, updater){
+  const key=normalizeCrmStageKey(normalized);
+  if(!key) return null;
+  if(!state.settings) state.settings={};
+  if(!state.settings.mapping || typeof state.settings.mapping!=='object'){
+    state.settings.mapping={};
+  }
+  const current=getCrmStageMappingEntry(key);
+  const nextValue=typeof updater==='function'?updater(current):updater;
+  const sanitized=sanitizeCrmMappingRecord(nextValue);
+  if(sanitized){
+    state.settings.mapping={...state.settings.mapping,[key]:sanitized};
+    return sanitized;
+  }
+  if(Object.prototype.hasOwnProperty.call(state.settings.mapping,key)){
+    const next={...state.settings.mapping};
+    delete next[key];
+    state.settings.mapping=next;
+  }
+  return null;
+}
+
+function getStageHoursPreference(normalized){
+  const entry=getCrmStageMappingEntry(normalized);
+  if(entry){
+    if(entry.stage===CRM_STAGE_IGNORE) return false;
+    if(entry.hasHours===true) return true;
+    if(entry.hasHours===false) return false;
+  }
+  return null;
+}
+
+function stageNameHasHours(normalized){
+  const key=normalizeStageName(normalized||'');
+  if(!key) return false;
+  const preference=getStageHoursPreference(key);
+  if(preference!==null) return preference;
+  if(HOURLESS_STAGE_NAMES.has(key)) return false;
+  const entry=getCrmStageMappingEntry(key);
+  const mappedStage=entry&&typeof entry.stage==='string'?entry.stage:'';
+  if(mappedStage===CRM_STAGE_IGNORE) return false;
+  const fallback=mappedStage&&CRM_STAGE_KEYS.includes(mappedStage)
+    ? mappedStage
+    : resolveCrmStageKey(key)||'';
+  if(fallback){
+    return !CRM_NOHOUR_STAGES.has(fallback);
+  }
+  return true;
+}
+
+function isStageNameHourless(normalized){
+  return !stageNameHasHours(normalized);
+}
+
+function ensureStageHoursPreference(normalized, label){
+  const key=normalizeStageName(normalized||'');
+  if(!key) return;
+  if(getStageHoursPreference(key)!==null) return;
+  if(resolveCrmStageKey(key)) return;
+  const display=label&&label.trim()?label.trim():key;
+  const message=`Передел «${display}»: учитывать часы?\nНажмите «ОК», если необходимо вводить часы. «Отмена» — если этот передел без часов.`;
+  const hasHours=window.confirm(message);
+  const result=setCrmStageMappingEntry(key, entry=>({
+    stage:entry&&typeof entry.stage==='string'?entry.stage:'',
+    hasHours:hasHours
+  }));
+  if(result){
+    save('Уточнение часов передела');
+  }
+}
+
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
 state=ensureCrmStateShape(state);
+const storedCrmSettings=loadStoredCrmSettings();
+if(storedCrmSettings){
+  state.settings=mergeCrmSettings(storedCrmSettings, state.settings);
+}
 persistLocal();
 function applyTrashRetention(){
   applyTrashRetentionToTarget(state);
@@ -4378,10 +5295,35 @@ function load(){
 }
 function persistLocal(){
   state=ensureCrmStateShape(state);
+  persistStoredCrmSettings(state.settings);
   try{localStorage.setItem(KEY,JSON.stringify(state));}
   catch(err){console.warn('CRM local save failed',err);}
 }
-function save(summary){persistLocal();queueSync(summary);}
+let crmAutoOptimizeGuard=false;
+
+function isCrmAutoOptimizationEnabled(){
+  const prefs=getCrmPreferences();
+  return !!(prefs && prefs.autoOptimize);
+}
+
+function shouldShowCrmLateTips(){
+  const prefs=getCrmPreferences();
+  if(!prefs) return true;
+  return prefs.showLateTips!==false;
+}
+
+function save(summary){
+  if(!crmAutoOptimizeGuard && isCrmAutoOptimizationEnabled()){
+    crmAutoOptimizeGuard=true;
+    try{
+      runCrmAutoOptimization({ reason:'auto' });
+    }finally{
+      crmAutoOptimizeGuard=false;
+    }
+  }
+  persistLocal();
+  queueSync(summary);
+}
 function currentBoard(){
   state=ensureCrmStateShape(state);
   return state.boards.find(b=>b.id===state.currentBoardId);
@@ -4493,6 +5435,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageFilter=$('#crmStageFilter'),
       crmStageExceptionsBtn=$('#crmStageExceptionsBtn'),
       crmStageReserveBtn=$('#crmStageReserveBtn'),
+      crmStageOptimizeBtn=$('#crmStageOptimizeBtn'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
@@ -4535,7 +5478,19 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveDiag=$('#crmStageReserveDiag'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
-      crmStageReserveApply=$('#crmStageReserveApply');
+      crmStageReserveApply=$('#crmStageReserveApply'),
+      crmJournalBtn=$('#crmJournalBtn'),
+      crmJournalBadge=$('#crmJournalBadge'),
+      crmJournalDlg=$('#crmJournalDlg'),
+      crmJournalList=$('#crmJournalList'),
+      crmJournalEmpty=$('#crmJournalEmpty'),
+      crmJournalClose=$('#crmJournalClose'),
+      crmJournalDetailDlg=$('#crmJournalDetailDlg'),
+      crmJournalDetailTitle=$('#crmJournalDetailTitle'),
+      crmJournalDetailMeta=$('#crmJournalDetailMeta'),
+      crmJournalDetailContent=$('#crmJournalDetailContent'),
+      crmJournalDetailClose=$('#crmJournalDetailClose'),
+      crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon');
 crmDbIndicator=$('#crmDbIndicator');
 crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
 updateCrmDbIndicator();
@@ -4913,6 +5868,305 @@ function buildCrmOrderTitle(order){
   return (order?.title||'Заказ').toString().trim()||'Заказ';
 }
 
+function formatJournalTimestamp(iso){
+  if(!iso) return '—';
+  const date=new Date(iso);
+  if(Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleString('ru-RU',{
+    day:'2-digit',
+    month:'2-digit',
+    year:'numeric',
+    hour:'2-digit',
+    minute:'2-digit'
+  });
+}
+
+function formatJournalFieldValue(key,value){
+  if(value===undefined||value===null||value==='') return '—';
+  if(key==='start'||key==='end'){
+    return formatCalendarIso(value) || '—';
+  }
+  if(key==='serviceTotal'){
+    const num=Number(value);
+    if(Number.isFinite(num)){
+      return num.toLocaleString('ru-RU');
+    }
+  }
+  if(key==='progress'){
+    const num=Number(value);
+    if(Number.isFinite(num)){
+      return `${Math.round(Math.max(0,Math.min(100,num)))}%`;
+    }
+  }
+  if(typeof value==='boolean'){
+    return value?'Да':'Нет';
+  }
+  return String(value);
+}
+
+function summarizeStagesForJournal(stages){
+  const list=Array.isArray(stages)?stages:[];
+  return list.map((stage,index)=>{
+    const key=resolveCrmStageKey(stage?.name);
+    const label=stage?.name || CRM_STAGE_LABELS[key] || `Передел ${index+1}`;
+    const isHourless=key?CRM_NOHOUR_STAGES.has(key):false;
+    const hours=isHourless?null:parseStageHours(stage);
+    const progress=normalizeStageProgress(stage?.progress??0);
+    const done=!!stage?.done || progress>=100;
+    return {
+      key,
+      label,
+      index:index+1,
+      start:stage?.start||'',
+      end:stage?.end||'',
+      hours:isHourless?null:roundHours(hours||0),
+      progress:done?100:progress,
+      done,
+      useReserve:!!stage?.useReserve
+    };
+  });
+}
+
+function summarizeOrderForJournal(order){
+  if(!order||typeof order!=='object') return null;
+  const stages=Array.isArray(order.stages)?order.stages:[];
+  let totalHours=0;
+  stages.forEach(stage=>{
+    const key=resolveCrmStageKey(stage?.name);
+    if(key && !CRM_NOHOUR_STAGES.has(key)){
+      const hours=parseStageHours(stage);
+      if(Number.isFinite(hours) && hours>0){
+        totalHours+=hours;
+      }
+    }
+  });
+  return {
+    id:order.id||'',
+    title:buildCrmOrderTitle(order),
+    orderNo:order.orderNo||'',
+    customer:order.customer||'',
+    status:order.status||'',
+    start:order.start||'',
+    end:order.end||'',
+    done:!!order.done,
+    progress:Math.max(0,Math.min(100,Number(order.progress)||0)),
+    stageCount:stages.length,
+    totalHours:roundHours(totalHours),
+    stages:summarizeStagesForJournal(stages)
+  };
+}
+
+function stageSignatureForJournal(stage){
+  if(!stage||typeof stage!=='object') return '';
+  const key=resolveCrmStageKey(stage?.name);
+  const hourless=key?CRM_NOHOUR_STAGES.has(key):false;
+  const hours=hourless?null:roundHours(parseStageHours(stage)||0);
+  const snapshot={
+    key:key||'',
+    name:stage?.name||'',
+    start:stage?.start||'',
+    end:stage?.end||'',
+    hours:hourless?null:hours,
+    value:hourless?String(stage?.value??''):hours,
+    done:!!stage?.done,
+    progress:normalizeStageProgress(stage?.progress??0),
+    useReserve:!!stage?.useReserve
+  };
+  return JSON.stringify(snapshot);
+}
+
+function snapshotOrderForJournal(order){
+  return order?deepClone(order):null;
+}
+
+function commitCrmOrderJournal(previousSnapshot, order, explicitChanges){
+  if(!order) return false;
+  const prev=previousSnapshot?deepClone(previousSnapshot):null;
+  let changes=[];
+  if(Array.isArray(explicitChanges)&&explicitChanges.length){
+    changes=explicitChanges.filter(Boolean);
+  }else if(prev){
+    changes=describeOrderChanges(prev, order);
+  }
+  if(!prev||!changes.length){
+    return false;
+  }
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderUpdated,{
+    order:deepClone(order),
+    previous:prev,
+    changes
+  });
+  return true;
+}
+
+function describeOrderChanges(previous,next){
+  const changes=[];
+  if(!previous||typeof previous!=='object') return changes;
+  if(!next||typeof next!=='object') return changes;
+  const mapField=(key,label)=>{
+    const prevVal=(previous?.[key]??'');
+    const nextVal=(next?.[key]??'');
+    const prevNorm=String(prevVal??'').trim();
+    const nextNorm=String(nextVal??'').trim();
+    if(key==='serviceTotal'){
+      const prevNum=Number(prevVal);
+      const nextNum=Number(nextVal);
+      if(Number.isFinite(prevNum)||Number.isFinite(nextNum)){
+        if(!Number.isFinite(prevNum)||!Number.isFinite(nextNum) || Math.abs(prevNum-nextNum)>0.001){
+          changes.push({
+            field:key,
+            label,
+            before:formatJournalFieldValue(key,prevVal),
+            after:formatJournalFieldValue(key,nextVal)
+          });
+        }
+        return;
+      }
+    }
+    if(prevNorm!==nextNorm){
+      changes.push({
+        field:key,
+        label,
+        before:formatJournalFieldValue(key,prevVal),
+        after:formatJournalFieldValue(key,nextVal)
+      });
+    }
+  };
+  mapField('title','Название');
+  mapField('orderNo','№ заказа');
+  mapField('customer','Клиент');
+  mapField('status','Статус');
+  mapField('start','Дата начала');
+  mapField('end','Дата завершения');
+  mapField('serviceTotal','Стоимость услуг');
+  mapField('progress','Прогресс');
+  if(!!previous.done!==!!next.done){
+    changes.push({
+      field:'done',
+      label:'Готовность',
+      before:previous.done?'Готово':'В работе',
+      after:next.done?'Готово':'В работе'
+    });
+  }
+  const prevStages=Array.isArray(previous.stages)?previous.stages:[];
+  const nextStages=Array.isArray(next.stages)?next.stages:[];
+  const prevSignature=prevStages.map(stageSignatureForJournal).join('|');
+  const nextSignature=nextStages.map(stageSignatureForJournal).join('|');
+  if(prevSignature!==nextSignature){
+    changes.push({
+      field:'stages',
+      label:'Переделы',
+      before:`${prevStages.length}`,
+      after:`${nextStages.length}`,
+      details:{
+        before:summarizeStagesForJournal(prevStages),
+        after:summarizeStagesForJournal(nextStages)
+      }
+    });
+  }
+  return changes;
+}
+
+function buildCrmJournalEntry(type,context,actor){
+  const normalizedType=Object.values(CRM_JOURNAL_TYPES).includes(type)?type:CRM_JOURNAL_TYPES.orderUpdated;
+  const createdAt=new Date().toISOString();
+  const entry={
+    id:generateJournalId(),
+    type:normalizedType,
+    createdAt,
+    actor:typeof actor==='string'&&actor.trim()?actor.trim():'CRM оператор',
+    unread:true,
+    summary:'',
+    details:{}
+  };
+  if(normalizedType===CRM_JOURNAL_TYPES.orderCreated){
+    const snapshot=summarizeOrderForJournal(context?.order);
+    if(!snapshot) return null;
+    entry.summary=`Добавлен заказ «${snapshot.title}»`;
+    entry.details={ order:snapshot };
+  }else if(normalizedType===CRM_JOURNAL_TYPES.orderUpdated){
+    const snapshot=summarizeOrderForJournal(context?.order);
+    const prevSnapshot=summarizeOrderForJournal(context?.previous);
+    const computedChanges=Array.isArray(context?.changes)&&context.changes.length?context.changes:describeOrderChanges(context?.previous, context?.order);
+    if(!snapshot || !computedChanges.length) return null;
+    const labels=computedChanges.map(change=>change.label).filter(Boolean);
+    const changeLabel=labels.length?` — изменено: ${labels.slice(0,3).join(', ')}${labels.length>3?'…':''}`:'';
+    entry.summary=`Обновлён заказ «${snapshot.title}»${changeLabel}`;
+    entry.details={ order:snapshot, previous:prevSnapshot, changes:computedChanges };
+  }else if(normalizedType===CRM_JOURNAL_TYPES.orderDeleted){
+    const snapshot=summarizeOrderForJournal(context?.order);
+    if(!snapshot) return null;
+    entry.summary=`Удалён заказ «${snapshot.title}»`;
+    entry.details={ order:snapshot };
+  }else if(normalizedType===CRM_JOURNAL_TYPES.orderRestored){
+    const snapshot=summarizeOrderForJournal(context?.order);
+    if(!snapshot) return null;
+    entry.summary=`Восстановлен заказ «${snapshot.title}» из корзины`;
+    entry.details={ order:snapshot };
+  }else if(normalizedType===CRM_JOURNAL_TYPES.settingsUpdated){
+    const sections=Array.isArray(context?.sections)?context.sections.filter(Boolean):[];
+    const uniqueSections=[...new Set(sections)];
+    const suffix=uniqueSections.length?`: ${uniqueSections.join(', ')}`:'';
+    entry.summary=`Изменены настройки CRM${suffix}`;
+    entry.details={ sections:uniqueSections, snapshot:context?.snapshot||null };
+  }else{
+    entry.summary=context?.summary?String(context.summary):'';
+    entry.details=context?.details&&typeof context.details==='object'?context.details:{};
+  }
+  if(!entry.summary){
+    return null;
+  }
+  return entry;
+}
+
+function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,nextBoardMeta){
+  const prevSanitized=sanitizeCrmSettings(prevSettings||{});
+  const nextSanitized=sanitizeCrmSettings(nextSettings||{});
+  const sections=[];
+  const prevBoard={
+    name:prevBoardMeta?.name||'',
+    lanes:Array.isArray(prevBoardMeta?.lanes)?prevBoardMeta.lanes.join('|'):''
+  };
+  const nextBoard={
+    name:nextBoardMeta?.name||'',
+    lanes:Array.isArray(nextBoardMeta?.lanes)?nextBoardMeta.lanes.join('|'):''
+  };
+  if(prevBoard.name!==nextBoard.name){
+    sections.push('Название доски');
+  }
+  if(prevBoard.lanes!==nextBoard.lanes){
+    sections.push('Колонки канбана');
+  }
+  if(JSON.stringify(prevSanitized.unaccountedStatuses)!==JSON.stringify(nextSanitized.unaccountedStatuses)){
+    sections.push('Не учитывать состояния');
+  }
+  if(JSON.stringify(prevSanitized.extraTime)!==JSON.stringify(nextSanitized.extraTime)){
+    sections.push('Автодовес');
+  }
+  if(JSON.stringify(prevSanitized.capacity)!==JSON.stringify(nextSanitized.capacity)){
+    sections.push('Константы вместимости');
+  }
+  if(JSON.stringify(prevSanitized.parallel)!==JSON.stringify(nextSanitized.parallel)){
+    sections.push('Графики нечасовых переделов');
+  }
+  if(JSON.stringify(prevSanitized.preferences)!==JSON.stringify(nextSanitized.preferences)){
+    sections.push('Настройки оптимизации');
+  }
+  if(prevSanitized.startView!==nextSanitized.startView){
+    sections.push('Стартовый вид');
+  }
+  if(JSON.stringify(prevSanitized.stageSchedules)!==JSON.stringify(nextSanitized.stageSchedules)){
+    sections.push('Графики работы переделов');
+  }
+  if(JSON.stringify(prevSanitized.mapping)!==JSON.stringify(nextSanitized.mapping)){
+    sections.push('Сопоставление данных');
+  }
+  if(JSON.stringify(prevSanitized.trashRetention)!==JSON.stringify(nextSanitized.trashRetention)){
+    sections.push('Корзина');
+  }
+  return sections;
+}
+
 function collectCrmOrdersForList(filterMode){
   const board=currentBoard();
   const totals={ orders:0, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
@@ -5001,29 +6255,24 @@ function collectCrmUnaccountedOrders(){
   return rows;
 }
 
-function collectCrmStageRows(stageKey,filterMode){
+function collectCrmStageRows(stageKey, options={}){
+  const { ignoreSearch=false }=options||{};
   const board=currentBoard();
   const stage=stageKey||'draw';
-  const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
   if(!board){
-    return { rows:[], counts:{ total:0, active:0, done:0 }, totals:{ baseHours:0, extraHours:0, totalHours:0, restHours:0 }, overdue:[] };
+    return { rows:[] };
   }
   const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
     ? state.settings.unaccountedStatuses.map(normalizeStatusKey).filter(Boolean)
     : [];
   const ignoredSet=new Set(ignoredStatuses);
-  const now=new Date();
   const rows=[];
-  const overdue=[];
-  let totalBase=0;
-  let totalExtra=0;
-  let totalRest=0;
   (board.orders||[]).forEach((order,index)=>{
     if(!order||typeof order!=='object') return;
     const statusKey=normalizeStatusKey(order.status||'');
     if(ignoredSet.size && statusKey && ignoredSet.has(statusKey)) return;
-    if(orderSearchNormalized && !orderMatchesSearch(order)) return;
-  const stages=Array.isArray(order.stages)?order.stages:[];
+    if(!ignoreSearch && orderSearchNormalized && !orderMatchesSearch(order)) return;
+    const stages=Array.isArray(order.stages)?order.stages:[];
     const matching=stages
       .map((stageEntry, stagePosition)=>({
         stageEntry,
@@ -5043,45 +6292,15 @@ function collectCrmStageRows(stageKey,filterMode){
       const endRaw=stageEntry.end||'';
       const startDate=normalizeDate(startRaw);
       const endDate=normalizeDate(endRaw);
-      let isLate=false;
-      if(!done && endDate){
-        isLate=endDate<now;
-      }
       const isHourless=CRM_NOHOUR_STAGES.has(stageKeyResolved);
       const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
-      switch(filter){
-        case 'current':
-          if(done) return;
-          break;
-        case 'done':
-          if(!done) return;
-          break;
-        case 'late':
-          if(!isLate) return;
-          break;
-        default:
-          break;
-      }
       const identity=stageId || resolveOrderIdentity(order,index,stageKeyResolved);
       const title=buildCrmOrderTitle(order);
-      const statusLabel=done?'Готово':(isLate?'Просрочено':'В работе');
+      const statusLabel=done?'Готово':'В работе';
       const expectedProgress=computeExpectedPercentForInputs(startRaw, endRaw);
       const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
-      if(!isHourless){
-        totalBase+=baseHours;
-        totalExtra+=extraHours;
-        totalRest+=restHours||0;
-      }
-      if(isLate){
-        const lateDays=endDate?Math.max(1, Math.ceil((now.getTime()-endDate.getTime())/86400000)):null;
-        overdue.push({
-          orderTitle:title,
-          endDate,
-          lateDays,
-          orderId:order?.id||'',
-          stageKey:stageKeyResolved
-        });
-      }
+      const queueOrderRaw=Number(stageEntry.crmQueueOrder);
+      const queueOrder=Number.isFinite(queueOrderRaw)?queueOrderRaw:null;
       rows.push({
         order,
         orderId:order?.id||'',
@@ -5105,15 +6324,23 @@ function collectCrmStageRows(stageKey,filterMode){
         endRaw,
         startDate,
         endDate,
-        isLate,
+        isLate:false,
         orderTitle:title,
         stateLabel:order?.status||'—',
         statusLabel,
-        useReserve:!!stageEntry.useReserve
+        useReserve:!!stageEntry.useReserve,
+        queueOrder
       });
     });
   });
   rows.sort((a,b)=>{
+    const aQueue=Number.isFinite(a.queueOrder)?a.queueOrder:null;
+    const bQueue=Number.isFinite(b.queueOrder)?b.queueOrder:null;
+    if(aQueue!=null || bQueue!=null){
+      if(aQueue==null) return 1;
+      if(bQueue==null) return -1;
+      if(aQueue!==bQueue) return aQueue-bQueue;
+    }
     if(a.done!==b.done) return a.done?1:-1;
     if(a.orderId&&b.orderId&&a.orderId===b.orderId&&a.stageKey===b.stageKey){
       const aPos=Number.isFinite(a.stagePosition)?a.stagePosition:Number.MAX_SAFE_INTEGER;
@@ -5125,19 +6352,78 @@ function collectCrmStageRows(stageKey,filterMode){
     if(aStart!==bStart) return aStart-bStart;
     return (a.orderTitle||'').localeCompare(b.orderTitle||'', 'ru', { sensitivity:'base' });
   });
-  rows.forEach((row,idx)=>{ row.displayIndex=idx+1; });
-  const doneCount=rows.filter(row=>row.done).length;
-  return {
-    rows,
-    counts:{ total:rows.length, active:rows.length-doneCount, done:doneCount },
-    totals:{
-      baseHours:roundHours(totalBase),
-      extraHours:roundHours(totalExtra),
-      totalHours:roundHours(totalBase+totalExtra),
-      restHours:roundHours(totalRest)
-    },
-    overdue
-  };
+  return { rows };
+}
+
+function runCrmAutoOptimization({ reason='auto' }={}){
+  const board=currentBoard();
+  if(!board) return false;
+  let changed=false;
+  const today=today0();
+  const todayTime=today.getTime();
+  CRM_STAGE_SEQUENCE.forEach(stageKey=>{
+    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+    if(!Array.isArray(rows) || !rows.length) return;
+    const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
+    const capacity=isHourless
+      ? Math.max(1, getCrmStageParallel(stageKey))
+      : Math.max(getCrmStageCapacity(stageKey), 0.01);
+    const pending=rows.filter(row=>!row.done);
+    const completed=rows.filter(row=>row.done);
+    const prioritized=pending.map(row=>{
+      const due=row.endDate instanceof Date?row.endDate:null;
+      const start=row.startDate instanceof Date?row.startDate:null;
+      const release=Math.max(todayTime, start?start.getTime():todayTime);
+      const dueTime=due?due.getTime():Number.POSITIVE_INFINITY;
+      const restHours=isHourless
+        ? (row.done?0:1)
+        : Math.max(0, Number(row.restHours??row.totalHours)||0);
+      const workload=isHourless?1:Math.max(restHours, 0.01);
+      const workDays=workload/capacity;
+      const slack=Number.isFinite(dueTime)
+        ? ((dueTime-release)/86400000)-workDays
+        : Number.POSITIVE_INFINITY;
+      return {
+        row,
+        dueTime,
+        release,
+        slack,
+        workload
+      };
+    });
+    prioritized.sort((a,b)=>{
+      if(a.dueTime!==b.dueTime) return a.dueTime-b.dueTime;
+      if(a.slack!==b.slack) return a.slack-b.slack;
+      if(a.release!==b.release) return a.release-b.release;
+      const aLabel=a.row.orderTitle||'';
+      const bLabel=b.row.orderTitle||'';
+      return aLabel.localeCompare(bLabel,'ru',{sensitivity:'base'});
+    });
+    let orderCounter=1;
+    prioritized.forEach(entry=>{
+      const target=orderCounter++;
+      const stage=entry.row.stage;
+      if(stage){
+        if(stage.crmQueueOrder!==target){
+          stage.crmQueueOrder=target;
+          changed=true;
+        }
+      }
+      entry.row.queueOrder=target;
+    });
+    completed.forEach(row=>{
+      const target=orderCounter++;
+      const stage=row.stage;
+      if(stage){
+        if(stage.crmQueueOrder!==target){
+          stage.crmQueueOrder=target;
+          changed=true;
+        }
+      }
+      row.queueOrder=target;
+    });
+  });
+  return changed;
 }
 
 function buildCrmStageSchedule(stageKey, rows){
@@ -5149,6 +6435,7 @@ function buildCrmStageSchedule(stageKey, rows){
   const calendar=getCrmStageCalendar(stageKey);
   const exceptionMap=isHourless?new Map():calendar.exceptions;
   const reserveMap=isHourless?new Map():calendar.reserves;
+  const scheduleEvaluator=getCrmStageScheduleEvaluator(stageKey);
   const errors=[];
   const tasks=rows.map(row=>{
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
@@ -5158,6 +6445,7 @@ function buildCrmStageSchedule(stageKey, rows){
     if(safeEnd<safeStart) safeEnd=new Date(safeStart);
     const total=isHourless?1:Math.max(0, Number(row.totalHours)||0);
     const rest=isHourless? (row.done?0:1) : Math.max(0, Number(row.restHours)||0);
+    const queueOrder=Number.isFinite(row.queueOrder)?row.queueOrder:null;
     return {
       id:row.identity,
       label:row.orderTitle||'Заказ',
@@ -5169,13 +6457,23 @@ function buildCrmStageSchedule(stageKey, rows){
       rest,
       progress:row.progress||0,
       done:!!row.done,
-      isLate:!!row.isLate
+      isLate:!!row.isLate,
+      queueOrder
     };
   });
   if(!tasks.length){
     return null;
   }
-  tasks.sort((a,b)=>a.start-b.start||a.end-b.end||a.label.localeCompare(b.label,'ru',{sensitivity:'base'}));
+  tasks.sort((a,b)=>{
+    const aQueue=Number.isFinite(a.queueOrder)?a.queueOrder:null;
+    const bQueue=Number.isFinite(b.queueOrder)?b.queueOrder:null;
+    if(aQueue!=null || bQueue!=null){
+      if(aQueue==null) return 1;
+      if(bQueue==null) return -1;
+      if(aQueue!==bQueue) return aQueue-bQueue;
+    }
+    return a.start-b.start||a.end-b.end||a.label.localeCompare(b.label,'ru',{sensitivity:'base'});
+  });
   let minDate=new Date(tasks[0].start);
   let maxDate=new Date(tasks[0].end);
   const today=today0();
@@ -5186,8 +6484,16 @@ function buildCrmStageSchedule(stageKey, rows){
   const ensureDay=(date)=>{
     const ds=fmtDateISO(date);
     if(!perDay.has(ds)){
-      const capDay=isHourless?baseCapacity:(exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity);
-      const reserveWanted=isHourless?0:(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0);
+      let capDay;
+      const working=!scheduleEvaluator || scheduleEvaluator.isWorking(date);
+      let patternOff=!working;
+      if(isHourless){
+        capDay=working?baseCapacity:0;
+      }else{
+        const calendarCap=exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity;
+        capDay=working?calendarCap:0;
+      }
+      const reserveWanted=!isHourless && working?(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0):0;
       const resLim=Math.min(reserveWanted, capDay);
       const pubCap=Math.max(0, capDay-resLim);
       perDay.set(ds,{
@@ -5200,6 +6506,7 @@ function buildCrmStageSchedule(stageKey, rows){
           pubRem:pubCap,
           resRem:resLim,
           excluded:Math.max(0, baseCapacity-capDay),
+          patternOff,
           reserveExclusive:resLim>1e-6
         }
       });
@@ -5370,9 +6677,15 @@ function renderCrmStageStack(schedule){
     title.className='crm-stage-stack-title';
     const excluded=Math.max(0, Number(meta.excluded||0));
     const reserveLimit=Math.max(0, Number(meta.resLim||0));
+    const isOffDay=!!meta.patternOff;
+    if(isOffDay){
+      col.dataset.offday='1';
+    }
     const humanDate=fmtDateHuman(day.date);
     const infoParts=[];
-    if(excluded>0.001){
+    if(isOffDay){
+      infoParts.push('Выходной');
+    }else if(excluded>0.001){
       infoParts.push(`Исключение: −${excluded.toFixed(1)}ч`);
     }
     if(reserveLimit>0.001){
@@ -5491,6 +6804,11 @@ function renderCrmStageGantt(rows, schedule){
     const dateLabel=document.createElement('span');
     dateLabel.textContent=fmtDateHuman(day.date);
     headerCell.append(dow, dateLabel);
+    const isOffDay=!!(day.meta && day.meta.patternOff);
+    if(isOffDay){
+      headerCell.classList.add('offday');
+      headerCell.title='Выходной по графику';
+    }
     if([0,6].includes(day.date.getDay())){
       headerCell.classList.add('weekend');
     }
@@ -5514,6 +6832,11 @@ function renderCrmStageGantt(rows, schedule){
     filteredDays.forEach(({ key, day })=>{
       const cell=document.createElement('div');
       cell.className='crm-stage-gantt-cell';
+      const isOffDay=!!(day.meta && day.meta.patternOff);
+      if(isOffDay){
+        cell.classList.add('offday');
+        cell.title='Выходной по графику';
+      }
       if([0,6].includes(day.date.getDay())){
         cell.classList.add('weekend');
       }
@@ -7014,6 +8337,7 @@ function restoreCrmTrashEntry(entryId){
     }else{
       board.orders.push(restored);
     }
+    recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderRestored,{ order:deepClone(restored) });
     summary='Восстановление заказа из корзины';
   }else if(entry.type===CRM_TRASH_ENTRY_TYPES.stage){
     const order=board.orders.find(o=>o.id===entry.orderId);
@@ -7212,12 +8536,17 @@ function renderOrdersTable(){
 }
 
 function computeCrmStageStatus(entry,schedule){
-  if(!entry) return { label:'—', className:'', title:'' };
-  if(entry.done){
-    return { label:'Готово', className:'status-done', title:'Этап завершён' };
+  if(!entry) return { label:'—', className:'', title:'', lateDays:0, plannedEnd:null, scheduledEnd:null };
+  let plannedEnd=null;
+  if(entry.endDate instanceof Date){
+    plannedEnd=new Date(entry.endDate);
+  }else if(entry.endDate){
+    const parsed=new Date(entry.endDate);
+    if(!Number.isNaN(parsed.getTime())){
+      plannedEnd=parsed;
+    }
   }
-  const plannedEnd=entry.endDate instanceof Date?entry.endDate:null;
-  let lastDate=null;
+  let scheduledEnd=null;
   if(schedule && schedule.perTask instanceof Map && entry.identity){
     const record=schedule.perTask.get(entry.identity);
     if(record && Array.isArray(record.segments)){
@@ -7226,52 +8555,72 @@ function computeCrmStageStatus(entry,schedule){
           ? segment.date
           : (segment?.date?new Date(segment.date):null);
         if(segDate && !Number.isNaN(segDate.getTime())){
-          if(!lastDate || segDate>lastDate){
-            lastDate=new Date(segDate);
+          if(!scheduledEnd || segDate>scheduledEnd){
+            scheduledEnd=new Date(segDate);
           }
         }
       });
     }
   }
-  if(!lastDate && plannedEnd){
-    lastDate=new Date(plannedEnd);
+  if(entry.done){
+    return {
+      label:'Готово',
+      className:'status-done',
+      title:'Этап завершён',
+      lateDays:0,
+      plannedEnd,
+      scheduledEnd:scheduledEnd||plannedEnd||null
+    };
   }
   if(!plannedEnd){
-    if(lastDate){
-      const label=formatStageDateLabel(lastDate);
-      return { label, className:'', title:`Распределено на ${label}` };
+    if(scheduledEnd){
+      const label=formatStageDateLabel(scheduledEnd);
+      return { label, className:'', title:`Распределено на ${label}`, lateDays:0, plannedEnd:null, scheduledEnd };
     }
-    return { label:'—', className:'', title:'' };
+    return { label:'—', className:'', title:'', lateDays:0, plannedEnd:null, scheduledEnd:null };
   }
-  if(!lastDate){
+  if(!scheduledEnd){
     const today=today0();
     const diffMs=today.getTime()-plannedEnd.getTime();
     if(diffMs===0){
-      return { label:'0дн', className:'status-today', title:'В срок' };
+      return { label:'0дн', className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd:null };
     }
     const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
     const word=formatDayWord(days);
     if(diffMs>0){
-      return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+      return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}`, lateDays:days, plannedEnd, scheduledEnd:null };
     }
     if(days<=2){
-      return { label:`-${days}дн`, className:'status-today', title:'В срок' };
+      return { label:`-${days}дн`, className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd:null };
     }
-    return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+    return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}`, lateDays:0, plannedEnd, scheduledEnd:null };
   }
-  const diffMs=lastDate.getTime()-plannedEnd.getTime();
+  const diffMs=scheduledEnd.getTime()-plannedEnd.getTime();
   if(diffMs===0){
-    return { label:'0дн', className:'status-today', title:'В срок' };
+    return { label:'0дн', className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd };
   }
   const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
   const word=formatDayWord(days);
   if(diffMs>0){
-    return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+    return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}`, lateDays:days, plannedEnd, scheduledEnd };
   }
   if(days<=2){
-    return { label:`-${days}дн`, className:'status-today', title:'В срок' };
+    return { label:`-${days}дн`, className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd };
   }
-  return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+  return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}`, lateDays:0, plannedEnd, scheduledEnd };
+}
+
+function crmStageRowMatchesFilter(filter, entry){
+  switch(filter){
+    case 'current':
+      return !entry.done;
+    case 'done':
+      return !!entry.done;
+    case 'late':
+      return !!entry.isLate;
+    default:
+      return true;
+  }
 }
 
 function renderCrmStageTable(){
@@ -7285,31 +8634,46 @@ function renderCrmStageTable(){
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
-  const { rows, counts, totals, overdue }=collectCrmStageRows(stageKey, activeFilter);
-  crmStageRowsCache=rows;
+  const { rows:allRows }=collectCrmStageRows(stageKey);
   crmStageTableBody.innerHTML='';
+  const visibleRows=[];
+  const overdueEntries=[];
+  let activeCount=0;
+  let doneCount=0;
+  let totalBase=0;
+  let totalExtra=0;
+  let totalRest=0;
   if(stats){
     const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=`${label}: ${counts.total} • Активных: ${counts.active}`;
+    stats.textContent=`${label}: 0 • Активных: 0`;
   }
-  if(!rows.length){
+  if(!allRows.length){
     if(crmStageEmpty){
       crmStageEmpty.hidden=false;
     }
+    crmStageRowsCache=visibleRows;
     crmStageScheduleCache=null;
-    updateCrmStageTotals(totals);
-    renderCrmStageOverdue([]);
-    renderCrmStageViews(null, [], stageKey, activeFilter);
+    updateCrmStageTotals({ baseHours:0, extraHours:0, totalHours:0, restHours:0 });
+    renderCrmStageOverdue(overdueEntries);
+    renderCrmStageViews(null, visibleRows, stageKey, activeFilter);
     updateSearchUI();
     updateCrmAuxButtons();
     return;
   }
-  if(crmStageEmpty){
-    crmStageEmpty.hidden=true;
-  }
-  const schedule=buildCrmStageSchedule(stageKey, rows);
+  const schedule=buildCrmStageSchedule(stageKey, allRows);
   crmStageScheduleCache=schedule||null;
-  rows.forEach(entry=>{
+  allRows.forEach(entry=>{
+    const statusInfo=computeCrmStageStatus(entry, schedule);
+    entry.statusLabel=statusInfo.label;
+    entry.statusClass=statusInfo.className;
+    entry.statusTitle=statusInfo.title;
+    entry.isLate=statusInfo.className==='status-late';
+    entry.lateDays=statusInfo.lateDays||0;
+    if(!crmStageRowMatchesFilter(activeFilter, entry)){
+      return;
+    }
+    entry.displayIndex=visibleRows.length+1;
+    visibleRows.push(entry);
     const tr=document.createElement('tr');
     tr.dataset.identity=entry.identity;
     if(entry.stageId) tr.dataset.stageId=entry.stageId;
@@ -7318,17 +8682,35 @@ function renderCrmStageTable(){
     if(Number.isInteger(entry.orderIndex)) tr.dataset.orderIndex=String(entry.orderIndex);
     if(entry.done) tr.classList.add('crm-stage-done');
     if(entry.isLate) tr.classList.add('crm-stage-late');
-    const statusInfo=computeCrmStageStatus(entry, schedule);
-    entry.statusLabel=statusInfo.label;
-    entry.statusClass=statusInfo.className;
-    entry.statusTitle=statusInfo.title;
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
+    if(entry.done){
+      doneCount+=1;
+    }else{
+      activeCount+=1;
+    }
+    if(!isHourless){
+      totalBase+=entry.baseHours;
+      totalExtra+=entry.extraHours;
+      totalRest+=entry.restHours||0;
+    }
+    if(entry.isLate){
+      const advice=buildCrmLateAdvice(entry, schedule);
+      overdueEntries.push({
+        orderTitle:entry.orderTitle||'Заказ',
+        orderId:entry.order?.id||'',
+        stageKey:entry.stageKey,
+        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
+        scheduledEnd:statusInfo.scheduledEnd||null,
+        lateDays:statusInfo.lateDays||0,
+        tips:advice
+      });
+    }
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
     const reserveDisabled=isHourless?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
-    const statusCellClass=['crm-stage-row-status', statusInfo.className].filter(Boolean).join(' ');
+    const statusCellClass=['crm-stage-row-status', entry.statusClass].filter(Boolean).join(' ');
     const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
     const titleMarkup=entry.occurrenceTotal>1
       ? `${escapeHtml(entry.orderTitle||'Заказ')} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
@@ -7344,7 +8726,7 @@ function renderCrmStageTable(){
       <td>${escapeHtml(formatStageDateLabel(entry.startRaw))}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.endRaw))}</td>
       <td>${escapeHtml(entry.stateLabel||'—')}</td>
-      <td class="${statusCellClass}">${escapeHtml(statusInfo.label||'—')}</td>
+      <td class="${statusCellClass}">${escapeHtml(entry.statusLabel||'—')}</td>
       <td><input type="checkbox" class="crm-stage-reserve" ${reserveChecked} ${reserveDisabled}></td>
       <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked}></td>
       <td><button class="crm-stage-delete" type="button" title="Удалить из передела">×</button></td>
@@ -7399,19 +8781,42 @@ function renderCrmStageTable(){
     });
     const statusCell=tr.querySelector('.crm-stage-row-status');
     if(statusCell){
-      if(statusInfo.title){
-        statusCell.title=statusInfo.title;
+      if(entry.statusTitle){
+        statusCell.title=entry.statusTitle;
       }else{
         statusCell.removeAttribute('title');
       }
     }
     crmStageTableBody.appendChild(tr);
   });
-  ensureCrmStageSelection(rows);
+  if(!visibleRows.length){
+    if(crmStageEmpty){
+      crmStageEmpty.hidden=false;
+    }
+  }else if(crmStageEmpty){
+    crmStageEmpty.hidden=true;
+  }
+  crmStageRowsCache=visibleRows;
+  ensureCrmStageSelection(visibleRows);
   applyCrmStageSelectionHighlight();
+  const totals={
+    baseHours:roundHours(totalBase),
+    extraHours:roundHours(totalExtra),
+    totalHours:roundHours(totalBase+totalExtra),
+    restHours:roundHours(totalRest)
+  };
+  const counts={
+    total:visibleRows.length,
+    active:activeCount,
+    done:doneCount
+  };
+  if(stats){
+    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
+    stats.textContent=`${label}: ${counts.total} • Активных: ${counts.active}`;
+  }
   updateCrmStageTotals(totals);
-  renderCrmStageOverdue(overdue);
-  renderCrmStageViews(schedule, rows, stageKey, activeFilter);
+  renderCrmStageOverdue(overdueEntries);
+  renderCrmStageViews(schedule, visibleRows, stageKey, activeFilter);
   updateSearchUI();
   updateCrmAuxButtons();
 }
@@ -7430,10 +8835,60 @@ function updateCrmStageTotals(totals){
   crmStageTotalRest.textContent=hourless?'—':formatStageRestLabel(rest);
 }
 
+function buildCrmLateAdvice(entry, schedule){
+  const tips=[];
+  if(entry.expectedBehind){
+    tips.push('Увеличьте доступные часы или ускорьте выполнение текущего передела.');
+  }
+  if(entry.order){
+    const stages=Array.isArray(entry.order.stages)?entry.order.stages:[];
+    const stageId=entry.stageId||entry.identity||'';
+    if(stages.length && stageId){
+      const index=stages.findIndex(stage=>ensureStageIdentity(stage)===stageId);
+      if(index>0){
+        for(let i=index-1;i>=0;i-=1){
+          const prev=stages[i];
+          if(!prev) continue;
+          const prevProgress=normalizeStageProgress(prev.progress??0);
+          if(prev.done || prevProgress>=100) continue;
+          const prevKey=resolveCrmStageKey(prev.name);
+          const prevLabel=CRM_STAGE_LABELS[prevKey]||prev.name||'Предыдущий передел';
+          tips.push(`Ускорьте передел «${prevLabel}», чтобы сократить ожидание текущего этапа.`);
+          break;
+        }
+      }
+    }
+  }
+  if(!entry.useReserve){
+    try{
+      const calendar=getCrmStageCalendar(entry.stageKey);
+      if(calendar && calendar.reserves instanceof Map && calendar.reserves.size>0){
+        tips.push('Включите бронь для этого заказа, чтобы задействовать зарезервированные часы.');
+      }
+    }catch(_err){ /* ignore */ }
+  }
+  if(schedule && schedule.perTask && entry.identity){
+    const record=schedule.perTask.get(entry.identity);
+    if(record && Array.isArray(record.segments) && record.segments.some(seg=>seg.late)){
+      tips.push('Добавьте рабочие смены или пересмотрите исключения, чтобы освободить ёмкость.');
+    }
+  }
+  if(!tips.length){
+    tips.push('Проверьте сроки и ограничения графика: возможно, потребуется добавить смены или скорректировать даты.');
+  }
+  const seen=new Set();
+  return tips.filter(tip=>{
+    if(seen.has(tip)) return false;
+    seen.add(tip);
+    return true;
+  });
+}
+
 function renderCrmStageOverdue(entries){
   if(!crmStageOverdueList) return;
   crmStageOverdueList.innerHTML='';
   const list=Array.isArray(entries)?entries.filter(Boolean):[];
+  const showTips=shouldShowCrmLateTips();
   if(crmStageOverdueSection){
     crmStageOverdueSection.classList.toggle('crm-stage-overdue--active', list.length>0);
   }
@@ -7447,7 +8902,10 @@ function renderCrmStageOverdue(entries){
     .sort((a,b)=>{
       const aDays=a?.lateDays||0;
       const bDays=b?.lateDays||0;
-      return bDays-aDays;
+      if(bDays!==aDays) return bDays-aDays;
+      const aPlanned=a?.plannedEnd instanceof Date?a.plannedEnd.getTime():0;
+      const bPlanned=b?.plannedEnd instanceof Date?b.plannedEnd.getTime():0;
+      return aPlanned-bPlanned;
     })
     .forEach(entry=>{
       const item=document.createElement('div');
@@ -7465,14 +8923,23 @@ function renderCrmStageOverdue(entries){
       if(entry.stageKey){
         parts.push(CRM_STAGE_LABELS[entry.stageKey]||'Передел');
       }
-      if(entry.endDate){
-        parts.push(`Срок: ${formatStageDateLabel(entry.endDate)}`);
+      const planned=entry.plannedEnd||entry.endDate||null;
+      if(planned){
+        parts.push(`Срок: ${formatStageDateLabel(planned)}`);
+      }
+      if(entry.scheduledEnd instanceof Date){
+        parts.push(`Распределено: ${formatStageDateLabel(entry.scheduledEnd)}`);
       }
       if(entry.lateDays){
         parts.push(`Просрочка: ${entry.lateDays} дн`);
       }
       meta.textContent=parts.join(' • ');
       item.appendChild(meta);
+      if(showTips && Array.isArray(entry.tips) && entry.tips.length){
+        item.title=entry.tips.join('\n');
+      }else{
+        item.removeAttribute('title');
+      }
       fragment.appendChild(item);
     });
   crmStageOverdueList.appendChild(fragment);
@@ -7521,9 +8988,11 @@ function updateOrderAfterStageChange(order){
 function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   stage.useReserve=!!checked;
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Обновление брони передела');
   renderCurrentView();
 }
@@ -7531,6 +9000,7 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
 function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
     stage.done=true;
     stage.progress=100;
@@ -7541,6 +9011,7 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   }
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Изменение готовности передела');
   renderCurrentView();
 }
@@ -7549,13 +9020,41 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
   const { board, order, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!board || !order || stageIndex<0 || !stage) return;
   if(!confirm('Удалить передел из заказа? Он будет перемещён в «Корзину».')) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   const removed=order.stages.splice(stageIndex,1)[0];
   pushStageToTrash(order, removed, board, stageIndex);
   updateOrderAfterStageChange(order);
   if(stageId && crmStageSelectionId===stageId){
     crmStageSelectionId=null;
   }
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Удаление передела');
+  renderCurrentView();
+}
+
+function handleCrmStageManualOptimization(){
+  if(crmAutoOptimizeGuard) return;
+  let changed=false;
+  if(crmStageOptimizeBtn){
+    crmStageOptimizeBtn.disabled=true;
+  }
+  crmAutoOptimizeGuard=true;
+  try{
+    changed=runCrmAutoOptimization({ reason:'manual' });
+    if(changed){
+      save('Ручная оптимизация очереди');
+    }
+  }finally{
+    crmAutoOptimizeGuard=false;
+    if(crmStageOptimizeBtn){
+      crmStageOptimizeBtn.disabled=false;
+    }
+  }
+  if(changed){
+    showToast({ title:'CRM', message:'Очередь передела оптимизирована.', tone:'success' });
+  }else{
+    showToast({ title:'CRM', message:'Очередь уже оптимальна.', tone:'info', autoClose:3500 });
+  }
   renderCurrentView();
 }
 
@@ -7720,7 +9219,7 @@ function normalizeStageProgress(value){
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>{if(!x) return false;return x.done||normalizeStageProgress(x.progress)>=100;}).length;return[d,s.length]}
-function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&!HOURLESS_STAGE_NAMES.has(nm);}
+function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&stageNameHasHours(nm);}
 function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
 function updateSearchUI(){
@@ -7895,7 +9394,18 @@ function renderCards(){
 
         card.addEventListener('click',e=>{
           const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
-          if(act==='toggle-done'){e.stopPropagation();o.done=target.checked;if(o.done){(o.stages||[]).forEach(st=>{st.done=true;st.progress=100})}save('Изменение готовности заказа');renderCurrentView();return}
+          if(act==='toggle-done'){
+            e.stopPropagation();
+            const previousSnapshot=snapshotOrderForJournal(o);
+            o.done=target.checked;
+            if(o.done){
+              (o.stages||[]).forEach(st=>{st.done=true;st.progress=100;});
+            }
+            commitCrmOrderJournal(previousSnapshot, o);
+            save('Изменение готовности заказа');
+            renderCurrentView();
+            return;
+          }
           if(act==='move'){e.stopPropagation();showMoveMenu(target.getBoundingClientRect(),o);return}
           openOrder(o.id);
         });
@@ -7953,6 +9463,7 @@ function moveOrderToLane(orderId,targetLane,beforeId){
   const fromIndex=list.findIndex(o=>o.id===orderId);
   if(fromIndex===-1)return false;
   const order=list[fromIndex];
+  const previousSnapshot=snapshotOrderForJournal(order);
   const originalLane=order.status;
   const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
   list.splice(fromIndex,1);
@@ -7988,6 +9499,9 @@ function moveOrderToLane(orderId,targetLane,beforeId){
     }
   }
   const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  if(changed){
+    commitCrmOrderJournal(previousSnapshot, order);
+  }
   return changed;
 }
 
@@ -8025,7 +9539,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -8269,7 +9783,10 @@ function appendStageRow(st){
   const nmRaw=(st.name||'').trim();
   const nmNormalized=normalizeStageName(st.name);
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
-  const suppressValue=HOURLESS_STAGE_NAMES.has(nmNormalized);
+  if(nmNormalized && getStageHoursPreference(nmNormalized)===null){
+    ensureStageHoursPreference(nmNormalized, nmRaw);
+  }
+  const suppressValue=isStageNameHourless(nmNormalized);
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
   const stageId=ensureStageIdentity(st);
@@ -8373,8 +9890,25 @@ function readStageRow(tr){
   };
 }
 
+function mergeStageDraftWithSource(stage){
+  if(!stage) return stage;
+  if(!(stageSourceMap instanceof Map)) return stage;
+  const key=stage.crmStageId||'';
+  if(!key || !stageSourceMap.has(key)) return stage;
+  const source=stageSourceMap.get(key);
+  if(!source || typeof source!=='object') return stage;
+  const skipKeys=new Set(['name','done','progress','start','end','value','crmStageId','originalStart','originalEnd']);
+  Object.keys(source).forEach(prop=>{
+    if(skipKeys.has(prop)) return;
+    if(stage[prop]!==undefined) return;
+    const value=source[prop];
+    stage[prop]=deepClone(value);
+  });
+  return stage;
+}
+
 function suppressValueForStage(normalizedName){
-  return HOURLESS_STAGE_NAMES.has(normalizedName);
+  return isStageNameHourless(normalizedName);
 }
 
 function showStagePicker(anchor){
@@ -8420,7 +9954,9 @@ function showStagePicker(anchor){
 
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
-  return rows.map(readStageRow).filter(Boolean);
+  return rows
+    .map(tr=>mergeStageDraftWithSource(readStageRow(tr)))
+    .filter(Boolean);
 }
 
 function calcAutoProgress(stages){
@@ -8434,7 +9970,7 @@ function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
-  const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const stages=readStages();
+  const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
   const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
   let removedStages=[];
   if(editingOrderId){
@@ -8448,7 +9984,14 @@ orderForm.addEventListener('submit',e=>{
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
     parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
-  if(obj.done)obj.progress=100; if(exist){Object.assign(exist,obj)}else{b.orders.push(obj)}
+  if(obj.done)obj.progress=100;
+  if(exist){
+    Object.assign(exist,obj);
+    commitCrmOrderJournal(previousSnapshot, exist);
+  }else{
+    b.orders.push(obj);
+    recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(obj) });
+  }
   if(removedStages.length){
     const targetOrder=exist||obj;
     removedStages.forEach(entry=>{
@@ -8475,10 +10018,57 @@ const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]'
 const crmExtraMinimumInput=boardForm?.querySelector('input[name="extraMinimum"]')||null;
 const crmCapacityContainer=boardForm?.querySelector('#crmCapacitySettings')||null;
 const crmParallelContainer=boardForm?.querySelector('#crmParallelSettings')||null;
+const crmStageScheduleContainer=boardForm?.querySelector('#crmHourlessScheduleSettings')||null;
 const crmPreferencesContainer=boardForm?.querySelector('#crmPreferencesSettings')||null;
 const crmStartViewContainer=boardForm?.querySelector('#crmStartViewSettings')||null;
 const crmMappingContainer=boardForm?.querySelector('#crmMappingSettings')||null;
+const crmSettingsTabButtons=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-tab')):[];
+const crmSettingsPanels=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-panel')):[];
+let crmSettingsActiveTabId=crmSettingsPanels[0]?.dataset?.panel||'general';
+
+function setCrmSettingsActiveTab(tabId){
+  if(!crmSettingsPanels.length) return;
+  const fallback=crmSettingsPanels[0]?.dataset?.panel||'general';
+  const target=crmSettingsPanels.some(panel=>panel.dataset?.panel===tabId)?tabId:fallback;
+  crmSettingsActiveTabId=target;
+  crmSettingsTabButtons.forEach(btn=>{
+    const isActive=btn?.dataset?.tab===target;
+    if(!btn) return;
+    btn.classList.toggle('is-active', isActive);
+    btn.setAttribute('aria-selected', isActive?'true':'false');
+    btn.setAttribute('tabindex', isActive?'0':'-1');
+  });
+  crmSettingsPanels.forEach(panel=>{
+    const isActive=panel?.dataset?.panel===target;
+    panel.classList.toggle('is-active', isActive);
+    if(isActive){
+      panel.removeAttribute('hidden');
+    }else{
+      panel.setAttribute('hidden','');
+    }
+  });
+}
+
+crmSettingsTabButtons.forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    setCrmSettingsActiveTab(btn.dataset?.tab||'');
+    btn.focus();
+  });
+});
+
+if(crmSettingsPanels.length){
+  setCrmSettingsActiveTab(crmSettingsActiveTabId);
+}
 let crmUnaccountedDraft=[];
+let crmStageScheduleDrafts={};
+let crmStageScheduleActiveStage=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'';
+let crmStageScheduleStageSelect=null;
+let crmStageSchedulePresetSelect=null;
+let crmStageScheduleStartInput=null;
+let crmStageScheduleStartWrapper=null;
+let crmStageScheduleExtrasList=null;
+let crmStageScheduleExtrasInput=null;
+let crmStageScheduleExtrasAddBtn=null;
 
 function renderCrmCapacitySettingsUI(){
   if(!crmCapacityContainer) return;
@@ -8556,6 +10146,290 @@ function renderCrmParallelSettingsUI(){
   crmParallelContainer.appendChild(row);
 }
 
+function setCrmStageScheduleDraft(stage, config){
+  if(!stage) return;
+  const sanitized=sanitizeCrmHourlessSchedule(config);
+  crmStageScheduleDrafts[stage]=cloneCrmScheduleEntry(sanitized);
+}
+
+function ensureCrmStageScheduleDraft(stage){
+  if(!stage){
+    return null;
+  }
+  if(!CRM_STAGE_KEYS.includes(stage)){
+    const fallback=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||null;
+    stage=fallback||stage;
+  }
+  if(!crmStageScheduleDrafts[stage]){
+    setCrmStageScheduleDraft(stage, sanitizeCrmHourlessSchedule({}));
+  }
+  return crmStageScheduleDrafts[stage];
+}
+
+function updateCrmStageScheduleDraft(stage, mutator){
+  if(!stage) return;
+  const current=ensureCrmStageScheduleDraft(stage);
+  if(!current) return;
+  const draft=cloneCrmScheduleEntry(current);
+  if(typeof mutator==='function'){
+    mutator(draft);
+  }
+  setCrmStageScheduleDraft(stage, draft);
+}
+
+function renderCrmStageScheduleExtrasList(){
+  if(!crmStageScheduleExtrasList) return;
+  const stage=crmStageScheduleActiveStage;
+  const draft=stage?ensureCrmStageScheduleDraft(stage):null;
+  const extras=Array.isArray(draft?.extras)?draft.extras.slice():[];
+  crmStageScheduleExtrasList.innerHTML='';
+  if(!extras.length){
+    const empty=document.createElement('span');
+    empty.className='muted';
+    empty.textContent='Дополнительных смен нет';
+    crmStageScheduleExtrasList.appendChild(empty);
+    return;
+  }
+  extras.forEach(iso=>{
+    const chip=document.createElement('span');
+    chip.className='crm-chip';
+    const text=document.createElement('span');
+    text.textContent=formatCalendarIso(iso);
+    chip.appendChild(text);
+    const remove=document.createElement('button');
+    remove.type='button';
+    remove.setAttribute('aria-label','Удалить смену');
+    remove.textContent='✕';
+    remove.addEventListener('click',()=>{
+      updateCrmStageScheduleDraft(stage,draftState=>{
+        draftState.extras=(draftState.extras||[]).filter(item=>item!==iso);
+      });
+      renderCrmStageScheduleExtrasList();
+    });
+    chip.appendChild(remove);
+    crmStageScheduleExtrasList.appendChild(chip);
+  });
+}
+
+function addCrmStageScheduleExtra(value){
+  const stage=crmStageScheduleActiveStage;
+  if(!stage){
+    return false;
+  }
+  const iso=coerceCalendarIso(value);
+  if(!iso){
+    showToast({ title:'CRM', message:'Введите корректную дату дополнительной смены.', tone:'danger' });
+    return false;
+  }
+  const draft=ensureCrmStageScheduleDraft(stage);
+  const extras=Array.isArray(draft?.extras)?draft.extras:[];
+  if(extras.includes(iso)){
+    showToast({ title:'CRM', message:'Такая смена уже добавлена.', tone:'warning' });
+    return false;
+  }
+  updateCrmStageScheduleDraft(stage,draftState=>{
+    const next=new Set(draftState.extras||[]);
+    next.add(iso);
+    draftState.extras=Array.from(next).sort((a,b)=>a.localeCompare(b));
+  });
+  renderCrmStageScheduleExtrasList();
+  return true;
+}
+
+function updateCrmStageScheduleStartVisibility(){
+  if(!crmStageScheduleStartWrapper) return;
+  const presetKey=crmStageSchedulePresetSelect?crmStageSchedulePresetSelect.value:'';
+  const preset=CRM_HOURLESS_SCHEDULE_PRESET_MAP.get(presetKey);
+  const isCycle=!!preset && preset.type==='cycle';
+  crmStageScheduleStartWrapper.style.display=isCycle?'flex':'none';
+}
+
+function commitCrmStageScheduleInputs(){
+  const stage=crmStageScheduleActiveStage;
+  if(!stage) return;
+  updateCrmStageScheduleDraft(stage,draft=>{
+    draft.preset=crmStageSchedulePresetSelect?crmStageSchedulePresetSelect.value:draft.preset;
+    draft.start=crmStageScheduleStartInput?crmStageScheduleStartInput.value:draft.start;
+  });
+}
+
+function loadCrmStageScheduleEditor(stage){
+  if(!stage){
+    return;
+  }
+  crmStageScheduleActiveStage=stage;
+  const draft=ensureCrmStageScheduleDraft(stage)||cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule({}));
+  if(crmStageScheduleStageSelect){
+    crmStageScheduleStageSelect.value=stage;
+  }
+  if(crmStageSchedulePresetSelect){
+    crmStageSchedulePresetSelect.value=draft.preset||CRM_HOURLESS_SCHEDULE_DEFAULT.preset;
+  }
+  if(crmStageScheduleStartInput){
+    crmStageScheduleStartInput.value=draft.start||'';
+  }
+  renderCrmStageScheduleExtrasList();
+  updateCrmStageScheduleStartVisibility();
+}
+
+function renderCrmStageSchedulesUI(config){
+  if(!crmStageScheduleContainer) return;
+  const scheduleMap=sanitizeCrmStageSchedules(config||getCrmStageSchedules(), state?.settings?.hourlessSchedule);
+  crmStageScheduleDrafts={};
+  CRM_STAGE_KEYS.forEach(stage=>{
+    crmStageScheduleDrafts[stage]=cloneCrmScheduleEntry(scheduleMap[stage]);
+  });
+  const orderedStages=CRM_STAGE_SEQUENCE.filter(stage=>CRM_STAGE_KEYS.includes(stage));
+  const fallbackStages=Object.keys(crmStageScheduleDrafts).sort((a,b)=>{
+    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
+  });
+  const availableStages=orderedStages.length?orderedStages:fallbackStages;
+  crmStageScheduleActiveStage=availableStages[0]||CRM_STAGE_KEYS[0]||'';
+  crmStageScheduleContainer.innerHTML='';
+  const row=document.createElement('div');
+  row.className='crm-settings-row crm-settings-row--stack';
+  const label=document.createElement('div');
+  label.className='crm-settings-label';
+  label.textContent='Графики работы переделов';
+  const control=document.createElement('div');
+  control.className='crm-settings-control crm-settings-control--column';
+
+  const stageField=document.createElement('label');
+  stageField.className='crm-field';
+  const stageLabel=document.createElement('span');
+  stageLabel.className='crm-field__label';
+  stageLabel.textContent='Передел';
+  const stageSelect=document.createElement('select');
+  stageSelect.className='pc-select';
+  stageSelect.name='crmScheduleStage';
+  availableStages.forEach(stage=>{
+    if(!stage) return;
+    const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
+    stageSelect.appendChild(opt);
+  });
+  stageField.append(stageLabel, stageSelect);
+
+  const presetField=document.createElement('label');
+  presetField.className='crm-field';
+  const presetLabel=document.createElement('span');
+  presetLabel.className='crm-field__label';
+  presetLabel.textContent='Базовый график';
+  const presetSelect=document.createElement('select');
+  presetSelect.className='pc-select';
+  presetSelect.name='crmSchedulePreset';
+  CRM_HOURLESS_SCHEDULE_PRESETS.forEach(option=>{
+    const opt=new Option(option.label, option.key);
+    presetSelect.appendChild(opt);
+  });
+  presetField.append(presetLabel, presetSelect);
+
+  const startField=document.createElement('label');
+  startField.className='crm-field';
+  startField.dataset.hourlessStart='1';
+  const startLabel=document.createElement('span');
+  startLabel.className='crm-field__label';
+  startLabel.textContent='Начало цикла';
+  const startInput=document.createElement('input');
+  startInput.type='date';
+  startInput.className='pc-input';
+  startInput.name='crmScheduleStart';
+  startField.append(startLabel, startInput);
+
+  const extrasGroup=document.createElement('div');
+  extrasGroup.className='crm-chip-input';
+  const extrasLabel=document.createElement('span');
+  extrasLabel.className='crm-field__label';
+  extrasLabel.textContent='Дополнительные смены';
+  const extrasRow=document.createElement('div');
+  extrasRow.className='crm-chip-input-row';
+  const extrasInput=document.createElement('input');
+  extrasInput.type='date';
+  extrasInput.className='pc-input';
+  extrasInput.placeholder='Выберите дату';
+  const extrasAdd=document.createElement('button');
+  extrasAdd.type='button';
+  extrasAdd.className='pc-btn pc-btn--primary';
+  extrasAdd.textContent='Добавить';
+  extrasRow.append(extrasInput, extrasAdd);
+  const extrasList=document.createElement('div');
+  extrasList.className='crm-chip-list';
+  const extrasHint=document.createElement('div');
+  extrasHint.className='crm-field__hint muted';
+  extrasHint.textContent='Дни вне графика отображаются как выходные. Здесь можно добавить рабочие смены поверх шаблона.';
+  extrasGroup.append(extrasLabel, extrasRow, extrasList, extrasHint);
+
+  const summary=document.createElement('div');
+  summary.className='crm-settings-summary';
+  summary.textContent='Выберите передел и задайте его расписание. Настройки применяются ко всем представлениям CRM.';
+
+  control.append(stageField, presetField, startField, extrasGroup, summary);
+  row.append(label, control);
+  crmStageScheduleContainer.appendChild(row);
+
+  crmStageScheduleStageSelect=stageSelect;
+  crmStageSchedulePresetSelect=presetSelect;
+  crmStageScheduleStartInput=startInput;
+  crmStageScheduleStartWrapper=startField;
+  crmStageScheduleExtrasInput=extrasInput;
+  crmStageScheduleExtrasAddBtn=extrasAdd;
+  crmStageScheduleExtrasList=extrasList;
+
+  if(crmStageScheduleStageSelect){
+    crmStageScheduleStageSelect.onchange=()=>{
+      commitCrmStageScheduleInputs();
+      const next=crmStageScheduleStageSelect.value;
+      loadCrmStageScheduleEditor(next);
+    };
+  }
+  if(crmStageSchedulePresetSelect){
+    crmStageSchedulePresetSelect.onchange=()=>{
+      updateCrmStageScheduleDraft(crmStageScheduleActiveStage,draft=>{
+        draft.preset=crmStageSchedulePresetSelect.value;
+      });
+      updateCrmStageScheduleStartVisibility();
+    };
+  }
+  if(crmStageScheduleStartInput){
+    crmStageScheduleStartInput.onchange=()=>{
+      updateCrmStageScheduleDraft(crmStageScheduleActiveStage,draft=>{
+        draft.start=crmStageScheduleStartInput.value||'';
+      });
+    };
+  }
+  if(crmStageScheduleExtrasAddBtn){
+    crmStageScheduleExtrasAddBtn.onclick=()=>{
+      if(addCrmStageScheduleExtra(crmStageScheduleExtrasInput?.value)){
+        if(crmStageScheduleExtrasInput){
+          crmStageScheduleExtrasInput.value='';
+        }
+      }
+    };
+  }
+  if(crmStageScheduleExtrasInput){
+    crmStageScheduleExtrasInput.onkeydown=event=>{
+      if(event.key==='Enter'){
+        event.preventDefault();
+        if(addCrmStageScheduleExtra(crmStageScheduleExtrasInput.value)){
+          crmStageScheduleExtrasInput.value='';
+        }
+      }
+    };
+  }
+
+  loadCrmStageScheduleEditor(crmStageScheduleActiveStage);
+}
+
+function collectCrmStageScheduleDrafts(){
+  const result={};
+  CRM_STAGE_KEYS.forEach(stage=>{
+    const entry=ensureCrmStageScheduleDraft(stage);
+    if(entry){
+      result[stage]=cloneCrmScheduleEntry(entry);
+    }
+  });
+  return result;
+}
+
 function renderCrmPreferencesSettingsUI(){
   if(!crmPreferencesContainer) return;
   crmPreferencesContainer.innerHTML='';
@@ -8594,7 +10468,16 @@ function renderCrmPreferencesSettingsUI(){
   const cascadeText=document.createElement('span');
   cascadeText.textContent='Автоготовность при упаковке/отгрузке';
   cascadeOption.append(cascadeCheckbox, cascadeText);
-  control.append(autoOption, shiftOption, cascadeOption);
+  const tipsOption=document.createElement('label');
+  tipsOption.className='crm-settings-checkbox';
+  const tipsCheckbox=document.createElement('input');
+  tipsCheckbox.type='checkbox';
+  tipsCheckbox.name='prefShowLateTips';
+  tipsCheckbox.checked=prefs.showLateTips!==false;
+  const tipsText=document.createElement('span');
+  tipsText.textContent='Показывать советы по просроченным заказам';
+  tipsOption.append(tipsCheckbox, tipsText);
+  control.append(autoOption, shiftOption, cascadeOption, tipsOption);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -8684,12 +10567,12 @@ function renderCrmMappingSettingsUI(){
   if(!crmMappingContainer) return;
   crmMappingContainer.innerHTML='';
   const row=document.createElement('div');
-  row.className='crm-settings-row';
+  row.className='crm-settings-row crm-settings-row--stack';
   const label=document.createElement('div');
   label.className='crm-settings-label';
   label.textContent='Сопоставление данных';
   const control=document.createElement('div');
-  control.className='crm-settings-control';
+  control.className='crm-settings-control crm-settings-control--column';
   const list=document.createElement('div');
   list.className='crm-mapping-list';
   const entries=collectCrmMappingEntries();
@@ -8705,6 +10588,7 @@ function renderCrmMappingSettingsUI(){
       const rowEl=document.createElement('div');
       rowEl.className='crm-mapping-row';
       rowEl.dataset.fallback=entry.fallback||'';
+      rowEl.dataset.normalized=entry.normalized||'';
       const title=document.createElement('div');
       title.className='crm-mapping-row__title';
       title.textContent=entry.label||entry.normalized;
@@ -8714,6 +10598,10 @@ function renderCrmMappingSettingsUI(){
         fallback.textContent=`По умолчанию: ${CRM_STAGE_LABELS[entry.fallback]||entry.fallback}`;
         title.appendChild(fallback);
       }
+      const controls=document.createElement('div');
+      controls.className='crm-mapping-row__controls';
+      const selectWrap=document.createElement('div');
+      selectWrap.className='crm-mapping-row__select';
       const select=document.createElement('select');
       select.className='pc-select';
       select.dataset.crmMapping=entry.normalized;
@@ -8725,18 +10613,43 @@ function renderCrmMappingSettingsUI(){
         const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
         select.appendChild(opt);
       });
-      const current=mapping?.[entry.normalized];
-      if(typeof current==='string' && current){
-        select.value=current;
+      const currentRecord=mapping?.[entry.normalized];
+      const stageValue=currentRecord&&typeof currentRecord==='object'?currentRecord.stage:'';
+      if(stageValue===CRM_STAGE_IGNORE){
+        select.value=CRM_STAGE_IGNORE;
+      }else if(stageValue && CRM_STAGE_KEYS.includes(stageValue)){
+        select.value=stageValue;
       }else{
         select.value='';
       }
-      if(!select.value && !entry.fallback){
+      if(select.value!==CRM_STAGE_IGNORE && !select.value && !entry.fallback){
         hasUnmapped=true;
       }
+      selectWrap.appendChild(select);
+      const hoursLabel=document.createElement('label');
+      hoursLabel.className='crm-mapping-row__hours';
+      const hoursInput=document.createElement('input');
+      hoursInput.type='checkbox';
+      hoursInput.name='crmMappingHours';
+      hoursInput.dataset.crmMapping=entry.normalized;
+      const hasHours=stageNameHasHours(entry.normalized);
+      hoursInput.checked=hasHours;
+      if(currentRecord&&typeof currentRecord==='object'&&typeof currentRecord.hasHours==='boolean'){
+        hoursInput.dataset.manual='1';
+      }
+      if(select.value===CRM_STAGE_IGNORE){
+        hoursInput.checked=false;
+        hoursInput.disabled=true;
+        hoursLabel.dataset.disabled='1';
+      }else{
+        hoursLabel.dataset.disabled='';
+      }
+      const hoursText=document.createElement('span');
+      hoursText.textContent='Есть часы';
+      hoursLabel.append(hoursInput, hoursText);
+      controls.append(selectWrap, hoursLabel);
       updateCrmMappingRowState(rowEl, select.value);
-      rowEl.appendChild(title);
-      rowEl.appendChild(select);
+      rowEl.append(title, controls);
       list.appendChild(rowEl);
     });
   }
@@ -8755,19 +10668,41 @@ function renderCrmMappingSettingsUI(){
 
 if(crmMappingContainer){
   crmMappingContainer.addEventListener('change',event=>{
-    const select=event.target;
-    if(!(select instanceof HTMLSelectElement)) return;
-    if(!select.dataset.crmMapping) return;
-    const row=select.closest('.crm-mapping-row');
-    updateCrmMappingRowState(row, select.value);
-    const note=crmMappingContainer.querySelector('.crm-mapping-note');
-    if(note){
-      const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
-      note.textContent=hasUnmapped
-        ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
-        : 'Настройте сопоставление названий стадий CRM с переделами.';
+    const target=event.target;
+    if(target instanceof HTMLSelectElement && target.name==='crmMappingSelect'){
+      if(!target.dataset.crmMapping) return;
+      const row=target.closest('.crm-mapping-row');
+      updateCrmMappingRowState(row, target.value);
+      const hoursInput=row?.querySelector('input[name="crmMappingHours"]');
+      const hoursWrapper=hoursInput?.closest('.crm-mapping-row__hours');
+      if(hoursInput){
+        if(target.value===CRM_STAGE_IGNORE){
+          hoursInput.checked=false;
+          hoursInput.disabled=true;
+          hoursInput.dataset.manual='1';
+          if(hoursWrapper) hoursWrapper.dataset.disabled='1';
+        }else{
+          hoursInput.disabled=false;
+          if(hoursWrapper) hoursWrapper.dataset.disabled='';
+          hoursInput.removeAttribute('data-manual');
+          if(!hoursInput.dataset.manual){
+            hoursInput.checked=stageNameHasHours(target.dataset.crmMapping||'');
+          }
+        }
+      }
+      const note=crmMappingContainer.querySelector('.crm-mapping-note');
+      if(note){
+        const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
+        note.textContent=hasUnmapped
+          ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
+          : 'Настройте сопоставление названий стадий CRM с переделами.';
+      }
+      updateCrmMappingAlertState();
+      return;
     }
-    updateCrmMappingAlertState();
+    if(target instanceof HTMLInputElement && target.name==='crmMappingHours'){
+      target.dataset.manual='1';
+    }
   });
 }
 
@@ -8814,8 +10749,9 @@ function recalcCrmMappingAlert(){
       const normalized=entry?.normalized;
       if(!normalized) return false;
       const value=mapping?.[normalized];
-      if(value===CRM_STAGE_IGNORE) return false;
-      if(typeof value==='string' && value){
+      const stageValue=value&&typeof value==='object'?value.stage:(typeof value==='string'?value:'');
+      if(stageValue===CRM_STAGE_IGNORE) return false;
+      if(stageValue && CRM_STAGE_KEYS.includes(stageValue)){
         return false;
       }
       if(entry.fallback){
@@ -8961,6 +10897,7 @@ function openBoard(){
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
   const extraSettings=getExtraTimeSettings();
+  const scheduleMap=getCrmStageSchedules();
   if(crmExtraPercentInput){
     crmExtraPercentInput.value=String(extraSettings.percent);
   }
@@ -8969,9 +10906,11 @@ function openBoard(){
   }
   renderCrmCapacitySettingsUI();
   renderCrmParallelSettingsUI();
+  renderCrmStageSchedulesUI(scheduleMap);
   renderCrmPreferencesSettingsUI();
   renderCrmStartViewSettingsUI();
   renderCrmMappingSettingsUI();
+  setCrmSettingsActiveTab(crmSettingsActiveTabId);
   boardDlg.showModal();
 }
 function closeBoard(){boardDlg.close()}
@@ -8979,6 +10918,8 @@ boardForm.addEventListener('submit',e=>{
   e.preventDefault();
   const id=boardForm.id.value;
   const b=state.boards.find(x=>x.id===id);
+  const prevSettings=deepClone(state.settings);
+  const prevBoardMeta={ name:b.name, lanes:Array.isArray(b.lanes)?b.lanes.slice():[] };
   b.name=boardForm.name.value.trim()||'Доска';
   b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);
   const sanitizedStatuses=sanitizeCrmStatusList(crmUnaccountedDraft);
@@ -8998,6 +10939,7 @@ boardForm.addEventListener('submit',e=>{
     percent:sanitizeExtraPercent(extraPercentRaw),
     minimum:sanitizeExtraMinimum(extraMinimumRaw)
   };
+  commitCrmStageScheduleInputs();
   const capacityInputs=[...boardForm.querySelectorAll('input[data-crm-setting="capacity"]')];
   const capacityDraft={};
   capacityInputs.forEach(input=>{
@@ -9023,26 +10965,41 @@ boardForm.addEventListener('submit',e=>{
   state.settings.preferences=sanitizeCrmPreferences({
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     shiftOnProgress:!!boardForm.prefShiftOnProgress?.checked,
-    cascadeReady:!!boardForm.prefCascadeReady?.checked
+    cascadeReady:!!boardForm.prefCascadeReady?.checked,
+    showLateTips:!!boardForm.prefShowLateTips?.checked
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
-  const mappingSelects=[...boardForm.querySelectorAll('select[name="crmMappingSelect"]')];
+  const scheduleDraft=collectCrmStageScheduleDrafts();
+  state.settings.stageSchedules=sanitizeCrmStageSchedules(scheduleDraft, state.settings?.stageSchedules||state.settings?.hourlessSchedule);
+  if(state.settings && Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
+    delete state.settings.hourlessSchedule;
+  }
+  const mappingRows=[...boardForm.querySelectorAll('.crm-mapping-row')];
   const mappingDraft={};
-  mappingSelects.forEach(select=>{
-    const normalized=select.dataset.crmMapping?normalizeCrmStageKey(select.dataset.crmMapping):'';
+  mappingRows.forEach(row=>{
+    const normalized=row?.dataset?.normalized?normalizeCrmStageKey(row.dataset.normalized):'';
     if(!normalized) return;
-    if(select.value===CRM_STAGE_IGNORE){
-      mappingDraft[normalized]=CRM_STAGE_IGNORE;
+    const select=row.querySelector('select[name="crmMappingSelect"]');
+    const hoursInput=row.querySelector('input[name="crmMappingHours"]');
+    const stageValue=select?select.value:'';
+    if(stageValue===CRM_STAGE_IGNORE){
+      mappingDraft[normalized]={ stage:CRM_STAGE_IGNORE, hasHours:false };
       return;
     }
-    if(CRM_STAGE_KEYS.includes(select.value)){
-      mappingDraft[normalized]=select.value;
-    }
+    const record={
+      stage:CRM_STAGE_KEYS.includes(stageValue)?stageValue:'',
+      hasHours:hoursInput?!!hoursInput.checked:true
+    };
+    mappingDraft[normalized]=record;
   });
   state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
   applyTrashRetention();
   updateAllStageExpectations();
+  const sectionsChanged=describeCrmSettingsChanges(prevSettings,state.settings,prevBoardMeta,{ name:b.name, lanes:Array.isArray(b.lanes)?b.lanes.slice():[] });
+  if(sectionsChanged.length){
+    recordCrmJournalEntry(CRM_JOURNAL_TYPES.settingsUpdated,{ sections:sectionsChanged, snapshot:deepClone(state.settings) });
+  }
   save('Настройка доски');
   renderAll();
   boardDlg.close();
@@ -9086,7 +11043,7 @@ function openSplitDialog(){
   stages.forEach(st=>{
     const tr=document.createElement('tr');
     const normalized=normalizeStageName(st.name);
-    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    const hourless=isStageNameHourless(normalized);
     tr.dataset.stageName=st.name||'';
     tr.dataset.stageNormalized=normalized;
     tr.dataset.hourless=hourless?'1':'0';
@@ -9100,6 +11057,7 @@ function openSplitDialog(){
 }
 splitForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard(); const parent=b.orders.find(x=>x.id===splitContextId); if(!parent){alert('Не удалось найти исходный заказ');return}
+  const parentSnapshot=snapshotOrderForJournal(parent);
   const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0)));
   const servicePctRaw=splitForm.servicePct?.value??'';
   const servicePct=servicePctRaw===''?null:Number(servicePctRaw);
@@ -9148,7 +11106,7 @@ splitForm.addEventListener('submit',e=>{
   const stageShareResults=[];
   child.stages=(parent.stages||[]).map((st,i)=>{
     const normalized=normalizeStageName(st.name);
-    const hourless=HOURLESS_STAGE_NAMES.has(normalized);
+    const hourless=isStageNameHourless(normalized);
     if(hourless){
       const parsedHourless=parseNumericValue(st.value);
       stageShareResults[i]={share:0,current:parsedHourless.number,hourless:true,hadValue:parsedHourless.hasValue};
@@ -9230,7 +11188,10 @@ splitForm.addEventListener('submit',e=>{
   child._origServiceTotal=childServiceInfo.hasValue?childServiceInfo.number:0;
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
-  b.orders.push(child); save('Создание подзаказа'); renderCurrentView(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
+  commitCrmOrderJournal(parentSnapshot, parent);
+  b.orders.push(child);
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(child) });
+  save('Создание подзаказа'); renderCurrentView(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
 });
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 
@@ -9312,7 +11273,7 @@ function mergeSuborderBack(parent, child, board){
   childStages.forEach(st=>{childMap.set(normalizeStageName(st.name||''),st);});
   parent.stages=(parent.stages||[]).map(st=>{
     const normalized=normalizeStageName(st.name);
-    if(HOURLESS_STAGE_NAMES.has(normalized)){
+    if(isStageNameHourless(normalized)){
       return {...st};
     }
     const childStage=childMap.get(normalized);
@@ -9339,6 +11300,7 @@ function handleOrderRemoval(order, board){
   if(!order) return;
   const b=board||currentBoard();
   if(!b) return;
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderDeleted,{ order:deepClone(order) });
   pushOrderToTrash(order, b);
   if(order.parentId){
     const parent=b.orders.find(x=>x.id===order.parentId);
@@ -9367,7 +11329,7 @@ if(boardSelect){
 
 $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
-$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');state=ensureCrmStateShape(obj);save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
+$('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;const prevSettings=state?.settings;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');const imported=ensureCrmStateShape(obj);let mergedSettings=imported.settings;if(prevSettings){mergedSettings=mergeCrmSettings(prevSettings, mergedSettings);}const storedSettings=loadStoredCrmSettings();if(storedSettings){mergedSettings=mergeCrmSettings(storedSettings, mergedSettings);}imported.settings=mergedSettings;state=imported;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
 const orderSearchInput=document.getElementById('orderSearchInput');
 if(orderSearchInput){
@@ -9440,6 +11402,371 @@ let crmAlias=(()=>{
 function setCrmAlias(name){
   crmAlias=(name||'CRM оператор').trim()||'CRM оператор';
   try{localStorage.setItem(CRM_ALIAS_STORAGE_KEY,crmAlias);}catch(_err){/* ignore */}
+}
+
+function getCrmJournalEntries(){
+  return Array.isArray(state?.journal)?state.journal:[];
+}
+
+function countCrmJournalUnread(){
+  return getCrmJournalEntries().reduce((acc,entry)=>acc+(entry?.unread?1:0),0);
+}
+
+function formatJournalTypeLabel(type){
+  switch(type){
+    case CRM_JOURNAL_TYPES.orderCreated:
+    case CRM_JOURNAL_TYPES.orderUpdated:
+    case CRM_JOURNAL_TYPES.orderDeleted:
+    case CRM_JOURNAL_TYPES.orderRestored:
+      return 'Заказ';
+    case CRM_JOURNAL_TYPES.settingsUpdated:
+      return 'Настройки';
+    default:
+      return 'Журнал';
+  }
+}
+
+function recordCrmJournalEntry(type,context){
+  const entry=buildCrmJournalEntry(type,context,crmAlias);
+  if(!entry) return;
+  state=ensureCrmStateShape(state);
+  const next=[entry, ...getCrmJournalEntries()];
+  state.journal=next.slice(0,CRM_JOURNAL_LIMIT);
+  updateCrmJournalUi();
+  return entry;
+}
+
+function renderCrmJournalList(){
+  if(!crmJournalList) return;
+  const entries=getCrmJournalEntries();
+  crmJournalList.innerHTML='';
+  if(crmJournalEmpty){
+    crmJournalEmpty.hidden=entries.length>0;
+  }
+  if(!entries.length){
+    return;
+  }
+  entries.forEach(entry=>{
+    const li=document.createElement('li');
+    li.className='crm-journal-item';
+    li.dataset.unread=entry.unread?'true':'false';
+    const content=document.createElement('div');
+    content.className='crm-journal-item__content';
+    const summary=document.createElement('div');
+    summary.className='crm-journal-item__summary';
+    summary.textContent=entry.summary||'—';
+    content.appendChild(summary);
+    const meta=document.createElement('div');
+    meta.className='crm-journal-item__meta';
+    const typeChip=document.createElement('span');
+    typeChip.className='crm-journal-item__type';
+    typeChip.textContent=formatJournalTypeLabel(entry.type);
+    meta.appendChild(typeChip);
+    const timeSpan=document.createElement('span');
+    timeSpan.textContent=formatJournalTimestamp(entry.createdAt);
+    meta.appendChild(timeSpan);
+    if(entry.actor){
+      const actorSpan=document.createElement('span');
+      actorSpan.textContent=`Автор: ${entry.actor}`;
+      meta.appendChild(actorSpan);
+    }
+    content.appendChild(meta);
+    li.appendChild(content);
+    const actions=document.createElement('div');
+    actions.className='crm-journal-item__actions';
+    const btn=document.createElement('button');
+    btn.className='pc-btn pc-btn--ghost';
+    btn.type='button';
+    btn.textContent='Подробнее';
+    btn.addEventListener('click',()=>openCrmJournalDetail(entry.id));
+    actions.appendChild(btn);
+    li.appendChild(actions);
+    crmJournalList.appendChild(li);
+  });
+}
+
+function updateCrmJournalUi(){
+  const unread=countCrmJournalUnread();
+  if(crmJournalBadge){
+    if(unread>0){
+      crmJournalBadge.hidden=false;
+      crmJournalBadge.textContent=String(unread);
+    }else{
+      crmJournalBadge.hidden=true;
+    }
+  }
+  if(crmJournalBtn){
+    crmJournalBtn.classList.toggle('pc-nav__link--alert',unread>0);
+    const baseLabel='Журнал';
+    const ariaLabel=unread>0?`${baseLabel}: ${unread} новых`:`${baseLabel}`;
+    crmJournalBtn.setAttribute('aria-label',ariaLabel);
+  }
+  if(crmJournalDlg?.open){
+    renderCrmJournalList();
+  }
+}
+
+function markCrmJournalEntriesRead(){
+  const entries=getCrmJournalEntries();
+  let changed=false;
+  entries.forEach(entry=>{
+    if(entry.unread){
+      entry.unread=false;
+      changed=true;
+    }
+  });
+  if(changed){
+    try{persistLocal();}
+    catch(_err){/* ignore */}
+  }
+}
+
+function openCrmJournal(){
+  if(!crmJournalDlg) return;
+  markCrmJournalEntriesRead();
+  renderCrmJournalList();
+  updateCrmJournalUi();
+  try{crmJournalDlg.showModal();}
+  catch(_err){crmJournalDlg.open=true;}
+  if(crmJournalBtn){
+    crmJournalBtn.setAttribute('aria-expanded','true');
+  }
+}
+
+function closeCrmJournal(){
+  if(crmJournalDlg){
+    crmJournalDlg.close();
+  }
+  if(crmJournalBtn){
+    crmJournalBtn.setAttribute('aria-expanded','false');
+  }
+  updateCrmJournalUi();
+}
+
+function closeCrmJournalDetail(){
+  if(crmJournalDetailDlg){
+    crmJournalDetailDlg.close();
+  }
+}
+
+function openCrmJournalDetail(entryId){
+  if(!crmJournalDetailDlg) return;
+  const entry=getCrmJournalEntries().find(item=>item.id===entryId);
+  renderCrmJournalDetail(entry||null);
+  try{crmJournalDetailDlg.showModal();}
+  catch(_err){crmJournalDetailDlg.open=true;}
+}
+
+function renderJournalOrderSection(order){
+  if(!order) return null;
+  const section=document.createElement('div');
+  section.className='crm-journal-detail__section';
+  const title=document.createElement('h3');
+  title.className='crm-journal-detail__subtitle';
+  title.textContent='Карточка заказа';
+  section.appendChild(title);
+  const tableWrap=document.createElement('div');
+  tableWrap.className='crm-journal-detail__table';
+  const table=document.createElement('table');
+  const rows=[
+    ['Название', order.title||'—'],
+    ['№ заказа', order.orderNo||'—'],
+    ['Клиент', order.customer||'—'],
+    ['Статус', order.status||'—'],
+    ['Дата начала', formatJournalFieldValue('start', order.start)],
+    ['Дата завершения', formatJournalFieldValue('end', order.end)],
+    ['Готовность', order.done?'Готово':formatJournalFieldValue('progress', order.progress)],
+    ['Переделов', String(order.stageCount||0)]
+  ];
+  if(order.totalHours && order.totalHours>0){
+    rows.push(['Сумма часов', `${formatHoursRu(order.totalHours)} ч`]);
+  }
+  rows.forEach(([label,value])=>{
+    const tr=document.createElement('tr');
+    const th=document.createElement('th');
+    th.textContent=label;
+    const td=document.createElement('td');
+    td.textContent=value===''? '—' : value;
+    tr.appendChild(th);
+    tr.appendChild(td);
+    table.appendChild(tr);
+  });
+  tableWrap.appendChild(table);
+  section.appendChild(tableWrap);
+  return section;
+}
+
+function renderJournalChangesSection(changes){
+  if(!Array.isArray(changes)||!changes.length) return null;
+  const section=document.createElement('div');
+  section.className='crm-journal-detail__section';
+  const title=document.createElement('h3');
+  title.className='crm-journal-detail__subtitle';
+  title.textContent='Изменения';
+  section.appendChild(title);
+  const tableWrap=document.createElement('div');
+  tableWrap.className='crm-journal-detail__table';
+  const table=document.createElement('table');
+  const head=document.createElement('tr');
+  ['Поле','Было','Стало'].forEach(text=>{
+    const th=document.createElement('th');
+    th.textContent=text;
+    head.appendChild(th);
+  });
+  table.appendChild(head);
+  changes.forEach(change=>{
+    const tr=document.createElement('tr');
+    const label=document.createElement('td');
+    label.textContent=change.label||change.field||'—';
+    const before=document.createElement('td');
+    before.textContent=change.before??'—';
+    const after=document.createElement('td');
+    after.textContent=change.after??'—';
+    tr.append(label,before,after);
+    table.appendChild(tr);
+  });
+  tableWrap.appendChild(table);
+  section.appendChild(tableWrap);
+  const stageChange=changes.find(change=>change.field==='stages'&&change.details);
+  if(stageChange){
+    const diff=document.createElement('div');
+    diff.className='crm-journal-stage-diff';
+    const beforeCol=document.createElement('div');
+    const beforeTitle=document.createElement('strong');
+    beforeTitle.textContent=`Было (${stageChange.details.before.length})`;
+    beforeCol.appendChild(beforeTitle);
+    const beforeList=document.createElement('ul');
+      stageChange.details.before.forEach(item=>{
+        const li=document.createElement('li');
+        const parts=[item.label];
+        const period=formatStagePeriod(item.start, item.end);
+        if(item.hours){
+          parts.push(`${formatHoursRu(item.hours)} ч`);
+        }
+        if(item.done){
+          parts.push('Готово');
+        }else if(typeof item.progress==='number' && item.progress>0){
+          parts.push(`${Math.round(item.progress)}%`);
+        }
+        if(period){
+          parts.push(period);
+        }
+        if(item.useReserve){
+          parts.push('Бронь');
+      }
+      li.textContent=parts.join(' • ');
+      beforeList.appendChild(li);
+    });
+    if(!stageChange.details.before.length){
+      const empty=document.createElement('li');
+      empty.textContent='—';
+      beforeList.appendChild(empty);
+    }
+    beforeCol.appendChild(beforeList);
+    const afterCol=document.createElement('div');
+    const afterTitle=document.createElement('strong');
+    afterTitle.textContent=`Стало (${stageChange.details.after.length})`;
+    afterCol.appendChild(afterTitle);
+    const afterList=document.createElement('ul');
+      stageChange.details.after.forEach(item=>{
+        const li=document.createElement('li');
+        const parts=[item.label];
+        const period=formatStagePeriod(item.start, item.end);
+        if(item.hours){
+          parts.push(`${formatHoursRu(item.hours)} ч`);
+        }
+        if(item.done){
+          parts.push('Готово');
+        }else if(typeof item.progress==='number' && item.progress>0){
+          parts.push(`${Math.round(item.progress)}%`);
+        }
+        if(period){
+          parts.push(period);
+        }
+        if(item.useReserve){
+          parts.push('Бронь');
+      }
+      li.textContent=parts.join(' • ');
+      afterList.appendChild(li);
+    });
+    if(!stageChange.details.after.length){
+      const empty=document.createElement('li');
+      empty.textContent='—';
+      afterList.appendChild(empty);
+    }
+    afterCol.appendChild(afterList);
+    diff.append(beforeCol,afterCol);
+    section.appendChild(diff);
+  }
+  return section;
+}
+
+function renderJournalSettingsSection(sections){
+  const list=Array.isArray(sections)?sections.filter(Boolean):[];
+  const section=document.createElement('div');
+  section.className='crm-journal-detail__section';
+  const title=document.createElement('h3');
+  title.className='crm-journal-detail__subtitle';
+  title.textContent='Изменённые разделы';
+  section.appendChild(title);
+  if(!list.length){
+    const empty=document.createElement('div');
+    empty.className='crm-journal-empty';
+    empty.textContent='Разделы не указаны.';
+    section.appendChild(empty);
+    return section;
+  }
+  const chips=document.createElement('div');
+  chips.className='crm-journal-detail__chips';
+  list.forEach(item=>{
+    const chip=document.createElement('span');
+    chip.className='crm-journal-chip';
+    chip.textContent=item;
+    chips.appendChild(chip);
+  });
+  section.appendChild(chips);
+  return section;
+}
+
+function renderCrmJournalDetail(entry){
+  if(!crmJournalDetailContent||!crmJournalDetailMeta||!crmJournalDetailTitle){
+    return;
+  }
+  crmJournalDetailContent.innerHTML='';
+  crmJournalDetailMeta.innerHTML='';
+  if(!entry){
+    crmJournalDetailTitle.textContent='Подробности изменения';
+    const empty=document.createElement('div');
+    empty.className='crm-journal-empty';
+    empty.textContent='Запись не найдена.';
+    crmJournalDetailContent.appendChild(empty);
+    return;
+  }
+  crmJournalDetailTitle.textContent=entry.summary||'Подробности изменения';
+  const metaItems=[formatJournalTypeLabel(entry.type), formatJournalTimestamp(entry.createdAt)];
+  if(entry.actor){
+    metaItems.push(`Автор: ${entry.actor}`);
+  }
+  metaItems.forEach(text=>{
+    const span=document.createElement('span');
+    span.textContent=text;
+    crmJournalDetailMeta.appendChild(span);
+  });
+  if(entry.type===CRM_JOURNAL_TYPES.settingsUpdated){
+    const section=renderJournalSettingsSection(entry.details?.sections);
+    crmJournalDetailContent.appendChild(section);
+  }else{
+    const orderSection=renderJournalOrderSection(entry.details?.order);
+    if(orderSection){
+      crmJournalDetailContent.appendChild(orderSection);
+    }
+    if(entry.type===CRM_JOURNAL_TYPES.orderUpdated){
+      const changesSection=renderJournalChangesSection(entry.details?.changes);
+      if(changesSection){
+        crmJournalDetailContent.appendChild(changesSection);
+      }
+    }
+  }
 }
 
 function showToast({title='CRM',message='',tone='info',autoClose=4000}={}){
@@ -9667,6 +11994,10 @@ function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  const storedSettings=loadStoredCrmSettings();
+  if(storedSettings){
+    state.settings=mergeCrmSettings(storedSettings, state.settings);
+  }
   persistLocal();
   renderAll();
 }
@@ -9713,6 +12044,7 @@ function renderAll(){
   updateLaneHeightVar();
   updateCrmAuxButtons();
   recalcCrmMappingAlert();
+  updateCrmJournalUi();
 }
 updateCrmOrdersTabUi();
 if(crmNavKanbanBtn){
@@ -9816,6 +12148,9 @@ if(crmStageExceptionsDlg){
 if(crmStageReserveBtn){
   crmStageReserveBtn.addEventListener('click',()=>openCrmStageReserveDialog());
 }
+if(crmStageOptimizeBtn){
+  crmStageOptimizeBtn.addEventListener('click',()=>handleCrmStageManualOptimization());
+}
 if(crmStageReserveClose){
   crmStageReserveClose.addEventListener('click',()=>closeCrmStageReserveDialog());
 }
@@ -9835,6 +12170,30 @@ if(crmStageReserveInput){
   crmStageReserveInput.addEventListener('input',()=>{
     const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
     renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
+  });
+}
+if(crmJournalBtn){
+  crmJournalBtn.addEventListener('click',()=>openCrmJournal());
+}
+if(crmJournalClose){
+  crmJournalClose.addEventListener('click',()=>closeCrmJournal());
+}
+if(crmJournalDlg){
+  crmJournalDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmJournal();
+  });
+}
+if(crmJournalDetailClose){
+  crmJournalDetailClose.addEventListener('click',()=>closeCrmJournalDetail());
+}
+if(crmJournalDetailCloseIcon){
+  crmJournalDetailCloseIcon.addEventListener('click',()=>closeCrmJournalDetail());
+}
+if(crmJournalDetailDlg){
+  crmJournalDetailDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmJournalDetail();
   });
 }
 const crmUnaccountedDlg=document.getElementById('crmUnaccountedDlg');
