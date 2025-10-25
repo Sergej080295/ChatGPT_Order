@@ -5292,22 +5292,17 @@ function collectCrmUnaccountedOrders(){
   return rows;
 }
 
-function collectCrmStageRows(stageKey,filterMode){
+function collectCrmStageRows(stageKey){
   const board=currentBoard();
   const stage=stageKey||'draw';
-  const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
   if(!board){
-    return { rows:[], counts:{ total:0, active:0, done:0 }, totals:{ baseHours:0, extraHours:0, totalHours:0, restHours:0 } };
+    return { rows:[] };
   }
   const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
     ? state.settings.unaccountedStatuses.map(normalizeStatusKey).filter(Boolean)
     : [];
   const ignoredSet=new Set(ignoredStatuses);
-  const now=new Date();
   const rows=[];
-  let totalBase=0;
-  let totalExtra=0;
-  let totalRest=0;
   (board.orders||[]).forEach((order,index)=>{
     if(!order||typeof order!=='object') return;
     const statusKey=normalizeStatusKey(order.status||'');
@@ -5333,35 +5328,13 @@ function collectCrmStageRows(stageKey,filterMode){
       const endRaw=stageEntry.end||'';
       const startDate=normalizeDate(startRaw);
       const endDate=normalizeDate(endRaw);
-      let isLate=false;
-      if(!done && endDate){
-        isLate=endDate<now;
-      }
       const isHourless=CRM_NOHOUR_STAGES.has(stageKeyResolved);
       const restHours=isHourless?null:computeStageRestHours(totalHours, progress, done);
-      switch(filter){
-        case 'current':
-          if(done) return;
-          break;
-        case 'done':
-          if(!done) return;
-          break;
-        case 'late':
-          if(!isLate) return;
-          break;
-        default:
-          break;
-      }
       const identity=stageId || resolveOrderIdentity(order,index,stageKeyResolved);
       const title=buildCrmOrderTitle(order);
-      const statusLabel=done?'Готово':(isLate?'Просрочено':'В работе');
+      const statusLabel=done?'Готово':'В работе';
       const expectedProgress=computeExpectedPercentForInputs(startRaw, endRaw);
       const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
-      if(!isHourless){
-        totalBase+=baseHours;
-        totalExtra+=extraHours;
-        totalRest+=restHours||0;
-      }
       rows.push({
         order,
         orderId:order?.id||'',
@@ -5385,7 +5358,7 @@ function collectCrmStageRows(stageKey,filterMode){
         endRaw,
         startDate,
         endDate,
-        isLate,
+        isLate:false,
         orderTitle:title,
         stateLabel:order?.status||'—',
         statusLabel,
@@ -5405,18 +5378,7 @@ function collectCrmStageRows(stageKey,filterMode){
     if(aStart!==bStart) return aStart-bStart;
     return (a.orderTitle||'').localeCompare(b.orderTitle||'', 'ru', { sensitivity:'base' });
   });
-  rows.forEach((row,idx)=>{ row.displayIndex=idx+1; });
-  const doneCount=rows.filter(row=>row.done).length;
-  return {
-    rows,
-    counts:{ total:rows.length, active:rows.length-doneCount, done:doneCount },
-    totals:{
-      baseHours:roundHours(totalBase),
-      extraHours:roundHours(totalExtra),
-      totalHours:roundHours(totalBase+totalExtra),
-      restHours:roundHours(totalRest)
-    },
-  };
+  return { rows };
 }
 
 function buildCrmStageSchedule(stageKey, rows){
@@ -7591,6 +7553,19 @@ function computeCrmStageStatus(entry,schedule){
   return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}`, lateDays:0, plannedEnd, scheduledEnd };
 }
 
+function crmStageRowMatchesFilter(filter, entry){
+  switch(filter){
+    case 'current':
+      return !entry.done;
+    case 'done':
+      return !!entry.done;
+    case 'late':
+      return !!entry.isLate;
+    default:
+      return true;
+  }
+}
+
 function renderCrmStageTable(){
   if(!crmStageTableBody) return;
   const stageKey=crmStageSelect?.value || 'draw';
@@ -7602,32 +7577,46 @@ function renderCrmStageTable(){
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
-  const { rows, counts, totals }=collectCrmStageRows(stageKey, activeFilter);
-  crmStageRowsCache=rows;
+  const { rows:allRows }=collectCrmStageRows(stageKey);
   crmStageTableBody.innerHTML='';
+  const visibleRows=[];
+  const overdueEntries=[];
+  let activeCount=0;
+  let doneCount=0;
+  let totalBase=0;
+  let totalExtra=0;
+  let totalRest=0;
   if(stats){
     const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=`${label}: ${counts.total} • Активных: ${counts.active}`;
+    stats.textContent=`${label}: 0 • Активных: 0`;
   }
-  if(!rows.length){
+  if(!allRows.length){
     if(crmStageEmpty){
       crmStageEmpty.hidden=false;
     }
+    crmStageRowsCache=visibleRows;
     crmStageScheduleCache=null;
-    updateCrmStageTotals(totals);
-    renderCrmStageOverdue([]);
-    renderCrmStageViews(null, [], stageKey, activeFilter);
+    updateCrmStageTotals({ baseHours:0, extraHours:0, totalHours:0, restHours:0 });
+    renderCrmStageOverdue(overdueEntries);
+    renderCrmStageViews(null, visibleRows, stageKey, activeFilter);
     updateSearchUI();
     updateCrmAuxButtons();
     return;
   }
-  if(crmStageEmpty){
-    crmStageEmpty.hidden=true;
-  }
-  const schedule=buildCrmStageSchedule(stageKey, rows);
+  const schedule=buildCrmStageSchedule(stageKey, allRows);
   crmStageScheduleCache=schedule||null;
-  const overdueEntries=[];
-  rows.forEach(entry=>{
+  allRows.forEach(entry=>{
+    const statusInfo=computeCrmStageStatus(entry, schedule);
+    entry.statusLabel=statusInfo.label;
+    entry.statusClass=statusInfo.className;
+    entry.statusTitle=statusInfo.title;
+    entry.isLate=statusInfo.className==='status-late';
+    entry.lateDays=statusInfo.lateDays||0;
+    if(!crmStageRowMatchesFilter(activeFilter, entry)){
+      return;
+    }
+    entry.displayIndex=visibleRows.length+1;
+    visibleRows.push(entry);
     const tr=document.createElement('tr');
     tr.dataset.identity=entry.identity;
     if(entry.stageId) tr.dataset.stageId=entry.stageId;
@@ -7635,14 +7624,19 @@ function renderCrmStageTable(){
     if(entry.stageKey) tr.dataset.stageKey=entry.stageKey;
     if(Number.isInteger(entry.orderIndex)) tr.dataset.orderIndex=String(entry.orderIndex);
     if(entry.done) tr.classList.add('crm-stage-done');
-    const statusInfo=computeCrmStageStatus(entry, schedule);
-    const isLate=statusInfo.className==='status-late';
-    entry.isLate=isLate;
-    if(isLate) tr.classList.add('crm-stage-late');
-    entry.statusLabel=statusInfo.label;
-    entry.statusClass=statusInfo.className;
-    entry.statusTitle=statusInfo.title;
-    if(isLate){
+    if(entry.isLate) tr.classList.add('crm-stage-late');
+    const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
+    if(entry.done){
+      doneCount+=1;
+    }else{
+      activeCount+=1;
+    }
+    if(!isHourless){
+      totalBase+=entry.baseHours;
+      totalExtra+=entry.extraHours;
+      totalRest+=entry.restHours||0;
+    }
+    if(entry.isLate){
       overdueEntries.push({
         orderTitle:entry.orderTitle||'Заказ',
         orderId:entry.order?.id||'',
@@ -7652,13 +7646,12 @@ function renderCrmStageTable(){
         lateDays:statusInfo.lateDays||0
       });
     }
-    const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
     const reserveDisabled=isHourless?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
-    const statusCellClass=['crm-stage-row-status', statusInfo.className].filter(Boolean).join(' ');
+    const statusCellClass=['crm-stage-row-status', entry.statusClass].filter(Boolean).join(' ');
     const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
     const titleMarkup=entry.occurrenceTotal>1
       ? `${escapeHtml(entry.orderTitle||'Заказ')} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
@@ -7674,7 +7667,7 @@ function renderCrmStageTable(){
       <td>${escapeHtml(formatStageDateLabel(entry.startRaw))}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.endRaw))}</td>
       <td>${escapeHtml(entry.stateLabel||'—')}</td>
-      <td class="${statusCellClass}">${escapeHtml(statusInfo.label||'—')}</td>
+      <td class="${statusCellClass}">${escapeHtml(entry.statusLabel||'—')}</td>
       <td><input type="checkbox" class="crm-stage-reserve" ${reserveChecked} ${reserveDisabled}></td>
       <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked}></td>
       <td><button class="crm-stage-delete" type="button" title="Удалить из передела">×</button></td>
@@ -7729,19 +7722,42 @@ function renderCrmStageTable(){
     });
     const statusCell=tr.querySelector('.crm-stage-row-status');
     if(statusCell){
-      if(statusInfo.title){
-        statusCell.title=statusInfo.title;
+      if(entry.statusTitle){
+        statusCell.title=entry.statusTitle;
       }else{
         statusCell.removeAttribute('title');
       }
     }
     crmStageTableBody.appendChild(tr);
   });
-  ensureCrmStageSelection(rows);
+  if(!visibleRows.length){
+    if(crmStageEmpty){
+      crmStageEmpty.hidden=false;
+    }
+  }else if(crmStageEmpty){
+    crmStageEmpty.hidden=true;
+  }
+  crmStageRowsCache=visibleRows;
+  ensureCrmStageSelection(visibleRows);
   applyCrmStageSelectionHighlight();
+  const totals={
+    baseHours:roundHours(totalBase),
+    extraHours:roundHours(totalExtra),
+    totalHours:roundHours(totalBase+totalExtra),
+    restHours:roundHours(totalRest)
+  };
+  const counts={
+    total:visibleRows.length,
+    active:activeCount,
+    done:doneCount
+  };
+  if(stats){
+    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
+    stats.textContent=`${label}: ${counts.total} • Активных: ${counts.active}`;
+  }
   updateCrmStageTotals(totals);
   renderCrmStageOverdue(overdueEntries);
-  renderCrmStageViews(schedule, rows, stageKey, activeFilter);
+  renderCrmStageViews(schedule, visibleRows, stageKey, activeFilter);
   updateSearchUI();
   updateCrmAuxButtons();
 }
