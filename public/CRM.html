@@ -5297,7 +5297,7 @@ function collectCrmStageRows(stageKey,filterMode){
   const stage=stageKey||'draw';
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
   if(!board){
-    return { rows:[], counts:{ total:0, active:0, done:0 }, totals:{ baseHours:0, extraHours:0, totalHours:0, restHours:0 }, overdue:[] };
+    return { rows:[], counts:{ total:0, active:0, done:0 }, totals:{ baseHours:0, extraHours:0, totalHours:0, restHours:0 } };
   }
   const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
     ? state.settings.unaccountedStatuses.map(normalizeStatusKey).filter(Boolean)
@@ -5305,7 +5305,6 @@ function collectCrmStageRows(stageKey,filterMode){
   const ignoredSet=new Set(ignoredStatuses);
   const now=new Date();
   const rows=[];
-  const overdue=[];
   let totalBase=0;
   let totalExtra=0;
   let totalRest=0;
@@ -5314,7 +5313,7 @@ function collectCrmStageRows(stageKey,filterMode){
     const statusKey=normalizeStatusKey(order.status||'');
     if(ignoredSet.size && statusKey && ignoredSet.has(statusKey)) return;
     if(orderSearchNormalized && !orderMatchesSearch(order)) return;
-  const stages=Array.isArray(order.stages)?order.stages:[];
+    const stages=Array.isArray(order.stages)?order.stages:[];
     const matching=stages
       .map((stageEntry, stagePosition)=>({
         stageEntry,
@@ -5362,16 +5361,6 @@ function collectCrmStageRows(stageKey,filterMode){
         totalBase+=baseHours;
         totalExtra+=extraHours;
         totalRest+=restHours||0;
-      }
-      if(isLate){
-        const lateDays=endDate?Math.max(1, Math.ceil((now.getTime()-endDate.getTime())/86400000)):null;
-        overdue.push({
-          orderTitle:title,
-          endDate,
-          lateDays,
-          orderId:order?.id||'',
-          stageKey:stageKeyResolved
-        });
       }
       rows.push({
         order,
@@ -5427,7 +5416,6 @@ function collectCrmStageRows(stageKey,filterMode){
       totalHours:roundHours(totalBase+totalExtra),
       restHours:roundHours(totalRest)
     },
-    overdue
   };
 }
 
@@ -7529,12 +7517,17 @@ function renderOrdersTable(){
 }
 
 function computeCrmStageStatus(entry,schedule){
-  if(!entry) return { label:'—', className:'', title:'' };
-  if(entry.done){
-    return { label:'Готово', className:'status-done', title:'Этап завершён' };
+  if(!entry) return { label:'—', className:'', title:'', lateDays:0, plannedEnd:null, scheduledEnd:null };
+  let plannedEnd=null;
+  if(entry.endDate instanceof Date){
+    plannedEnd=new Date(entry.endDate);
+  }else if(entry.endDate){
+    const parsed=new Date(entry.endDate);
+    if(!Number.isNaN(parsed.getTime())){
+      plannedEnd=parsed;
+    }
   }
-  const plannedEnd=entry.endDate instanceof Date?entry.endDate:null;
-  let lastDate=null;
+  let scheduledEnd=null;
   if(schedule && schedule.perTask instanceof Map && entry.identity){
     const record=schedule.perTask.get(entry.identity);
     if(record && Array.isArray(record.segments)){
@@ -7543,52 +7536,59 @@ function computeCrmStageStatus(entry,schedule){
           ? segment.date
           : (segment?.date?new Date(segment.date):null);
         if(segDate && !Number.isNaN(segDate.getTime())){
-          if(!lastDate || segDate>lastDate){
-            lastDate=new Date(segDate);
+          if(!scheduledEnd || segDate>scheduledEnd){
+            scheduledEnd=new Date(segDate);
           }
         }
       });
     }
   }
-  if(!lastDate && plannedEnd){
-    lastDate=new Date(plannedEnd);
+  if(entry.done){
+    return {
+      label:'Готово',
+      className:'status-done',
+      title:'Этап завершён',
+      lateDays:0,
+      plannedEnd,
+      scheduledEnd:scheduledEnd||plannedEnd||null
+    };
   }
   if(!plannedEnd){
-    if(lastDate){
-      const label=formatStageDateLabel(lastDate);
-      return { label, className:'', title:`Распределено на ${label}` };
+    if(scheduledEnd){
+      const label=formatStageDateLabel(scheduledEnd);
+      return { label, className:'', title:`Распределено на ${label}`, lateDays:0, plannedEnd:null, scheduledEnd };
     }
-    return { label:'—', className:'', title:'' };
+    return { label:'—', className:'', title:'', lateDays:0, plannedEnd:null, scheduledEnd:null };
   }
-  if(!lastDate){
+  if(!scheduledEnd){
     const today=today0();
     const diffMs=today.getTime()-plannedEnd.getTime();
     if(diffMs===0){
-      return { label:'0дн', className:'status-today', title:'В срок' };
+      return { label:'0дн', className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd:null };
     }
     const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
     const word=formatDayWord(days);
     if(diffMs>0){
-      return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+      return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}`, lateDays:days, plannedEnd, scheduledEnd:null };
     }
     if(days<=2){
-      return { label:`-${days}дн`, className:'status-today', title:'В срок' };
+      return { label:`-${days}дн`, className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd:null };
     }
-    return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+    return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}`, lateDays:0, plannedEnd, scheduledEnd:null };
   }
-  const diffMs=lastDate.getTime()-plannedEnd.getTime();
+  const diffMs=scheduledEnd.getTime()-plannedEnd.getTime();
   if(diffMs===0){
-    return { label:'0дн', className:'status-today', title:'В срок' };
+    return { label:'0дн', className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd };
   }
   const days=Math.max(1, Math.ceil(Math.abs(diffMs)/86400000));
   const word=formatDayWord(days);
   if(diffMs>0){
-    return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}` };
+    return { label:`+${days}дн`, className:'status-late', title:`Просрочка ${days} ${word}`, lateDays:days, plannedEnd, scheduledEnd };
   }
   if(days<=2){
-    return { label:`-${days}дн`, className:'status-today', title:'В срок' };
+    return { label:`-${days}дн`, className:'status-today', title:'В срок', lateDays:0, plannedEnd, scheduledEnd };
   }
-  return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}` };
+  return { label:`-${days}дн`, className:'status-early', title:`Раньше срока на ${days} ${word}`, lateDays:0, plannedEnd, scheduledEnd };
 }
 
 function renderCrmStageTable(){
@@ -7602,7 +7602,7 @@ function renderCrmStageTable(){
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
-  const { rows, counts, totals, overdue }=collectCrmStageRows(stageKey, activeFilter);
+  const { rows, counts, totals }=collectCrmStageRows(stageKey, activeFilter);
   crmStageRowsCache=rows;
   crmStageTableBody.innerHTML='';
   if(stats){
@@ -7626,6 +7626,7 @@ function renderCrmStageTable(){
   }
   const schedule=buildCrmStageSchedule(stageKey, rows);
   crmStageScheduleCache=schedule||null;
+  const overdueEntries=[];
   rows.forEach(entry=>{
     const tr=document.createElement('tr');
     tr.dataset.identity=entry.identity;
@@ -7634,11 +7635,23 @@ function renderCrmStageTable(){
     if(entry.stageKey) tr.dataset.stageKey=entry.stageKey;
     if(Number.isInteger(entry.orderIndex)) tr.dataset.orderIndex=String(entry.orderIndex);
     if(entry.done) tr.classList.add('crm-stage-done');
-    if(entry.isLate) tr.classList.add('crm-stage-late');
     const statusInfo=computeCrmStageStatus(entry, schedule);
+    const isLate=statusInfo.className==='status-late';
+    entry.isLate=isLate;
+    if(isLate) tr.classList.add('crm-stage-late');
     entry.statusLabel=statusInfo.label;
     entry.statusClass=statusInfo.className;
     entry.statusTitle=statusInfo.title;
+    if(isLate){
+      overdueEntries.push({
+        orderTitle:entry.orderTitle||'Заказ',
+        orderId:entry.order?.id||'',
+        stageKey:entry.stageKey,
+        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
+        scheduledEnd:statusInfo.scheduledEnd||null,
+        lateDays:statusInfo.lateDays||0
+      });
+    }
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
@@ -7727,7 +7740,7 @@ function renderCrmStageTable(){
   ensureCrmStageSelection(rows);
   applyCrmStageSelectionHighlight();
   updateCrmStageTotals(totals);
-  renderCrmStageOverdue(overdue);
+  renderCrmStageOverdue(overdueEntries);
   renderCrmStageViews(schedule, rows, stageKey, activeFilter);
   updateSearchUI();
   updateCrmAuxButtons();
@@ -7764,7 +7777,10 @@ function renderCrmStageOverdue(entries){
     .sort((a,b)=>{
       const aDays=a?.lateDays||0;
       const bDays=b?.lateDays||0;
-      return bDays-aDays;
+      if(bDays!==aDays) return bDays-aDays;
+      const aPlanned=a?.plannedEnd instanceof Date?a.plannedEnd.getTime():0;
+      const bPlanned=b?.plannedEnd instanceof Date?b.plannedEnd.getTime():0;
+      return aPlanned-bPlanned;
     })
     .forEach(entry=>{
       const item=document.createElement('div');
@@ -7782,8 +7798,12 @@ function renderCrmStageOverdue(entries){
       if(entry.stageKey){
         parts.push(CRM_STAGE_LABELS[entry.stageKey]||'Передел');
       }
-      if(entry.endDate){
-        parts.push(`Срок: ${formatStageDateLabel(entry.endDate)}`);
+      const planned=entry.plannedEnd||entry.endDate||null;
+      if(planned){
+        parts.push(`Срок: ${formatStageDateLabel(planned)}`);
+      }
+      if(entry.scheduledEnd instanceof Date){
+        parts.push(`Распределено: ${formatStageDateLabel(entry.scheduledEnd)}`);
       }
       if(entry.lateDays){
         parts.push(`Просрочка: ${entry.lateDays} дн`);
