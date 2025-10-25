@@ -5911,6 +5911,8 @@ function summarizeStagesForJournal(stages){
     const label=stage?.name || CRM_STAGE_LABELS[key] || `Передел ${index+1}`;
     const isHourless=key?CRM_NOHOUR_STAGES.has(key):false;
     const hours=isHourless?null:parseStageHours(stage);
+    const progress=normalizeStageProgress(stage?.progress??0);
+    const done=!!stage?.done || progress>=100;
     return {
       key,
       label,
@@ -5918,6 +5920,8 @@ function summarizeStagesForJournal(stages){
       start:stage?.start||'',
       end:stage?.end||'',
       hours:isHourless?null:roundHours(hours||0),
+      progress:done?100:progress,
+      done,
       useReserve:!!stage?.useReserve
     };
   });
@@ -5950,6 +5954,49 @@ function summarizeOrderForJournal(order){
     totalHours:roundHours(totalHours),
     stages:summarizeStagesForJournal(stages)
   };
+}
+
+function stageSignatureForJournal(stage){
+  if(!stage||typeof stage!=='object') return '';
+  const key=resolveCrmStageKey(stage?.name);
+  const hourless=key?CRM_NOHOUR_STAGES.has(key):false;
+  const hours=hourless?null:roundHours(parseStageHours(stage)||0);
+  const snapshot={
+    key:key||'',
+    name:stage?.name||'',
+    start:stage?.start||'',
+    end:stage?.end||'',
+    hours:hourless?null:hours,
+    value:hourless?String(stage?.value??''):hours,
+    done:!!stage?.done,
+    progress:normalizeStageProgress(stage?.progress??0),
+    useReserve:!!stage?.useReserve
+  };
+  return JSON.stringify(snapshot);
+}
+
+function snapshotOrderForJournal(order){
+  return order?deepClone(order):null;
+}
+
+function commitCrmOrderJournal(previousSnapshot, order, explicitChanges){
+  if(!order) return false;
+  const prev=previousSnapshot?deepClone(previousSnapshot):null;
+  let changes=[];
+  if(Array.isArray(explicitChanges)&&explicitChanges.length){
+    changes=explicitChanges.filter(Boolean);
+  }else if(prev){
+    changes=describeOrderChanges(prev, order);
+  }
+  if(!prev||!changes.length){
+    return false;
+  }
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderUpdated,{
+    order:deepClone(order),
+    previous:prev,
+    changes
+  });
+  return true;
 }
 
 function describeOrderChanges(previous,next){
@@ -5992,6 +6039,7 @@ function describeOrderChanges(previous,next){
   mapField('start','Дата начала');
   mapField('end','Дата завершения');
   mapField('serviceTotal','Стоимость услуг');
+  mapField('progress','Прогресс');
   if(!!previous.done!==!!next.done){
     changes.push({
       field:'done',
@@ -6002,16 +6050,8 @@ function describeOrderChanges(previous,next){
   }
   const prevStages=Array.isArray(previous.stages)?previous.stages:[];
   const nextStages=Array.isArray(next.stages)?next.stages:[];
-  const prevSignature=prevStages.map(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
-    const hours=key && !CRM_NOHOUR_STAGES.has(key)?roundHours(parseStageHours(stage)||0):'h0';
-    return `${key||stage?.name||''}:${hours}:${stage?.start||''}:${stage?.end||''}`;
-  }).join('|');
-  const nextSignature=nextStages.map(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
-    const hours=key && !CRM_NOHOUR_STAGES.has(key)?roundHours(parseStageHours(stage)||0):'h0';
-    return `${key||stage?.name||''}:${hours}:${stage?.start||''}:${stage?.end||''}`;
-  }).join('|');
+  const prevSignature=prevStages.map(stageSignatureForJournal).join('|');
+  const nextSignature=nextStages.map(stageSignatureForJournal).join('|');
   if(prevSignature!==nextSignature){
     changes.push({
       field:'stages',
@@ -8948,9 +8988,11 @@ function updateOrderAfterStageChange(order){
 function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   stage.useReserve=!!checked;
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Обновление брони передела');
   renderCurrentView();
 }
@@ -8958,6 +9000,7 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
 function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
     stage.done=true;
     stage.progress=100;
@@ -8968,6 +9011,7 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   }
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Изменение готовности передела');
   renderCurrentView();
 }
@@ -8976,12 +9020,14 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
   const { board, order, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!board || !order || stageIndex<0 || !stage) return;
   if(!confirm('Удалить передел из заказа? Он будет перемещён в «Корзину».')) return;
+  const previousSnapshot=snapshotOrderForJournal(order);
   const removed=order.stages.splice(stageIndex,1)[0];
   pushStageToTrash(order, removed, board, stageIndex);
   updateOrderAfterStageChange(order);
   if(stageId && crmStageSelectionId===stageId){
     crmStageSelectionId=null;
   }
+  commitCrmOrderJournal(previousSnapshot, order);
   save('Удаление передела');
   renderCurrentView();
 }
@@ -9348,7 +9394,18 @@ function renderCards(){
 
         card.addEventListener('click',e=>{
           const target=e.target; const act=target?.dataset?.act||target?.closest('[data-act]')?.dataset?.act;
-          if(act==='toggle-done'){e.stopPropagation();o.done=target.checked;if(o.done){(o.stages||[]).forEach(st=>{st.done=true;st.progress=100})}save('Изменение готовности заказа');renderCurrentView();return}
+          if(act==='toggle-done'){
+            e.stopPropagation();
+            const previousSnapshot=snapshotOrderForJournal(o);
+            o.done=target.checked;
+            if(o.done){
+              (o.stages||[]).forEach(st=>{st.done=true;st.progress=100;});
+            }
+            commitCrmOrderJournal(previousSnapshot, o);
+            save('Изменение готовности заказа');
+            renderCurrentView();
+            return;
+          }
           if(act==='move'){e.stopPropagation();showMoveMenu(target.getBoundingClientRect(),o);return}
           openOrder(o.id);
         });
@@ -9406,6 +9463,7 @@ function moveOrderToLane(orderId,targetLane,beforeId){
   const fromIndex=list.findIndex(o=>o.id===orderId);
   if(fromIndex===-1)return false;
   const order=list[fromIndex];
+  const previousSnapshot=snapshotOrderForJournal(order);
   const originalLane=order.status;
   const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
   list.splice(fromIndex,1);
@@ -9441,6 +9499,9 @@ function moveOrderToLane(orderId,targetLane,beforeId){
     }
   }
   const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  if(changed){
+    commitCrmOrderJournal(previousSnapshot, order);
+  }
   return changed;
 }
 
@@ -9478,7 +9539,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){order.status=l;save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -9926,10 +9987,7 @@ orderForm.addEventListener('submit',e=>{
   if(obj.done)obj.progress=100;
   if(exist){
     Object.assign(exist,obj);
-    const changes=describeOrderChanges(previousSnapshot, exist);
-    if(changes.length){
-      recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderUpdated,{ order:deepClone(exist), previous:previousSnapshot, changes });
-    }
+    commitCrmOrderJournal(previousSnapshot, exist);
   }else{
     b.orders.push(obj);
     recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(obj) });
@@ -10999,6 +11057,7 @@ function openSplitDialog(){
 }
 splitForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard(); const parent=b.orders.find(x=>x.id===splitContextId); if(!parent){alert('Не удалось найти исходный заказ');return}
+  const parentSnapshot=snapshotOrderForJournal(parent);
   const basePct=Math.max(1,Math.min(99,Number(splitForm.partPct.value||0)));
   const servicePctRaw=splitForm.servicePct?.value??'';
   const servicePct=servicePctRaw===''?null:Number(servicePctRaw);
@@ -11129,7 +11188,10 @@ splitForm.addEventListener('submit',e=>{
   child._origServiceTotal=childServiceInfo.hasValue?childServiceInfo.number:0;
 
   computeOrderDatesFromStages(child); computeOrderDatesFromStages(parent); child.progress=calcAutoProgress(child.stages); parent.progress=calcAutoProgress(parent.stages);
-  b.orders.push(child); save('Создание подзаказа'); renderCurrentView(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
+  commitCrmOrderJournal(parentSnapshot, parent);
+  b.orders.push(child);
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(child) });
+  save('Создание подзаказа'); renderCurrentView(); splitDlg.close(); alert('Подзаказ создан и значения распределены.');
 });
 function round(n){return Math.round((n+Number.EPSILON)*100)/100}
 
@@ -11574,18 +11636,23 @@ function renderJournalChangesSection(changes){
     beforeTitle.textContent=`Было (${stageChange.details.before.length})`;
     beforeCol.appendChild(beforeTitle);
     const beforeList=document.createElement('ul');
-    stageChange.details.before.forEach(item=>{
-      const li=document.createElement('li');
-      const parts=[item.label];
-      const period=formatStagePeriod(item.start, item.end);
-      if(item.hours){
-        parts.push(`${formatHoursRu(item.hours)} ч`);
-      }
-      if(period){
-        parts.push(period);
-      }
-      if(item.useReserve){
-        parts.push('Бронь');
+      stageChange.details.before.forEach(item=>{
+        const li=document.createElement('li');
+        const parts=[item.label];
+        const period=formatStagePeriod(item.start, item.end);
+        if(item.hours){
+          parts.push(`${formatHoursRu(item.hours)} ч`);
+        }
+        if(item.done){
+          parts.push('Готово');
+        }else if(typeof item.progress==='number' && item.progress>0){
+          parts.push(`${Math.round(item.progress)}%`);
+        }
+        if(period){
+          parts.push(period);
+        }
+        if(item.useReserve){
+          parts.push('Бронь');
       }
       li.textContent=parts.join(' • ');
       beforeList.appendChild(li);
@@ -11601,18 +11668,23 @@ function renderJournalChangesSection(changes){
     afterTitle.textContent=`Стало (${stageChange.details.after.length})`;
     afterCol.appendChild(afterTitle);
     const afterList=document.createElement('ul');
-    stageChange.details.after.forEach(item=>{
-      const li=document.createElement('li');
-      const parts=[item.label];
-      const period=formatStagePeriod(item.start, item.end);
-      if(item.hours){
-        parts.push(`${formatHoursRu(item.hours)} ч`);
-      }
-      if(period){
-        parts.push(period);
-      }
-      if(item.useReserve){
-        parts.push('Бронь');
+      stageChange.details.after.forEach(item=>{
+        const li=document.createElement('li');
+        const parts=[item.label];
+        const period=formatStagePeriod(item.start, item.end);
+        if(item.hours){
+          parts.push(`${formatHoursRu(item.hours)} ч`);
+        }
+        if(item.done){
+          parts.push('Готово');
+        }else if(typeof item.progress==='number' && item.progress>0){
+          parts.push(`${Math.round(item.progress)}%`);
+        }
+        if(period){
+          parts.push(period);
+        }
+        if(item.useReserve){
+          parts.push('Бронь');
       }
       li.textContent=parts.join(' • ');
       afterList.appendChild(li);
