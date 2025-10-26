@@ -252,6 +252,29 @@
 })();
 </script>
 <script>
+(function bootstrapCrmAuth(){
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET','/me',false);
+    xhr.send(null);
+    if (xhr.status >= 200 && xhr.status < 300 && xhr.responseText) {
+      try {
+        const data = JSON.parse(xhr.responseText);
+        window.__CRM_AUTH__ = data || {};
+      } catch (_err) {
+        window.__CRM_AUTH__ = {};
+      }
+    } else if (xhr.status === 401) {
+      window.__CRM_AUTH__ = { user:null };
+      window.location.href = '/login';
+    }
+  } catch (err) {
+    console.warn('CRM auth bootstrap failed', err);
+    window.__CRM_AUTH__ = window.__CRM_AUTH__ || {};
+  }
+})();
+</script>
+<script>
 (function bootstrapCrmSnapshot(){
   const KEY = 'mini_crm_v13c';
   try {
@@ -315,6 +338,261 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .pc-user-menu {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .pc-user-menu__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--pc-text-base);
+    font: inherit;
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+
+  .pc-user-menu__toggle:hover,
+  .pc-user-menu__toggle:focus-visible {
+    background: var(--pc-surface-subtle);
+  }
+
+  .pc-user-menu__toggle[aria-expanded="true"] {
+    background: var(--pc-surface-subtle);
+    border-color: var(--pc-border-subtle);
+  }
+
+  .pc-user-menu__avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--pc-accent-muted);
+    color: var(--pc-accent-on-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+  }
+
+  .pc-user-menu__label {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+  }
+
+  .pc-user-menu__name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: var(--pc-text-strong);
+  }
+
+  .pc-user-menu__role {
+    font-size: 0.78rem;
+    color: var(--pc-text-muted);
+  }
+
+  .pc-user-menu__chevron {
+    width: 18px;
+    height: 18px;
+    color: var(--pc-text-muted);
+  }
+
+  .pc-user-menu__dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 220px;
+    background: var(--pc-surface-raised);
+    border-radius: 16px;
+    box-shadow: var(--pc-shadow-md);
+    padding: var(--pc-spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+    z-index: 30;
+  }
+
+  .pc-user-menu__meta {
+    font-size: 0.85rem;
+    color: var(--pc-text-muted);
+  }
+
+  .pc-user-menu__item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--pc-spacing-sm);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border-radius: 12px;
+    border: none;
+    background: transparent;
+    color: var(--pc-text-base);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .pc-user-menu__item:hover,
+  .pc-user-menu__item:focus-visible {
+    background: var(--pc-surface-subtle);
+  }
+
+  .crm-admin-modal {
+    width: min(960px, 95vw);
+  }
+
+  .crm-admin-tabs {
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    border-bottom: 1px solid var(--pc-border-subtle);
+    margin-bottom: var(--pc-spacing-md);
+  }
+
+  .crm-admin-tab {
+    border: none;
+    background: transparent;
+    padding: var(--pc-spacing-sm) var(--pc-spacing-lg);
+    border-radius: 999px 999px 0 0;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-admin-tab[aria-selected="true"] {
+    color: var(--pc-text-base);
+    background: var(--pc-surface-subtle);
+  }
+
+  .crm-admin-section {
+    display: none;
+  }
+
+  .crm-admin-section[aria-hidden="false"] {
+    display: block;
+  }
+
+  .crm-admin-users {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-admin-users-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .crm-admin-users-table th,
+  .crm-admin-users-table td {
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    text-align: left;
+    border-bottom: 1px solid var(--pc-border-subtle);
+  }
+
+  .crm-admin-users-table th {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-admin-user-actions {
+    display: flex;
+    gap: var(--pc-spacing-xs);
+    flex-wrap: wrap;
+  }
+
+  .crm-admin-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--pc-surface-subtle);
+    font-size: 0.75rem;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-admin-form {
+    display: grid;
+    gap: var(--pc-spacing-md);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    align-items: flex-end;
+  }
+
+  .crm-admin-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-admin-field label {
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  .crm-admin-field input,
+  .crm-admin-field select,
+  .crm-admin-field textarea {
+    border: 1px solid var(--pc-border-subtle);
+    border-radius: 12px;
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    font: inherit;
+    background: var(--pc-surface-base);
+    color: var(--pc-text-base);
+  }
+
+  .crm-admin-role-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-admin-role-card {
+    border: 1px solid var(--pc-border-subtle);
+    border-radius: 12px;
+    padding: var(--pc-spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+    background: var(--pc-surface-base);
+  }
+
+  .crm-admin-role-card textarea {
+    min-height: 96px;
+    resize: vertical;
+  }
+
+  .crm-admin-audit-list {
+    display: grid;
+    gap: var(--pc-spacing-sm);
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .crm-admin-audit-item {
+    border: 1px solid var(--pc-border-subtle);
+    border-radius: 12px;
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    display: grid;
+    gap: 4px;
+    background: var(--pc-surface-base);
+  }
+
+  .crm-admin-audit-item time {
+    font-size: 0.8rem;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-admin-actions {
+    display: flex;
+    gap: var(--pc-spacing-sm);
+    justify-content: flex-end;
   }
 
   main {
@@ -3605,11 +3883,12 @@
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
     <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
-    <button class="pc-nav__link" type="button" data-section="settings" data-action="open-settings">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false">
       Журнал
       <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
     </button>
+    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden>Админ</button>
   </nav>
   <div class="pc-header__actions">
     <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
@@ -3631,7 +3910,22 @@
         <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" d="M10 20a2 2 0 0 0 4 0" />
       </svg>
     </button>
-    <div class="pc-avatar" aria-hidden="true">AP</div>
+    <div class="pc-user-menu" id="crmUserMenu">
+      <button type="button" class="pc-user-menu__toggle" id="crmUserMenuToggle" aria-haspopup="true" aria-expanded="false">
+        <span class="pc-user-menu__avatar" id="crmUserAvatar">--</span>
+        <span class="pc-user-menu__label">
+          <span class="pc-user-menu__name" id="crmUserName">—</span>
+          <span class="pc-user-menu__role" id="crmUserRole"></span>
+        </span>
+        <svg class="pc-user-menu__chevron" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+          <path d="M5 7l5 6 5-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      <div class="pc-user-menu__dropdown" id="crmUserMenuDropdown" hidden>
+        <div class="pc-user-menu__meta" id="crmUserMeta"></div>
+        <button type="button" class="pc-user-menu__item" id="crmUserLogoutBtn">Выйти</button>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -4299,6 +4593,79 @@
     <div class="crm-modal-actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderHistoryClose">Закрыть</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="crmAdminDlg" class="pc-modal crm-admin-modal" aria-label="Администрирование">
+  <div class="dlg-head">
+    <strong>Администрирование</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmAdminCloseIcon" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div class="crm-admin-tabs" role="tablist" aria-label="Разделы администрирования">
+      <button type="button" class="crm-admin-tab" data-admin-tab="users" role="tab" aria-selected="true">Пользователи</button>
+      <button type="button" class="crm-admin-tab" data-admin-tab="roles" role="tab" aria-selected="false">Роли и права</button>
+      <button type="button" class="crm-admin-tab" data-admin-tab="audit" role="tab" aria-selected="false">Журнал действий</button>
+    </div>
+    <section class="crm-admin-section" data-admin-section="users" aria-hidden="false">
+      <div class="crm-admin-users">
+        <table class="crm-admin-users-table">
+          <thead>
+            <tr>
+              <th>Логин</th>
+              <th>Имя</th>
+              <th>Роли</th>
+              <th>Статус</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody id="crmAdminUsersBody"></tbody>
+        </table>
+        <form id="crmAdminUserForm" class="crm-admin-form" autocomplete="off">
+          <div class="crm-admin-field">
+            <label for="crmAdminUserLogin">Логин</label>
+            <input id="crmAdminUserLogin" name="login" type="text" required />
+          </div>
+          <div class="crm-admin-field">
+            <label for="crmAdminUserName">Имя</label>
+            <input id="crmAdminUserName" name="displayName" type="text" required />
+          </div>
+          <div class="crm-admin-field">
+            <label for="crmAdminUserPassword">Пароль</label>
+            <input id="crmAdminUserPassword" name="password" type="password" autocomplete="new-password" />
+          </div>
+          <div class="crm-admin-field">
+            <label>Роли</label>
+            <div class="crm-admin-role-grid" id="crmAdminUserRoles"></div>
+          </div>
+          <div class="crm-admin-field">
+            <label class="rowc"><input type="checkbox" id="crmAdminUserActive" checked /> Активен</label>
+          </div>
+          <div class="crm-admin-field">
+            <button type="submit" class="pc-btn pc-btn--primary" id="crmAdminUserSubmit">Сохранить</button>
+          </div>
+        </form>
+        <div class="crm-admin-actions">
+          <button type="button" class="pc-btn pc-btn--ghost" id="crmAdminUserReset">Очистить форму</button>
+        </div>
+        <div class="crm-admin-pill" id="crmAdminUserHint">Выберите пользователя из списка или заполните форму для создания нового.</div>
+      </div>
+    </section>
+    <section class="crm-admin-section" data-admin-section="roles" aria-hidden="true">
+      <div class="crm-admin-role-grid" id="crmAdminRolesGrid"></div>
+      <div class="crm-admin-actions">
+        <button type="button" class="pc-btn pc-btn--primary" id="crmAdminRolesSave">Сохранить описания</button>
+      </div>
+    </section>
+    <section class="crm-admin-section" data-admin-section="audit" aria-hidden="true">
+      <div class="crm-admin-actions">
+        <button type="button" class="pc-btn pc-btn--ghost" id="crmAdminAuditRefresh">Обновить</button>
+      </div>
+      <div class="crm-admin-audit-list" id="crmAdminAuditList"></div>
+    </section>
+  </div>
+  <div class="dlg-footer crm-admin-actions">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmAdminCloseBtn">Закрыть</button>
   </div>
 </dialog>
 
@@ -5199,7 +5566,15 @@ const normalizeWriteMode=value=>{
   return DATA_WRITE_MODES.both;
 };
 let currentWriteMode=DATA_WRITE_MODES.both;
-const crmWriteAccessEnabled=()=> currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
+const crmWriteAccessEnabled=()=>{
+  if(!crmPermissions.write) return false;
+  return currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
+};
+const crmCanManageOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.manageOrders;
+const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manageStages;
+const crmCanUseJournal=()=> !!crmPermissions.useJournal;
+const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
+const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
 function updateCrmDbIndicator(){
   if(!crmDbIndicator) return;
   const label=crmDbIndicator.querySelector('.crm-db-indicator__label');
@@ -5229,16 +5604,20 @@ function setCrmDataSource(source){
 let lastCrmWriteBlockedAt=0;
 const applyCrmWriteAccess=()=>{
   const canWrite=crmWriteAccessEnabled();
+  const canOrders=crmCanManageOrders();
+  const canStages=crmCanManageStages();
   if(document.body){
     document.body.classList.toggle('crm-write-disabled', !canWrite);
+    document.body.classList.toggle('crm-order-disabled', !canOrders);
+    document.body.classList.toggle('crm-stage-disabled', !canStages);
   }
   const newOrderBtn=$('#newOrderBtn');
-  if(newOrderBtn){ newOrderBtn.disabled = !canWrite; }
-  if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canWrite; }
-  if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canWrite; }
-  if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canWrite; }
-  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canWrite; }
-  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canWrite; }
+  if(newOrderBtn){ newOrderBtn.disabled = !canOrders; }
+  if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canStages; }
+  if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canStages; }
+  if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
+  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canStages; }
+  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canStages; }
   updateCrmDbIndicator();
 };
 
@@ -5252,6 +5631,14 @@ try{
     orderSearchNormalized=normalizeSearchTerm(stored);
   }
 }catch(_err){/* ignore */}
+
+const crmAdminState={
+  activeTab:'users',
+  users:[],
+  roles:[],
+  audit:[],
+  selectedUserId:null
+};
 
 const deepClone=value=>{
   if(typeof structuredClone==='function'){
@@ -5461,6 +5848,21 @@ function ensureStageHoursPreference(normalized, label){
   if(result){
     save('Уточнение часов передела');
   }
+}
+
+const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
+const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
+const crmPermissions=(()=>{
+  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false };
+  if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
+  return { ...defaults, ...crmCurrentUser.permissions };
+})();
+const crmRoleLabels=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
+const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
+const crmAuthMode=CRM_AUTH_INFO.authMode||'local';
+const crmAllowGuest=!!CRM_AUTH_INFO.allowGuest;
+if(document.body){
+  document.body.dataset.crmRole=crmPrimaryRole||'';
 }
 
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
@@ -5681,17 +6083,49 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmJournalDetailMeta=$('#crmJournalDetailMeta'),
       crmJournalDetailContent=$('#crmJournalDetailContent'),
       crmJournalDetailClose=$('#crmJournalDetailClose'),
-      crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon');
-crmOrderHistoryDlg=$('#crmOrderHistoryDlg');
-crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
+      crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon'),
+      crmAdminNavBtn=$('#crmAdminNavBtn'),
+      crmSettingsNavBtn=$('#crmSettingsNavBtn'),
+      crmAdminDlg=$('#crmAdminDlg'),
+      crmAdminCloseBtn=$('#crmAdminCloseBtn'),
+      crmAdminCloseIcon=$('#crmAdminCloseIcon'),
+      crmAdminTabs=$$('#crmAdminDlg .crm-admin-tab'),
+      crmAdminSections=$$('#crmAdminDlg .crm-admin-section'),
+      crmAdminUsersBody=$('#crmAdminUsersBody'),
+      crmAdminUserForm=$('#crmAdminUserForm'),
+      crmAdminUserLogin=$('#crmAdminUserLogin'),
+      crmAdminUserName=$('#crmAdminUserName'),
+      crmAdminUserPassword=$('#crmAdminUserPassword'),
+      crmAdminUserRoles=$('#crmAdminUserRoles'),
+      crmAdminUserActive=$('#crmAdminUserActive'),
+      crmAdminUserSubmit=$('#crmAdminUserSubmit'),
+      crmAdminUserReset=$('#crmAdminUserReset'),
+      crmAdminUserHint=$('#crmAdminUserHint'),
+      crmAdminRolesGrid=$('#crmAdminRolesGrid'),
+      crmAdminRolesSave=$('#crmAdminRolesSave'),
+      crmAdminAuditList=$('#crmAdminAuditList'),
+      crmAdminAuditRefresh=$('#crmAdminAuditRefresh'),
+      crmUserMenu=$('#crmUserMenu'),
+      crmUserMenuToggle=$('#crmUserMenuToggle'),
+      crmUserMenuDropdown=$('#crmUserMenuDropdown'),
+      crmUserNameEl=$('#crmUserName'),
+      crmUserRoleEl=$('#crmUserRole'),
+      crmUserAvatarEl=$('#crmUserAvatar'),
+      crmUserMetaEl=$('#crmUserMeta'),
+      crmUserLogoutBtn=$('#crmUserLogoutBtn'),
+      crmOrderHistoryDlg=$('#crmOrderHistoryDlg'),
+      crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
 crmOrderHistoryMeta=$('#crmOrderHistoryMeta');
 crmOrderHistoryContent=$('#crmOrderHistoryContent');
-crmOrderHistoryClose=$('#crmOrderHistoryClose');
+      crmOrderHistoryClose=$('#crmOrderHistoryClose');
 crmOrderHistoryCloseIcon=$('#crmOrderHistoryCloseIcon');
 crmJournalClear=$('#crmJournalClear');
 orderHistoryBtn=$('#orderHistoryBtn');
 crmDbIndicator=$('#crmDbIndicator');
 crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
+const CRM_ADMIN_HINT_DEFAULT=crmAdminUserHint?crmAdminUserHint.textContent.trim():'Выберите пользователя из списка или заполните форму для создания нового.';
+let crmAdminBusyCounter=0;
+let crmUserMenuOpen=false;
 updateCrmDbIndicator();
 recalcCrmMappingAlert();
 const LANE_PAGE_SIZE=10;
@@ -8019,6 +8453,10 @@ function renderCrmStageReserveDiag(text, stageKey){
 }
 
 function openCrmStageExceptionsDialog(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений.', tone:'warn' });
+    return;
+  }
   if(!crmStageExceptionsDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
   crmStageExceptionsDlg.dataset.stage=stageKey;
@@ -8038,6 +8476,10 @@ function closeCrmStageExceptionsDialog(){
 }
 
 function applyCrmStageExceptions(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений.', tone:'warn' });
+    return;
+  }
   if(!crmStageExceptionsDlg) return;
   const stageKey=crmStageExceptionsDlg.dataset.stage||crmStageSelect?.value||'draw';
   const parsed=parseCrmCalendarLines(crmStageExceptionsInput?.value,'exception');
@@ -8049,6 +8491,10 @@ function applyCrmStageExceptions(){
 }
 
 function openCrmStageReserveDialog(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения брони.', tone:'warn' });
+    return;
+  }
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
   crmStageReserveDlg.dataset.stage=stageKey;
@@ -8070,6 +8516,10 @@ function closeCrmStageReserveDialog(){
 }
 
 function applyCrmStageReserve(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения брони.', tone:'warn' });
+    return;
+  }
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageReserveDlg.dataset.stage||crmStageSelect?.value||'draw';
   const parsed=parseCrmCalendarLines(crmStageReserveInput?.value,'reserve');
@@ -8456,6 +8906,598 @@ function updateCrmAuxButtons(){
     const title=trashCount>0?`Корзина (${trashCount})`:'Корзина';
     crmTrashBtn.title=title;
     crmTrashBtn.setAttribute('aria-label',title);
+  }
+}
+
+function computeUserInitials(name, login){
+  const target=name&&name.trim()?name:(login||'');
+  const parts=target.split(/[\s]+/).filter(Boolean);
+  if(!parts.length){
+    return (login||'??').slice(0,2).toUpperCase();
+  }
+  if(parts.length===1){
+    return parts[0].slice(0,2).toUpperCase();
+  }
+  return (parts[0][0]+parts[1][0]).toUpperCase();
+}
+
+function handleCrmUserMenuDocumentClick(event){
+  if(!crmUserMenuOpen) return;
+  if(!crmUserMenuDropdown || !crmUserMenuToggle) return;
+  const target=event.target;
+  if(crmUserMenuDropdown.contains(target) || crmUserMenuToggle.contains(target)){
+    return;
+  }
+  setCrmUserMenuOpen(false);
+}
+
+function handleCrmUserMenuDocumentKeydown(event){
+  if(event.key==='Escape'){
+    setCrmUserMenuOpen(false);
+  }
+}
+
+function setCrmUserMenuOpen(open){
+  const next=!!open && !!crmCurrentUser;
+  if(next===crmUserMenuOpen){
+    return;
+  }
+  crmUserMenuOpen=next;
+  if(crmUserMenuDropdown){
+    crmUserMenuDropdown.hidden=!next;
+  }
+  if(crmUserMenuToggle){
+    crmUserMenuToggle.setAttribute('aria-expanded', next?'true':'false');
+  }
+  if(next){
+    document.addEventListener('mousedown', handleCrmUserMenuDocumentClick, true);
+    document.addEventListener('keydown', handleCrmUserMenuDocumentKeydown);
+  }else{
+    document.removeEventListener('mousedown', handleCrmUserMenuDocumentClick, true);
+    document.removeEventListener('keydown', handleCrmUserMenuDocumentKeydown);
+  }
+}
+
+function toggleCrmUserMenu(){
+  setCrmUserMenuOpen(!crmUserMenuOpen);
+}
+
+function updateCrmUserMenu(){
+  const hasUser=!!crmCurrentUser;
+  if(crmUserNameEl){
+    crmUserNameEl.textContent=hasUser?(crmCurrentUser.displayName||crmCurrentUser.login||'—'):'Гость';
+  }
+  if(crmUserRoleEl){
+    crmUserRoleEl.textContent=crmPrimaryRole|| (hasUser?'':'Гость');
+  }
+  if(crmUserAvatarEl){
+    crmUserAvatarEl.textContent=computeUserInitials(crmCurrentUser?.displayName||'', crmCurrentUser?.login||'');
+  }
+  if(crmUserMenuToggle){
+    crmUserMenuToggle.disabled=!hasUser;
+  }
+  if(crmUserMetaEl){
+    const metaParts=[];
+    metaParts.push(`Режим: ${crmAuthMode}`);
+    if(crmAllowGuest){
+      metaParts.push('Гостевой доступ доступен');
+    }
+    crmUserMetaEl.textContent=metaParts.join(' · ');
+  }
+  if(!crmCanManageUsers() && crmAdminDlg && crmAdminDlg.open){
+    closeCrmAdmin();
+  }
+  if(!hasUser){
+    setCrmUserMenuOpen(false);
+  }
+}
+
+function updateCrmNavigationAccess(){
+  if(crmJournalBtn){
+    const allowJournal=crmCanUseJournal();
+    crmJournalBtn.hidden=!allowJournal;
+    if(!allowJournal && crmJournalDlg?.open){
+      closeCrmJournal();
+    }
+  }
+  if(crmAdminNavBtn){
+    crmAdminNavBtn.hidden=!crmCanManageUsers();
+  }
+  if(crmSettingsNavBtn){
+    crmSettingsNavBtn.hidden=!crmCanManageSettings();
+  }
+}
+
+async function crmRequestJson(url, options={}){
+  const merged={
+    headers:{ 'Accept':'application/json', ...(options.headers||{}) },
+    credentials:'same-origin',
+    ...options
+  };
+  if(merged.body && typeof merged.body==='object' && !(merged.body instanceof FormData)){
+    merged.headers['Content-Type']='application/json';
+    merged.body=JSON.stringify(merged.body);
+  }
+  const res=await fetch(url, merged);
+  let data=null;
+  const isJson=res.headers.get('content-type')?.includes('application/json');
+  if(isJson){
+    try{ data=await res.json(); }
+    catch(_err){ data=null; }
+  }
+  if(!res.ok){
+    const message=(data&&data.error)||`Ошибка ${res.status}`;
+    const err=new Error(message);
+    err.status=res.status;
+    err.payload=data;
+    throw err;
+  }
+  return data;
+}
+
+function setCrmAdminTab(tabId){
+  crmAdminState.activeTab=tabId;
+  if(Array.isArray(crmAdminTabs)){
+    crmAdminTabs.forEach(btn=>{
+      const isActive=btn.dataset.adminTab===tabId;
+      btn.setAttribute('aria-selected', isActive?'true':'false');
+    });
+  }
+  if(Array.isArray(crmAdminSections)){
+    crmAdminSections.forEach(section=>{
+      const isActive=section.dataset.adminSection===tabId;
+      section.setAttribute('aria-hidden', isActive?'false':'true');
+    });
+  }
+}
+
+function resetCrmAdminUserForm(){
+  if(!crmAdminUserForm) return;
+  crmAdminUserForm.reset();
+  crmAdminUserForm.dataset.userId='';
+  if(crmAdminUserLogin){ crmAdminUserLogin.disabled=false; }
+  if(crmAdminUserPassword){ crmAdminUserPassword.value=''; }
+  if(crmAdminUserRoles){
+    crmAdminUserRoles.querySelectorAll('input[type="checkbox"]').forEach(box=>{ box.checked=false; });
+  }
+  if(crmAdminUserActive){ crmAdminUserActive.checked=true; }
+  crmAdminState.selectedUserId=null;
+  updateCrmAdminUserHint();
+}
+
+function fillCrmAdminUserForm(user){
+  if(!crmAdminUserForm||!user) return;
+  crmAdminState.selectedUserId=user.id;
+  crmAdminUserForm.dataset.userId=String(user.id);
+  if(crmAdminUserLogin){
+    crmAdminUserLogin.value=user.login||'';
+    crmAdminUserLogin.disabled=true;
+  }
+  if(crmAdminUserName){
+    crmAdminUserName.value=user.displayName||'';
+  }
+  if(crmAdminUserPassword){
+    crmAdminUserPassword.value='';
+  }
+  if(crmAdminUserActive){
+    crmAdminUserActive.checked=user.isActive!==false;
+  }
+  if(crmAdminUserRoles){
+    const roles=Array.isArray(user.roles)?user.roles:[];
+    crmAdminUserRoles.querySelectorAll('input[type="checkbox"]').forEach(box=>{
+      box.checked=roles.includes(box.value);
+    });
+  }
+  updateCrmAdminUserHint();
+}
+
+function renderCrmAdminUsers(){
+  if(!crmAdminUsersBody) return;
+  crmAdminUsersBody.innerHTML='';
+  if(!Array.isArray(crmAdminState.users) || !crmAdminState.users.length){
+    const tr=document.createElement('tr');
+    const td=document.createElement('td');
+    td.colSpan=5;
+    td.innerHTML='<div class="crm-modal-empty">Пользователи не найдены.</div>';
+    tr.appendChild(td);
+    crmAdminUsersBody.appendChild(tr);
+    return;
+  }
+  crmAdminState.users.forEach((user)=>{
+    const tr=document.createElement('tr');
+    tr.dataset.userId=String(user.id);
+    const roles=Array.isArray(user.roles)?user.roles:[];
+    const actions=document.createElement('td');
+    actions.className='crm-admin-user-actions';
+
+    const editBtn=document.createElement('button');
+    editBtn.type='button';
+    editBtn.className='pc-btn pc-btn--ghost';
+    editBtn.textContent='Редактировать';
+    editBtn.addEventListener('click',()=>{
+      fillCrmAdminUserForm(user);
+      setCrmAdminTab('users');
+    });
+    actions.appendChild(editBtn);
+
+    if(user.failedAttempts>0 || user.lockedUntil){
+      const unlockBtn=document.createElement('button');
+      unlockBtn.type='button';
+      unlockBtn.className='pc-btn pc-btn--ghost';
+      unlockBtn.textContent='Разблокировать';
+      unlockBtn.addEventListener('click',()=>handleCrmAdminUnlock(user.id));
+      actions.appendChild(unlockBtn);
+    }
+
+    const toggleBtn=document.createElement('button');
+    toggleBtn.type='button';
+    toggleBtn.className='pc-btn pc-btn--ghost';
+    toggleBtn.textContent=user.isActive!==false?'Отключить':'Включить';
+    toggleBtn.addEventListener('click',()=>handleCrmAdminToggleActive(user));
+    actions.appendChild(toggleBtn);
+
+    const passwordBtn=document.createElement('button');
+    passwordBtn.type='button';
+    passwordBtn.className='pc-btn pc-btn--ghost';
+    passwordBtn.textContent='Сменить пароль';
+    passwordBtn.addEventListener('click',()=>handleCrmAdminPassword(user));
+    actions.appendChild(passwordBtn);
+
+    const loginCell=document.createElement('td');
+    loginCell.textContent=user.login||'—';
+    const nameCell=document.createElement('td');
+    nameCell.textContent=user.displayName||'—';
+    const rolesCell=document.createElement('td');
+    rolesCell.innerHTML=roles.map(slug=>`<span class="crm-admin-pill">${slug}</span>`).join(' ');
+    const statusCell=document.createElement('td');
+    const statusParts=[];
+    statusParts.push(user.isActive!==false?'Активен':'Отключен');
+    if(user.lockedUntil){
+      statusParts.push(`Блок до ${formatDateRu(user.lockedUntil)}`);
+    }else if(user.failedAttempts>0){
+      statusParts.push(`Ошибок: ${user.failedAttempts}`);
+    }
+    statusCell.textContent=statusParts.join(' · ');
+
+    tr.appendChild(loginCell);
+    tr.appendChild(nameCell);
+    tr.appendChild(rolesCell);
+    tr.appendChild(statusCell);
+    tr.appendChild(actions);
+    crmAdminUsersBody.appendChild(tr);
+  });
+}
+
+function renderCrmAdminRoles(){
+  if(!crmAdminRolesGrid) return;
+  crmAdminRolesGrid.innerHTML='';
+  const roles=Array.isArray(crmAdminState.roles)?crmAdminState.roles:[];
+  roles.forEach(role=>{
+    const card=document.createElement('div');
+    card.className='crm-admin-role-card';
+    const title=document.createElement('strong');
+    title.textContent=role.displayName||role.slug;
+    const slug=role.slug||'';
+    const textarea=document.createElement('textarea');
+    textarea.value=role.description||'';
+    textarea.dataset.roleSlug=slug;
+    card.appendChild(title);
+    const meta=document.createElement('span');
+    meta.className='crm-admin-pill';
+    meta.textContent=slug;
+    card.appendChild(meta);
+    card.appendChild(textarea);
+    crmAdminRolesGrid.appendChild(card);
+  });
+}
+
+function renderCrmAdminAudit(){
+  if(!crmAdminAuditList) return;
+  crmAdminAuditList.innerHTML='';
+  const entries=Array.isArray(crmAdminState.audit)?crmAdminState.audit:[];
+  if(!entries.length){
+    const empty=document.createElement('div');
+    empty.className='crm-modal-empty';
+    empty.textContent='Пока нет записей в журнале.';
+    crmAdminAuditList.appendChild(empty);
+    return;
+  }
+  entries.forEach(entry=>{
+    const item=document.createElement('article');
+    item.className='crm-admin-audit-item';
+    const title=document.createElement('strong');
+    title.textContent=entry.action||'—';
+    const user=document.createElement('span');
+    user.textContent=entry.username?`Пользователь: ${entry.username}`:'Пользователь не указан';
+    const time=document.createElement('time');
+    time.dateTime=entry.createdAt||'';
+    time.textContent=formatDateTimeRu(entry.createdAt||'');
+    item.appendChild(title);
+    item.appendChild(user);
+    item.appendChild(time);
+    if(entry.details){
+      const details=document.createElement('pre');
+      details.textContent=JSON.stringify(entry.details,null,2);
+      details.style.margin='0';
+      details.style.whiteSpace='pre-wrap';
+      item.appendChild(details);
+    }
+    crmAdminAuditList.appendChild(item);
+  });
+}
+
+function applyCrmAdminBusyState(){
+  const busy=crmAdminBusyCounter>0;
+  if(crmAdminDlg){
+    if(busy){
+      crmAdminDlg.dataset.loading='true';
+    }else{
+      delete crmAdminDlg.dataset.loading;
+    }
+  }
+  [crmAdminUserSubmit,crmAdminRolesSave,crmAdminAuditRefresh].forEach(btn=>{
+    if(btn){
+      btn.disabled=busy;
+    }
+  });
+}
+
+function setCrmAdminBusy(active){
+  if(active){
+    crmAdminBusyCounter+=1;
+  }else if(crmAdminBusyCounter>0){
+    crmAdminBusyCounter-=1;
+  }else{
+    crmAdminBusyCounter=0;
+  }
+  applyCrmAdminBusyState();
+}
+
+function resetCrmAdminBusy(){
+  crmAdminBusyCounter=0;
+  applyCrmAdminBusyState();
+}
+
+function renderCrmAdminRoleOptions(selectedRoles){
+  if(!crmAdminUserRoles) return;
+  const roles=Array.isArray(crmAdminState.roles)?crmAdminState.roles:[];
+  const selectedSet=new Set(Array.isArray(selectedRoles)?selectedRoles.map(String):[]);
+  crmAdminUserRoles.innerHTML='';
+  roles.forEach(role=>{
+    const slug=(role&&role.slug?String(role.slug).trim():'');
+    if(!slug) return;
+    const option=document.createElement('label');
+    option.className='crm-admin-role-option';
+    option.dataset.roleSlug=slug;
+    if(role.description){
+      option.title=role.description;
+    }
+    const checkbox=document.createElement('input');
+    checkbox.type='checkbox';
+    checkbox.value=slug;
+    checkbox.checked=selectedSet.has(slug);
+    const text=document.createElement('span');
+    text.textContent=role.displayName||slug;
+    option.appendChild(checkbox);
+    option.appendChild(text);
+    crmAdminUserRoles.appendChild(option);
+  });
+}
+
+function findCrmAdminUserById(rawId){
+  const id=Number(rawId);
+  if(!Number.isFinite(id)) return null;
+  return crmAdminState.users.find(user=>Number(user?.id)===id)||null;
+}
+
+function updateCrmAdminUserHint(){
+  if(!crmAdminUserHint) return;
+  if(crmAdminState.selectedUserId){
+    const current=findCrmAdminUserById(crmAdminState.selectedUserId);
+    if(current){
+      const label=current.displayName||current.login||`ID ${current.id}`;
+      crmAdminUserHint.textContent=`Редактирование: ${label}`;
+      return;
+    }
+  }
+  crmAdminUserHint.textContent=CRM_ADMIN_HINT_DEFAULT;
+}
+
+async function loadCrmAdminUsers({ silent=false, skipBusy=false }={}){
+  if(!crmCanManageUsers()) return null;
+  if(!skipBusy) setCrmAdminBusy(true);
+  try{
+    const data=await crmRequestJson('/admin/users');
+    const prevSelected=crmAdminState.selectedUserId;
+    crmAdminState.users=Array.isArray(data?.users)?data.users:[];
+    if(Array.isArray(data?.roles)){
+      crmAdminState.roles=data.roles;
+    }
+    const selectedUser=prevSelected?findCrmAdminUserById(prevSelected):null;
+    renderCrmAdminRoleOptions(selectedUser?.roles||[]);
+    renderCrmAdminUsers();
+    renderCrmAdminRoles();
+    if(selectedUser){
+      fillCrmAdminUserForm(selectedUser);
+    }else{
+      resetCrmAdminUserForm();
+    }
+    return data;
+  }catch(err){
+    console.error('Не удалось загрузить список пользователей',err);
+    if(!silent){
+      showToast({ title:'Администрирование', message:err.message||'Не удалось загрузить пользователей', tone:'error' });
+    }
+    throw err;
+  }finally{
+    if(!skipBusy) setCrmAdminBusy(false);
+  }
+}
+
+async function loadCrmAdminRoles({ silent=false, skipBusy=false }={}){
+  if(!crmCanManageUsers()) return null;
+  if(!skipBusy) setCrmAdminBusy(true);
+  try{
+    const data=await crmRequestJson('/admin/roles/description');
+    if(Array.isArray(data?.roles)){
+      crmAdminState.roles=data.roles;
+    }
+    renderCrmAdminRoles();
+    const current=crmAdminState.selectedUserId?findCrmAdminUserById(crmAdminState.selectedUserId):null;
+    renderCrmAdminRoleOptions(current?.roles||[]);
+    if(current){
+      fillCrmAdminUserForm(current);
+    }
+    return data;
+  }catch(err){
+    console.error('Не удалось загрузить описания ролей',err);
+    if(!silent){
+      showToast({ title:'Администрирование', message:err.message||'Не удалось загрузить описания ролей', tone:'error' });
+    }
+    throw err;
+  }finally{
+    if(!skipBusy) setCrmAdminBusy(false);
+  }
+}
+
+async function loadCrmAdminAudit({ silent=false, skipBusy=false }={}){
+  if(!crmCanManageUsers()) return null;
+  if(!skipBusy) setCrmAdminBusy(true);
+  try{
+    const data=await crmRequestJson('/admin/audit');
+    crmAdminState.audit=Array.isArray(data?.entries)?data.entries:[];
+    renderCrmAdminAudit();
+    return data;
+  }catch(err){
+    console.error('Не удалось загрузить журнал действий',err);
+    if(!silent){
+      showToast({ title:'Администрирование', message:err.message||'Не удалось загрузить журнал действий', tone:'error' });
+    }
+    throw err;
+  }finally{
+    if(!skipBusy) setCrmAdminBusy(false);
+  }
+}
+
+async function openCrmAdmin(initialTab='users'){
+  if(!crmAdminDlg || !crmCanManageUsers()) return;
+  const target=initialTab||crmAdminState.activeTab||'users';
+  setCrmAdminTab(target);
+  setCrmAdminBusy(true);
+  try{
+    await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    if(target==='roles'){
+      await loadCrmAdminRoles({ silent:true, skipBusy:true });
+    }else if(target==='audit'){
+      await loadCrmAdminAudit({ silent:true, skipBusy:true });
+    }
+  }catch(err){
+    console.error('Не удалось открыть админ-панель',err);
+    showToast({ title:'Администрирование', message:err.message||'Не удалось загрузить данные администрирования', tone:'error' });
+  }finally{
+    setCrmAdminBusy(false);
+  }
+  try{crmAdminDlg.showModal();}
+  catch(_err){crmAdminDlg.open=true;}
+}
+
+function closeCrmAdmin(){
+  if(!crmAdminDlg) return;
+  resetCrmAdminBusy();
+  try{crmAdminDlg.close();}
+  catch(_err){crmAdminDlg.open=false;}
+}
+
+async function activateCrmAdminTab(tabId,{ silent=false }={}){
+  const target=(tabId==='roles'||tabId==='audit')?tabId:'users';
+  setCrmAdminTab(target);
+  try{
+    if(target==='users'){
+      await loadCrmAdminUsers({ silent });
+    }else if(target==='roles'){
+      await loadCrmAdminRoles({ silent });
+    }else{
+      await loadCrmAdminAudit({ silent });
+    }
+  }catch(err){
+    console.error('Ошибка переключения вкладки администрирования',err);
+  }
+}
+
+async function handleCrmAdminUnlock(userId){
+  const id=Number(userId);
+  if(!Number.isFinite(id) || id<=0) return;
+  setCrmAdminBusy(true);
+  try{
+    await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ unlock:true } });
+    showToast({ title:'Администрирование', message:'Пользователь разблокирован', tone:'success' });
+    await loadCrmAdminUsers({ silent:true, skipBusy:true });
+  }catch(err){
+    console.error('Не удалось разблокировать пользователя',err);
+    showToast({ title:'Администрирование', message:err.message||'Не удалось разблокировать пользователя', tone:'error' });
+  }finally{
+    setCrmAdminBusy(false);
+  }
+}
+
+async function handleCrmAdminToggleActive(user){
+  if(!user) return;
+  const id=Number(user.id);
+  if(!Number.isFinite(id) || id<=0) return;
+  const isActive=user.isActive!==false;
+  if(isActive){
+    const proceed=window.confirm(`Отключить пользователя «${user.displayName||user.login||user.id}»?`);
+    if(!proceed) return;
+  }
+  setCrmAdminBusy(true);
+  try{
+    await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ isActive:!isActive } });
+    showToast({ title:'Администрирование', message:!isActive?'Пользователь активирован':'Пользователь отключён', tone:'success' });
+    await loadCrmAdminUsers({ silent:true, skipBusy:true });
+  }catch(err){
+    console.error('Не удалось изменить статус пользователя',err);
+    showToast({ title:'Администрирование', message:err.message||'Не удалось изменить статус пользователя', tone:'error' });
+  }finally{
+    setCrmAdminBusy(false);
+  }
+}
+
+async function handleCrmAdminPassword(user){
+  if(!user) return;
+  const id=Number(user.id);
+  if(!Number.isFinite(id) || id<=0) return;
+  const promptTitle=user.displayName||user.login||`ID ${id}`;
+  const raw=window.prompt(`Новый пароль для пользователя «${promptTitle}»:`,'');
+  if(raw===null) return;
+  const password=raw.trim();
+  if(password.length<8){
+    showToast({ title:'Администрирование', message:'Пароль должен содержать не менее 8 символов', tone:'error' });
+    return;
+  }
+  setCrmAdminBusy(true);
+  try{
+    await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ password } });
+    showToast({ title:'Администрирование', message:'Пароль обновлён', tone:'success' });
+    await loadCrmAdminUsers({ silent:true, skipBusy:true });
+  }catch(err){
+    console.error('Не удалось сменить пароль',err);
+    showToast({ title:'Администрирование', message:err.message||'Не удалось сменить пароль', tone:'error' });
+  }finally{
+    setCrmAdminBusy(false);
+  }
+}
+
+async function handleCrmLogout(){
+  setCrmUserMenuOpen(false);
+  if(crmUserLogoutBtn){
+    crmUserLogoutBtn.disabled=true;
+  }
+  try{
+    await fetch('/auth/logout',{ method:'POST', credentials:'same-origin' });
+  }catch(err){
+    console.error('Ошибка выхода из аккаунта',err);
+  }finally{
+    window.location.href='/login';
   }
 }
 
@@ -9298,6 +10340,10 @@ function updateOrderAfterStageChange(order){
 }
 
 function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для управления бронью.', tone:'warn' });
+    return;
+  }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
@@ -9310,6 +10356,10 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
 }
 
 function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения статуса передела.', tone:'warn' });
+    return;
+  }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
@@ -9329,6 +10379,10 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
 }
 
 function handleCrmStageDelete(orderId, stageId, stageKey){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для удаления переделов.', tone:'warn' });
+    return;
+  }
   const { board, order, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!board || !order || stageIndex<0 || !stage) return;
   if(!confirm('Удалить передел из заказа? Он будет перемещён в «Корзину».')) return;
@@ -9345,6 +10399,10 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
 }
 
 function handleCrmStageManualOptimization(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для оптимизации очереди.', tone:'warn' });
+    return;
+  }
   if(crmAutoOptimizeGuard) return;
   let changed=false;
   if(crmStageOptimizeBtn){
@@ -9932,6 +10990,10 @@ if(orderDone){
 }
 
 function openOrder(id=null){
+  if(!crmCanManageOrders()){
+    showToast({ title:'CRM', message:'У вас нет прав для редактирования заказов.', tone:'warn' });
+    return;
+  }
   const b=currentBoard();
   statusSel.innerHTML='';
   b.lanes.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l;statusSel.appendChild(o)});
@@ -12665,6 +13727,138 @@ if(crmJournalDetailDlg){
     closeCrmJournalDetail();
   });
 }
+if(crmAdminNavBtn){
+  crmAdminNavBtn.addEventListener('click',()=>{
+    setCrmUserMenuOpen(false);
+    openCrmAdmin('users');
+  });
+}
+if(crmAdminCloseBtn){
+  crmAdminCloseBtn.addEventListener('click',()=>closeCrmAdmin());
+}
+if(crmAdminCloseIcon){
+  crmAdminCloseIcon.addEventListener('click',()=>closeCrmAdmin());
+}
+if(crmAdminDlg){
+  crmAdminDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmAdmin();
+  });
+}
+if(Array.isArray(crmAdminTabs)){
+  crmAdminTabs.forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tabId=btn.dataset.adminTab||'users';
+      activateCrmAdminTab(tabId,{ silent:false });
+    });
+  });
+}
+if(crmAdminUserForm){
+  crmAdminUserForm.addEventListener('submit',async evt=>{
+    evt.preventDefault();
+    if(!crmCanManageUsers()){
+      showToast({ title:'Администрирование', message:'Недостаточно прав для управления пользователями', tone:'error' });
+      return;
+    }
+    const login=crmAdminUserLogin?crmAdminUserLogin.value.trim():'';
+    const displayName=crmAdminUserName?crmAdminUserName.value.trim():'';
+    const rawPassword=crmAdminUserPassword?crmAdminUserPassword.value:'';
+    const password=rawPassword.trim();
+    const isActive=crmAdminUserActive?crmAdminUserActive.checked:true;
+    const roles=crmAdminUserRoles
+      ? Array.from(crmAdminUserRoles.querySelectorAll('input[type="checkbox"]')).filter(box=>box.checked).map(box=>box.value)
+      : [];
+    const userIdRaw=crmAdminUserForm.dataset.userId;
+    const userId=Number(userIdRaw);
+    const isEdit=Number.isFinite(userId)&&userId>0;
+    if(!isEdit && !login){
+      showToast({ title:'Администрирование', message:'Укажите логин пользователя', tone:'error' });
+      return;
+    }
+    if(!displayName){
+      showToast({ title:'Администрирование', message:'Укажите имя пользователя', tone:'error' });
+      return;
+    }
+    if(!roles.length){
+      showToast({ title:'Администрирование', message:'Выберите хотя бы одну роль', tone:'error' });
+      return;
+    }
+    if(isEdit){
+      if(password && password.length<8){
+        showToast({ title:'Администрирование', message:'Пароль должен содержать не менее 8 символов', tone:'error' });
+        return;
+      }
+    }else if(password.length<8){
+      showToast({ title:'Администрирование', message:'Пароль должен содержать не менее 8 символов', tone:'error' });
+      return;
+    }
+    const payload=isEdit
+      ? { displayName, isActive, roles }
+      : { login, displayName, password, roles, isActive };
+    if(isEdit && password){
+      payload.password=password;
+    }
+    setCrmAdminBusy(true);
+    try{
+      if(isEdit){
+        await crmRequestJson(`/admin/users/${userId}`,{ method:'PATCH', body:payload });
+        showToast({ title:'Администрирование', message:'Пользователь обновлён', tone:'success' });
+      }else{
+        await crmRequestJson('/admin/users',{ method:'POST', body:payload });
+        showToast({ title:'Администрирование', message:'Пользователь создан', tone:'success' });
+      }
+      await loadCrmAdminUsers({ silent:true, skipBusy:true });
+      if(isEdit){
+        const current=findCrmAdminUserById(userId);
+        if(current){
+          fillCrmAdminUserForm(current);
+        }
+      }else{
+        resetCrmAdminUserForm();
+      }
+    }catch(err){
+      console.error('Не удалось сохранить пользователя',err);
+      showToast({ title:'Администрирование', message:err.message||'Не удалось сохранить пользователя', tone:'error' });
+    }finally{
+      setCrmAdminBusy(false);
+    }
+  });
+}
+if(crmAdminUserReset){
+  crmAdminUserReset.addEventListener('click',()=>resetCrmAdminUserForm());
+}
+if(crmAdminRolesSave){
+  crmAdminRolesSave.addEventListener('click',async ()=>{
+    if(!crmCanManageUsers()){
+      showToast({ title:'Администрирование', message:'Недостаточно прав для изменения ролей', tone:'error' });
+      return;
+    }
+    const descriptions={};
+    if(crmAdminRolesGrid){
+      crmAdminRolesGrid.querySelectorAll('textarea[data-role-slug]').forEach(textarea=>{
+        const slug=textarea.dataset.roleSlug;
+        if(!slug) return;
+        descriptions[slug]=textarea.value;
+      });
+    }
+    setCrmAdminBusy(true);
+    try{
+      await crmRequestJson('/admin/roles/description',{ method:'PUT', body:{ descriptions } });
+      showToast({ title:'Администрирование', message:'Описания ролей обновлены', tone:'success' });
+      await loadCrmAdminRoles({ silent:true, skipBusy:true });
+    }catch(err){
+      console.error('Не удалось обновить описания ролей',err);
+      showToast({ title:'Администрирование', message:err.message||'Не удалось сохранить описания ролей', tone:'error' });
+    }finally{
+      setCrmAdminBusy(false);
+    }
+  });
+}
+if(crmAdminAuditRefresh){
+  crmAdminAuditRefresh.addEventListener('click',()=>{
+    loadCrmAdminAudit({ silent:false }).catch(()=>{});
+  });
+}
 if(orderHistoryBtn){
   orderHistoryBtn.addEventListener('click',()=>{
     const targetId=orderHistoryBtn.dataset?.orderId||orderForm?.id?.value||editingOrderId||'';
@@ -12711,6 +13905,17 @@ if(crmTrashDlg){
     btn.addEventListener('click',()=>setCrmTrashFilter(btn.dataset.trashFilter));
   });
 }
+if(crmUserMenuToggle){
+  crmUserMenuToggle.addEventListener('click',()=>{
+    if(!crmCurrentUser){
+      return;
+    }
+    toggleCrmUserMenu();
+  });
+}
+if(crmUserLogoutBtn){
+  crmUserLogoutBtn.addEventListener('click',()=>handleCrmLogout());
+}
 window.addEventListener('resize',()=>{
   if(currentCrmView==='orders'){
     syncCrmOrdersTotals();
@@ -12719,6 +13924,9 @@ window.addEventListener('resize',()=>{
   syncCrmRouteHeaders();
 });
 renderAll();
+
+updateCrmUserMenu();
+updateCrmNavigationAccess();
 
 crmSettingsLinks.forEach(link => {
   if(!link) return;

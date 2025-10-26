@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
 const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -14,7 +15,21 @@ const DATA_DIR = path.join(__dirname, 'data');
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
 
+const SESSION_COOKIE_NAME = 'pc_session';
+const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
+const SESSION_RENEW_THRESHOLD_MS = SESSION_TTL_MS / 3;
+const AUTH_MODE = (process.env.AUTH_MODE || 'local').trim().toLowerCase();
+const ALLOW_GUEST_LOGIN = parseBoolean(process.env.ALLOW_GUEST ?? 'true', true);
+const MAX_FAILED_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_MAX_FAILED_ATTEMPTS || '5', 10));
+const LOCKOUT_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_LOCKOUT_MINUTES || '15', 10));
+const SESSION_IDLE_TIMEOUT_MS = Math.max(SESSION_TTL_MS, 60 * 60 * 1000);
+const COOKIE_SECURE = parseBoolean(process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production'), process.env.NODE_ENV === 'production');
+const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
+const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
+
 let sqlite = null;
+let lastSessionCleanup = 0;
 
 function getDatabase() {
   if (sqlite) {
@@ -55,7 +70,60 @@ function getDatabase() {
       tasks_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL UNIQUE,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login TEXT NOT NULL UNIQUE,
+      password_hash TEXT,
+      display_name TEXT NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_login_at TEXT,
+      password_updated_at TEXT,
+      failed_attempts INTEGER NOT NULL DEFAULT 0,
+      locked_until TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS user_roles (
+      user_id INTEGER NOT NULL,
+      role_id INTEGER NOT NULL,
+      PRIMARY KEY (user_id, role_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER,
+      is_guest INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      username TEXT,
+      roles TEXT,
+      action TEXT NOT NULL,
+      details_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    );
   `);
+  ensureAuthBootstrap();
   return sqlite;
 }
 
@@ -92,10 +160,623 @@ const pool = {
   }
 };
 
+const ROLE_SEEDS = [
+  {
+    slug: 'admin',
+    displayName: 'Админ',
+    description: 'Полный доступ к системе, управление пользователями, ролями, настройками и журналами.'
+  },
+  {
+    slug: 'administrator',
+    displayName: 'Администратор',
+    description: 'Управление заказами, маршрутами и настройками производства. Доступны все операции мастера участка.'
+  },
+  {
+    slug: 'master',
+    displayName: 'Мастер участка',
+    description: 'Отмечает готовность переделов, управляет бронью и исключениями, оставляет комментарии.'
+  },
+  {
+    slug: 'guest',
+    displayName: 'Гость',
+    description: 'Только просмотр текущего состояния без возможности внесения изменений.'
+  }
+];
+
+const ROLE_PERMISSIONS = {
+  admin: {
+    view: true,
+    write: true,
+    manageUsers: true,
+    manageSettings: true,
+    manageStages: true,
+    manageOrders: true,
+    viewAudit: true,
+    useJournal: true
+  },
+  administrator: {
+    view: true,
+    write: true,
+    manageUsers: false,
+    manageSettings: true,
+    manageStages: true,
+    manageOrders: true,
+    viewAudit: true,
+    useJournal: true
+  },
+  master: {
+    view: true,
+    write: true,
+    manageUsers: false,
+    manageSettings: false,
+    manageStages: true,
+    manageOrders: false,
+    viewAudit: false,
+    useJournal: true
+  },
+  guest: {
+    view: true,
+    write: false,
+    manageUsers: false,
+    manageSettings: false,
+    manageStages: false,
+    manageOrders: false,
+    viewAudit: false,
+    useJournal: false
+  }
+};
+const ROLE_LOOKUP = ROLE_SEEDS.reduce((acc, role) => {
+  acc[role.slug] = role;
+  return acc;
+}, {});
+
+
 const app = express();
 app.use(compression());
 app.use(express.json({ limit: '10mb', strict: false }));
 app.use(express.text({ limit: '10mb', type: ['text/plain', 'application/octet-stream'] }));
+
+function sessionMiddleware(req, res, next) {
+  try {
+    req.authMode = AUTH_MODE;
+    req.allowGuest = ALLOW_GUEST_LOGIN;
+    const token = getSessionToken(req);
+    if (!token) {
+      req.session = null;
+      req.user = null;
+      return next();
+    }
+    const session = resolveSession(token);
+    if (!session) {
+      clearSessionCookie(res);
+      req.session = null;
+      req.user = null;
+      return next();
+    }
+    req.session = session;
+    req.user = session.user;
+    res.locals.currentUser = session.user;
+    touchSession(session.id, session.lastSeenAt);
+    return next();
+  } catch (err) {
+    return next(err);
+  }
+}
+
+app.use(sessionMiddleware);
+
+function requireAuth(permission = null) {
+  return (req, res, next) => {
+    if (!req.user) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    if (permission) {
+      const allowed = req.user?.permissions?.[permission];
+      if (!allowed) {
+        res.status(403).json({ error: 'Forbidden', permission });
+        return;
+      }
+    }
+    next();
+  };
+}
+
+function ensureGuestAllowed(req, res, next) {
+  if (!ALLOW_GUEST_LOGIN) {
+    res.status(403).json({ error: 'Guest access disabled' });
+    return;
+  }
+  next();
+}
+
+function ensureAuthBootstrap() {
+  if (!sqlite) {
+    return;
+  }
+  const db = sqlite;
+  const now = new Date().toISOString();
+  const insertRole = db.prepare(`
+    INSERT OR IGNORE INTO roles (slug, display_name, description, created_at, updated_at)
+    VALUES (@slug, @display_name, @description, @created_at, @updated_at)
+  `);
+  for (const role of ROLE_SEEDS) {
+    insertRole.run({
+      slug: role.slug,
+      display_name: role.displayName,
+      description: role.description,
+      created_at: now,
+      updated_at: now
+    });
+  }
+
+  const totalUsersRow = db.prepare('SELECT COUNT(*) AS count FROM users').get();
+  const userCount = Number(totalUsersRow?.count || 0);
+  if (userCount > 0) {
+    return;
+  }
+
+  const passwordHash = bcrypt.hashSync(DEFAULT_ADMIN_PASSWORD, 10);
+  const insertUser = db.prepare(`
+    INSERT INTO users (login, password_hash, display_name, is_active, created_at, updated_at, last_login_at, password_updated_at)
+    VALUES (@login, @password_hash, @display_name, 1, @created_at, @updated_at, NULL, @password_updated_at)
+  `);
+  const userResult = insertUser.run({
+    login: DEFAULT_ADMIN_LOGIN,
+    password_hash: passwordHash,
+    display_name: 'Системный администратор',
+    created_at: now,
+    updated_at: now,
+    password_updated_at: now
+  });
+  const userId = Number(userResult.lastInsertRowid);
+  if (Number.isFinite(userId)) {
+    const roleRow = db.prepare('SELECT id FROM roles WHERE slug = ?').get('admin');
+    if (roleRow?.id) {
+      db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)').run(userId, roleRow.id);
+    }
+    console.warn(`Создан пользователь по умолчанию ${DEFAULT_ADMIN_LOGIN}. Пароль необходимо сменить после первого входа.`);
+  }
+}
+
+function normalizeRoleSlug(input) {
+  if (!input && input !== 0) return null;
+  const normalized = String(input).trim().toLowerCase();
+  return ROLE_LOOKUP[normalized] ? normalized : null;
+}
+
+function computePermissions(roleSlugs) {
+  const permissions = {
+    view: false,
+    write: false,
+    manageUsers: false,
+    manageSettings: false,
+    manageStages: false,
+    manageOrders: false,
+    viewAudit: false,
+    useJournal: false
+  };
+  if (!Array.isArray(roleSlugs)) {
+    return permissions;
+  }
+  for (const slugRaw of roleSlugs) {
+    const slug = normalizeRoleSlug(slugRaw);
+    if (!slug) continue;
+    const rolePerms = ROLE_PERMISSIONS[slug];
+    if (!rolePerms) continue;
+    for (const [key, value] of Object.entries(rolePerms)) {
+      if (value) {
+        permissions[key] = true;
+      }
+    }
+  }
+  return permissions;
+}
+
+function buildRoleDetails(roleSlugs) {
+  if (!Array.isArray(roleSlugs)) {
+    return [];
+  }
+  return roleSlugs
+    .map((slug) => {
+      const normalized = normalizeRoleSlug(slug);
+      if (!normalized) return null;
+      const meta = ROLE_LOOKUP[normalized];
+      return {
+        slug: normalized,
+        displayName: meta?.displayName || normalized
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildUserPayload(userRow, roleRows) {
+  if (!userRow) {
+    return null;
+  }
+  const roles = Array.isArray(roleRows)
+    ? roleRows.map((role) => normalizeRoleSlug(role.slug || role.role_slug || role))
+    : [];
+  const uniqueRoles = Array.from(new Set(roles.filter(Boolean)));
+  const permissions = computePermissions(uniqueRoles);
+  return {
+    id: Number(userRow.id),
+    login: userRow.login,
+    displayName: userRow.display_name,
+    isActive: Number(userRow.is_active) !== 0,
+    lastLoginAt: userRow.last_login_at || null,
+    lockedUntil: userRow.locked_until || null,
+    roles: uniqueRoles,
+    roleDetails: buildRoleDetails(uniqueRoles),
+    permissions
+  };
+}
+
+function readUserWithRolesByLogin(login) {
+  const db = getDatabase();
+  const user = db.prepare('SELECT * FROM users WHERE login = ?').get(login);
+  if (!user) {
+    return null;
+  }
+  const roles = db
+    .prepare(
+      `SELECT r.slug
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = ?`
+    )
+    .all(user.id);
+  return { user, roles };
+}
+
+function readUserWithRolesById(userId) {
+  const db = getDatabase();
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) {
+    return null;
+  }
+  const roles = db
+    .prepare(
+      `SELECT r.slug
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+        WHERE ur.user_id = ?`
+    )
+    .all(user.id);
+  return { user, roles };
+}
+
+function listAllRoles() {
+  const db = getDatabase();
+  return db
+    .prepare('SELECT id, slug, display_name, description FROM roles ORDER BY id ASC')
+    .all()
+    .map((row) => ({
+      id: Number(row.id),
+      slug: row.slug,
+      displayName: row.display_name,
+      description: row.description || ''
+    }));
+}
+
+function sanitizeLogin(login) {
+  if (typeof login !== 'string') {
+    return null;
+  }
+  const trimmed = login.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
+function parseCookies(header) {
+  if (!header || typeof header !== 'string') {
+    return {};
+  }
+  return header.split(';').reduce((acc, part) => {
+    const segment = part.trim();
+    if (!segment) return acc;
+    const eqIndex = segment.indexOf('=');
+    if (eqIndex === -1) {
+      acc[segment] = '';
+      return acc;
+    }
+    const key = segment.slice(0, eqIndex).trim();
+    const value = segment.slice(eqIndex + 1);
+    if (!key) return acc;
+    try {
+      acc[key] = decodeURIComponent(value);
+    } catch (_err) {
+      acc[key] = value;
+    }
+    return acc;
+  }, {});
+}
+
+function getSessionToken(req) {
+  const cookies = parseCookies(req.headers?.cookie || '');
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (typeof token !== 'string') {
+    return null;
+  }
+  const trimmed = token.trim();
+  return trimmed ? trimmed : null;
+}
+
+function purgeExpiredSessions() {
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowIso);
+}
+
+function loadSessionRecord(sessionId) {
+  if (!sessionId) return null;
+  const db = getDatabase();
+  const row = db
+    .prepare(
+      `SELECT s.id, s.user_id, s.is_guest, s.created_at, s.last_seen_at, s.expires_at,
+              u.login, u.display_name, u.is_active, u.locked_until
+         FROM sessions s
+         LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = ?`
+    )
+    .get(sessionId);
+  if (!row) {
+    return null;
+  }
+  const expiresAt = row.expires_at ? Date.parse(row.expires_at) : null;
+  const now = Date.now();
+  if (expiresAt && expiresAt <= now) {
+    try {
+      db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+    } catch (_err) {
+      /* ignore */
+    }
+    return null;
+  }
+  return row;
+}
+
+function touchSession(sessionId, previousLastSeenIso) {
+  if (!sessionId) return;
+  const db = getDatabase();
+  const now = Date.now();
+  const lastSeen = previousLastSeenIso ? Date.parse(previousLastSeenIso) : 0;
+  if (Number.isFinite(lastSeen) && now - lastSeen < SESSION_RENEW_THRESHOLD_MS) {
+    return;
+  }
+  const nowIso = new Date(now).toISOString();
+  const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
+  db
+    .prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?')
+    .run(nowIso, expiresIso, sessionId);
+}
+
+function destroySession(sessionId) {
+  if (!sessionId) return;
+  const db = getDatabase();
+  db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+}
+
+function generateSessionId() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function createSessionRecord({ userId = null, isGuest = false }) {
+  const db = getDatabase();
+  const sessionId = generateSessionId();
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
+  db
+    .prepare('INSERT INTO sessions (id, user_id, is_guest, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(sessionId, userId, isGuest ? 1 : 0, nowIso, nowIso, expiresIso);
+  return { id: sessionId, createdAt: nowIso, expiresAt: expiresIso };
+}
+
+function setSessionCookie(res, sessionId) {
+  res.cookie(SESSION_COOKIE_NAME, sessionId, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+    path: '/',
+    maxAge: SESSION_IDLE_TIMEOUT_MS
+  });
+}
+
+function clearSessionCookie(res) {
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: COOKIE_SECURE,
+    path: '/'
+  });
+}
+
+function recordAuditEvent({ user = null, action, details = null }) {
+  if (!action) return;
+  try {
+    const db = getDatabase();
+    const nowIso = new Date().toISOString();
+    const payload = {
+      user_id: user?.id ?? null,
+      username: user?.login || user?.username || null,
+      roles: user?.roles ? JSON.stringify(user.roles) : null,
+      action,
+      details_json: details ? JSON.stringify(details) : null,
+      created_at: nowIso
+    };
+    db
+      .prepare(
+        'INSERT INTO audit_log (user_id, username, roles, action, details_json, created_at) VALUES (@user_id,@username,@roles,@action,@details_json,@created_at)'
+      )
+      .run(payload);
+  } catch (err) {
+    console.warn('Failed to write audit log', err);
+  }
+}
+
+function buildGuestUserPayload() {
+  const roles = ['guest'];
+  return {
+    id: null,
+    login: 'guest',
+    displayName: 'Гость',
+    isActive: true,
+    lastLoginAt: null,
+    lockedUntil: null,
+    roles,
+    roleDetails: buildRoleDetails(roles),
+    permissions: computePermissions(roles),
+    isGuest: true
+  };
+}
+
+function resolveSession(sessionId) {
+  if (!sessionId) return null;
+  const nowTs = Date.now();
+  if (nowTs - lastSessionCleanup > SESSION_TTL_MS) {
+    try {
+      purgeExpiredSessions();
+    } catch (_err) {
+      /* ignore */
+    }
+    lastSessionCleanup = nowTs;
+  }
+  const record = loadSessionRecord(sessionId);
+  if (!record) {
+    return null;
+  }
+  if (Number(record.is_guest) === 1) {
+    return {
+      id: record.id,
+      isGuest: true,
+      createdAt: record.created_at,
+      lastSeenAt: record.last_seen_at,
+      expiresAt: record.expires_at,
+      user: buildGuestUserPayload()
+    };
+  }
+  if (!record.user_id) {
+    destroySession(record.id);
+    return null;
+  }
+  if (Number(record.is_active) === 0) {
+    destroySession(record.id);
+    return null;
+  }
+  if (record.locked_until) {
+    const lockedUntil = Date.parse(record.locked_until);
+    if (Number.isFinite(lockedUntil) && lockedUntil > Date.now()) {
+      destroySession(record.id);
+      return null;
+    }
+  }
+  const fetched = readUserWithRolesById(record.user_id);
+  if (!fetched) {
+    destroySession(record.id);
+    return null;
+  }
+  const userPayload = buildUserPayload(fetched.user, fetched.roles);
+  if (!userPayload) {
+    destroySession(record.id);
+    return null;
+  }
+  userPayload.isGuest = false;
+  return {
+    id: record.id,
+    isGuest: false,
+    createdAt: record.created_at,
+    lastSeenAt: record.last_seen_at,
+    expiresAt: record.expires_at,
+    user: userPayload
+  };
+}
+
+function registerFailedLogin(userId) {
+  if (!userId) return;
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  const row = db.prepare('SELECT failed_attempts FROM users WHERE id = ?').get(userId);
+  const attempts = Number(row?.failed_attempts || 0) + 1;
+  let lockedUntil = null;
+  if (attempts >= MAX_FAILED_ATTEMPTS) {
+    const lockUntilDate = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
+    lockedUntil = lockUntilDate.toISOString();
+  }
+  db
+    .prepare('UPDATE users SET failed_attempts = ?, locked_until = COALESCE(?, locked_until), updated_at = ? WHERE id = ?')
+    .run(attempts, lockedUntil, nowIso, userId);
+  return { attempts, lockedUntil };
+}
+
+function resetFailedLogin(userId) {
+  if (!userId) return;
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  db
+    .prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL, updated_at = ? WHERE id = ?')
+    .run(nowIso, userId);
+}
+
+function markSuccessfulLogin(userId) {
+  if (!userId) return;
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  db
+    .prepare('UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = ?, updated_at = ? WHERE id = ?')
+    .run(nowIso, nowIso, userId);
+}
+
+function saveUserRoles(userId, roleSlugs) {
+  const db = getDatabase();
+  db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(userId);
+  if (!Array.isArray(roleSlugs) || !roleSlugs.length) {
+    return [];
+  }
+  const insert = db.prepare('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)');
+  const rolesTable = listAllRoles();
+  const lookup = new Map(rolesTable.map((role) => [role.slug, role.id]));
+  const applied = [];
+  for (const slugRaw of roleSlugs) {
+    const slug = normalizeRoleSlug(slugRaw);
+    if (!slug) continue;
+    const roleId = lookup.get(slug);
+    if (!roleId) continue;
+    insert.run(userId, roleId);
+    applied.push(slug);
+  }
+  return applied;
+}
+
+function ensureAdminPreserved(userId, nextRoleSlugs) {
+  const normalized = Array.isArray(nextRoleSlugs)
+    ? nextRoleSlugs.map(normalizeRoleSlug).filter(Boolean)
+    : [];
+  if (normalized.includes('admin')) {
+    return true;
+  }
+  const db = getDatabase();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+        WHERE r.slug = 'admin' AND ur.user_id != ?`
+    )
+    .get(userId);
+  const count = Number(row?.count || 0);
+  return count > 0;
+}
+
+function validatePassword(password) {
+  if (typeof password !== 'string') return false;
+  const trimmed = password.trim();
+  if (trimmed.length < 8) return false;
+  return true;
+}
+
 
 const sseClients = new Set();
 let cachedSnapshot = null;
@@ -105,6 +786,304 @@ let ordersTableInfo = null;
 let settingsSchemaEnsured = false;
 
 const SETTINGS_ROW_ID = 1;
+
+app.post('/auth/login', async (req, res) => {
+  if (AUTH_MODE !== 'local') {
+    res.status(501).json({ error: 'Auth mode not supported' });
+    return;
+  }
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const login = sanitizeLogin(body.login);
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!login || password.length < 1) {
+    res.status(400).json({ error: 'Введите логин и пароль' });
+    return;
+  }
+  const fetched = readUserWithRolesByLogin(login);
+  if (!fetched || !fetched.user) {
+    await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
+    res.status(401).json({ error: 'Неверный логин или пароль' });
+    return;
+  }
+  const { user, roles } = fetched;
+  if (Number(user.is_active) === 0) {
+    res.status(403).json({ error: 'Учетная запись заблокирована' });
+    return;
+  }
+  if (!user.password_hash) {
+    res.status(401).json({ error: 'Неверный логин или пароль' });
+    return;
+  }
+  if (user.locked_until) {
+    const lockedUntil = Date.parse(user.locked_until);
+    if (Number.isFinite(lockedUntil) && lockedUntil > Date.now()) {
+      res.status(423).json({ error: 'Учетная запись временно заблокирована', lockedUntil: user.locked_until });
+      return;
+    }
+  }
+  const passwordMatches = await bcrypt.compare(password, user.password_hash);
+  if (!passwordMatches) {
+    const state = registerFailedLogin(user.id);
+    const roleSlugs = Array.isArray(roles) ? roles.map((entry) => entry.slug) : [];
+    recordAuditEvent({ user: { id: user.id, login: user.login, roles: roleSlugs }, action: 'auth.failed', details: { attempts: state?.attempts || 0 } });
+    if (state?.lockedUntil) {
+      res.status(423).json({ error: 'Учетная запись временно заблокирована', lockedUntil: state.lockedUntil });
+      return;
+    }
+    res.status(401).json({ error: 'Неверный логин или пароль' });
+    return;
+  }
+
+  resetFailedLogin(user.id);
+  markSuccessfulLogin(user.id);
+  const payload = buildUserPayload(user, roles);
+  if (payload) {
+    payload.lastLoginAt = new Date().toISOString();
+    payload.isGuest = false;
+  }
+  const session = createSessionRecord({ userId: user.id, isGuest: false });
+  setSessionCookie(res, session.id);
+  recordAuditEvent({ user: { id: user.id, login: user.login, roles: payload?.roles || [] }, action: 'auth.login' });
+  res.json({
+    user: payload,
+    authMode: AUTH_MODE,
+    allowGuest: ALLOW_GUEST_LOGIN,
+    expiresAt: session.expiresAt
+  });
+});
+
+app.post('/auth/guest', ensureGuestAllowed, (req, res) => {
+  const session = createSessionRecord({ userId: null, isGuest: true });
+  setSessionCookie(res, session.id);
+  const guest = buildGuestUserPayload();
+  recordAuditEvent({ user: { id: null, login: 'guest', roles: guest.roles }, action: 'auth.guest' });
+  res.json({ user: guest, authMode: AUTH_MODE, allowGuest: ALLOW_GUEST_LOGIN, expiresAt: session.expiresAt });
+});
+
+app.post('/auth/logout', (req, res) => {
+  if (req.session?.id) {
+    destroySession(req.session.id);
+  }
+  clearSessionCookie(res);
+  if (req.user) {
+    recordAuditEvent({ user: { id: req.user.id, login: req.user.login, roles: req.user.roles }, action: 'auth.logout' });
+  }
+  res.status(204).end();
+});
+
+app.get('/me', (req, res) => {
+  if (!req.user) {
+    res.json({ user: null, authMode: AUTH_MODE, allowGuest: ALLOW_GUEST_LOGIN });
+    return;
+  }
+  res.json({ user: req.user, authMode: AUTH_MODE, allowGuest: ALLOW_GUEST_LOGIN });
+});
+
+app.get('/admin/users', requireAuth('manageUsers'), (req, res) => {
+  const db = getDatabase();
+  const users = db
+    .prepare(
+      `SELECT id, login, display_name, is_active, last_login_at, locked_until, failed_attempts
+         FROM users
+        ORDER BY login ASC`
+    )
+    .all();
+  const roleRows = db
+    .prepare(
+      `SELECT ur.user_id, r.slug
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id`
+    )
+    .all();
+  const roleMap = new Map();
+  for (const row of roleRows) {
+    const list = roleMap.get(row.user_id) || [];
+    list.push(row.slug);
+    roleMap.set(row.user_id, list);
+  }
+  const payload = users.map((row) => {
+    const roles = roleMap.get(row.id) || [];
+    const meta = buildUserPayload(row, roles.map((slug) => ({ slug })));
+    if (meta) {
+      meta.failedAttempts = Number(row.failed_attempts || 0);
+    }
+    return meta;
+  });
+  res.json({ users: payload, roles: listAllRoles() });
+});
+
+app.post('/admin/users', requireAuth('manageUsers'), async (req, res) => {
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({ error: 'Invalid payload' });
+    return;
+  }
+  const login = sanitizeLogin(req.body.login);
+  const displayName = typeof req.body.displayName === 'string' ? req.body.displayName.trim() : '';
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  const requestedRoles = Array.isArray(req.body.roles) ? req.body.roles : [];
+  const isActive = parseBoolean(req.body.isActive, true);
+  if (!login || !displayName) {
+    res.status(400).json({ error: 'Логин и имя обязательны' });
+    return;
+  }
+  if (!validatePassword(password)) {
+    res.status(400).json({ error: 'Пароль должен содержать не менее 8 символов' });
+    return;
+  }
+  if (!requestedRoles.length) {
+    res.status(400).json({ error: 'Назначьте хотя бы одну роль' });
+    return;
+  }
+  const existing = readUserWithRolesByLogin(login);
+  if (existing) {
+    res.status(409).json({ error: 'Пользователь с таким логином уже существует' });
+    return;
+  }
+  const passwordHash = await bcrypt.hash(password, 10);
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  const result = db
+    .prepare(
+      `INSERT INTO users (login, password_hash, display_name, is_active, created_at, updated_at, password_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(login, passwordHash, displayName, isActive ? 1 : 0, nowIso, nowIso, nowIso);
+  const userId = Number(result.lastInsertRowid);
+  const appliedRoles = saveUserRoles(userId, requestedRoles);
+  const payload = readUserWithRolesById(userId);
+  const response = buildUserPayload(payload.user, payload.roles);
+  recordAuditEvent({ user: req.user, action: 'admin.user.create', details: { userId, login, roles: appliedRoles } });
+  res.status(201).json({ user: response });
+});
+
+app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор' });
+    return;
+  }
+  const current = readUserWithRolesById(userId);
+  if (!current) {
+    res.status(404).json({ error: 'Пользователь не найден' });
+    return;
+  }
+  const body = (req.body && typeof req.body === 'object') ? req.body : {};
+  const updates = [];
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+
+  if (body.displayName !== undefined) {
+    const name = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+    if (!name) {
+      res.status(400).json({ error: 'Имя не может быть пустым' });
+      return;
+    }
+    updates.push({ column: 'display_name', value: name });
+  }
+
+  if (body.isActive !== undefined) {
+    const active = parseBoolean(body.isActive, true);
+    if (!active && !ensureAdminPreserved(userId, body.roles ?? current.roles?.map((r) => r.slug))) {
+      res.status(400).json({ error: 'Нельзя отключить последнего администратора' });
+      return;
+    }
+    updates.push({ column: 'is_active', value: active ? 1 : 0 });
+  }
+
+  let appliedRoles = current.roles?.map((r) => r.slug) || [];
+  if (body.roles !== undefined) {
+    const nextRoles = Array.isArray(body.roles) ? body.roles : [];
+    if (!nextRoles.length) {
+      res.status(400).json({ error: 'Назначьте хотя бы одну роль' });
+      return;
+    }
+    if (!ensureAdminPreserved(userId, nextRoles)) {
+      res.status(400).json({ error: 'В системе должен оставаться хотя бы один админ' });
+      return;
+    }
+    appliedRoles = saveUserRoles(userId, nextRoles);
+  }
+
+  if (body.unlock === true) {
+    updates.push({ column: 'failed_attempts', value: 0 });
+    updates.push({ column: 'locked_until', value: null });
+  }
+
+  if (body.password) {
+    if (!validatePassword(body.password)) {
+      res.status(400).json({ error: 'Пароль должен содержать не менее 8 символов' });
+      return;
+    }
+    const hash = await bcrypt.hash(body.password, 10);
+    updates.push({ column: 'password_hash', value: hash });
+    updates.push({ column: 'password_updated_at', value: nowIso });
+  }
+
+  if (updates.length) {
+    const sets = updates.map((entry) => `${entry.column} = ?`).join(', ');
+    const values = updates.map((entry) => entry.value);
+    values.push(nowIso, userId);
+    db.prepare(`UPDATE users SET ${sets}, updated_at = ? WHERE id = ?`).run(...values);
+  } else if (body.roles !== undefined || body.unlock === true) {
+    db.prepare('UPDATE users SET updated_at = ? WHERE id = ?').run(nowIso, userId);
+  }
+
+  const fresh = readUserWithRolesById(userId);
+  const response = buildUserPayload(fresh.user, fresh.roles);
+  recordAuditEvent({ user: req.user, action: 'admin.user.update', details: { userId, roles: appliedRoles } });
+  res.json({ user: response });
+});
+
+app.get('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
+  res.json({ roles: listAllRoles() });
+});
+
+app.put('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({ error: 'Invalid payload' });
+    return;
+  }
+  const descriptions = req.body.descriptions && typeof req.body.descriptions === 'object'
+    ? req.body.descriptions
+    : req.body;
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  const stmt = db.prepare('UPDATE roles SET description = ?, updated_at = ? WHERE slug = ?');
+  for (const [slug, text] of Object.entries(descriptions)) {
+    const normalized = normalizeRoleSlug(slug);
+    if (!normalized) continue;
+    const description = typeof text === 'string' ? text.trim() : '';
+    stmt.run(description, nowIso, normalized);
+  }
+  recordAuditEvent({ user: req.user, action: 'admin.roles.update' });
+  res.json({ roles: listAllRoles() });
+});
+
+app.get('/admin/audit', requireAuth('viewAudit'), (req, res) => {
+  const limitRaw = Number(req.query.limit);
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 100;
+  const db = getDatabase();
+  const rows = db
+    .prepare(
+      `SELECT id, user_id, username, roles, action, details_json, created_at
+         FROM audit_log
+        ORDER BY id DESC
+        LIMIT ?`
+    )
+    .all(limit);
+  const entries = rows.map((row) => ({
+    id: Number(row.id),
+    userId: row.user_id === null ? null : Number(row.user_id),
+    username: row.username || null,
+    roles: row.roles ? safeParseJson(row.roles, []) : [],
+    action: row.action,
+    details: safeParseJson(row.details_json, null),
+    createdAt: row.created_at
+  }));
+  res.json({ entries });
+});
+
+
 
 async function ensureDataDir() {
   try {
@@ -4140,7 +5119,7 @@ async function applySnapshotToSql(client, snapshot) {
   return { tasks, done, trash, resolveOrderKey, orderIdMap };
 }
 
-app.get('/api/state', async (req, res) => {
+app.get('/api/state', requireAuth('view'), async (req, res) => {
   try {
     const snapshot = await getCachedSnapshot();
     const etag = computeEtag(snapshot.hash);
@@ -4160,7 +5139,7 @@ app.get('/api/state', async (req, res) => {
   }
 });
 
-app.put('/api/state', async (req, res) => {
+app.put('/api/state', requireAuth('write'), async (req, res) => {
   const requestId = createRequestId();
   const startedAt = Date.now();
   try {
@@ -4293,7 +5272,7 @@ app.put('/api/state', async (req, res) => {
   }
 });
 
-app.get('/api/events', async (req, res) => {
+app.get('/api/events', requireAuth('view'), async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Connection', 'keep-alive');
@@ -4329,32 +5308,60 @@ app.get('/api/events', async (req, res) => {
   });
 });
 
-app.get('/api/admin/history', (req, res) => {
+app.get('/api/admin/history', requireAuth('viewAudit'), (req, res) => {
   res.json({ items: [] });
 });
 
-app.get('/api/admin/history/:hash', (req, res) => {
+app.get('/api/admin/history/:hash', requireAuth('viewAudit'), (req, res) => {
   res.status(404).json({ error: 'History disabled' });
 });
 
-app.delete('/api/admin/history', (_req, res) => {
+app.delete('/api/admin/history', requireAuth('manageUsers'), (_req, res) => {
   res.status(410).json({ error: 'History storage disabled' });
 });
 
-app.post('/api/admin/snapshot', (_req, res) => {
+app.post('/api/admin/snapshot', requireAuth('manageUsers'), (_req, res) => {
   res.status(410).json({ error: 'Snapshot storage disabled' });
 });
 
-app.post('/api/admin/rollback', (_req, res) => {
+app.post('/api/admin/rollback', requireAuth('manageUsers'), (_req, res) => {
   res.status(410).json({ error: 'Rollback disabled' });
 });
 
 
-app.use(express.static(PUBLIC_DIR, { index: 'CRM.html' }));
+app.use(express.static(PUBLIC_DIR, { index: false }));
+
+app.get('/login', (req, res) => {
+  if (req.user) {
+    res.redirect('/');
+    return;
+  }
+  res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
+});
+
+app.get('/', (req, res) => {
+  if (!req.user) {
+    res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
+    return;
+  }
+  res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+});
+
+app.get('/crm', (req, res) => {
+  if (!req.user) {
+    res.redirect('/login');
+    return;
+  }
+  res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+});
 
 app.use((req, res, next) => {
   if (req.method === 'GET' && !req.path.startsWith('/api/')) {
-    res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+    if (!req.user) {
+      res.sendFile(path.join(PUBLIC_DIR, 'login.html'));
+    } else {
+      res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+    }
     return;
   }
   next();

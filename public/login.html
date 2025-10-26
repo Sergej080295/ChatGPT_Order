@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlanCore · Вход</title>
+<link rel="stylesheet" href="plan-core.css" />
+<script defer src="plan-core.js"></script>
+<style>
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--pc-surface-subtle);
+    padding: var(--pc-spacing-xl) var(--pc-spacing-md);
+  }
+
+  .auth-card {
+    width: min(420px, 100%);
+    padding: var(--pc-spacing-xl) var(--pc-spacing-lg);
+    background: var(--pc-surface-raised);
+    border-radius: 24px;
+    box-shadow: var(--pc-shadow-lg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .auth-card__header {
+    text-align: center;
+  }
+
+  .auth-card__title {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 600;
+    color: var(--pc-text-strong);
+  }
+
+  .auth-card__subtitle {
+    margin-top: var(--pc-spacing-xs);
+    color: var(--pc-text-muted);
+    font-size: 0.95rem;
+  }
+
+  .auth-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
+  }
+
+  .auth-form label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+    font-weight: 500;
+    color: var(--pc-text-muted);
+  }
+
+  .auth-form input {
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border: 1px solid var(--pc-border-subtle);
+    border-radius: 12px;
+    font-size: 1rem;
+    background: var(--pc-surface-base);
+    color: var(--pc-text-base);
+  }
+
+  .auth-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .auth-submit {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-lg);
+    border: none;
+    border-radius: 999px;
+    background: var(--pc-accent-primary);
+    color: #fff;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+
+  .auth-submit:disabled {
+    opacity: 0.6;
+    cursor: progress;
+  }
+
+  .auth-guest {
+    border: 1px solid var(--pc-border-strong);
+    background: transparent;
+    color: var(--pc-text-base);
+  }
+
+  .auth-error {
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border-radius: 12px;
+    background: rgba(220, 53, 69, 0.08);
+    color: #d93025;
+    font-size: 0.95rem;
+    display: none;
+  }
+
+  .auth-footer {
+    text-align: center;
+    color: var(--pc-text-muted);
+    font-size: 0.85rem;
+  }
+
+  .auth-meta {
+    display: flex;
+    justify-content: center;
+    gap: var(--pc-spacing-md);
+    font-size: 0.9rem;
+    color: var(--pc-text-muted);
+  }
+
+  .auth-meta strong {
+    color: var(--pc-text-base);
+  }
+</style>
+</head>
+<body>
+<main class="auth-card" data-animate="fade-in">
+  <header class="auth-card__header">
+    <h1 class="auth-card__title">PlanCore</h1>
+    <p class="auth-card__subtitle">Войдите под своей учетной записью</p>
+  </header>
+  <form class="auth-form" id="loginForm" novalidate>
+    <div class="auth-error" id="loginError" role="alert"></div>
+    <label for="loginInput">Логин
+      <input id="loginInput" name="login" type="text" autocomplete="username" required />
+    </label>
+    <label for="passwordInput">Пароль
+      <input id="passwordInput" name="password" type="password" autocomplete="current-password" required />
+    </label>
+    <div class="auth-actions">
+      <button type="submit" class="auth-submit" id="loginSubmit">Войти</button>
+      <button type="button" class="auth-submit auth-guest" id="guestBtn" hidden>Войти как гость</button>
+    </div>
+  </form>
+  <footer class="auth-footer">
+    <div class="auth-meta" id="authMeta"></div>
+  </footer>
+</main>
+<script>
+(() => {
+  const form = document.getElementById('loginForm');
+  const loginInput = document.getElementById('loginInput');
+  const passwordInput = document.getElementById('passwordInput');
+  const submitBtn = document.getElementById('loginSubmit');
+  const guestBtn = document.getElementById('guestBtn');
+  const errorBox = document.getElementById('loginError');
+  const metaBox = document.getElementById('authMeta');
+
+  const setLoading = (loading) => {
+    submitBtn.disabled = loading;
+    if (guestBtn) {
+      guestBtn.disabled = loading;
+    }
+  };
+
+  const showError = (message) => {
+    if (!errorBox) return;
+    if (message) {
+      errorBox.textContent = message;
+      errorBox.style.display = 'block';
+    } else {
+      errorBox.textContent = '';
+      errorBox.style.display = 'none';
+    }
+  };
+
+  const updateMeta = (info) => {
+    if (!metaBox) return;
+    const parts = [];
+    if (info?.authMode) {
+      parts.push(`<span>Режим: <strong>${info.authMode}</strong></span>`);
+    }
+    if (info?.allowGuest) {
+      parts.push('<span>Гостевой доступ включён</span>');
+    }
+    metaBox.innerHTML = parts.join('·');
+  };
+
+  const handleResponse = async (res) => {
+    if (res.ok) {
+      window.location.href = '/';
+      return;
+    }
+    let message = 'Не удалось выполнить запрос';
+    try {
+      const payload = await res.json();
+      if (payload && typeof payload.error === 'string') {
+        message = payload.error;
+      }
+    } catch (_err) {
+      /* ignore parse errors */
+    }
+    showError(message);
+  };
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    showError('');
+    const login = loginInput.value.trim();
+    const password = passwordInput.value;
+    if (!login || !password) {
+      showError('Укажите логин и пароль');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login, password })
+      });
+      await handleResponse(res);
+    } catch (err) {
+      console.error('Login failed', err);
+      showError('Не удалось связаться с сервером');
+    } finally {
+      setLoading(false);
+    }
+  });
+
+  if (guestBtn) {
+    guestBtn.addEventListener('click', async () => {
+      showError('');
+      setLoading(true);
+      try {
+        const res = await fetch('/auth/guest', { method: 'POST' });
+        await handleResponse(res);
+      } catch (err) {
+        console.error('Guest login failed', err);
+        showError('Не удалось выполнить гостевой вход');
+      } finally {
+        setLoading(false);
+      }
+    });
+  }
+
+  const bootstrap = async () => {
+    try {
+      const res = await fetch('/me');
+      if (!res.ok) return;
+      const payload = await res.json();
+      if (payload?.user) {
+        window.location.href = '/';
+        return;
+      }
+      if (guestBtn && payload?.allowGuest) {
+        guestBtn.hidden = false;
+      }
+      updateMeta(payload);
+    } catch (_err) {
+      /* ignore bootstrap errors */
+    }
+  };
+
+  bootstrap();
+})();
+</script>
+</body>
+</html>
