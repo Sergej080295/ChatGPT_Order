@@ -7,7 +7,14 @@ const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
 const Database = require('better-sqlite3');
-const bcrypt = require('bcryptjs');
+
+let bcrypt;
+try {
+  bcrypt = require('bcryptjs');
+} catch (err) {
+  console.warn('[CRM] Модуль "bcryptjs" не установлен, используется резервная сборка из lib/bcryptjs.js.');
+  bcrypt = require('./lib/bcryptjs');
+}
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
