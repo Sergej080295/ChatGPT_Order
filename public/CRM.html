@@ -340,6 +340,22 @@
     overflow: hidden;
   }
 
+  [hidden] {
+    display: none !important;
+  }
+
+  .pc-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin-bottom: var(--pc-spacing-lg);
+    background: var(--pc-surface);
+  }
+
+  .pc-header--menu-open {
+    margin-bottom: clamp(96px, 12vh, 140px);
+  }
+
   .pc-user-menu {
     position: relative;
     display: flex;
@@ -5585,9 +5601,9 @@ function updateCrmDbIndicator(){
   crmDbIndicator.classList.add(stateClass);
   if(label){
     if(stateClass==='crm-db-indicator--online'){
-      label.textContent='БД онлайн';
+      label.textContent='SQL режим';
     }else if(stateClass==='crm-db-indicator--readonly'){
-      label.textContent='БД только чтение';
+      label.textContent='SQL: только чтение';
     }else{
       label.textContent='Локальный режим';
     }
@@ -6009,6 +6025,7 @@ function setCrmStageCalendar(stageKey, payload){
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
+
 const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       boardSelect=$('#boardSelect'),
       columns=$('#columns'),
@@ -6112,17 +6129,19 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmUserRoleEl=$('#crmUserRole'),
       crmUserAvatarEl=$('#crmUserAvatar'),
       crmUserMetaEl=$('#crmUserMeta'),
-      crmUserLogoutBtn=$('#crmUserLogoutBtn'),
-      crmOrderHistoryDlg=$('#crmOrderHistoryDlg'),
-      crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
+      crmUserLogoutBtn=$('#crmUserLogoutBtn');
+
+crmOrderHistoryDlg=$('#crmOrderHistoryDlg');
+crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
 crmOrderHistoryMeta=$('#crmOrderHistoryMeta');
 crmOrderHistoryContent=$('#crmOrderHistoryContent');
-      crmOrderHistoryClose=$('#crmOrderHistoryClose');
+crmOrderHistoryClose=$('#crmOrderHistoryClose');
 crmOrderHistoryCloseIcon=$('#crmOrderHistoryCloseIcon');
 crmJournalClear=$('#crmJournalClear');
 orderHistoryBtn=$('#orderHistoryBtn');
 crmDbIndicator=$('#crmDbIndicator');
 crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
+const crmHeaderEl=document.querySelector('.pc-header');
 const CRM_ADMIN_HINT_DEFAULT=crmAdminUserHint?crmAdminUserHint.textContent.trim():'Выберите пользователя из списка или заполните форму для создания нового.';
 let crmAdminBusyCounter=0;
 let crmUserMenuOpen=false;
@@ -8949,6 +8968,11 @@ function setCrmUserMenuOpen(open){
   if(crmUserMenuToggle){
     crmUserMenuToggle.setAttribute('aria-expanded', next?'true':'false');
   }
+  if(crmHeaderEl){
+    crmHeaderEl.classList.toggle('pc-header--menu-open', next);
+    positionToastLayer();
+    updateLaneHeightVar();
+  }
   if(next){
     document.addEventListener('mousedown', handleCrmUserMenuDocumentClick, true);
     document.addEventListener('keydown', handleCrmUserMenuDocumentKeydown);
@@ -8978,7 +9002,8 @@ function updateCrmUserMenu(){
   }
   if(crmUserMetaEl){
     const metaParts=[];
-    metaParts.push(`Режим: ${crmAuthMode}`);
+    const authLabel=crmAuthMode==='local'? 'SQL' : (crmAuthMode||'').toString().toUpperCase();
+    metaParts.push(`Режим: ${authLabel}`);
     if(crmAllowGuest){
       metaParts.push('Гостевой доступ доступен');
     }

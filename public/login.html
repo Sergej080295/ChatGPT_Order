@@ -7,131 +7,274 @@
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <style>
+  :root {
+    color-scheme: light dark;
+  }
+
   body {
+    position: relative;
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--pc-surface-subtle);
-    padding: var(--pc-spacing-xl) var(--pc-spacing-md);
+    padding: clamp(32px, 6vw, 72px) 16px;
+    background: radial-gradient(140% 140% at 15% 10%, rgba(255, 226, 149, 0.4), transparent 55%),
+                radial-gradient(120% 120% at 85% 25%, rgba(255, 190, 105, 0.35), transparent 60%),
+                var(--pc-surface-subtle);
+    overflow: hidden;
+  }
+
+  body::before,
+  body::after {
+    content: '';
+    position: absolute;
+    inset: auto;
+    pointer-events: none;
+    border-radius: 999px;
+    filter: blur(0px);
+    opacity: 0.55;
+  }
+
+  body::before {
+    width: 420px;
+    height: 420px;
+    top: -160px;
+    right: -120px;
+    background: radial-gradient(circle at 30% 30%, rgba(255, 214, 102, 0.55), rgba(255, 255, 255, 0));
+  }
+
+  body::after {
+    width: 460px;
+    height: 460px;
+    bottom: -200px;
+    left: -140px;
+    background: radial-gradient(circle at 65% 35%, rgba(255, 223, 148, 0.55), rgba(255, 255, 255, 0));
   }
 
   .auth-card {
-    width: min(420px, 100%);
-    padding: var(--pc-spacing-xl) var(--pc-spacing-lg);
-    background: var(--pc-surface-raised);
-    border-radius: 24px;
-    box-shadow: var(--pc-shadow-lg);
+    position: relative;
+    width: min(440px, 100%);
+    padding: clamp(28px, 5vw, 48px) clamp(24px, 4vw, 40px);
+    border-radius: 28px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.72));
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    box-shadow: 0 22px 48px -28px rgba(15, 23, 42, 0.32);
     display: flex;
     flex-direction: column;
-    gap: var(--pc-spacing-lg);
+    gap: clamp(24px, 4vw, 36px);
+    backdrop-filter: blur(18px);
+  }
+
+  .pc-theme-dark .auth-card {
+    background: linear-gradient(135deg, rgba(26, 32, 44, 0.92), rgba(26, 32, 44, 0.78));
+    border-color: rgba(148, 163, 184, 0.24);
   }
 
   .auth-card__header {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    align-items: center;
     text-align: center;
+  }
+
+  .auth-logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-accent-muted) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pc-accent-muted) 26%, transparent);
+  }
+
+  .auth-logo__icon {
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--pc-accent-primary);
+    color: var(--pc-accent-on-primary);
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
+
+  .auth-logo__wordmark {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--pc-text-strong);
+    text-transform: uppercase;
+  }
+
+  .auth-card__subtitle {
+    margin: 0;
+    color: color-mix(in srgb, var(--pc-text-muted) 85%, transparent);
+    font-size: 0.98rem;
+    line-height: 1.45;
+    max-width: 28ch;
   }
 
   .auth-card__title {
     margin: 0;
-    font-size: 1.75rem;
-    font-weight: 600;
+    font-size: 1.6rem;
+    font-weight: 700;
     color: var(--pc-text-strong);
-  }
-
-  .auth-card__subtitle {
-    margin-top: var(--pc-spacing-xs);
-    color: var(--pc-text-muted);
-    font-size: 0.95rem;
   }
 
   .auth-form {
     display: flex;
     flex-direction: column;
-    gap: var(--pc-spacing-md);
+    gap: clamp(18px, 3vw, 22px);
   }
 
   .auth-form label {
     display: flex;
     flex-direction: column;
-    gap: var(--pc-spacing-xs);
-    font-weight: 500;
+    gap: 6px;
+    font-weight: 600;
     color: var(--pc-text-muted);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    font-size: 0.75rem;
   }
 
   .auth-form input {
-    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
-    border: 1px solid var(--pc-border-subtle);
-    border-radius: 12px;
+    padding: 14px 18px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    background: color-mix(in srgb, var(--pc-surface-base) 80%, rgba(255,255,255,0.92));
     font-size: 1rem;
-    background: var(--pc-surface-base);
     color: var(--pc-text-base);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  }
+
+  .auth-form input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--pc-accent-primary) 70%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--pc-accent-primary) 22%, transparent);
+    background: color-mix(in srgb, var(--pc-surface-base) 94%, rgba(255,255,255,0.96));
   }
 
   .auth-actions {
     display: flex;
     flex-direction: column;
-    gap: var(--pc-spacing-sm);
+    gap: 12px;
   }
 
   .auth-submit {
     display: inline-flex;
     justify-content: center;
     align-items: center;
-    gap: var(--pc-spacing-sm);
-    padding: var(--pc-spacing-sm) var(--pc-spacing-lg);
+    gap: 8px;
+    padding: 14px 24px;
     border: none;
     border-radius: 999px;
-    background: var(--pc-accent-primary);
-    color: #fff;
+    font-size: 1.05rem;
     font-weight: 600;
-    font-size: 1rem;
     cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+    background: linear-gradient(135deg, var(--pc-accent-primary), color-mix(in srgb, var(--pc-accent-primary) 82%, #fff 18%));
+    color: var(--pc-accent-on-primary);
+    box-shadow: 0 16px 30px -20px color-mix(in srgb, var(--pc-accent-primary) 80%, transparent);
+  }
+
+  .auth-submit:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 20px 36px -22px color-mix(in srgb, var(--pc-accent-primary) 88%, transparent);
   }
 
   .auth-submit:disabled {
-    opacity: 0.6;
+    opacity: 0.65;
     cursor: progress;
+    transform: none;
+    box-shadow: none;
   }
 
   .auth-guest {
-    border: 1px solid var(--pc-border-strong);
     background: transparent;
     color: var(--pc-text-base);
+    border: 1px solid color-mix(in srgb, var(--pc-border-strong) 65%, transparent);
+    box-shadow: none;
+  }
+
+  .auth-guest:hover {
+    background: color-mix(in srgb, var(--pc-border-strong) 10%, transparent);
   }
 
   .auth-error {
-    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
-    border-radius: 12px;
+    display: none;
+    padding: 12px 16px;
+    border-radius: 16px;
+    border: 1px solid rgba(220, 53, 69, 0.18);
     background: rgba(220, 53, 69, 0.08);
     color: #d93025;
     font-size: 0.95rem;
-    display: none;
-  }
-
-  .auth-footer {
-    text-align: center;
-    color: var(--pc-text-muted);
-    font-size: 0.85rem;
+    line-height: 1.4;
   }
 
   .auth-meta {
     display: flex;
     justify-content: center;
-    gap: var(--pc-spacing-md);
-    font-size: 0.9rem;
+    gap: 16px;
+    font-size: 0.88rem;
     color: var(--pc-text-muted);
+    flex-wrap: wrap;
+  }
+
+  .auth-meta span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-surface-subtle) 60%, transparent);
   }
 
   .auth-meta strong {
     color: var(--pc-text-base);
+  }
+
+  .auth-footer {
+    text-align: center;
+    color: color-mix(in srgb, var(--pc-text-muted) 80%, transparent);
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 520px) {
+    body::before,
+    body::after {
+      display: none;
+    }
+
+    .auth-card {
+      padding: 28px 22px;
+      border-radius: 22px;
+      box-shadow: 0 16px 30px -24px rgba(15, 23, 42, 0.3);
+    }
+
+    .auth-logo {
+      padding: 8px 16px;
+    }
+
+    .auth-logo__icon {
+      width: 32px;
+      height: 32px;
+    }
   }
 </style>
 </head>
 <body>
 <main class="auth-card" data-animate="fade-in">
   <header class="auth-card__header">
-    <h1 class="auth-card__title">PlanCore</h1>
-    <p class="auth-card__subtitle">Войдите под своей учетной записью</p>
+    <div class="auth-logo" aria-hidden="true">
+      <span class="auth-logo__icon">PC</span>
+      <span class="auth-logo__wordmark">PlanCore</span>
+    </div>
+    <h1 class="auth-card__title">Вход в PlanCore</h1>
+    <p class="auth-card__subtitle">Укажите учетные данные или воспользуйтесь гостевым режимом просмотра</p>
   </header>
   <form class="auth-form" id="loginForm" novalidate>
     <div class="auth-error" id="loginError" role="alert"></div>
@@ -182,7 +325,8 @@
     if (!metaBox) return;
     const parts = [];
     if (info?.authMode) {
-      parts.push(`<span>Режим: <strong>${info.authMode}</strong></span>`);
+      const label = info.authMode === 'local' ? 'SQL' : String(info.authMode).toUpperCase();
+      parts.push(`<span>Режим: <strong>${label}</strong></span>`);
     }
     if (info?.allowGuest) {
       parts.push('<span>Гостевой доступ включён</span>');
