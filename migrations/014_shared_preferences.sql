@@ -49,7 +49,6 @@ BEGIN
   INSERT INTO settings_shared_preferences (pref_key, bool_value)
   VALUES
     ('autosaveOn', TRUE),
-    ('shiftOnProgress', TRUE),
     ('autoOptimizeOn', TRUE),
     ('cascadeReadyOn', TRUE)
   ON CONFLICT (pref_key) DO NOTHING;
