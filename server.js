@@ -169,6 +169,19 @@ const pool = {
   }
 };
 
+const STAGE_SLUGS = Object.freeze([
+  'draw',
+  'proc',
+  'shear',
+  'laser',
+  'bend',
+  'weld',
+  'mech',
+  'coop',
+  'pack',
+  'ship'
+]);
+
 const ROLE_PERMISSION_KEYS = Object.freeze([
   'view',
   'write',
@@ -180,6 +193,13 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'useJournal'
 ]);
 
+function createStageAccessDefaults(enabled) {
+  return STAGE_SLUGS.reduce((acc, slug) => {
+    acc[slug] = !!enabled;
+    return acc;
+  }, {});
+}
+
 const DEFAULT_ROLE_PERMISSIONS = {
   admin: {
     view: true,
@@ -189,7 +209,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageStages: true,
     manageOrders: true,
     viewAudit: true,
-    useJournal: true
+    useJournal: true,
+    stageAccess: createStageAccessDefaults(true)
   },
   administrator: {
     view: true,
@@ -199,7 +220,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageStages: true,
     manageOrders: true,
     viewAudit: true,
-    useJournal: true
+    useJournal: true,
+    stageAccess: createStageAccessDefaults(true)
   },
   master: {
     view: true,
@@ -209,7 +231,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageStages: true,
     manageOrders: false,
     viewAudit: false,
-    useJournal: true
+    useJournal: true,
+    stageAccess: createStageAccessDefaults(true)
   },
   guest: {
     view: true,
@@ -219,7 +242,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     manageStages: false,
     manageOrders: false,
     viewAudit: false,
-    useJournal: false
+    useJournal: false,
+    stageAccess: createStageAccessDefaults(false)
   }
 };
 const ROLE_SEEDS = [
@@ -231,7 +255,7 @@ const ROLE_SEEDS = [
   },
   {
     slug: 'administrator',
-    displayName: 'Администратор',
+    displayName: 'Управляющий',
     description: 'Управление заказами, маршрутами и настройками производства. Доступны все операции мастера участка.',
     permissions: DEFAULT_ROLE_PERMISSIONS.administrator
   },
@@ -248,10 +272,17 @@ const ROLE_SEEDS = [
     permissions: DEFAULT_ROLE_PERMISSIONS.guest
   }
 ];
-const ROLE_LOOKUP = ROLE_SEEDS.reduce((acc, role) => {
-  acc[role.slug] = role;
-  return acc;
-}, {});
+const ROLE_LOOKUP = new Map();
+ROLE_SEEDS.forEach((role) => {
+  ROLE_LOOKUP.set(role.slug, { displayName: role.displayName, description: role.description });
+});
+
+function updateRoleLookup(slug, meta = {}) {
+  if (!slug) return;
+  const displayName = typeof meta.displayName === 'string' && meta.displayName.trim() ? meta.displayName.trim() : slug;
+  const description = typeof meta.description === 'string' ? meta.description : '';
+  ROLE_LOOKUP.set(slug, { displayName, description });
+}
 
 let rolePermissionCache = new Map();
 
@@ -337,6 +368,9 @@ function ensureAuthBootstrap() {
     });
   }
 
+  db.prepare('UPDATE roles SET display_name = ? WHERE slug = ? AND display_name = ?')
+    .run('Управляющий', 'administrator', 'Администратор');
+
   const selectRoles = db.prepare('SELECT slug, permissions_json FROM roles');
   const updateRolePermissions = db.prepare('UPDATE roles SET permissions_json = ?, updated_at = ? WHERE slug = ?');
   selectRoles.all().forEach((row) => {
@@ -385,7 +419,11 @@ function ensureAuthBootstrap() {
 function normalizeRoleSlug(input) {
   if (!input && input !== 0) return null;
   const normalized = String(input).trim().toLowerCase();
-  return ROLE_LOOKUP[normalized] ? normalized : null;
+  if (!normalized) return null;
+  if (ROLE_LOOKUP.has(normalized) || rolePermissionCache.has(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
 function normalizeRolePermissions(payload, slug) {
@@ -399,6 +437,19 @@ function normalizeRolePermissions(payload, slug) {
       result[key] = !!defaults[key];
     }
   }
+  const stageDefaults = defaults.stageAccess && typeof defaults.stageAccess === 'object' ? defaults.stageAccess : {};
+  const sourceStages = payload && typeof payload.stageAccess === 'object' ? payload.stageAccess : {};
+  const stageAccess = {};
+  for (const stage of STAGE_SLUGS) {
+    if (typeof sourceStages[stage] === 'boolean') {
+      stageAccess[stage] = sourceStages[stage];
+    } else if (typeof stageDefaults[stage] === 'boolean') {
+      stageAccess[stage] = stageDefaults[stage];
+    } else {
+      stageAccess[stage] = !!result.manageStages;
+    }
+  }
+  result.stageAccess = stageAccess;
   return result;
 }
 
@@ -425,13 +476,14 @@ function parseRolePermissions(raw, slug) {
 function refreshRolePermissionCache() {
   try {
     const db = getDatabase();
-    const rows = db.prepare('SELECT slug, permissions_json FROM roles').all();
+    const rows = db.prepare('SELECT slug, display_name, description, permissions_json FROM roles').all();
     const map = new Map();
     rows.forEach((row) => {
       const slug = normalizeRoleSlug(row.slug);
       if (!slug) return;
       const parsed = parseRolePermissions(row.permissions_json, slug);
       map.set(slug, parsed);
+      updateRoleLookup(slug, { displayName: row.display_name, description: row.description });
     });
     rolePermissionCache = map;
   } catch (err) {
@@ -544,6 +596,13 @@ function computePermissions(roleSlugs) {
         permissions[key] = true;
       }
     }
+    if (rolePerms.stageAccess && typeof rolePerms.stageAccess === 'object') {
+      for (const stage of STAGE_SLUGS) {
+        if (rolePerms.stageAccess[stage]) {
+          permissions.stageAccess[stage] = true;
+        }
+      }
+    }
   }
   return permissions;
 }
@@ -556,7 +615,7 @@ function buildRoleDetails(roleSlugs) {
     .map((slug) => {
       const normalized = normalizeRoleSlug(slug);
       if (!normalized) return null;
-      const meta = ROLE_LOOKUP[normalized];
+      const meta = ROLE_LOOKUP.get(normalized);
       return {
         slug: normalized,
         displayName: meta?.displayName || normalized
@@ -626,13 +685,17 @@ function listAllRoles() {
   return db
     .prepare('SELECT id, slug, display_name, description, permissions_json FROM roles ORDER BY id ASC')
     .all()
-    .map((row) => ({
-      id: Number(row.id),
-      slug: row.slug,
-      displayName: row.display_name,
-      description: row.description || '',
-      permissions: parseRolePermissions(row.permissions_json, row.slug)
-    }));
+    .map((row) => {
+      const entry = {
+        id: Number(row.id),
+        slug: row.slug,
+        displayName: row.display_name,
+        description: row.description || '',
+        permissions: parseRolePermissions(row.permissions_json, row.slug)
+      };
+      updateRoleLookup(row.slug, { displayName: row.display_name, description: row.description });
+      return entry;
+    });
 }
 
 function sanitizeLogin(login) {
@@ -644,6 +707,28 @@ function sanitizeLogin(login) {
     return null;
   }
   return trimmed.toLowerCase();
+}
+
+function normalizeRoleSlugForCreate(input) {
+  if (typeof input !== 'string') {
+    return null;
+  }
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (!/^[a-z0-9_-]{3,32}$/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function sanitizeRoleDisplayName(input) {
+  if (typeof input !== 'string') {
+    return null;
+  }
+  const trimmed = input.trim();
+  return trimmed || null;
 }
 
 function parseCookies(header) {
@@ -1214,6 +1299,47 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
 
 app.get('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
   res.json({ roles: listAllRoles() });
+});
+
+app.post('/admin/roles', requireAuth('manageUsers'), (req, res) => {
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({ error: 'Invalid payload' });
+    return;
+  }
+
+  const slug = normalizeRoleSlugForCreate(req.body.slug);
+  if (!slug) {
+    res.status(400).json({ error: 'Укажите идентификатор роли (3-32 символа: латиница, цифры, "-" или "_")' });
+    return;
+  }
+  if (ROLE_LOOKUP.has(slug) || rolePermissionCache.has(slug)) {
+    res.status(409).json({ error: 'Роль с таким идентификатором уже существует' });
+    return;
+  }
+
+  const displayName = sanitizeRoleDisplayName(req.body.displayName) || slug;
+  const description = typeof req.body.description === 'string' ? req.body.description.trim() : '';
+  const permissions = normalizeRolePermissions(req.body.permissions, slug);
+
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  try {
+    db
+      .prepare(
+        'INSERT INTO roles (slug, display_name, description, permissions_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)' 
+      )
+      .run(slug, displayName, description, JSON.stringify(permissions), nowIso, nowIso);
+  } catch (err) {
+    console.error('Не удалось создать роль', err);
+    res.status(500).json({ error: 'Не удалось создать роль' });
+    return;
+  }
+
+  updateRoleLookup(slug, { displayName, description });
+  refreshRolePermissionCache();
+  ensureUsersExportSnapshot();
+  recordAuditEvent({ user: req.user, action: 'admin.roles.create', details: { slug } });
+  res.status(201).json({ role: { slug, displayName, description, permissions } });
 });
 
 app.put('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {

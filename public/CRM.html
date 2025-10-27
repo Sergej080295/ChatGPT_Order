@@ -464,18 +464,25 @@
   .crm-admin-modal {
     width: min(960px, 96vw);
     border: none;
-    border-radius: 28px;
     padding: 0;
+    background: transparent;
+  }
+
+  .crm-admin-modal__surface {
+    border-radius: 28px;
     overflow: hidden;
     background: color-mix(in srgb, var(--pc-surface-raised) 92%, transparent);
     box-shadow: 0 28px 60px -32px rgba(15, 23, 42, 0.42);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
 
   .crm-admin-modal::backdrop {
     background: color-mix(in srgb, rgba(15, 23, 42, 0.6) 70%, transparent);
   }
 
-  .crm-admin-modal .dlg-head {
+  .crm-admin-modal__surface .dlg-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -484,16 +491,19 @@
     border-bottom: 1px solid var(--pc-border-subtle);
   }
 
-  .crm-admin-modal .dlg-head strong {
+  .crm-admin-modal__surface .dlg-head strong {
     font-size: 1.35rem;
   }
 
-  .crm-admin-modal .dlg-body {
+  .crm-admin-modal__surface .dlg-body {
     padding: var(--pc-spacing-xl);
     background: linear-gradient(180deg, color-mix(in srgb, var(--pc-surface) 94%, transparent) 0%, var(--pc-surface) 60%);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
   }
 
-  .crm-admin-modal .dlg-footer {
+  .crm-admin-modal__surface .dlg-footer {
     padding: var(--pc-spacing-md) var(--pc-spacing-xl) var(--pc-spacing-lg);
     background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
     border-top: 1px solid var(--pc-border-subtle);
@@ -631,12 +641,20 @@
   .crm-admin-field input,
   .crm-admin-field select,
   .crm-admin-field textarea {
-    border: 1px solid var(--pc-border-subtle);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 78%, transparent);
     border-radius: 12px;
     padding: var(--pc-spacing-sm) var(--pc-spacing-md);
     font: inherit;
-    background: var(--pc-surface-base);
+    background: color-mix(in srgb, var(--pc-surface-base) 95%, transparent);
     color: var(--pc-text-base);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .crm-admin-field input:focus-visible,
+  .crm-admin-field select:focus-visible,
+  .crm-admin-field textarea:focus-visible {
+    border-color: var(--pc-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc-accent) 20%, transparent);
   }
 
   .crm-admin-role-grid {
@@ -729,6 +747,37 @@
     display: flex;
     flex-direction: column;
     gap: var(--pc-spacing-sm);
+  }
+
+  .crm-admin-permission-group--stages .crm-admin-permission-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-admin-permission-group--stages .crm-admin-permission-option {
+    background: color-mix(in srgb, var(--pc-surface-base) 85%, transparent);
+  }
+
+  .crm-admin-role-create {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--pc-spacing-md);
+    padding: var(--pc-spacing-lg);
+    margin-bottom: var(--pc-spacing-lg);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--pc-surface-base) 96%, transparent) 0%, var(--pc-surface-base) 100%);
+    border-radius: 24px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    box-shadow: 0 18px 36px -24px rgba(15, 23, 42, 0.26);
+  }
+
+  .crm-admin-role-create .crm-admin-field {
+    margin: 0;
+  }
+
+  .crm-admin-role-create .crm-admin-field--actions {
+    display: flex;
+    align-items: flex-end;
   }
 
   .crm-admin-permission-option {
@@ -4796,11 +4845,12 @@
 </dialog>
 
 <dialog id="crmAdminDlg" class="pc-modal crm-admin-modal" aria-label="Администрирование">
-  <div class="dlg-head">
-    <strong>Администрирование</strong>
-    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmAdminCloseIcon" aria-label="Закрыть">✖</button>
-  </div>
-  <div class="dlg-body">
+  <div class="crm-admin-modal__surface">
+    <div class="dlg-head">
+      <strong>Администрирование</strong>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmAdminCloseIcon" aria-label="Закрыть">✖</button>
+    </div>
+    <div class="dlg-body">
     <div class="crm-admin-tabs" role="tablist" aria-label="Разделы администрирования">
       <button type="button" class="crm-admin-tab" data-admin-tab="users" role="tab" aria-selected="true">Пользователи</button>
       <button type="button" class="crm-admin-tab" data-admin-tab="roles" role="tab" aria-selected="false">Роли и права</button>
@@ -4851,9 +4901,26 @@
       </div>
     </section>
     <section class="crm-admin-section" data-admin-section="roles" aria-hidden="true">
+      <form id="crmAdminRoleCreate" class="crm-admin-role-create" autocomplete="off">
+        <div class="crm-admin-field">
+          <label for="crmAdminRoleSlug">Идентификатор</label>
+          <input id="crmAdminRoleSlug" name="slug" type="text" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]+" required />
+        </div>
+        <div class="crm-admin-field">
+          <label for="crmAdminRoleName">Название</label>
+          <input id="crmAdminRoleName" name="displayName" type="text" maxlength="80" required />
+        </div>
+        <div class="crm-admin-field">
+          <label for="crmAdminRoleDescription">Описание</label>
+          <textarea id="crmAdminRoleDescription" name="description" rows="2" placeholder="Опишите предназначение роли"></textarea>
+        </div>
+        <div class="crm-admin-field crm-admin-field--actions">
+          <button type="submit" class="pc-btn pc-btn--secondary" id="crmAdminRoleCreateBtn">Добавить роль</button>
+        </div>
+      </form>
       <div class="crm-admin-role-grid" id="crmAdminRolesGrid"></div>
       <div class="crm-admin-actions">
-        <button type="button" class="pc-btn pc-btn--primary" id="crmAdminRolesSave">Сохранить описания</button>
+        <button type="button" class="pc-btn pc-btn--primary" id="crmAdminRolesSave">Сохранить настройки ролей</button>
       </div>
     </section>
     <section class="crm-admin-section" data-admin-section="audit" aria-hidden="true">
@@ -4862,9 +4929,10 @@
       </div>
       <div class="crm-admin-audit-list" id="crmAdminAuditList"></div>
     </section>
-  </div>
-  <div class="dlg-footer crm-admin-actions">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmAdminCloseBtn">Закрыть</button>
+    </div>
+    <div class="dlg-footer crm-admin-actions">
+      <button type="button" class="pc-btn pc-btn--secondary" id="crmAdminCloseBtn">Закрыть</button>
+    </div>
   </div>
 </dialog>
 
@@ -5774,6 +5842,13 @@ const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manage
 const crmCanUseJournal=()=> !!crmPermissions.useJournal;
 const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
+const crmStageAccessMap=(crmPermissions.stageAccess&&typeof crmPermissions.stageAccess==='object')?crmPermissions.stageAccess:{};
+const crmCanManageStage=(stage)=>{
+  if(!crmCanManageStages()) return false;
+  const key=resolveCrmStageKey(stage)|| (typeof stage==='string'?stage.trim().toLowerCase():null);
+  if(!key) return false;
+  return !!crmStageAccessMap[key];
+};
 function updateCrmDbIndicator(){
   if(!crmDbIndicator) return;
   const label=crmDbIndicator.querySelector('.crm-db-indicator__label');
@@ -5805,6 +5880,8 @@ const applyCrmWriteAccess=()=>{
   const canWrite=crmWriteAccessEnabled();
   const canOrders=crmCanManageOrders();
   const canStages=crmCanManageStages();
+  const selectedStage=crmStageSelect?.value||'draw';
+  const canSelectedStage=crmCanManageStage(selectedStage);
   if(document.body){
     document.body.classList.toggle('crm-write-disabled', !canWrite);
     document.body.classList.toggle('crm-order-disabled', !canOrders);
@@ -5812,11 +5889,11 @@ const applyCrmWriteAccess=()=>{
   }
   const newOrderBtn=$('#newOrderBtn');
   if(newOrderBtn){ newOrderBtn.disabled = !canOrders; }
-  if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canStages; }
-  if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canStages; }
+  if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
+  if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
   if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
-  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canStages; }
-  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canStages; }
+  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canSelectedStage; }
+  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canSelectedStage; }
   updateCrmDbIndicator();
 };
 
@@ -6052,9 +6129,12 @@ function ensureStageHoursPreference(normalized, label){
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false };
+  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false, stageAccess:crmDefaultStageAccess(false) };
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
-  return { ...defaults, ...crmCurrentUser.permissions };
+  const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
+  const stageAccess=crmDefaultStageAccess(false);
+  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ stageAccess[stage]=!!stageSource[stage]; });
+  return { ...defaults, ...crmCurrentUser.permissions, stageAccess };
 })();
 const crmRoleLabels=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
 const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
@@ -6302,6 +6382,11 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmAdminUserReset=$('#crmAdminUserReset'),
       crmAdminUserHint=$('#crmAdminUserHint'),
       crmAdminRolesGrid=$('#crmAdminRolesGrid'),
+      crmAdminRoleCreateForm=$('#crmAdminRoleCreate'),
+      crmAdminRoleSlug=$('#crmAdminRoleSlug'),
+      crmAdminRoleName=$('#crmAdminRoleName'),
+      crmAdminRoleDescription=$('#crmAdminRoleDescription'),
+      crmAdminRoleCreateBtn=$('#crmAdminRoleCreateBtn'),
       crmAdminRolesSave=$('#crmAdminRolesSave'),
       crmAdminAuditList=$('#crmAdminAuditList'),
       crmAdminAuditRefresh=$('#crmAdminAuditRefresh'),
@@ -6375,11 +6460,17 @@ const CRM_STAGE_ALIASES={
   pack:['pack','упаковка','упак'],
   ship:['ship','отгрузка','отгруз','отгр']
 };
+const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
+function crmDefaultStageAccess(enabled){
+  const map={};
+  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ map[stage]=!!enabled; });
+  return map;
+}
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  admin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true },
-  administrator:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true },
-  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, viewAudit:false, useJournal:true },
-  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false }
+  admin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
+  administrator:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, viewAudit:false, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false, stageAccess:crmDefaultStageAccess(false) }
 };
 const CRM_ROLE_PERMISSION_KEYS=['view','write','manageOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal'];
 const CRM_ROLE_PERMISSION_GROUPS=[
@@ -6401,7 +6492,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
   },
   {
     key:'production',
-    title:'Производство',
+    title:'Производство — общие операции',
     items:[
       { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' }
     ]
@@ -8696,12 +8787,12 @@ function renderCrmStageReserveDiag(text, stageKey){
 }
 
 function openCrmStageExceptionsDialog(){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений.', tone:'warn' });
-    return;
-  }
   if(!crmStageExceptionsDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений этого передела.', tone:'warn' });
+    return;
+  }
   crmStageExceptionsDlg.dataset.stage=stageKey;
   if(crmStageExceptionsInput){
     const { exceptions }=getCrmStageCalendar(stageKey);
@@ -8719,12 +8810,12 @@ function closeCrmStageExceptionsDialog(){
 }
 
 function applyCrmStageExceptions(){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений.', tone:'warn' });
-    return;
-  }
   if(!crmStageExceptionsDlg) return;
   const stageKey=crmStageExceptionsDlg.dataset.stage||crmStageSelect?.value||'draw';
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений этого передела.', tone:'warn' });
+    return;
+  }
   const parsed=parseCrmCalendarLines(crmStageExceptionsInput?.value,'exception');
   const current=getCrmStageCalendar(stageKey);
   setCrmStageCalendar(stageKey,{ exceptions:parsed, reserves:current.reserves });
@@ -8734,12 +8825,12 @@ function applyCrmStageExceptions(){
 }
 
 function openCrmStageReserveDialog(){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения брони.', tone:'warn' });
-    return;
-  }
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения брони этого передела.', tone:'warn' });
+    return;
+  }
   crmStageReserveDlg.dataset.stage=stageKey;
   if(crmStageReserveInput){
     const { reserves }=getCrmStageCalendar(stageKey);
@@ -8759,12 +8850,12 @@ function closeCrmStageReserveDialog(){
 }
 
 function applyCrmStageReserve(){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения брони.', tone:'warn' });
-    return;
-  }
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageReserveDlg.dataset.stage||crmStageSelect?.value||'draw';
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения брони этого передела.', tone:'warn' });
+    return;
+  }
   const parsed=parseCrmCalendarLines(crmStageReserveInput?.value,'reserve');
   const current=getCrmStageCalendar(stageKey);
   setCrmStageCalendar(stageKey,{ exceptions:current.exceptions, reserves:parsed });
@@ -9492,6 +9583,34 @@ function renderCrmAdminRoles(){
       groupSection.appendChild(items);
       permissionsWrapper.appendChild(groupSection);
     });
+    const stageGroup=document.createElement('section');
+    stageGroup.className='crm-admin-permission-group crm-admin-permission-group--stages';
+    const stageHeading=document.createElement('h4');
+    stageHeading.textContent='Производство по переделам';
+    stageGroup.appendChild(stageHeading);
+    const stageItems=document.createElement('div');
+    stageItems.className='crm-admin-permission-items';
+    const stageAccess=permissions.stageAccess&&typeof permissions.stageAccess==='object'?permissions.stageAccess:{};
+    CRM_STAGE_PERMISSION_KEYS.forEach(stageKey=>{
+      const option=document.createElement('label');
+      option.className='crm-admin-permission-option';
+      const checkbox=document.createElement('input');
+      checkbox.type='checkbox';
+      checkbox.dataset.roleSlug=slug;
+      checkbox.dataset.roleStage=stageKey;
+      checkbox.checked=!!stageAccess[stageKey];
+      option.appendChild(checkbox);
+      const textWrap=document.createElement('span');
+      textWrap.className='crm-admin-permission-text';
+      const labelSpan=document.createElement('span');
+      labelSpan.className='crm-admin-permission-label';
+      labelSpan.textContent=CRM_STAGE_LABELS[stageKey]||stageKey;
+      textWrap.appendChild(labelSpan);
+      option.appendChild(textWrap);
+      stageItems.appendChild(option);
+    });
+    stageGroup.appendChild(stageItems);
+    permissionsWrapper.appendChild(stageGroup);
     body.appendChild(permissionsWrapper);
     card.appendChild(body);
     crmAdminRolesGrid.appendChild(card);
@@ -9573,6 +9692,19 @@ function getRolePermissionsForUi(role){
   CRM_ROLE_PERMISSION_KEYS.forEach(key=>{
     normalized[key]=typeof source[key]==='boolean'?source[key]:!!defaults[key];
   });
+  const baseStageAccess=defaults.stageAccess&&typeof defaults.stageAccess==='object'?defaults.stageAccess:{};
+  const sourceStageAccess=source.stageAccess&&typeof source.stageAccess==='object'?source.stageAccess:{};
+  const stageAccess={};
+  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{
+    if(typeof sourceStageAccess[stage]==='boolean'){
+      stageAccess[stage]=sourceStageAccess[stage];
+    }else if(typeof baseStageAccess[stage]==='boolean'){
+      stageAccess[stage]=baseStageAccess[stage];
+    }else{
+      stageAccess[stage]=!!normalized.manageStages;
+    }
+  });
+  normalized.stageAccess=stageAccess;
   return normalized;
 }
 
@@ -10355,6 +10487,7 @@ function renderCrmStageTable(){
     if(entry.done) tr.classList.add('crm-stage-done');
     if(entry.isLate) tr.classList.add('crm-stage-late');
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
+    const stageEditable=crmCanManageStage(entry.stageKey);
     if(entry.done){
       doneCount+=1;
     }else{
@@ -10379,9 +10512,11 @@ function renderCrmStageTable(){
     }
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
-    const reserveDisabled=isHourless?'disabled':'';
+    const reserveDisabled=(!stageEditable||isHourless)?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
+    const doneDisabled=stageEditable?'':'disabled';
+    const deleteDisabled=stageEditable?'':'disabled';
     const statusCellClass=['crm-stage-row-status', entry.statusClass].filter(Boolean).join(' ');
     const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
     const titleMarkup=entry.occurrenceTotal>1
@@ -10400,8 +10535,8 @@ function renderCrmStageTable(){
       <td>${escapeHtml(entry.stateLabel||'—')}</td>
       <td class="${statusCellClass}">${escapeHtml(entry.statusLabel||'—')}</td>
       <td><input type="checkbox" class="crm-stage-reserve" ${reserveChecked} ${reserveDisabled}></td>
-      <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked}></td>
-      <td><button class="crm-stage-delete" type="button" title="Удалить из передела">×</button></td>
+      <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked} ${doneDisabled}></td>
+      <td><button class="crm-stage-delete" type="button" title="Удалить из передела" ${deleteDisabled}>×</button></td>
     `;
     const btn=tr.querySelector('.order-eye-btn');
     if(btn){
@@ -10434,13 +10569,16 @@ function renderCrmStageTable(){
     const doneInput=tr.querySelector('.crm-stage-done-toggle');
     if(doneInput){
       doneInput.addEventListener('click',evt=>evt.stopPropagation());
-      doneInput.addEventListener('change',()=>{
-        handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked);
-      });
+      if(!doneInput.disabled){
+        doneInput.addEventListener('change',()=>{
+          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked);
+        });
+      }
     }
     const deleteBtn=tr.querySelector('.crm-stage-delete');
     if(deleteBtn){
       deleteBtn.addEventListener('click',evt=>{
+        if(deleteBtn.disabled) return;
         evt.stopPropagation();
         handleCrmStageDelete(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey);
       });
@@ -10658,8 +10796,8 @@ function updateOrderAfterStageChange(order){
 }
 
 function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для управления бронью.', tone:'warn' });
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для управления бронью этого передела.', tone:'warn' });
     return;
   }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
@@ -10674,8 +10812,8 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
 }
 
 function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения статуса передела.', tone:'warn' });
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
     return;
   }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
@@ -10697,8 +10835,8 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
 }
 
 function handleCrmStageDelete(orderId, stageId, stageKey){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для удаления переделов.', tone:'warn' });
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для удаления этого передела.', tone:'warn' });
     return;
   }
   const { board, order, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
@@ -13918,6 +14056,7 @@ if(crmStageSelect){
     if(currentCrmView==='stage'){
       renderCrmStageTable();
     }
+    applyCrmWriteAccess();
   });
 }
 if(crmStageFilter){
@@ -14147,6 +14286,41 @@ if(crmAdminUserForm){
 if(crmAdminUserReset){
   crmAdminUserReset.addEventListener('click',()=>resetCrmAdminUserForm());
 }
+if(crmAdminRoleCreateForm){
+  crmAdminRoleCreateForm.addEventListener('submit',async evt=>{
+    evt.preventDefault();
+    if(!crmCanManageUsers()){
+      showToast({ title:'Администрирование', message:'Недостаточно прав для создания ролей', tone:'error' });
+      return;
+    }
+    const slugValue=(crmAdminRoleSlug?.value||'').trim().toLowerCase();
+    const nameValue=(crmAdminRoleName?.value||'').trim();
+    const descriptionValue=(crmAdminRoleDescription?.value||'').trim();
+    if(!slugValue){
+      showToast({ title:'Администрирование', message:'Укажите идентификатор роли', tone:'error' });
+      return;
+    }
+    if(!nameValue){
+      showToast({ title:'Администрирование', message:'Укажите название роли', tone:'error' });
+      return;
+    }
+    if(crmAdminRoleSlug){
+      crmAdminRoleSlug.value=slugValue;
+    }
+    setCrmAdminBusy(true);
+    try{
+      await crmRequestJson('/admin/roles',{ method:'POST', body:{ slug:slugValue, displayName:nameValue, description:descriptionValue } });
+      showToast({ title:'Администрирование', message:'Роль создана', tone:'success' });
+      if(crmAdminRoleCreateForm) crmAdminRoleCreateForm.reset();
+      await loadCrmAdminRoles({ silent:true, skipBusy:true });
+    }catch(err){
+      console.error('Не удалось создать роль',err);
+      showToast({ title:'Администрирование', message:err.message||'Не удалось создать роль', tone:'error' });
+    }finally{
+      setCrmAdminBusy(false);
+    }
+  });
+}
 if(crmAdminRolesSave){
   crmAdminRolesSave.addEventListener('click',async ()=>{
     if(!crmCanManageUsers()){
@@ -14174,6 +14348,21 @@ if(crmAdminRolesSave){
           rolesPayload[slug].permissions={};
         }
         rolesPayload[slug].permissions[perm]=input.checked;
+      });
+      crmAdminRolesGrid.querySelectorAll('input[data-role-stage]').forEach(input=>{
+        const slug=(input.dataset.roleSlug||'').trim();
+        const stage=(input.dataset.roleStage||'').trim();
+        if(!slug||!stage) return;
+        if(!rolesPayload[slug]){
+          rolesPayload[slug]={ permissions:{} };
+        }
+        if(!rolesPayload[slug].permissions){
+          rolesPayload[slug].permissions={};
+        }
+        if(!rolesPayload[slug].permissions.stageAccess){
+          rolesPayload[slug].permissions.stageAccess={};
+        }
+        rolesPayload[slug].permissions.stageAccess[stage]=input.checked;
       });
     }
     setCrmAdminBusy(true);
