@@ -21,6 +21,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
+const USERS_EXPORT_FILE = path.join(DATA_DIR, 'users.json');
 
 const SESSION_COOKIE_NAME = 'pc_session';
 const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
@@ -83,6 +84,7 @@ function getDatabase() {
       slug TEXT NOT NULL UNIQUE,
       display_name TEXT NOT NULL,
       description TEXT,
+      permissions_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -167,30 +169,18 @@ const pool = {
   }
 };
 
-const ROLE_SEEDS = [
-  {
-    slug: 'admin',
-    displayName: 'Админ',
-    description: 'Полный доступ к системе, управление пользователями, ролями, настройками и журналами.'
-  },
-  {
-    slug: 'administrator',
-    displayName: 'Администратор',
-    description: 'Управление заказами, маршрутами и настройками производства. Доступны все операции мастера участка.'
-  },
-  {
-    slug: 'master',
-    displayName: 'Мастер участка',
-    description: 'Отмечает готовность переделов, управляет бронью и исключениями, оставляет комментарии.'
-  },
-  {
-    slug: 'guest',
-    displayName: 'Гость',
-    description: 'Только просмотр текущего состояния без возможности внесения изменений.'
-  }
-];
+const ROLE_PERMISSION_KEYS = Object.freeze([
+  'view',
+  'write',
+  'manageUsers',
+  'manageSettings',
+  'manageStages',
+  'manageOrders',
+  'viewAudit',
+  'useJournal'
+]);
 
-const ROLE_PERMISSIONS = {
+const DEFAULT_ROLE_PERMISSIONS = {
   admin: {
     view: true,
     write: true,
@@ -232,10 +222,38 @@ const ROLE_PERMISSIONS = {
     useJournal: false
   }
 };
+const ROLE_SEEDS = [
+  {
+    slug: 'admin',
+    displayName: 'Админ',
+    description: 'Полный доступ к системе, управление пользователями, ролями, настройками и журналами.',
+    permissions: DEFAULT_ROLE_PERMISSIONS.admin
+  },
+  {
+    slug: 'administrator',
+    displayName: 'Администратор',
+    description: 'Управление заказами, маршрутами и настройками производства. Доступны все операции мастера участка.',
+    permissions: DEFAULT_ROLE_PERMISSIONS.administrator
+  },
+  {
+    slug: 'master',
+    displayName: 'Мастер участка',
+    description: 'Отмечает готовность переделов, управляет бронью и исключениями, оставляет комментарии.',
+    permissions: DEFAULT_ROLE_PERMISSIONS.master
+  },
+  {
+    slug: 'guest',
+    displayName: 'Гость',
+    description: 'Только просмотр текущего состояния без возможности внесения изменений.',
+    permissions: DEFAULT_ROLE_PERMISSIONS.guest
+  }
+];
 const ROLE_LOOKUP = ROLE_SEEDS.reduce((acc, role) => {
   acc[role.slug] = role;
   return acc;
 }, {});
+
+let rolePermissionCache = new Map();
 
 
 const app = express();
@@ -303,23 +321,39 @@ function ensureAuthBootstrap() {
   }
   const db = sqlite;
   const now = new Date().toISOString();
+  ensureRolePermissionColumn(db);
   const insertRole = db.prepare(`
-    INSERT OR IGNORE INTO roles (slug, display_name, description, created_at, updated_at)
-    VALUES (@slug, @display_name, @description, @created_at, @updated_at)
+    INSERT OR IGNORE INTO roles (slug, display_name, description, permissions_json, created_at, updated_at)
+    VALUES (@slug, @display_name, @description, @permissions_json, @created_at, @updated_at)
   `);
   for (const role of ROLE_SEEDS) {
     insertRole.run({
       slug: role.slug,
       display_name: role.displayName,
       description: role.description,
+      permissions_json: JSON.stringify(role.permissions || DEFAULT_ROLE_PERMISSIONS[role.slug] || {}),
       created_at: now,
       updated_at: now
     });
   }
 
+  const selectRoles = db.prepare('SELECT slug, permissions_json FROM roles');
+  const updateRolePermissions = db.prepare('UPDATE roles SET permissions_json = ?, updated_at = ? WHERE slug = ?');
+  selectRoles.all().forEach((row) => {
+    const slug = normalizeRoleSlug(row.slug);
+    if (!slug) return;
+    if (row.permissions_json) {
+      return;
+    }
+    const defaults = normalizeRolePermissions({}, slug);
+    updateRolePermissions.run(JSON.stringify(defaults), now, slug);
+  });
+
   const totalUsersRow = db.prepare('SELECT COUNT(*) AS count FROM users').get();
   const userCount = Number(totalUsersRow?.count || 0);
   if (userCount > 0) {
+    refreshRolePermissionCache();
+    ensureUsersExportSnapshot();
     return;
   }
 
@@ -344,6 +378,8 @@ function ensureAuthBootstrap() {
     }
     console.warn(`Создан пользователь по умолчанию ${DEFAULT_ADMIN_LOGIN}. Пароль необходимо сменить после первого входа.`);
   }
+  refreshRolePermissionCache();
+  ensureUsersExportSnapshot();
 }
 
 function normalizeRoleSlug(input) {
@@ -352,27 +388,159 @@ function normalizeRoleSlug(input) {
   return ROLE_LOOKUP[normalized] ? normalized : null;
 }
 
+function normalizeRolePermissions(payload, slug) {
+  const result = {};
+  const defaults = (slug && DEFAULT_ROLE_PERMISSIONS[slug]) || {};
+  for (const key of ROLE_PERMISSION_KEYS) {
+    const rawValue = payload && Object.prototype.hasOwnProperty.call(payload, key) ? payload[key] : undefined;
+    if (typeof rawValue === 'boolean') {
+      result[key] = rawValue;
+    } else {
+      result[key] = !!defaults[key];
+    }
+  }
+  return result;
+}
+
+function parseRolePermissions(raw, slug) {
+  if (!raw && raw !== 0) {
+    return normalizeRolePermissions({}, slug);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        return normalizeRolePermissions(parsed, slug);
+      }
+    } catch (_err) {
+      return normalizeRolePermissions({}, slug);
+    }
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    return normalizeRolePermissions(raw, slug);
+  }
+  return normalizeRolePermissions({}, slug);
+}
+
+function refreshRolePermissionCache() {
+  try {
+    const db = getDatabase();
+    const rows = db.prepare('SELECT slug, permissions_json FROM roles').all();
+    const map = new Map();
+    rows.forEach((row) => {
+      const slug = normalizeRoleSlug(row.slug);
+      if (!slug) return;
+      const parsed = parseRolePermissions(row.permissions_json, slug);
+      map.set(slug, parsed);
+    });
+    rolePermissionCache = map;
+  } catch (err) {
+    console.warn('Failed to refresh role permission cache', err);
+  }
+}
+
+function getRolePermissions(slug) {
+  const normalized = normalizeRoleSlug(slug);
+  if (!normalized) {
+    return normalizeRolePermissions({}, slug);
+  }
+  const cached = rolePermissionCache.get(normalized);
+  if (cached) {
+    return cached;
+  }
+  const fallback = normalizeRolePermissions({}, normalized);
+  rolePermissionCache.set(normalized, fallback);
+  return fallback;
+}
+
+function ensureRolePermissionColumn(db) {
+  try {
+    const columns = db.prepare('PRAGMA table_info(roles)').all();
+    const hasColumn = columns.some((col) => col?.name === 'permissions_json');
+    if (!hasColumn) {
+      db.exec('ALTER TABLE roles ADD COLUMN permissions_json TEXT');
+    }
+  } catch (err) {
+    console.error('Failed to ensure permissions column on roles table', err);
+  }
+}
+
+function exportUsersToFile() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const db = getDatabase();
+    const users = db
+      .prepare(
+        `SELECT id, login, display_name, is_active, password_hash, created_at, updated_at, last_login_at, password_updated_at
+           FROM users
+          ORDER BY id ASC`
+      )
+      .all();
+    const rolePairs = db
+      .prepare(
+        `SELECT ur.user_id AS userId, r.slug AS roleSlug
+           FROM user_roles ur
+           JOIN roles r ON r.id = ur.role_id`
+      )
+      .all();
+    const roleMap = new Map();
+    rolePairs.forEach((pair) => {
+      if (!pair) return;
+      const list = roleMap.get(pair.userId) || [];
+      list.push(pair.roleSlug);
+      roleMap.set(pair.userId, list);
+    });
+    const snapshot = {
+      exportedAt: new Date().toISOString(),
+      authMode: AUTH_MODE,
+      users: users.map((row) => {
+        const assigned = roleMap.get(row.id) || [];
+        const roles = assigned
+          .map((slug) => {
+            const normalized = normalizeRoleSlug(slug);
+            if (normalized) return normalized;
+            if (!slug && slug !== 0) return null;
+            return String(slug).trim() || null;
+          })
+          .filter(Boolean);
+        return {
+          login: row.login,
+          displayName: row.display_name,
+          isActive: Number(row.is_active) !== 0,
+          passwordHash: row.password_hash,
+          roles,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+          lastLoginAt: row.last_login_at || null,
+          passwordUpdatedAt: row.password_updated_at || null
+        };
+      })
+    };
+    fs.writeFileSync(USERS_EXPORT_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Не удалось сохранить экспорт пользователей', err);
+  }
+}
+
+function ensureUsersExportSnapshot() {
+  try {
+    exportUsersToFile();
+  } catch (err) {
+    console.warn('Failed to write users snapshot', err);
+  }
+}
+
 function computePermissions(roleSlugs) {
-  const permissions = {
-    view: false,
-    write: false,
-    manageUsers: false,
-    manageSettings: false,
-    manageStages: false,
-    manageOrders: false,
-    viewAudit: false,
-    useJournal: false
-  };
+  const permissions = normalizeRolePermissions({}, null);
   if (!Array.isArray(roleSlugs)) {
     return permissions;
   }
   for (const slugRaw of roleSlugs) {
     const slug = normalizeRoleSlug(slugRaw);
     if (!slug) continue;
-    const rolePerms = ROLE_PERMISSIONS[slug];
-    if (!rolePerms) continue;
-    for (const [key, value] of Object.entries(rolePerms)) {
-      if (value) {
+    const rolePerms = getRolePermissions(slug);
+    for (const key of ROLE_PERMISSION_KEYS) {
+      if (rolePerms[key]) {
         permissions[key] = true;
       }
     }
@@ -456,13 +624,14 @@ function readUserWithRolesById(userId) {
 function listAllRoles() {
   const db = getDatabase();
   return db
-    .prepare('SELECT id, slug, display_name, description FROM roles ORDER BY id ASC')
+    .prepare('SELECT id, slug, display_name, description, permissions_json FROM roles ORDER BY id ASC')
     .all()
     .map((row) => ({
       id: Number(row.id),
       slug: row.slug,
       displayName: row.display_name,
-      description: row.description || ''
+      description: row.description || '',
+      permissions: parseRolePermissions(row.permissions_json, row.slug)
     }));
 }
 
@@ -960,6 +1129,7 @@ app.post('/admin/users', requireAuth('manageUsers'), async (req, res) => {
   const payload = readUserWithRolesById(userId);
   const response = buildUserPayload(payload.user, payload.roles);
   recordAuditEvent({ user: req.user, action: 'admin.user.create', details: { userId, login, roles: appliedRoles } });
+  ensureUsersExportSnapshot();
   res.status(201).json({ user: response });
 });
 
@@ -1038,6 +1208,7 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
   const fresh = readUserWithRolesById(userId);
   const response = buildUserPayload(fresh.user, fresh.roles);
   recordAuditEvent({ user: req.user, action: 'admin.user.update', details: { userId, roles: appliedRoles } });
+  ensureUsersExportSnapshot();
   res.json({ user: response });
 });
 
@@ -1050,18 +1221,73 @@ app.put('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
     res.status(400).json({ error: 'Invalid payload' });
     return;
   }
-  const descriptions = req.body.descriptions && typeof req.body.descriptions === 'object'
-    ? req.body.descriptions
-    : req.body;
+
+  const updates = new Map();
+  if (req.body.roles && typeof req.body.roles === 'object') {
+    for (const [slugRaw, entry] of Object.entries(req.body.roles)) {
+      const slug = normalizeRoleSlug(slugRaw);
+      if (!slug) continue;
+      const current = updates.get(slug) || {};
+      if (entry && typeof entry === 'object') {
+        if (Object.prototype.hasOwnProperty.call(entry, 'description')) {
+          current.description = typeof entry.description === 'string' ? entry.description : '';
+        }
+        if (Object.prototype.hasOwnProperty.call(entry, 'permissions')) {
+          current.permissions = entry.permissions;
+        }
+      }
+      updates.set(slug, current);
+    }
+  } else {
+    if (req.body.descriptions && typeof req.body.descriptions === 'object') {
+      for (const [slugRaw, text] of Object.entries(req.body.descriptions)) {
+        const slug = normalizeRoleSlug(slugRaw);
+        if (!slug) continue;
+        const current = updates.get(slug) || {};
+        current.description = typeof text === 'string' ? text : '';
+        updates.set(slug, current);
+      }
+    } else {
+      for (const [slugRaw, value] of Object.entries(req.body)) {
+        const slug = normalizeRoleSlug(slugRaw);
+        if (!slug) continue;
+        const current = updates.get(slug) || {};
+        current.description = typeof value === 'string' ? value : '';
+        updates.set(slug, current);
+      }
+    }
+    if (req.body.permissions && typeof req.body.permissions === 'object') {
+      for (const [slugRaw, perms] of Object.entries(req.body.permissions)) {
+        const slug = normalizeRoleSlug(slugRaw);
+        if (!slug) continue;
+        const current = updates.get(slug) || {};
+        current.permissions = perms;
+        updates.set(slug, current);
+      }
+    }
+  }
+
+  if (!updates.size) {
+    res.json({ roles: listAllRoles() });
+    return;
+  }
+
   const db = getDatabase();
   const nowIso = new Date().toISOString();
-  const stmt = db.prepare('UPDATE roles SET description = ?, updated_at = ? WHERE slug = ?');
-  for (const [slug, text] of Object.entries(descriptions)) {
-    const normalized = normalizeRoleSlug(slug);
-    if (!normalized) continue;
-    const description = typeof text === 'string' ? text.trim() : '';
-    stmt.run(description, nowIso, normalized);
+  const updateDescription = db.prepare('UPDATE roles SET description = ?, updated_at = ? WHERE slug = ?');
+  const updatePermissions = db.prepare('UPDATE roles SET permissions_json = ?, updated_at = ? WHERE slug = ?');
+  for (const [slug, entry] of updates.entries()) {
+    if (Object.prototype.hasOwnProperty.call(entry, 'description')) {
+      const description = typeof entry.description === 'string' ? entry.description.trim() : '';
+      updateDescription.run(description, nowIso, slug);
+    }
+    if (Object.prototype.hasOwnProperty.call(entry, 'permissions')) {
+      const normalized = normalizeRolePermissions(entry.permissions, slug);
+      updatePermissions.run(JSON.stringify(normalized), nowIso, slug);
+    }
   }
+
+  refreshRolePermissionCache();
   recordAuditEvent({ user: req.user, action: 'admin.roles.update' });
   res.json({ roles: listAllRoles() });
 });
@@ -5335,6 +5561,14 @@ app.post('/api/admin/rollback', requireAuth('manageUsers'), (_req, res) => {
   res.status(410).json({ error: 'Rollback disabled' });
 });
 
+
+app.get(['/CRM.html', '/crm.html'], (req, res) => {
+  if (!req.user) {
+    res.redirect('/login');
+    return;
+  }
+  res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+});
 
 app.use(express.static(PUBLIC_DIR, { index: false }));
 

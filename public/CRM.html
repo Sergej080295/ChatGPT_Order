@@ -350,10 +350,11 @@
     z-index: 40;
     margin-bottom: var(--pc-spacing-lg);
     background: var(--pc-surface);
+    box-shadow: 0 8px 24px -22px rgba(15, 23, 42, 0.18);
   }
 
-  .pc-header--menu-open {
-    margin-bottom: clamp(96px, 12vh, 140px);
+  .pc-header--menu-active {
+    box-shadow: 0 22px 48px -28px rgba(15, 23, 42, 0.32);
   }
 
   .pc-user-menu {
@@ -461,7 +462,41 @@
   }
 
   .crm-admin-modal {
-    width: min(960px, 95vw);
+    width: min(960px, 96vw);
+    border: none;
+    border-radius: 28px;
+    padding: 0;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--pc-surface-raised) 92%, transparent);
+    box-shadow: 0 28px 60px -32px rgba(15, 23, 42, 0.42);
+  }
+
+  .crm-admin-modal::backdrop {
+    background: color-mix(in srgb, rgba(15, 23, 42, 0.6) 70%, transparent);
+  }
+
+  .crm-admin-modal .dlg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--pc-spacing-lg) var(--pc-spacing-xl) var(--pc-spacing-md);
+    background: color-mix(in srgb, var(--pc-surface) 85%, transparent);
+    border-bottom: 1px solid var(--pc-border-subtle);
+  }
+
+  .crm-admin-modal .dlg-head strong {
+    font-size: 1.35rem;
+  }
+
+  .crm-admin-modal .dlg-body {
+    padding: var(--pc-spacing-xl);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--pc-surface) 94%, transparent) 0%, var(--pc-surface) 60%);
+  }
+
+  .crm-admin-modal .dlg-footer {
+    padding: var(--pc-spacing-md) var(--pc-spacing-xl) var(--pc-spacing-lg);
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    border-top: 1px solid var(--pc-border-subtle);
   }
 
   .crm-admin-tabs {
@@ -496,26 +531,67 @@
 
   .crm-admin-users {
     display: grid;
-    gap: var(--pc-spacing-lg);
+    gap: var(--pc-spacing-xl);
   }
 
   .crm-admin-users-table {
     width: 100%;
     border-collapse: collapse;
+    background: var(--pc-surface-base);
+    border-radius: 20px;
+    overflow: hidden;
+    box-shadow: 0 14px 32px -24px rgba(15, 23, 42, 0.36);
+  }
+
+  .crm-admin-users-table thead {
+    background: color-mix(in srgb, var(--pc-surface-subtle) 88%, transparent);
   }
 
   .crm-admin-users-table th,
   .crm-admin-users-table td {
-    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    padding: var(--pc-spacing-md) var(--pc-spacing-lg);
     text-align: left;
-    border-bottom: 1px solid var(--pc-border-subtle);
+    border-bottom: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
   }
 
   .crm-admin-users-table th {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.08em;
     color: var(--pc-text-muted);
+  }
+
+  .crm-admin-users-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--pc-surface-subtle) 55%, transparent);
+  }
+
+  .crm-admin-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--pc-spacing-lg);
+    background: var(--pc-surface-base);
+    padding: var(--pc-spacing-xl);
+    border-radius: 24px;
+    box-shadow: 0 20px 38px -28px rgba(15, 23, 42, 0.32);
+  }
+
+  .crm-admin-role-option {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    padding: 6px 14px;
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    background: color-mix(in srgb, var(--pc-surface-subtle) 65%, transparent);
+    cursor: pointer;
+  }
+
+  .crm-admin-role-option:hover {
+    border-color: color-mix(in srgb, var(--pc-accent-primary) 40%, transparent);
+  }
+
+  .crm-admin-role-option input {
+    margin: 0;
   }
 
   .crm-admin-user-actions {
@@ -565,23 +641,130 @@
 
   .crm-admin-role-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: var(--pc-spacing-sm);
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--pc-spacing-lg);
   }
 
   .crm-admin-role-card {
-    border: 1px solid var(--pc-border-subtle);
-    border-radius: 12px;
-    padding: var(--pc-spacing-md);
+    display: flex;
+    flex-direction: column;
+    background: linear-gradient(145deg, color-mix(in srgb, var(--pc-surface-base) 92%, transparent) 0%, var(--pc-surface-base) 100%);
+    border-radius: 24px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 80%, transparent);
+    box-shadow: 0 18px 42px -28px rgba(15, 23, 42, 0.32);
+  }
+
+  .crm-admin-role-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--pc-spacing-lg) var(--pc-spacing-xl) var(--pc-spacing-sm);
+  }
+
+  .crm-admin-role-card__title {
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .crm-admin-role-pill {
+    padding: 4px 12px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-accent-muted) 24%, transparent);
+    color: var(--pc-accent-primary);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .crm-admin-role-card__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-lg);
+    padding: 0 var(--pc-spacing-xl) var(--pc-spacing-xl);
+  }
+
+  .crm-admin-role-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-admin-role-field span {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--pc-text-muted);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .crm-admin-role-field textarea {
+    min-height: 110px;
+    resize: vertical;
+    border-radius: 18px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    padding: var(--pc-spacing-md) var(--pc-spacing-lg);
+    font: inherit;
+    background: color-mix(in srgb, var(--pc-surface-base) 90%, transparent);
+  }
+
+  .crm-admin-role-field textarea:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--pc-accent-primary) 55%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--pc-accent-primary) 22%, transparent);
+  }
+
+  .crm-admin-permission-grid {
+    display: grid;
+    gap: var(--pc-spacing-lg);
+  }
+
+  .crm-admin-permission-group h4 {
+    margin: 0 0 var(--pc-spacing-sm) 0;
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--pc-text-strong);
+  }
+
+  .crm-admin-permission-items {
     display: flex;
     flex-direction: column;
     gap: var(--pc-spacing-sm);
-    background: var(--pc-surface-base);
   }
 
-  .crm-admin-role-card textarea {
-    min-height: 96px;
-    resize: vertical;
+  .crm-admin-permission-option {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--pc-spacing-sm);
+    align-items: flex-start;
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border-radius: 16px;
+    border: 1px solid color-mix(in srgb, var(--pc-border-subtle) 65%, transparent);
+    background: color-mix(in srgb, var(--pc-surface-subtle) 60%, transparent);
+    cursor: pointer;
+  }
+
+  .crm-admin-permission-option:hover {
+    border-color: color-mix(in srgb, var(--pc-accent-primary) 38%, transparent);
+  }
+
+  .crm-admin-permission-option input {
+    margin-top: 4px;
+  }
+
+  .crm-admin-permission-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .crm-admin-permission-label {
+    font-weight: 600;
+  }
+
+  .crm-admin-permission-hint {
+    font-size: 0.8rem;
+    color: var(--pc-text-muted);
+    line-height: 1.3;
   }
 
   .crm-admin-audit-list {
@@ -6192,6 +6375,47 @@ const CRM_STAGE_ALIASES={
   pack:['pack','упаковка','упак'],
   ship:['ship','отгрузка','отгруз','отгр']
 };
+const CRM_ROLE_DEFAULT_PERMISSIONS={
+  admin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true },
+  administrator:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, viewAudit:true, useJournal:true },
+  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, viewAudit:false, useJournal:true },
+  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, viewAudit:false, useJournal:false }
+};
+const CRM_ROLE_PERMISSION_KEYS=['view','write','manageOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal'];
+const CRM_ROLE_PERMISSION_GROUPS=[
+  {
+    key:'core',
+    title:'Основное',
+    items:[
+      { key:'view', label:'Просмотр CRM', hint:'Доступ к канбану, заказам, переделам и аналитике.' },
+      { key:'write', label:'Изменение данных', hint:'Сохранение заказов, статусов и расписаний.' }
+    ]
+  },
+  {
+    key:'orders',
+    title:'Заказы и очередь',
+    items:[
+      { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
+      { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
+    ]
+  },
+  {
+    key:'production',
+    title:'Производство',
+    items:[
+      { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' }
+    ]
+  },
+  {
+    key:'admin',
+    title:'Администрирование',
+    items:[
+      { key:'manageSettings', label:'Настройки CRM', hint:'Изменение параметров досок и расписаний.' },
+      { key:'manageUsers', label:'Пользователи и роли', hint:'Создание учетных записей и управление правами.' },
+      { key:'viewAudit', label:'Просмотр аудита', hint:'Просмотр журнала действий пользователей.' }
+    ]
+  }
+];
 const CRM_PROGRESS_STAGES=['draw','laser','bend','weld','mech'];
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
@@ -8969,10 +9193,10 @@ function setCrmUserMenuOpen(open){
     crmUserMenuToggle.setAttribute('aria-expanded', next?'true':'false');
   }
   if(crmHeaderEl){
-    crmHeaderEl.classList.toggle('pc-header--menu-open', next);
-    positionToastLayer();
-    updateLaneHeightVar();
+    crmHeaderEl.classList.toggle('pc-header--menu-active', next);
   }
+  positionToastLayer();
+  updateLaneHeightVar();
   if(next){
     document.addEventListener('mousedown', handleCrmUserMenuDocumentClick, true);
     document.addEventListener('keydown', handleCrmUserMenuDocumentKeydown);
@@ -9198,20 +9422,78 @@ function renderCrmAdminRoles(){
   crmAdminRolesGrid.innerHTML='';
   const roles=Array.isArray(crmAdminState.roles)?crmAdminState.roles:[];
   roles.forEach(role=>{
-    const card=document.createElement('div');
+    const slug=(role?.slug||'').trim();
+    if(!slug) return;
+    const permissions=getRolePermissionsForUi(role);
+    const card=document.createElement('section');
     card.className='crm-admin-role-card';
-    const title=document.createElement('strong');
-    title.textContent=role.displayName||role.slug;
-    const slug=role.slug||'';
+
+    const header=document.createElement('header');
+    header.className='crm-admin-role-card__header';
+    const title=document.createElement('span');
+    title.className='crm-admin-role-card__title';
+    title.textContent=role.displayName||slug;
+    const pill=document.createElement('span');
+    pill.className='crm-admin-role-pill';
+    pill.textContent=slug;
+    header.appendChild(title);
+    header.appendChild(pill);
+    card.appendChild(header);
+
+    const body=document.createElement('div');
+    body.className='crm-admin-role-card__body';
+
+    const descriptionField=document.createElement('label');
+    descriptionField.className='crm-admin-role-field';
+    const caption=document.createElement('span');
+    caption.textContent='Описание';
     const textarea=document.createElement('textarea');
-    textarea.value=role.description||'';
     textarea.dataset.roleSlug=slug;
-    card.appendChild(title);
-    const meta=document.createElement('span');
-    meta.className='crm-admin-pill';
-    meta.textContent=slug;
-    card.appendChild(meta);
-    card.appendChild(textarea);
+    textarea.value=role.description||'';
+    textarea.placeholder='Опишите права и обязанности роли';
+    descriptionField.appendChild(caption);
+    descriptionField.appendChild(textarea);
+    body.appendChild(descriptionField);
+
+    const permissionsWrapper=document.createElement('div');
+    permissionsWrapper.className='crm-admin-permission-grid';
+    CRM_ROLE_PERMISSION_GROUPS.forEach(group=>{
+      const groupSection=document.createElement('section');
+      groupSection.className='crm-admin-permission-group';
+      const heading=document.createElement('h4');
+      heading.textContent=group.title;
+      groupSection.appendChild(heading);
+      const items=document.createElement('div');
+      items.className='crm-admin-permission-items';
+      group.items.forEach(item=>{
+        const option=document.createElement('label');
+        option.className='crm-admin-permission-option';
+        const checkbox=document.createElement('input');
+        checkbox.type='checkbox';
+        checkbox.dataset.roleSlug=slug;
+        checkbox.dataset.rolePermission=item.key;
+        checkbox.checked=!!permissions[item.key];
+        option.appendChild(checkbox);
+        const textWrap=document.createElement('span');
+        textWrap.className='crm-admin-permission-text';
+        const labelSpan=document.createElement('span');
+        labelSpan.className='crm-admin-permission-label';
+        labelSpan.textContent=item.label;
+        textWrap.appendChild(labelSpan);
+        if(item.hint){
+          const hint=document.createElement('span');
+          hint.className='crm-admin-permission-hint';
+          hint.textContent=item.hint;
+          textWrap.appendChild(hint);
+        }
+        option.appendChild(textWrap);
+        items.appendChild(option);
+      });
+      groupSection.appendChild(items);
+      permissionsWrapper.appendChild(groupSection);
+    });
+    body.appendChild(permissionsWrapper);
+    card.appendChild(body);
     crmAdminRolesGrid.appendChild(card);
   });
 }
@@ -9281,6 +9563,17 @@ function setCrmAdminBusy(active){
 function resetCrmAdminBusy(){
   crmAdminBusyCounter=0;
   applyCrmAdminBusyState();
+}
+
+function getRolePermissionsForUi(role){
+  const slug=typeof role?.slug==='string'?role.slug.trim().toLowerCase():'';
+  const defaults=CRM_ROLE_DEFAULT_PERMISSIONS[slug]||{};
+  const source=(role&&typeof role.permissions==='object')?role.permissions:{};
+  const normalized={};
+  CRM_ROLE_PERMISSION_KEYS.forEach(key=>{
+    normalized[key]=typeof source[key]==='boolean'?source[key]:!!defaults[key];
+  });
+  return normalized;
 }
 
 function renderCrmAdminRoleOptions(selectedRoles){
@@ -10481,9 +10774,11 @@ function updateCrmOrdersTabUi(){
     crmStageControls.setAttribute('aria-hidden',inStage?'false':'true');
   }
   if(crmOrdersViewEl){
+    crmOrdersViewEl.hidden=!inOrders;
     crmOrdersViewEl.setAttribute('aria-hidden',inOrders?'false':'true');
   }
   if(crmStageViewEl){
+    crmStageViewEl.hidden=!inStage;
     crmStageViewEl.setAttribute('aria-hidden',inStage?'false':'true');
   }
 }
@@ -13858,17 +14153,32 @@ if(crmAdminRolesSave){
       showToast({ title:'Администрирование', message:'Недостаточно прав для изменения ролей', tone:'error' });
       return;
     }
-    const descriptions={};
+    const rolesPayload={};
     if(crmAdminRolesGrid){
       crmAdminRolesGrid.querySelectorAll('textarea[data-role-slug]').forEach(textarea=>{
-        const slug=textarea.dataset.roleSlug;
+        const slug=(textarea.dataset.roleSlug||'').trim();
         if(!slug) return;
-        descriptions[slug]=textarea.value;
+        if(!rolesPayload[slug]){
+          rolesPayload[slug]={ permissions:{} };
+        }
+        rolesPayload[slug].description=textarea.value;
+      });
+      crmAdminRolesGrid.querySelectorAll('input[data-role-permission]').forEach(input=>{
+        const slug=(input.dataset.roleSlug||'').trim();
+        const perm=(input.dataset.rolePermission||'').trim();
+        if(!slug||!perm) return;
+        if(!rolesPayload[slug]){
+          rolesPayload[slug]={ permissions:{} };
+        }
+        if(!rolesPayload[slug].permissions){
+          rolesPayload[slug].permissions={};
+        }
+        rolesPayload[slug].permissions[perm]=input.checked;
       });
     }
     setCrmAdminBusy(true);
     try{
-      await crmRequestJson('/admin/roles/description',{ method:'PUT', body:{ descriptions } });
+      await crmRequestJson('/admin/roles/description',{ method:'PUT', body:{ roles:rolesPayload } });
       showToast({ title:'Администрирование', message:'Описания ролей обновлены', tone:'success' });
       await loadCrmAdminRoles({ silent:true, skipBusy:true });
     }catch(err){
