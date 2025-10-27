@@ -366,13 +366,37 @@ function ensureAuthBootstrap() {
     INSERT OR IGNORE INTO roles (slug, display_name, description, permissions_json, created_at, updated_at)
     VALUES (@slug, @display_name, @description, @permissions_json, @created_at, @updated_at)
   `);
-  const renameRole = db.prepare(`
-    UPDATE roles
-    SET slug = @to, display_name = @display_name, updated_at = @updated_at
-    WHERE slug = @from
-  `);
-  renameRole.run({ from: 'admin', to: 'superadmin', display_name: 'Super Админ', updated_at: now });
-  renameRole.run({ from: 'administrator', to: 'admin', display_name: 'Admin', updated_at: now });
+  const selectRoleBySlug = db.prepare('SELECT id FROM roles WHERE slug = ?');
+  const selectUserIdsByRole = db.prepare('SELECT user_id FROM user_roles WHERE role_id = ?');
+  const insertUserRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
+  const deleteUserRoleByRole = db.prepare('DELETE FROM user_roles WHERE role_id = ?');
+  const deleteRoleById = db.prepare('DELETE FROM roles WHERE id = ?');
+  const updateRoleIdentity = db.prepare('UPDATE roles SET slug = ?, display_name = ?, updated_at = ? WHERE id = ?');
+  const updateRoleDisplay = db.prepare('UPDATE roles SET display_name = ?, updated_at = ? WHERE id = ?');
+
+  const mergeRole = (fromSlug, toSlug, toDisplayName) => {
+    const fromRole = selectRoleBySlug.get(fromSlug);
+    if (!fromRole?.id) {
+      return;
+    }
+    const toRole = selectRoleBySlug.get(toSlug);
+    if (toRole?.id) {
+      const userRows = selectUserIdsByRole.all(fromRole.id);
+      userRows.forEach((row) => {
+        if (row?.user_id) {
+          insertUserRole.run(row.user_id, toRole.id);
+        }
+      });
+      deleteUserRoleByRole.run(fromRole.id);
+      deleteRoleById.run(fromRole.id);
+      updateRoleDisplay.run(toDisplayName, now, toRole.id);
+      return;
+    }
+    updateRoleIdentity.run(toSlug, toDisplayName, now, fromRole.id);
+  };
+
+  mergeRole('admin', 'superadmin', 'Super Админ');
+  mergeRole('administrator', 'admin', 'Admin');
 
   for (const role of ROLE_SEEDS) {
     insertRole.run({
