@@ -1781,32 +1781,17 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-warning, #fcc419) 25%, transparent);
   }
 
-  .crm-stage-stack-col[data-freeze="manual"] {
-    border-color: color-mix(in srgb, var(--pc-primary, #4263eb) 45%, var(--pc-border));
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-primary, #4263eb) 35%, transparent);
+  .crm-stage-stack-col[data-freeze] .crm-stage-stack-title {
+    color: color-mix(in srgb, var(--pc-warning, #fcc419) 70%, var(--pc-text));
   }
 
-  .crm-stage-stack-col[data-freeze]::after {
-    content: attr(data-freeze-label);
-    position: absolute;
-    top: -14px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 2px 12px;
-    font-size: 11px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--pc-warning, #fcc419) 25%, var(--pc-surface));
-    color: color-mix(in srgb, var(--pc-warning, #fcc419) 80%, var(--pc-text));
-    box-shadow: var(--pc-shadow-surface);
-    white-space: nowrap;
-    max-width: calc(100% - 24px);
-    text-overflow: ellipsis;
-    overflow: hidden;
+  .crm-stage-stack-title .crm-stage-freeze-note {
+    color: color-mix(in srgb, var(--pc-warning, #fcc419) 85%, var(--pc-text));
+    font-weight: var(--pc-font-weight-semibold);
   }
 
-  .crm-stage-stack-col[data-freeze="manual"]::after {
-    background: color-mix(in srgb, var(--pc-primary, #4263eb) 20%, var(--pc-surface));
-    color: color-mix(in srgb, var(--pc-primary, #4263eb) 75%, var(--pc-text));
+  .crm-stage-stack-title .crm-stage-freeze-note--manual {
+    text-decoration: underline dotted currentColor;
   }
 
   .crm-stage-stack-title {
@@ -8461,10 +8446,8 @@ function renderCrmStageStack(schedule){
     if(isFrozen){
       const freezeType=freezeRecord.manual?'manual':'auto';
       col.dataset.freeze=freezeType;
-      col.dataset.freezeLabel=freezeRecord.manual?'Ручная фиксация':'Фиксация плана';
     }else{
       delete col.dataset.freeze;
-      delete col.dataset.freezeLabel;
     }
     const title=document.createElement('div');
     title.className='crm-stage-stack-title';
@@ -8484,10 +8467,30 @@ function renderCrmStageStack(schedule){
     if(reserveLimit>0.001){
       infoParts.push(`Бронь: ${reserveLimit.toFixed(1)}ч`);
     }
+    title.textContent='';
+    title.appendChild(document.createTextNode(humanDate));
+    let hasSuffix=false;
+    const appendSeparator=()=>{
+      title.appendChild(document.createTextNode(hasSuffix?' · ':'  ·  '));
+      hasSuffix=true;
+    };
+    infoParts.forEach(part=>{
+      appendSeparator();
+      title.appendChild(document.createTextNode(part));
+    });
     if(isFrozen){
-      infoParts.push(freezeRecord.manual?'Ручная фиксация':'Фиксация плана');
+      appendSeparator();
+      const freezeSpan=document.createElement('span');
+      freezeSpan.className='crm-stage-freeze-note';
+      if(freezeRecord.manual){
+        freezeSpan.classList.add('crm-stage-freeze-note--manual');
+        freezeSpan.title='Ручная фиксация дня';
+      }else{
+        freezeSpan.title='Автоматическая фиксация плана';
+      }
+      freezeSpan.textContent='Фиксация плана';
+      title.appendChild(freezeSpan);
     }
-    title.textContent=infoParts.length?`${humanDate}  ·  ${infoParts.join(' · ')}`:humanDate;
     const header=document.createElement('div');
     header.className='crm-stage-stack-header';
     header.appendChild(title);
