@@ -1789,14 +1789,19 @@
   .crm-stage-stack-col[data-freeze]::after {
     content: attr(data-freeze-label);
     position: absolute;
-    top: -10px;
-    left: 12px;
-    padding: 2px 8px;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 2px 12px;
     font-size: 11px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--pc-warning, #fcc419) 25%, var(--pc-surface));
     color: color-mix(in srgb, var(--pc-warning, #fcc419) 80%, var(--pc-text));
     box-shadow: var(--pc-shadow-surface);
+    white-space: nowrap;
+    max-width: calc(100% - 24px);
+    text-overflow: ellipsis;
+    overflow: hidden;
   }
 
   .crm-stage-stack-col[data-freeze="manual"]::after {
@@ -8195,6 +8200,8 @@ function buildCrmStageSchedule(stageKey, rows){
     const date=new Date(`${normalizedIso}T00:00:00`);
     if(Number.isNaN(date.getTime())) return;
     const day=ensureDay(date);
+    const originalPubCap=Number.isFinite(Number(day.meta?.pubCap))?Number(day.meta.pubCap):0;
+    const originalResLim=Number.isFinite(Number(day.meta?.resLim))?Number(day.meta.resLim):0;
     let publicUsed=0;
     let reserveUsed=0;
     const sanitizedSegments=[];
@@ -8249,14 +8256,17 @@ function buildCrmStageSchedule(stageKey, rows){
       }
     });
     if(isHourless){
-      day.meta.pubCap=sanitizedSegments.length;
+      const targetCap=Math.max(originalPubCap, sanitizedSegments.length);
+      day.meta.pubCap=targetCap;
       day.meta.pubRem=0;
       day.meta.resLim=0;
       day.meta.resRem=0;
     }else{
-      day.meta.pubCap=publicUsed;
+      const targetPublicCap=Math.max(originalPubCap, publicUsed);
+      const targetReserveCap=Math.max(originalResLim, reserveUsed);
+      day.meta.pubCap=targetPublicCap;
       day.meta.pubRem=0;
-      day.meta.resLim=reserveUsed;
+      day.meta.resLim=targetReserveCap;
       day.meta.resRem=0;
     }
     day.meta.freezeLocked=true;
@@ -10218,6 +10228,13 @@ function renderCrmAdminUsers(){
     passwordBtn.addEventListener('click',()=>handleCrmAdminPassword(user));
     actions.appendChild(passwordBtn);
 
+    const deleteBtn=document.createElement('button');
+    deleteBtn.type='button';
+    deleteBtn.className='pc-btn pc-btn--danger';
+    deleteBtn.textContent='Удалить';
+    deleteBtn.addEventListener('click',()=>handleCrmAdminDelete(user));
+    actions.appendChild(deleteBtn);
+
     const loginCell=document.createElement('td');
     loginCell.textContent=user.login||'—';
     const nameCell=document.createElement('td');
@@ -10667,6 +10684,29 @@ async function handleCrmAdminPassword(user){
   }catch(err){
     console.error('Не удалось сменить пароль',err);
     showToast({ title:'Администрирование', message:err.message||'Не удалось сменить пароль', tone:'error' });
+  }finally{
+    setCrmAdminBusy(false);
+  }
+}
+
+async function handleCrmAdminDelete(user){
+  if(!user) return;
+  const id=Number(user.id);
+  if(!Number.isFinite(id) || id<=0) return;
+  const label=user.displayName||user.login||`ID ${id}`;
+  const proceed=window.confirm(`Удалить пользователя «${label}»? Это действие нельзя отменить.`);
+  if(!proceed) return;
+  setCrmAdminBusy(true);
+  try{
+    await crmRequestJson(`/admin/users/${id}`,{ method:'DELETE' });
+    if(crmAdminState.selectedUserId===id){
+      resetCrmAdminUserForm();
+    }
+    showToast({ title:'Администрирование', message:'Пользователь удалён', tone:'success' });
+    await loadCrmAdminUsers({ silent:true, skipBusy:true });
+  }catch(err){
+    console.error('Не удалось удалить пользователя',err);
+    showToast({ title:'Администрирование', message:err.message||'Не удалось удалить пользователя', tone:'error' });
   }finally{
     setCrmAdminBusy(false);
   }

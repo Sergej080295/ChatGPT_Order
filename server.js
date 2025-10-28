@@ -1080,6 +1080,33 @@ function ensureAdminPreserved(userId, nextRoleSlugs) {
   return count > 0;
 }
 
+function ensureCriticalRolesRetained(userId, removedRoleSlugs) {
+  const normalized = Array.isArray(removedRoleSlugs)
+    ? removedRoleSlugs.map(normalizeRoleSlug).filter(Boolean)
+    : [];
+  if (!normalized.length) {
+    return { ok: true, slug: null };
+  }
+  const db = getDatabase();
+  const critical = ['superadmin', 'admin'];
+  for (const slug of critical) {
+    if (!normalized.includes(slug)) continue;
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM user_roles ur
+           JOIN roles r ON r.id = ur.role_id
+          WHERE r.slug = ? AND ur.user_id != ?`
+      )
+      .get(slug, userId);
+    const count = Number(row?.count || 0);
+    if (count === 0) {
+      return { ok: false, slug };
+    }
+  }
+  return { ok: true, slug: null };
+}
+
 function validatePassword(password) {
   if (typeof password !== 'string') return false;
   const trimmed = password.trim();
@@ -1344,6 +1371,31 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
   recordAuditEvent({ user: req.user, action: 'admin.user.update', details: { userId, roles: appliedRoles } });
   ensureUsersExportSnapshot();
   res.json({ user: response });
+});
+
+app.delete('/admin/users/:id', requireAuth('manageUsers'), (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isFinite(userId) || userId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор' });
+    return;
+  }
+  const current = readUserWithRolesById(userId);
+  if (!current) {
+    res.status(404).json({ error: 'Пользователь не найден' });
+    return;
+  }
+  const roleSlugs = Array.isArray(current.roles) ? current.roles.map((role) => role.slug).filter(Boolean) : [];
+  const guard = ensureCriticalRolesRetained(userId, roleSlugs);
+  if (!guard.ok) {
+    const roleLabel = guard.slug === 'superadmin' ? 'Super Админ' : 'Admin';
+    res.status(400).json({ error: `Нельзя удалить последнего пользователя с ролью «${roleLabel}»` });
+    return;
+  }
+  const db = getDatabase();
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  ensureUsersExportSnapshot();
+  recordAuditEvent({ user: req.user, action: 'admin.user.delete', details: { userId, login: current.user?.login || null } });
+  res.status(204).send();
 });
 
 app.get('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
