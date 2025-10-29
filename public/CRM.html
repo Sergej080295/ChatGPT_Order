@@ -6372,8 +6372,10 @@ function shouldShowCrmLateTips(){
   return prefs.showLateTips!==false;
 }
 
-function save(summary){
-  if(!crmAutoOptimizeGuard && isCrmAutoOptimizationEnabled()){
+function save(summary, options){
+  const opts=options&&typeof options==='object'?options:{};
+  const skipAutoOptimize=!!opts.skipAutoOptimize;
+  if(!skipAutoOptimize && !crmAutoOptimizeGuard && isCrmAutoOptimizationEnabled()){
     crmAutoOptimizeGuard=true;
     try{
       runCrmAutoOptimization({ reason:'auto' });
@@ -6819,7 +6821,7 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
     }else{
       removeCrmPlanFreezeRecord(normalizedStage, normalizedIso);
     }
-    save('Снятие фиксации плана');
+    save('Снятие фиксации плана',{ skipAutoOptimize:true });
     renderCrmStageTable();
     return;
   }
@@ -6831,7 +6833,7 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
       segments,
       released:false
     });
-    save('Фиксация дня плана');
+    save('Фиксация дня плана',{ skipAutoOptimize:true });
     renderCrmStageTable();
     return;
   }
@@ -6845,7 +6847,7 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
       segments:[],
       released:true
     });
-    save('Отмена автоматической фиксации плана');
+    save('Отмена автоматической фиксации плана',{ skipAutoOptimize:true });
     renderCrmStageTable();
     return;
   }
@@ -6856,7 +6858,7 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
     segments,
     released:false
   });
-  save('Фиксация дня плана');
+  save('Фиксация дня плана',{ skipAutoOptimize:true });
   renderCrmStageTable();
 }
 
@@ -6888,7 +6890,7 @@ function refillCrmPlanFreeze(){
   });
   if(changed){
     markCrmPlanFreezeDirty();
-    save('Заполнение пустот плана');
+    save('Заполнение пустот плана',{ skipAutoOptimize:true });
   }
   return changed;
 }
