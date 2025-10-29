@@ -6946,20 +6946,27 @@ function refillCrmPlanFreeze(options){
       container.stages[stageKey]=stageMap;
     }
     const horizonSet=new Set(collectCrmPlanFreezeHorizon(stageKey, freezeDays));
+    const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
     const schedule=scheduleByStage.get(stageKey);
     const perDay=schedule && schedule.perDay instanceof Map?schedule.perDay:new Map();
     const tasksById=new Map(Array.isArray(schedule?.tasks)?schedule.tasks.map(task=>[task.id, task]):[]);
     const lockMap=reserveLocks.get(stageKey)||new Map();
     Object.keys(stageMap).forEach(iso=>{
       const record=stageMap[iso];
+      const normalizedIso=coerceCalendarIso(iso);
       if(record && record.manual){
         if(record.released){
           record.released=false;
           freezeChanged=true;
         }
+        if(!normalizedIso){
+          delete stageMap[iso];
+          freezeChanged=true;
+          return;
+        }
+        horizonSet.add(normalizedIso);
         return;
       }
-      const normalizedIso=coerceCalendarIso(iso);
       if(!normalizedIso || !horizonSet.has(normalizedIso)){
         delete stageMap[iso];
         freezeChanged=true;
@@ -6969,21 +6976,48 @@ function refillCrmPlanFreeze(options){
       const normalizedIso=coerceCalendarIso(iso);
       if(!normalizedIso) return;
       const existing=stageMap[normalizedIso]||null;
+      const manualExisting=existing?.manual===true;
       const lockInfo=lockMap.get(normalizedIso)||lockMap.get(iso)||null;
-      const manual=(existing?.manual===true)||(lockInfo?.manual===true);
+      const manual=(manualExisting)||(lockInfo?.manual===true);
       const baseCaptured=manual
-        ? (existing?.capturedAt||lockInfo?.capturedAt||'')
+        ? (manualExisting?(existing?.capturedAt||''):(lockInfo?.capturedAt||existing?.capturedAt||''))
         : (existing?.capturedAt||'');
       const segments=[];
-      const lockedSegments=lockInfo && Array.isArray(lockInfo.segments)
-        ? lockInfo.segments.map(seg=>({
-            taskId:seg.taskId,
-            orderId:typeof seg.orderId==='string'?seg.orderId:'',
-            hours:Math.max(0, Number(seg.hours)||0),
-            section:seg.section==='reserve'?'reserve':'public'
-          }))
-        : [];
+      const lockedSegments=[];
       const lockedIndex=new Map();
+      const pushLocked=(seg)=>{
+        if(!seg || !seg.taskId) return;
+        const task=tasksById.get(seg.taskId);
+        if(!task || task.done) return;
+        let hours=Number(seg.hours);
+        if(!Number.isFinite(hours) || hours<=0){
+          hours=isHourless?1:0;
+        }
+        if(!isHourless && hours<=1e-6){
+          return;
+        }
+        const section=seg.section==='reserve'?'reserve':'public';
+        const key=`${seg.taskId}:${section}`;
+        const orderId=typeof seg.orderId==='string'?seg.orderId:'';
+        if(lockedIndex.has(key)){
+          const idx=lockedIndex.get(key);
+          const prev=lockedSegments[idx];
+          if(Math.abs((prev.hours||0)-hours)>1e-6 || prev.orderId!==orderId){
+            lockedSegments[idx]={ taskId:seg.taskId, orderId, hours, section };
+          }
+          return;
+        }
+        lockedIndex.set(key, lockedSegments.length);
+        lockedSegments.push({ taskId:seg.taskId, orderId, hours, section });
+      };
+      if(manualExisting && Array.isArray(existing?.segments)){
+        existing.segments.forEach(pushLocked);
+      }
+      if(lockInfo && Array.isArray(lockInfo.segments)){
+        lockInfo.segments.forEach(pushLocked);
+      }
+      // rebuild lockedIndex to match final segments order
+      lockedIndex.clear();
       lockedSegments.forEach((seg,idx)=>{
         const key=`${seg.taskId}:${seg.section}`;
         lockedIndex.set(key, idx);
