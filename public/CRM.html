@@ -8370,15 +8370,12 @@ function buildCrmStageSchedule(stageKey, rows){
       const available=Math.max(0, task.rest);
       let desired=Number(seg.hours);
       if(!Number.isFinite(desired) || desired<=0){
-        if(available<=1e-6){
-          return;
-        }
         desired=available;
       }
-      if(desired<=1e-6){
+      const take=Math.min(desired, available);
+      if(!Number.isFinite(take) || take<=1e-6){
         return;
       }
-      const take=desired;
       const segDate=addDays(date,0);
       task.rest=Math.max(0, task.rest-take);
       usage.used+=take;
@@ -8402,7 +8399,8 @@ function buildCrmStageSchedule(stageKey, rows){
       }else{
         publicUsed+=take;
       }
-      if(available>1e-6 && take>available+1e-3){
+      const overflow=Math.max(0, desired-take);
+      if(overflow>1e-3){
         const stageLabel=CRM_STAGE_LABELS[stageKey]||'Передел';
         errors.push({
           orderId:task.orderId,
@@ -8410,7 +8408,7 @@ function buildCrmStageSchedule(stageKey, rows){
           label:task.label,
           reason:'plan-freeze-overflow',
           date:fmtDateISO(segDate),
-          message:`Фиксация плана для «${task.label}» (${stageLabel}) закрепляет ${take.toFixed(1)}ч при доступных ${available.toFixed(1)}ч.`
+          message:`Фиксация плана для «${task.label}» (${stageLabel}) высвободила ${(overflow).toFixed(1)}ч из запланированных ${desired.toFixed(1)}ч.`
         });
       }
     });
