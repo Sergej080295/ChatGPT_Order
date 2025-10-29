@@ -6868,37 +6868,210 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
   renderCrmStageTable();
 }
 
-function refillCrmPlanFreeze(){
+function refillCrmPlanFreeze(options){
+  const opts=options&&typeof options==='object'?options:{};
   const board=currentBoard();
-  if(!board) return false;
+  if(!board){
+    return { changed:false, queueChanged:false, freezeChanged:false };
+  }
+  const reasonRaw=typeof opts.reason==='string'?opts.reason.trim():'';
+  const reason=reasonRaw||'Заполнение пустот плана';
+  const autoOptimize=opts.autoOptimize!==false;
+  const autoSave=opts.autoSave!==false;
   const container=ensureBoardPlanFreeze(board);
-  const stages=container.stages||{};
+  const stageKeys=Array.from(new Set(CRM_STAGE_SEQUENCE.map(normalizeCrmStageKey).filter(Boolean)));
+  if(!stageKeys.length){
+    return { changed:false, queueChanged:false, freezeChanged:false };
+  }
   const freezeDays=getPlanFreezeDays();
-  let changed=false;
-  Object.keys(stages).forEach(stageKey=>{
-    const stageMap=stages[stageKey];
-    if(!stageMap || typeof stageMap!=='object') return;
+  const rowsByStage=new Map();
+  stageKeys.forEach(stageKey=>{
+    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+    rowsByStage.set(stageKey, Array.isArray(rows)?rows:[]);
+  });
+  const stageMapByKey=new Map();
+  stageKeys.forEach(stageKey=>{
+    stageMapByKey.set(stageKey, getCrmPlanFreezeStageMap(stageKey));
+  });
+  const reserveLocks=new Map();
+  stageKeys.forEach(stageKey=>{
+    const rows=rowsByStage.get(stageKey)||[];
+    const reserveIds=new Set(rows.filter(row=>row && row.useReserve).map(row=>row.identity).filter(Boolean));
+    if(!reserveIds.size) return;
+    const stageMap=stageMapByKey.get(stageKey);
+    if(!stageMap) return;
+    const lockMap=new Map();
+    Object.entries(stageMap).forEach(([iso,record])=>{
+      if(!record || !Array.isArray(record.segments)) return;
+      const lockedSegments=record.segments
+        .filter(seg=>seg && reserveIds.has(seg.taskId))
+        .map(seg=>({
+          taskId:seg.taskId,
+          orderId:typeof seg.orderId==='string'?seg.orderId:'',
+          hours:Math.max(0, Number(seg.hours)||0),
+          section:seg.section==='reserve'?'reserve':'public'
+        }));
+      if(lockedSegments.length){
+        lockMap.set(coerceCalendarIso(iso)||iso,{ manual:record.manual===true, capturedAt:record.capturedAt||'', segments:lockedSegments });
+      }
+    });
+    if(lockMap.size){
+      reserveLocks.set(stageKey, lockMap);
+    }
+  });
+  const previousBypass=crmPlanFreezeBypass;
+  const scheduleByStage=new Map();
+  let queueChanged=false;
+  try{
+    crmPlanFreezeBypass=true;
+    if(autoOptimize){
+      const reasonTag=reason==='Принудительная оптимизация очереди'?'force':'plan-freeze-fill';
+      queueChanged=runCrmAutoOptimization({ reason:reasonTag })||false;
+    }
+    stageKeys.forEach(stageKey=>{
+      const rows=rowsByStage.get(stageKey)||[];
+      if(!rows.length) return;
+      const schedule=buildCrmStageSchedule(stageKey, rows);
+      if(schedule){
+        scheduleByStage.set(stageKey, schedule);
+      }
+    });
+  }finally{
+    crmPlanFreezeBypass=previousBypass;
+  }
+  let freezeChanged=false;
+  stageKeys.forEach(stageKey=>{
+    const stageMap=stageMapByKey.get(stageKey)||{};
+    if(!container.stages[stageKey]){
+      container.stages[stageKey]=stageMap;
+    }
     const horizonSet=new Set(collectCrmPlanFreezeHorizon(stageKey, freezeDays));
+    const schedule=scheduleByStage.get(stageKey);
+    const perDay=schedule && schedule.perDay instanceof Map?schedule.perDay:new Map();
+    const tasksById=new Map(Array.isArray(schedule?.tasks)?schedule.tasks.map(task=>[task.id, task]):[]);
+    const lockMap=reserveLocks.get(stageKey)||new Map();
     Object.keys(stageMap).forEach(iso=>{
       const record=stageMap[iso];
-      if(record && record.manual) return;
-      if(horizonSet.has(iso)){
+      if(record && record.manual){
+        if(record.released){
+          record.released=false;
+          freezeChanged=true;
+        }
+        return;
+      }
+      const normalizedIso=coerceCalendarIso(iso);
+      if(!normalizedIso || !horizonSet.has(normalizedIso)){
         delete stageMap[iso];
-        changed=true;
-      }else if(!record || !record.manual){
-        delete stageMap[iso];
-        changed=true;
+        freezeChanged=true;
+      }
+    });
+    horizonSet.forEach(iso=>{
+      const normalizedIso=coerceCalendarIso(iso);
+      if(!normalizedIso) return;
+      const existing=stageMap[normalizedIso]||null;
+      const lockInfo=lockMap.get(normalizedIso)||lockMap.get(iso)||null;
+      const manual=(existing?.manual===true)||(lockInfo?.manual===true);
+      const baseCaptured=manual
+        ? (existing?.capturedAt||lockInfo?.capturedAt||'')
+        : (existing?.capturedAt||'');
+      const segments=[];
+      const lockedSegments=lockInfo && Array.isArray(lockInfo.segments)
+        ? lockInfo.segments.map(seg=>({
+            taskId:seg.taskId,
+            orderId:typeof seg.orderId==='string'?seg.orderId:'',
+            hours:Math.max(0, Number(seg.hours)||0),
+            section:seg.section==='reserve'?'reserve':'public'
+          }))
+        : [];
+      const lockedIndex=new Map();
+      lockedSegments.forEach((seg,idx)=>{
+        const key=`${seg.taskId}:${seg.section}`;
+        lockedIndex.set(key, idx);
+        segments.push({ ...seg });
+      });
+      const day=perDay.get(normalizedIso);
+      if(day && Array.isArray(day.segments)){
+        day.segments.forEach(seg=>{
+          if(!seg || !seg.uid) return;
+          const hours=Number(seg.hours);
+          if(!Number.isFinite(hours) || hours<=1e-6) return;
+          const section=seg.section==='reserve'?'reserve':'public';
+          const key=`${seg.uid}:${section}`;
+          const orderId=typeof seg.orderId==='string'?seg.orderId:'';
+          if(lockedIndex.has(key)){
+            const idx=lockedIndex.get(key);
+            const prev=segments[idx];
+            if(Math.abs((prev.hours||0)-hours)>1e-6 || prev.orderId!==orderId){
+              segments[idx]={ taskId:seg.uid, orderId, hours, section };
+            }
+            return;
+          }
+          const task=tasksById.get(seg.uid);
+          if(task && task.useReserve && section!=='reserve'){
+            return;
+          }
+          segments.push({ taskId:seg.uid, orderId, hours, section });
+        });
+      }
+      const deduped=[];
+      const seen=new Set();
+      segments.forEach(seg=>{
+        if(!seg || !seg.taskId) return;
+        const section=seg.section==='reserve'?'reserve':'public';
+        const key=`${seg.taskId}:${section}`;
+        if(seen.has(key)) return;
+        seen.add(key);
+        const hours=Math.max(0, Number(seg.hours)||0);
+        if(hours<=1e-6) return;
+        deduped.push({
+          taskId:seg.taskId,
+          orderId:typeof seg.orderId==='string'?seg.orderId:'',
+          hours,
+          section
+        });
+      });
+      const record={
+        manual,
+        capturedAt:baseCaptured||new Date().toISOString(),
+        segments:deduped,
+        released:false
+      };
+      const sanitized=sanitizeCrmPlanFreezeDay(record);
+      if(!sanitized){
+        if(existing){
+          delete stageMap[normalizedIso];
+          freezeChanged=true;
+        }
+        return;
+      }
+      if(!manual && !sanitized.segments.length){
+        if(existing){
+          delete stageMap[normalizedIso];
+          freezeChanged=true;
+        }
+        return;
+      }
+      const same=existing
+        && existing.manual===sanitized.manual
+        && existing.released===sanitized.released
+        && existing.capturedAt===sanitized.capturedAt
+        && equalPlanFreezeSegments(existing.segments, sanitized.segments);
+      if(!same){
+        stageMap[normalizedIso]=sanitized;
+        freezeChanged=true;
       }
     });
     if(!Object.keys(stageMap).length){
-      delete stages[stageKey];
+      delete container.stages[stageKey];
     }
   });
-  if(changed){
+  if(freezeChanged){
     markCrmPlanFreezeDirty();
-    save('Заполнение пустот плана',{ skipAutoOptimize:true });
   }
-  return changed;
+  if(autoSave && (queueChanged||freezeChanged)){
+    save(reason,{ skipAutoOptimize:true });
+  }
+  return { changed:queueChanged||freezeChanged, queueChanged, freezeChanged };
 }
 
 function entriesFromAny(source){
@@ -11869,30 +12042,17 @@ function handleCrmPlanForceOptimization(){
   if(crmPlanFreezeForceBtn){
     crmPlanFreezeForceBtn.disabled=true;
   }
-  let queueChanged=false;
-  let freezeChanged=false;
+  let result={ changed:false, queueChanged:false, freezeChanged:false };
   try{
-    const previous=crmPlanFreezeBypass;
-    crmPlanFreezeBypass=true;
-    try{
-      queueChanged=runCrmAutoOptimization({ reason:'force' })||false;
-      renderCrmStageTable();
-    }finally{
-      crmPlanFreezeBypass=previous;
-    }
-    freezeChanged=refillCrmPlanFreeze()||false;
-    flushCrmPlanFreezeDirty();
+    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true })||result;
     renderCrmStageTable();
-    if(queueChanged||freezeChanged){
-      save('Принудительная оптимизация очереди');
-    }
   }finally{
     crmAutoOptimizeGuard=false;
     if(crmPlanFreezeForceBtn){
       crmPlanFreezeForceBtn.disabled=false;
     }
   }
-  if(queueChanged||freezeChanged){
+  if(result && result.changed){
     showToast({ title:'CRM', message:'Очередь пересчитана без учёта фиксации плана.', tone:'success' });
   }else{
     showToast({ title:'CRM', message:'Пересчёт не потребовал изменений.', tone:'info', autoClose:3500 });
@@ -13778,8 +13938,12 @@ if(crmUnaccountedSettingsDlg){
 }
 if(crmPlanFreezeFillBtn){
   crmPlanFreezeFillBtn.addEventListener('click',()=>{
-    if(refillCrmPlanFreeze()){
-      renderCrmStageTable();
+    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true });
+    renderCrmStageTable();
+    if(result && result.changed){
+      showToast({ title:'CRM', message:'Свободные слоты заполнены с учётом сроков.', tone:'success' });
+    }else{
+      showToast({ title:'CRM', message:'Свободных слотов для заполнения не найдено.', tone:'info', autoClose:3500 });
     }
   });
 }
