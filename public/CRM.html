@@ -8335,28 +8335,53 @@ function buildCrmStageSchedule(stageKey, rows){
       if(!task || task.done) return;
       const section=seg.section==='reserve'?'reserve':'public';
       const usage=prelockedByTask.get(task.id)||{ used:0, units:0, segments:[] };
-      let available;
       if(isHourless){
-        available=usage.units>=1?0:(task.rest>0?1:0);
-      }else{
-        available=Math.max(0, task.rest);
-      }
-      if(available<=0) return;
-      let desired=isHourless?1:Number(seg.hours);
-      if(!Number.isFinite(desired) || desired<=0){
-        desired=isHourless?1:available;
-      }
-      let take=isHourless?1:Math.min(desired, available);
-      if(take<=1e-6) return;
-      if(isHourless){
-        take=1;
-        task.rest=Math.max(0, task.rest-1);
+        if(usage.units>=1){
+          return;
+        }
+        const segDate=addDays(date,0);
+        const take=1;
         usage.units=1;
-      }else{
-        task.rest=Math.max(0, task.rest-take);
-        usage.used+=take;
+        usage.segments.push({ date:segDate, hours:take, late:false });
+        prelockedByTask.set(task.id, usage);
+        if(task.rest>0){
+          task.rest=Math.max(0, task.rest-take);
+        }
+        sanitizedSegments.push({
+          taskId:task.id,
+          orderId:task.orderId||'',
+          hours:take,
+          section
+        });
+        day.segments.push({
+          uid:task.id,
+          hours:take,
+          late:false,
+          section,
+          orderId:task.orderId||''
+        });
+        if(section==='reserve'){
+          reserveUsed+=take;
+        }else{
+          publicUsed+=take;
+        }
+        return;
       }
+      const available=Math.max(0, task.rest);
+      let desired=Number(seg.hours);
+      if(!Number.isFinite(desired) || desired<=0){
+        if(available<=1e-6){
+          return;
+        }
+        desired=available;
+      }
+      if(desired<=1e-6){
+        return;
+      }
+      const take=desired;
       const segDate=addDays(date,0);
+      task.rest=Math.max(0, task.rest-take);
+      usage.used+=take;
       usage.segments.push({ date:segDate, hours:take, late:false });
       prelockedByTask.set(task.id, usage);
       sanitizedSegments.push({
@@ -8376,6 +8401,17 @@ function buildCrmStageSchedule(stageKey, rows){
         reserveUsed+=take;
       }else{
         publicUsed+=take;
+      }
+      if(available>1e-6 && take>available+1e-3){
+        const stageLabel=CRM_STAGE_LABELS[stageKey]||'Передел';
+        errors.push({
+          orderId:task.orderId,
+          stageKey,
+          label:task.label,
+          reason:'plan-freeze-overflow',
+          date:fmtDateISO(segDate),
+          message:`Фиксация плана для «${task.label}» (${stageLabel}) закрепляет ${take.toFixed(1)}ч при доступных ${available.toFixed(1)}ч.`
+        });
       }
     });
     if(isHourless){
