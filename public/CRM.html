@@ -4792,10 +4792,6 @@
                     <input name="planFreezeDays" class="pc-input" type="number" min="0" step="1" />
                     <span class="crm-field__hint">Количество рабочих дней, которые остаются без перераспределения.</span>
                   </label>
-                  <div class="crm-settings-actions">
-                    <button type="button" class="pc-btn pc-btn--secondary" id="crmPlanFreezeFillBtn">Заполнить пустоту</button>
-                    <button type="button" class="pc-btn pc-btn--ghost" id="crmPlanFreezeForceBtn">Принудительная оптимизация</button>
-                  </div>
                   <label class="crm-field">
                     <span class="crm-field__label">Закреплять все заказы авто</span>
                     <input name="autoPinOrders" type="checkbox" />
@@ -7236,7 +7232,8 @@ function refillCrmPlanFreeze(options){
   try{
     crmPlanFreezeBypass=true;
     if(autoOptimize){
-      const reasonTag=reason==='Принудительная оптимизация очереди'?'force':'plan-freeze-fill';
+      const reasonTagRaw=typeof opts.autoOptimizeReason==='string'?opts.autoOptimizeReason.trim():'';
+      const reasonTag=reasonTagRaw||'plan-freeze-fill';
       queueChanged=runCrmAutoOptimization({ reason:reasonTag })||false;
     }
     rebuildStageData();
@@ -12598,37 +12595,6 @@ function handleCrmStageManualOptimization(){
   renderCurrentView();
 }
 
-function handleCrmPlanForceOptimization(){
-  if(!crmCanManageStages()){
-    showToast({ title:'CRM', message:'У вас нет прав для оптимизации очереди.', tone:'warn' });
-    return;
-  }
-  if(crmAutoOptimizeGuard) return;
-  if(!window.confirm('Принудительно пересчитать последовательность, игнорируя фиксацию плана?')){
-    return;
-  }
-  crmAutoOptimizeGuard=true;
-  if(crmPlanFreezeForceBtn){
-    crmPlanFreezeForceBtn.disabled=true;
-  }
-  let result={ changed:false, queueChanged:false, freezeChanged:false };
-  try{
-    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true, preserveManualSegments:false, allowPullback:true, refreshManualSegments:true })||result;
-    renderCrmStageTable();
-  }finally{
-    crmAutoOptimizeGuard=false;
-    if(crmPlanFreezeForceBtn){
-      crmPlanFreezeForceBtn.disabled=false;
-    }
-  }
-  if(result && result.changed){
-    showToast({ title:'CRM', message:'Очередь пересчитана без учёта фиксации плана.', tone:'success' });
-  }else{
-    showToast({ title:'CRM', message:'Пересчёт не потребовал изменений.', tone:'info', autoClose:3500 });
-  }
-  renderCurrentView();
-}
-
 function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
@@ -13641,8 +13607,6 @@ const crmUnaccountedAddBtn=$('#crmUnaccountedAdd');
 const crmUnaccountedEditorClose=$('#crmUnaccountedEditorClose');
 const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
 const crmPlanFreezeInput=boardForm?.querySelector('input[name="planFreezeDays"]')||null;
-const crmPlanFreezeFillBtn=boardForm?.querySelector('#crmPlanFreezeFillBtn')||null;
-const crmPlanFreezeForceBtn=boardForm?.querySelector('#crmPlanFreezeForceBtn')||null;
 const crmAutoPinInput=boardForm?.querySelector('input[name="autoPinOrders"]')||null;
 const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]')||null;
 const crmExtraMinimumInput=boardForm?.querySelector('input[name="extraMinimum"]')||null;
@@ -14506,23 +14470,6 @@ if(crmUnaccountedEditorDone){
 if(crmUnaccountedSettingsDlg){
   crmUnaccountedSettingsDlg.addEventListener('cancel',()=>closeCrmUnaccountedEditor());
 }
-if(crmPlanFreezeFillBtn){
-  crmPlanFreezeFillBtn.addEventListener('click',()=>{
-    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true, preserveManualSegments:false, allowPullback:true, refreshManualSegments:true });
-    renderCrmStageTable();
-    if(result && result.changed){
-      showToast({ title:'CRM', message:'Свободные слоты заполнены с учётом сроков.', tone:'success' });
-    }else{
-      showToast({ title:'CRM', message:'Свободных слотов для заполнения не найдено.', tone:'info', autoClose:3500 });
-    }
-  });
-}
-if(crmPlanFreezeForceBtn){
-  crmPlanFreezeForceBtn.addEventListener('click',()=>{
-    handleCrmPlanForceOptimization();
-  });
-}
-
 function openBoard(){
   const b=currentBoard();
   boardForm.name.value=b.name;
