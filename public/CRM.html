@@ -9016,21 +9016,32 @@ function buildCrmStageSchedule(stageKey, rows, options){
       const day=ensureDay(date);
       if(date<minDate) minDate=new Date(date);
       if(date>maxDate) maxDate=new Date(date);
-      const takeRaw=isHourless?1:Number(seg.hours);
-      if(!Number.isFinite(takeRaw) || takeRaw<=1e-6) return;
-      const take=Math.max(0, takeRaw);
-      days.push(addDays(date,0));
+      let take=0;
       if(isHourless){
-        usage.units=(usage.units||0)+1;
-        usage.segments.push({ date:addDays(date,0), hours:1, late:false, section });
-        day.segments.push({ uid:task.id, hours:1, late:false, section, orderId:task.orderId||'' });
-        day.meta.pubUsed=(day.meta.pubUsed||0)+1;
+        const remaining=Math.max(0, Number(task.rest)||0);
+        if(remaining<=1e-6) return;
+        take=Math.min(1, remaining);
+        if(take<=1e-6) return;
+        usage.units=(usage.units||0)+take;
+        usage.segments.push({ date:addDays(date,0), hours:take, late:false, section });
+        day.segments.push({ uid:task.id, hours:take, late:false, section, orderId:task.orderId||'' });
+        day.meta.pubUsed=(day.meta.pubUsed||0)+take;
         const available=Math.max(0, day.meta.pubRem||0);
-        const consume=Math.min(1, available);
+        const consume=Math.min(take, available);
         day.meta.pubRem=Math.max(0, available-consume);
         day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
-        task.rest=Math.max(0, task.rest-1);
+        task.rest=Math.max(0, remaining-take);
       }else{
+        const remaining=Math.max(0, Number(task.rest)||0);
+        if(remaining<=1e-6) return;
+        let desired=Number(seg.hours);
+        if(!Number.isFinite(desired) || desired<=1e-6){
+          desired=remaining;
+        }else{
+          desired=Math.max(0, desired);
+        }
+        take=Math.min(remaining, desired);
+        if(take<=1e-6) return;
         usage.used+=take;
         usage.segments.push({ date:addDays(date,0), hours:take, late:false, section });
         day.segments.push({ uid:task.id, hours:take, late:false, section, orderId:task.orderId||'' });
@@ -9047,9 +9058,11 @@ function buildCrmStageSchedule(stageKey, rows, options){
           day.meta.pubRem=Math.max(0, available-consume);
           day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
         }
-        task.rest=Math.max(0, task.rest-take);
+        task.rest=Math.max(0, remaining-take);
       }
+      if(take<=1e-6) return;
       prelockedByTask.set(taskId, usage);
+      days.push(addDays(date,0));
     });
     if(days.length){
       days.sort((a,b)=>a-b);
