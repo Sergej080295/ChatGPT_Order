@@ -6878,6 +6878,7 @@ function refillCrmPlanFreeze(options){
   const reason=reasonRaw||'Заполнение пустот плана';
   const autoOptimize=opts.autoOptimize!==false;
   const autoSave=opts.autoSave!==false;
+  const preserveManualSegments=opts.preserveManualSegments!==false;
   const container=ensureBoardPlanFreeze(board);
   const stageKeys=Array.from(new Set(CRM_STAGE_SEQUENCE.map(normalizeCrmStageKey).filter(Boolean)));
   if(!stageKeys.length){
@@ -7010,7 +7011,7 @@ function refillCrmPlanFreeze(options){
         lockedIndex.set(key, lockedSegments.length);
         lockedSegments.push({ taskId:seg.taskId, orderId, hours, section });
       };
-      if(manualExisting && Array.isArray(existing?.segments)){
+      if(preserveManualSegments && manualExisting && Array.isArray(existing?.segments)){
         existing.segments.forEach(pushLocked);
       }
       if(lockInfo && Array.isArray(lockInfo.segments)){
@@ -12078,7 +12079,7 @@ function handleCrmPlanForceOptimization(){
   }
   let result={ changed:false, queueChanged:false, freezeChanged:false };
   try{
-    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true })||result;
+    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true, preserveManualSegments:false })||result;
     renderCrmStageTable();
   }finally{
     crmAutoOptimizeGuard=false;
@@ -13972,7 +13973,7 @@ if(crmUnaccountedSettingsDlg){
 }
 if(crmPlanFreezeFillBtn){
   crmPlanFreezeFillBtn.addEventListener('click',()=>{
-    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true });
+    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true, preserveManualSegments:false });
     renderCrmStageTable();
     if(result && result.changed){
       showToast({ title:'CRM', message:'Свободные слоты заполнены с учётом сроков.', tone:'success' });
