@@ -6885,41 +6885,47 @@ function refillCrmPlanFreeze(options){
     return { changed:false, queueChanged:false, freezeChanged:false };
   }
   const freezeDays=getPlanFreezeDays();
-  const rowsByStage=new Map();
-  stageKeys.forEach(stageKey=>{
-    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
-    rowsByStage.set(stageKey, Array.isArray(rows)?rows:[]);
-  });
   const stageMapByKey=new Map();
   stageKeys.forEach(stageKey=>{
     stageMapByKey.set(stageKey, getCrmPlanFreezeStageMap(stageKey));
   });
-  const reserveLocks=new Map();
-  stageKeys.forEach(stageKey=>{
-    const rows=rowsByStage.get(stageKey)||[];
-    const reserveIds=new Set(rows.filter(row=>row && row.useReserve).map(row=>row.identity).filter(Boolean));
-    if(!reserveIds.size) return;
-    const stageMap=stageMapByKey.get(stageKey);
-    if(!stageMap) return;
-    const lockMap=new Map();
-    Object.entries(stageMap).forEach(([iso,record])=>{
-      if(!record || !Array.isArray(record.segments)) return;
-      const lockedSegments=record.segments
-        .filter(seg=>seg && reserveIds.has(seg.taskId))
-        .map(seg=>({
-          taskId:seg.taskId,
-          orderId:typeof seg.orderId==='string'?seg.orderId:'',
-          hours:Math.max(0, Number(seg.hours)||0),
-          section:seg.section==='reserve'?'reserve':'public'
-        }));
-      if(lockedSegments.length){
-        lockMap.set(coerceCalendarIso(iso)||iso,{ manual:record.manual===true, capturedAt:record.capturedAt||'', segments:lockedSegments });
+  let rowsByStage=new Map();
+  let reserveLocks=new Map();
+  const rebuildStageData=()=>{
+    const nextRows=new Map();
+    stageKeys.forEach(stageKey=>{
+      const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+      nextRows.set(stageKey, Array.isArray(rows)?rows:[]);
+    });
+    rowsByStage=nextRows;
+    const nextLocks=new Map();
+    stageKeys.forEach(stageKey=>{
+      const rows=rowsByStage.get(stageKey)||[];
+      const reserveIds=new Set(rows.filter(row=>row && row.useReserve).map(row=>row.identity).filter(Boolean));
+      if(!reserveIds.size) return;
+      const stageMap=stageMapByKey.get(stageKey);
+      if(!stageMap) return;
+      const lockMap=new Map();
+      Object.entries(stageMap).forEach(([iso,record])=>{
+        if(!record || !Array.isArray(record.segments)) return;
+        const lockedSegments=record.segments
+          .filter(seg=>seg && reserveIds.has(seg.taskId))
+          .map(seg=>({
+            taskId:seg.taskId,
+            orderId:typeof seg.orderId==='string'?seg.orderId:'',
+            hours:Math.max(0, Number(seg.hours)||0),
+            section:seg.section==='reserve'?'reserve':'public'
+          }));
+        if(lockedSegments.length){
+          lockMap.set(coerceCalendarIso(iso)||iso,{ manual:record.manual===true, capturedAt:record.capturedAt||'', segments:lockedSegments });
+        }
+      });
+      if(lockMap.size){
+        nextLocks.set(stageKey, lockMap);
       }
     });
-    if(lockMap.size){
-      reserveLocks.set(stageKey, lockMap);
-    }
-  });
+    reserveLocks=nextLocks;
+  };
   const previousBypass=crmPlanFreezeBypass;
   const scheduleByStage=new Map();
   let queueChanged=false;
@@ -6929,6 +6935,7 @@ function refillCrmPlanFreeze(options){
       const reasonTag=reason==='Принудительная оптимизация очереди'?'force':'plan-freeze-fill';
       queueChanged=runCrmAutoOptimization({ reason:reasonTag })||false;
     }
+    rebuildStageData();
     stageKeys.forEach(stageKey=>{
       const rows=rowsByStage.get(stageKey)||[];
       if(!rows.length) return;
