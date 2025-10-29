@@ -6879,6 +6879,7 @@ function refillCrmPlanFreeze(options){
   const autoOptimize=opts.autoOptimize!==false;
   const autoSave=opts.autoSave!==false;
   const preserveManualSegments=opts.preserveManualSegments!==false;
+  const allowPullback=opts.allowPullback===true;
   const container=ensureBoardPlanFreeze(board);
   const stageKeys=Array.from(new Set(CRM_STAGE_SEQUENCE.map(normalizeCrmStageKey).filter(Boolean)));
   if(!stageKeys.length){
@@ -6939,7 +6940,7 @@ function refillCrmPlanFreeze(options){
     stageKeys.forEach(stageKey=>{
       const rows=rowsByStage.get(stageKey)||[];
       if(!rows.length) return;
-      const schedule=buildCrmStageSchedule(stageKey, rows);
+      const schedule=buildCrmStageSchedule(stageKey, rows, { allowPullback });
       if(schedule){
         scheduleByStage.set(stageKey, schedule);
       }
@@ -8418,7 +8419,9 @@ function runCrmAutoOptimization({ reason='auto' }={}){
   return changed;
 }
 
-function buildCrmStageSchedule(stageKey, rows){
+function buildCrmStageSchedule(stageKey, rows, options){
+  const opts=options&&typeof options==='object'?options:{};
+  const allowPullback=opts.allowPullback===true;
   if(!Array.isArray(rows) || !rows.length){
     return null;
   }
@@ -8429,10 +8432,12 @@ function buildCrmStageSchedule(stageKey, rows){
   const reserveMap=isHourless?new Map():calendar.reserves;
   const scheduleEvaluator=getCrmStageScheduleEvaluator(stageKey);
   const errors=[];
+  const todayBaseline=today0();
   const tasks=rows.map(row=>{
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
     const end=row.endDate instanceof Date?new Date(row.endDate):null;
-    const safeStart=start?addDays(start,0):today0();
+    const baseStart=start?addDays(start,0):addDays(todayBaseline,0);
+    const safeStart=allowPullback && baseStart>todayBaseline?addDays(todayBaseline,0):baseStart;
     let safeEnd=end?addDays(end,0):safeStart;
     if(safeEnd<safeStart) safeEnd=new Date(safeStart);
     const total=isHourless?1:Math.max(0, Number(row.totalHours)||0);
@@ -8474,9 +8479,9 @@ function buildCrmStageSchedule(stageKey, rows){
     }
     return a.start-b.start||a.end-b.end||a.label.localeCompare(b.label,'ru',{sensitivity:'base'});
   });
-  let minDate=new Date(tasks[0].start);
+  let minDate=allowPullback?addDays(todayBaseline,0):new Date(tasks[0].start);
   let maxDate=new Date(tasks[0].end);
-  const today=today0();
+  const today=todayBaseline;
   if(minDate<today) minDate=today;
   if(maxDate<minDate) maxDate=new Date(minDate);
   freezeLocks.forEach((_record, iso)=>{
@@ -8687,7 +8692,7 @@ function buildCrmStageSchedule(stageKey, rows){
     const record={ segments:[] };
     perTask.set(task.id, record);
     let remain=Math.max(0, task.rest);
-    const startWindow=task.start>minDate?new Date(task.start):new Date(minDate);
+    const startWindow=allowPullback?new Date(minDate):(task.start>minDate?new Date(task.start):new Date(minDate));
     const endWindow=task.end>startWindow?new Date(task.end):new Date(startWindow);
     let lastFailReason='';
     let lastFailDate=null;
@@ -12086,7 +12091,7 @@ function handleCrmPlanForceOptimization(){
   }
   let result={ changed:false, queueChanged:false, freezeChanged:false };
   try{
-    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true, preserveManualSegments:false })||result;
+    result=refillCrmPlanFreeze({ reason:'Принудительная оптимизация очереди', autoOptimize:true, autoSave:true, preserveManualSegments:false, allowPullback:true })||result;
     renderCrmStageTable();
   }finally{
     crmAutoOptimizeGuard=false;
@@ -13980,7 +13985,7 @@ if(crmUnaccountedSettingsDlg){
 }
 if(crmPlanFreezeFillBtn){
   crmPlanFreezeFillBtn.addEventListener('click',()=>{
-    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true, preserveManualSegments:false });
+    const result=refillCrmPlanFreeze({ reason:'Заполнение пустот плана', autoOptimize:true, autoSave:true, preserveManualSegments:false, allowPullback:true });
     renderCrmStageTable();
     if(result && result.changed){
       showToast({ title:'CRM', message:'Свободные слоты заполнены с учётом сроков.', tone:'success' });
