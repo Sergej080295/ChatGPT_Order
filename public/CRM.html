@@ -8222,6 +8222,7 @@ function buildCrmStageSchedule(stageKey, rows){
     if(safeEnd<safeStart) safeEnd=new Date(safeStart);
     const total=isHourless?1:Math.max(0, Number(row.totalHours)||0);
     const rest=isHourless? (row.done?0:1) : Math.max(0, Number(row.restHours)||0);
+    const initialRest=rest;
     const queueOrder=Number.isFinite(row.queueOrder)?row.queueOrder:null;
     return {
       id:row.identity,
@@ -8232,6 +8233,7 @@ function buildCrmStageSchedule(stageKey, rows){
       end:safeEnd,
       total,
       rest,
+      initialRest,
       progress:row.progress||0,
       done:!!row.done,
       isLate:!!row.isLate,
@@ -8603,7 +8605,27 @@ function renderCrmStageStack(schedule){
   }
   if(crmStageStackEmpty) crmStageStackEmpty.hidden=true;
   const totalBy=new Map(schedule.tasks.map(task=>[task.id, Math.max(task.total, schedule.isHourless?1:0)]));
-  const cumulative=new Map(schedule.tasks.map(task=>[task.id,0]));
+  const initialDone=new Map();
+  schedule.tasks.forEach(task=>{
+    const total=totalBy.get(task.id)||0;
+    let base=0;
+    if(task.done){
+      base=total;
+    }else if(Number.isFinite(task.initialRest)){
+      base=total-Math.max(0, Math.min(total, Number(task.initialRest)));
+    }else{
+      const pctRaw=Number(task.progress);
+      if(Number.isFinite(pctRaw) && total>0){
+        const pct=Math.max(0, Math.min(100, pctRaw));
+        base=total*(pct/100);
+      }
+    }
+    if(!Number.isFinite(base)) base=0;
+    if(base>total) base=total;
+    if(base<0) base=0;
+    initialDone.set(task.id, base);
+  });
+  const cumulative=new Map(schedule.tasks.map(task=>[task.id, initialDone.get(task.id)||0]));
   const labelMap=new Map(schedule.tasks.map(task=>[task.id, task.label||'Заказ']));
   const hasReserve=entries.some(entry=>entry.day.segments.some(seg=>seg.section==='reserve'));
   entries.forEach(({ key, day })=>{
