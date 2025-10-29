@@ -2624,6 +2624,44 @@
     background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
   }
 
+  .crm-stage-pin-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--pc-radius-sm, 8px);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 85%, transparent);
+    background: var(--pc-surface);
+    color: var(--pc-text);
+    font-size: 16px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background var(--pc-transition-short), border-color var(--pc-transition-short), color var(--pc-transition-short);
+  }
+
+  .crm-stage-pin-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+    border-color: color-mix(in srgb, var(--pc-primary) 45%, var(--pc-border));
+  }
+
+  .crm-stage-pin-btn.is-active {
+    background: color-mix(in srgb, var(--pc-primary) 16%, transparent);
+    border-color: color-mix(in srgb, var(--pc-primary) 60%, var(--pc-border));
+    color: color-mix(in srgb, var(--pc-primary) 75%, var(--pc-text));
+  }
+
+  .crm-stage-pin-btn.is-active.is-auto {
+    background: color-mix(in srgb, var(--pc-info) 18%, transparent);
+    border-color: color-mix(in srgb, var(--pc-info) 60%, var(--pc-border));
+    color: color-mix(in srgb, var(--pc-info) 75%, var(--pc-text));
+  }
+
+  .crm-stage-pin-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
   #crmStageTable tfoot td {
     padding: 10px 8px;
     background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
@@ -4440,6 +4478,7 @@
               <col style="width:52px">
               <col style="width:48px">
               <col style="width:44px">
+              <col style="width:44px">
               <col style="width:260px">
               <col style="width:96px">
               <col style="width:120px">
@@ -4457,6 +4496,7 @@
                 <th>№</th>
                 <th>👁</th>
                 <th title="Маршрут заказа">⇆</th>
+                <th title="Закрепить распределение заказа">📎</th>
                 <th>Заказ</th>
                 <th>Прогресс, %</th>
                 <th>Часов</th>
@@ -4473,7 +4513,7 @@
             <tbody></tbody>
             <tfoot>
               <tr>
-                <td colspan="5" class="crm-stage-total-label">Итого:</td>
+                <td colspan="6" class="crm-stage-total-label">Итого:</td>
                 <td id="crmStageTotalHours">0 ч</td>
                 <td id="crmStageTotalRest">0 ч</td>
                 <td colspan="7"></td>
@@ -4756,6 +4796,11 @@
                     <button type="button" class="pc-btn pc-btn--secondary" id="crmPlanFreezeFillBtn">Заполнить пустоту</button>
                     <button type="button" class="pc-btn pc-btn--ghost" id="crmPlanFreezeForceBtn">Принудительная оптимизация</button>
                   </div>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Закреплять все заказы авто</span>
+                    <input name="autoPinOrders" type="checkbox" />
+                    <span class="crm-field__hint">Автоматически закреплять распределение новых заказов.</span>
+                  </label>
                 </div>
                 <div class="crm-settings-inline">
                   <label class="crm-field">
@@ -5354,6 +5399,34 @@ function sanitizeCrmPlanFreezeDay(raw){
   return { manual, capturedAt:capturedAt||'', segments, released };
 }
 
+function sanitizeCrmPlanFreezeTask(raw){
+  if(!raw || typeof raw!=='object') return null;
+  if(raw.pinned===false) return null;
+  const manual=raw.manual===true;
+  const capturedAt=typeof raw.capturedAt==='string'?raw.capturedAt.trim():'';
+  const segments=[];
+  const source=Array.isArray(raw.segments)?raw.segments:[];
+  source.forEach(entry=>{
+    if(!entry) return;
+    const iso=coerceCalendarIso(entry.date||entry.iso);
+    if(!iso) return;
+    const hoursRaw=Number(entry.hours);
+    if(!Number.isFinite(hoursRaw) || hoursRaw<=1e-6) return;
+    const taskId=typeof entry.taskId==='string'?entry.taskId.trim():'';
+    const orderId=typeof entry.orderId==='string'?entry.orderId.trim():'';
+    const section=entry.section==='reserve'?'reserve':'public';
+    segments.push({ taskId, orderId, date:iso, hours:hoursRaw, section });
+  });
+  segments.sort((a,b)=>{
+    const dateCmp=(a.date||'').localeCompare(b.date||'');
+    if(dateCmp!==0) return dateCmp;
+    const sectionCmp=(a.section||'').localeCompare(b.section||'');
+    if(sectionCmp!==0) return sectionCmp;
+    return Number(a.hours||0)-Number(b.hours||0);
+  });
+  return { pinned:true, manual, capturedAt:capturedAt||'', segments };
+}
+
 function sanitizeCrmPlanFreeze(raw){
   const base=raw&&typeof raw==='object'?raw:{};
   const stagesSource=base.stages&&typeof base.stages==='object'?base.stages:{};
@@ -5374,7 +5447,28 @@ function sanitizeCrmPlanFreeze(raw){
       stages[normalized]=dayMap;
     }
   });
-  return { stages };
+  const taskSource=base.taskPins&&typeof base.taskPins==='object'?base.taskPins:{};
+  const taskPins={};
+  Object.entries(taskSource).forEach(([stageKey,records])=>{
+    const normalizedStage=normalizeCrmStageKey(stageKey);
+    if(!normalizedStage) return;
+    if(!records || typeof records!=='object') return;
+    const taskMap={};
+    Object.entries(records).forEach(([taskId,record])=>{
+      const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+      if(!key) return;
+      const sanitizedRecord=sanitizeCrmPlanFreezeTask(record);
+      if(!sanitizedRecord) return;
+      sanitizedRecord.segments.forEach(seg=>{
+        if(!seg.taskId) seg.taskId=key;
+      });
+      taskMap[key]=sanitizedRecord;
+    });
+    if(Object.keys(taskMap).length){
+      taskPins[normalizedStage]=taskMap;
+    }
+  });
+  return { stages, taskPins };
 }
 
 function sanitizeCrmSettings(raw){
@@ -5428,6 +5522,7 @@ function sanitizeCrmSettings(raw){
   result.trashRetention=retention;
   result.journalRetention=journalRetention;
   result.planFreezeDays=sanitizePlanFreezeDays(base.planFreezeDays);
+  result.autoPinOrders=base.autoPinOrders===true;
   return result;
 }
 
@@ -5479,6 +5574,12 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
   result.preferences={ ...fallback.preferences, ...preferred.preferences };
   result.startView=preferred.startView||fallback.startView;
+
+  const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
+    && Object.prototype.hasOwnProperty.call(preferredSettings,'autoPinOrders');
+  result.autoPinOrders=preferredAutoDefined
+    ? preferred.autoPinOrders===true
+    : (preferred.autoPinOrders===true || fallback.autoPinOrders===true);
 
   const mergedMapping={ ...fallback.mapping };
   Object.keys(preferred.mapping||{}).forEach(key=>{
@@ -6420,6 +6521,9 @@ function ensureBoardPlanFreeze(board){
   if(!board.planFreeze.stages || typeof board.planFreeze.stages!=='object'){
     board.planFreeze.stages={};
   }
+  if(!board.planFreeze.taskPins || typeof board.planFreeze.taskPins!=='object'){
+    board.planFreeze.taskPins={};
+  }
   return board.planFreeze;
 }
 
@@ -6513,6 +6617,101 @@ function removeCrmPlanFreezeRecord(stageKey, iso){
   return true;
 }
 
+function getCrmPlanFreezeTaskMap(stageKey){
+  const normalized=normalizeCrmStageKey(stageKey);
+  if(!normalized) return {};
+  const board=currentBoard();
+  if(!board) return {};
+  const container=ensureBoardPlanFreeze(board);
+  if(!container.taskPins[normalized]){
+    container.taskPins[normalized]={};
+  }
+  const original=container.taskPins[normalized];
+  const sanitized={};
+  let changed=false;
+  Object.entries(original).forEach(([taskId,record])=>{
+    const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+    if(!key){
+      changed=true;
+      return;
+    }
+    const sanitizedRecord=sanitizeCrmPlanFreezeTask(record);
+    if(!sanitizedRecord){
+      changed=true;
+      return;
+    }
+    sanitizedRecord.segments.forEach(seg=>{
+      if(!seg.taskId) seg.taskId=key;
+    });
+    sanitized[key]=sanitizedRecord;
+    if(sanitizedRecord!==record || key!==taskId){
+      changed=true;
+    }
+  });
+  if(changed){
+    container.taskPins[normalized]=sanitized;
+    markCrmPlanFreezeDirty();
+  }
+  return container.taskPins[normalized];
+}
+
+function getCrmPlanFreezeTaskRecord(stageKey, taskId){
+  const map=getCrmPlanFreezeTaskMap(stageKey);
+  const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+  if(!key) return null;
+  return map[key]||null;
+}
+
+function setCrmPlanFreezeTaskRecord(stageKey, taskId, record){
+  const normalized=normalizeCrmStageKey(stageKey);
+  const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+  if(!normalized || !key) return null;
+  const board=currentBoard();
+  if(!board) return null;
+  const container=ensureBoardPlanFreeze(board);
+  if(!container.taskPins[normalized]){
+    container.taskPins[normalized]={};
+  }
+  const sanitized=sanitizeCrmPlanFreezeTask({ ...record, pinned:true });
+  if(!sanitized){
+    removeCrmPlanFreezeTaskRecord(stageKey, taskId);
+    return null;
+  }
+  sanitized.manual=record?.manual===true;
+  if(typeof record?.capturedAt==='string' && record.capturedAt.trim()){
+    sanitized.capturedAt=record.capturedAt.trim();
+  }else if(!sanitized.capturedAt){
+    sanitized.capturedAt=new Date().toISOString();
+  }
+  sanitized.segments.forEach(seg=>{
+    if(!seg.taskId) seg.taskId=key;
+    if(!seg.orderId && typeof record?.orderId==='string'){
+      seg.orderId=record.orderId.trim();
+    }
+  });
+  container.taskPins[normalized][key]=sanitized;
+  markCrmPlanFreezeDirty();
+  return sanitized;
+}
+
+function removeCrmPlanFreezeTaskRecord(stageKey, taskId){
+  const normalized=normalizeCrmStageKey(stageKey);
+  const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+  if(!normalized || !key) return false;
+  const board=currentBoard();
+  if(!board) return false;
+  const container=ensureBoardPlanFreeze(board);
+  if(!container.taskPins[normalized] || !container.taskPins[normalized][key]){
+    return false;
+  }
+  delete container.taskPins[normalized][key];
+  if(!Object.keys(container.taskPins[normalized]).length){
+    delete container.taskPins[normalized];
+  }
+  markCrmPlanFreezeDirty();
+  return true;
+}
+
 function collectCrmPlanFreezeHorizon(stageKey, limit){
   const days=sanitizePlanFreezeDays(limit);
   if(!days) return [];
@@ -6563,13 +6762,34 @@ function equalPlanFreezeSegments(a, b){
   return true;
 }
 
+function equalPinnedTaskSegments(a, b){
+  if(a===b) return true;
+  if(!Array.isArray(a) || !Array.isArray(b)) return false;
+  if(a.length!==b.length) return false;
+  for(let i=0;i<a.length;i+=1){
+    const segA=a[i];
+    const segB=b[i];
+    if(!segA || !segB) return false;
+    const isoA=coerceCalendarIso(segA.date||segA.iso);
+    const isoB=coerceCalendarIso(segB.date||segB.iso);
+    if(isoA!==isoB) return false;
+    if((segA.taskId||'')!==(segB.taskId||'')) return false;
+    if((segA.orderId||'')!==(segB.orderId||'')) return false;
+    if((segA.section||'public')!==(segB.section||'public')) return false;
+    const hoursA=Number(segA.hours||0);
+    const hoursB=Number(segB.hours||0);
+    if(Math.abs(hoursA-hoursB)>1e-6) return false;
+  }
+  return true;
+}
+
 function prepareCrmPlanFreezeForStage(board, stageKey){
   if(crmPlanFreezeBypass){
-    return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), changed:false };
+    return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), taskPins:new Map(), changed:false };
   }
   const normalized=normalizeCrmStageKey(stageKey);
   if(!board || !normalized){
-    return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), changed:false };
+    return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), taskPins:new Map(), changed:false };
   }
   const container=ensureBoardPlanFreeze(board);
   if(!container.stages[normalized]){
@@ -6595,6 +6815,35 @@ function prepareCrmPlanFreezeForStage(board, stageKey){
     }
   });
   container.stages[normalized]=sanitized;
+  if(!container.taskPins[normalized]){
+    container.taskPins[normalized]={};
+  }
+  const originalTaskPins=container.taskPins[normalized];
+  const sanitizedTaskPins={};
+  let tasksChanged=false;
+  Object.entries(originalTaskPins).forEach(([taskId,record])=>{
+    const key=typeof taskId==='string'?taskId.trim():String(taskId||'');
+    if(!key){
+      tasksChanged=true;
+      return;
+    }
+    const sanitizedRecord=sanitizeCrmPlanFreezeTask(record);
+    if(!sanitizedRecord){
+      tasksChanged=true;
+      return;
+    }
+    sanitizedRecord.segments.forEach(seg=>{
+      if(!seg.taskId) seg.taskId=key;
+    });
+    sanitizedTaskPins[key]=sanitizedRecord;
+    if(sanitizedRecord!==record || key!==taskId){
+      tasksChanged=true;
+    }
+  });
+  container.taskPins[normalized]=sanitizedTaskPins;
+  if(tasksChanged){
+    changed=true;
+  }
   const freezeDays=getPlanFreezeDays();
   const horizonDays=collectCrmPlanFreezeHorizon(normalized, freezeDays);
   const horizonSet=new Set(horizonDays);
@@ -6641,7 +6890,17 @@ function prepareCrmPlanFreezeForStage(board, stageKey){
   if(changed){
     markCrmPlanFreezeDirty();
   }
-  return { stageMap:sanitized, locks, captureDays, horizon:horizonSet, changed };
+  if(tasksChanged){
+    markCrmPlanFreezeDirty();
+  }
+  return {
+    stageMap:sanitized,
+    locks,
+    captureDays,
+    horizon:horizonSet,
+    taskPins:new Map(Object.entries(container.taskPins[normalized])),
+    changed
+  };
 }
 
 function finalizeCrmPlanFreezeForStage(board, stageKey, schedule, captureDays){
@@ -6683,6 +6942,66 @@ function finalizeCrmPlanFreezeForStage(board, stageKey, schedule, captureDays){
       record.capturedAt=new Date().toISOString();
       stageMap[normalizedIso]=record;
       changed=true;
+    }
+  });
+  const taskPinMap=getCrmPlanFreezeTaskMap(normalized);
+  const autoPinEnabled=state?.settings?.autoPinOrders===true;
+  const taskSegments=new Map();
+  if(schedule?.perDay instanceof Map){
+    schedule.perDay.forEach((day, iso)=>{
+      const dateKey=coerceCalendarIso(iso)||fmtDateISO(day.date);
+      if(!dateKey) return;
+      const segments=Array.isArray(day.segments)?day.segments:[];
+      segments.forEach(seg=>{
+        if(!seg || !seg.uid) return;
+        const hours=Number(seg.hours);
+        if(!Number.isFinite(hours) || hours<=1e-6) return;
+        const section=seg.section==='reserve'?'reserve':'public';
+        const list=taskSegments.get(seg.uid)||[];
+        list.push({
+          taskId:seg.uid,
+          orderId:typeof seg.orderId==='string'?seg.orderId:'',
+          date:dateKey,
+          hours:schedule.isHourless?1:hours,
+          section
+        });
+        taskSegments.set(seg.uid, list);
+      });
+    });
+  }
+  taskSegments.forEach(list=>{
+    list.sort((a,b)=>a.date.localeCompare(b.date)||a.section.localeCompare(b.section));
+  });
+  const seenTaskIds=new Set();
+  taskSegments.forEach((segments, taskId)=>{
+    if(!segments.length) return;
+    const existing=taskPinMap[taskId]||null;
+    const shouldPersist=!!existing || autoPinEnabled;
+    if(!shouldPersist){
+      return;
+    }
+    const manual=existing?.manual===true;
+    const baseRecord={
+      pinned:true,
+      manual,
+      capturedAt:existing?.capturedAt||'',
+      orderId:segments[0]?.orderId||'',
+      segments:segments.map(seg=>({ ...seg }))
+    };
+    if(existing){
+      if(!equalPinnedTaskSegments(existing.segments, baseRecord.segments)){
+        baseRecord.capturedAt=new Date().toISOString();
+      }
+    }else{
+      baseRecord.manual=false;
+      baseRecord.capturedAt=new Date().toISOString();
+    }
+    setCrmPlanFreezeTaskRecord(normalized, taskId, baseRecord);
+    seenTaskIds.add(taskId);
+  });
+  Object.keys(taskPinMap).forEach(taskId=>{
+    if(!seenTaskIds.has(taskId)){
+      removeCrmPlanFreezeTaskRecord(normalized, taskId);
     }
   });
   if(changed){
@@ -8116,6 +8435,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.preferences)!==JSON.stringify(nextSanitized.preferences)){
     sections.push('Настройки оптимизации');
   }
+  if(prevSanitized.autoPinOrders!==nextSanitized.autoPinOrders){
+    sections.push('Автозакрепление заказов');
+  }
   if(prevSanitized.startView!==nextSanitized.startView){
     sections.push('Стартовый вид');
   }
@@ -8455,6 +8777,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
   const planFreezeContext=prepareCrmPlanFreezeForStage(board, stageKey);
   const freezeLocks=planFreezeContext.locks||new Map();
   const captureDays=planFreezeContext.captureDays||new Set();
+  const taskPinRecords=planFreezeContext.taskPins||new Map();
   tasks.sort((a,b)=>{
     const aQueue=Number.isFinite(a.queueOrder)?a.queueOrder:null;
     const bQueue=Number.isFinite(b.queueOrder)?b.queueOrder:null;
@@ -8522,6 +8845,8 @@ function buildCrmStageSchedule(stageKey, rows, options){
           resLim,
           pubRem:pubCap,
           resRem:resLim,
+          pubUsed:0,
+          resUsed:0,
           excluded:Math.max(0, baseCapacity-capDay),
           patternOff,
           reserveExclusive:resLim>1e-6
@@ -8560,7 +8885,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
         const segDate=addDays(date,0);
         const take=1;
         usage.units=1;
-        usage.segments.push({ date:segDate, hours:take, late:false });
+        usage.segments.push({ date:segDate, hours:take, late:false, section });
         prelockedByTask.set(task.id, usage);
         if(task.rest>0){
           task.rest=Math.max(0, task.rest-take);
@@ -8578,6 +8903,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
           section,
           orderId:task.orderId||''
         });
+        day.meta.pubUsed=(day.meta.pubUsed||0)+take;
         if(section==='reserve'){
           reserveUsed+=take;
         }else{
@@ -8597,7 +8923,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
       const segDate=addDays(date,0);
       task.rest=Math.max(0, task.rest-take);
       usage.used+=take;
-      usage.segments.push({ date:segDate, hours:take, late:false });
+      usage.segments.push({ date:segDate, hours:take, late:false, section });
       prelockedByTask.set(task.id, usage);
       sanitizedSegments.push({
         taskId:task.id,
@@ -8612,6 +8938,11 @@ function buildCrmStageSchedule(stageKey, rows, options){
         section,
         orderId:task.orderId||''
       });
+      if(section==='reserve'){
+        day.meta.resUsed=(day.meta.resUsed||0)+take;
+      }else{
+        day.meta.pubUsed=(day.meta.pubUsed||0)+take;
+      }
       if(section==='reserve'){
         reserveUsed+=take;
       }else{
@@ -8636,6 +8967,8 @@ function buildCrmStageSchedule(stageKey, rows, options){
       day.meta.pubRem=0;
       day.meta.resLim=0;
       day.meta.resRem=0;
+      day.meta.pubUsed=sanitizedSegments.length;
+      day.meta.resUsed=0;
     }else{
       const targetPublicCap=Math.max(originalPubCap, publicUsed);
       const targetReserveCap=Math.max(originalResLim, reserveUsed);
@@ -8643,6 +8976,8 @@ function buildCrmStageSchedule(stageKey, rows, options){
       day.meta.pubRem=0;
       day.meta.resLim=targetReserveCap;
       day.meta.resRem=0;
+      day.meta.pubUsed=publicUsed;
+      day.meta.resUsed=reserveUsed;
     }
     day.meta.freezeLocked=true;
     day.meta.freezeManual=record.manual===true;
@@ -8654,6 +8989,71 @@ function buildCrmStageSchedule(stageKey, rows, options){
     if(!equalPlanFreezeSegments(record.segments, sanitizedSegments)){
       record.segments=sanitizedSegments;
       markCrmPlanFreezeDirty();
+    }
+  });
+  const pinnedDaysByTask=new Map();
+  taskPinRecords.forEach((record, rawTaskId)=>{
+    const taskId=typeof rawTaskId==='string'?rawTaskId:String(rawTaskId||'');
+    if(!taskId) return;
+    const task=taskById.get(taskId);
+    if(!task || task.done){
+      removeCrmPlanFreezeTaskRecord(stageKey, taskId);
+      return;
+    }
+    const segments=Array.isArray(record?.segments)?record.segments:[];
+    if(!segments.length){
+      return;
+    }
+    const usage=prelockedByTask.get(taskId)||{ used:0, units:0, segments:[] };
+    const days=[];
+    segments.forEach(seg=>{
+      if(!seg) return;
+      const iso=coerceCalendarIso(seg.date||seg.iso);
+      if(!iso) return;
+      const date=new Date(`${iso}T00:00:00`);
+      if(Number.isNaN(date.getTime())) return;
+      const section=seg.section==='reserve'?'reserve':'public';
+      const day=ensureDay(date);
+      if(date<minDate) minDate=new Date(date);
+      if(date>maxDate) maxDate=new Date(date);
+      const takeRaw=isHourless?1:Number(seg.hours);
+      if(!Number.isFinite(takeRaw) || takeRaw<=1e-6) return;
+      const take=Math.max(0, takeRaw);
+      days.push(addDays(date,0));
+      if(isHourless){
+        usage.units=(usage.units||0)+1;
+        usage.segments.push({ date:addDays(date,0), hours:1, late:false, section });
+        day.segments.push({ uid:task.id, hours:1, late:false, section, orderId:task.orderId||'' });
+        day.meta.pubUsed=(day.meta.pubUsed||0)+1;
+        const available=Math.max(0, day.meta.pubRem||0);
+        const consume=Math.min(1, available);
+        day.meta.pubRem=Math.max(0, available-consume);
+        day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
+        task.rest=Math.max(0, task.rest-1);
+      }else{
+        usage.used+=take;
+        usage.segments.push({ date:addDays(date,0), hours:take, late:false, section });
+        day.segments.push({ uid:task.id, hours:take, late:false, section, orderId:task.orderId||'' });
+        if(section==='reserve'){
+          day.meta.resUsed=(day.meta.resUsed||0)+take;
+          const available=Math.max(0, day.meta.resRem||0);
+          const consume=Math.min(take, available);
+          day.meta.resRem=Math.max(0, available-consume);
+          day.meta.resLim=Math.max(day.meta.resLim||0, day.meta.resUsed||0);
+        }else{
+          day.meta.pubUsed=(day.meta.pubUsed||0)+take;
+          const available=Math.max(0, day.meta.pubRem||0);
+          const consume=Math.min(take, available);
+          day.meta.pubRem=Math.max(0, available-consume);
+          day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
+        }
+        task.rest=Math.max(0, task.rest-take);
+      }
+      prelockedByTask.set(taskId, usage);
+    });
+    if(days.length){
+      days.sort((a,b)=>a-b);
+      pinnedDaysByTask.set(taskId, days);
     }
   });
   const hasReserveAhead=date=>{
@@ -8697,14 +9097,15 @@ function buildCrmStageSchedule(stageKey, rows, options){
       let progressed=false;
       if(task.useReserve && remain>1e-6 && day.meta.resRem>1e-6){
         const take=Math.min(remain, day.meta.resRem);
-      if(take>0){
-        day.meta.resRem=Math.max(0, day.meta.resRem-take);
-        day.segments.push({ uid:task.id, hours:take, late, section:'reserve', orderId:task.orderId||'' });
-        record.segments.push({ date:addDays(dayCursor,0), hours:take, late });
-        remain-=take;
-        progressed=true;
-        lastFailReason='';
-        lastFailDate=null;
+        if(take>0){
+          day.meta.resRem=Math.max(0, day.meta.resRem-take);
+          day.segments.push({ uid:task.id, hours:take, late, section:'reserve', orderId:task.orderId||'' });
+          record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'reserve' });
+          remain-=take;
+          progressed=true;
+          day.meta.resUsed=(day.meta.resUsed||0)+take;
+          lastFailReason='';
+          lastFailDate=null;
         }
       }
       if(remain>1e-6){
@@ -8718,9 +9119,10 @@ function buildCrmStageSchedule(stageKey, rows, options){
           if(take>0){
             day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
             day.segments.push({ uid:task.id, hours:take, late, section:'public', orderId:task.orderId||'' });
-            record.segments.push({ date:addDays(dayCursor,0), hours:take, late });
+            record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'public' });
             remain-=take;
             progressed=true;
+            day.meta.pubUsed=(day.meta.pubUsed||0)+take;
             lastFailReason='';
             lastFailDate=null;
           }
@@ -8739,6 +9141,12 @@ function buildCrmStageSchedule(stageKey, rows, options){
       }
       return progressed;
     };
+    const pinnedDays=pinnedDaysByTask.get(task.id)||[];
+    pinnedDays.forEach(date=>{
+      if(remain>1e-6){
+        allocateDay(date,false);
+      }
+    });
     for(let cursor=new Date(startWindow); cursor<=endWindow && remain>1e-6; cursor=addDays(cursor,1)){
       allocateDay(cursor,false);
     }
@@ -11710,10 +12118,25 @@ function renderCrmStageTable(){
     const titleMarkup=entry.occurrenceTotal>1
       ? `${escapeHtml(entry.orderTitle||'Заказ')} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
       : escapeHtml(entry.orderTitle||'Заказ');
+    const pinTaskId=entry.stageId||entry.identity;
+    const pinRecord=pinTaskId?getCrmPlanFreezeTaskRecord(entry.stageKey, pinTaskId):null;
+    const pinned=!!(pinRecord && Array.isArray(pinRecord.segments) && pinRecord.segments.length);
+    const pinManual=!!pinRecord?.manual;
+    const pinTitle=pinned
+      ? (pinManual?'Распределение закреплено вручную. Нажмите, чтобы снять.':'Распределение закреплено автоматически. Нажмите, чтобы снять.')
+      : 'Закрепить распределение заказа';
+    const pinClasses=['crm-stage-pin-btn'];
+    if(pinned){
+      pinClasses.push('is-active');
+      pinClasses.push(pinManual?'is-manual':'is-auto');
+    }
+    const pinDisabledAttr=stageEditable?'':'disabled';
+    const pinModeAttr=pinned?` data-mode="${pinManual?'manual':'auto'}"`:'';
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
       <td><button class="crm-stage-route-mini" type="button" title="Маршрут заказа">⇆</button></td>
+      <td><button class="${pinClasses.join(' ')}" type="button" title="${escapeHtml(pinTitle)}" ${pinDisabledAttr}${pinModeAttr}>📎</button></td>
       <td>${titleMarkup}</td>
       <td>${progressMarkup}</td>
       <td>${escapeHtml(hoursCell)}</td>
@@ -11743,6 +12166,17 @@ function renderCrmStageTable(){
         });
       }else{
         routeBtn.disabled=true;
+      }
+    }
+    const pinBtn=tr.querySelector('.crm-stage-pin-btn');
+    if(pinBtn){
+      if(stageEditable){
+        pinBtn.addEventListener('click',evt=>{
+          evt.stopPropagation();
+          toggleCrmStageTaskPin(entry.orderId, pinTaskId, entry.stageKey);
+        });
+      }else{
+        pinBtn.disabled=true;
       }
     }
     const reserveInput=tr.querySelector('.crm-stage-reserve');
@@ -12040,6 +12474,79 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
   commitCrmOrderJournal(previousSnapshot, order);
   save('Удаление передела');
   renderCurrentView();
+}
+
+function collectCrmStageSegmentsForTask(schedule, taskId, fallbackOrderId){
+  if(!schedule || !(schedule.perDay instanceof Map)) return [];
+  const normalizedTaskId=typeof taskId==='string'?taskId:String(taskId||'');
+  if(!normalizedTaskId) return [];
+  const segments=[];
+  schedule.perDay.forEach((day, iso)=>{
+    const isoKey=coerceCalendarIso(iso)||fmtDateISO(day.date);
+    if(!isoKey) return;
+    const daySegments=Array.isArray(day.segments)?day.segments:[];
+    daySegments.forEach(seg=>{
+      if(!seg || seg.uid!==normalizedTaskId) return;
+      const hours=Number(seg.hours);
+      if(!Number.isFinite(hours) || hours<=1e-6) return;
+      segments.push({
+        taskId:normalizedTaskId,
+        orderId:typeof seg.orderId==='string'&&seg.orderId?seg.orderId:(fallbackOrderId||''),
+        date:isoKey,
+        hours:schedule.isHourless?1:hours,
+        section:seg.section==='reserve'?'reserve':'public'
+      });
+    });
+  });
+  segments.sort((a,b)=>a.date.localeCompare(b.date)||a.section.localeCompare(b.section));
+  return segments;
+}
+
+function toggleCrmStageTaskPin(orderId, stageId, stageKey){
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения закрепления этого передела.', tone:'warn' });
+    return;
+  }
+  const normalizedStage=normalizeCrmStageKey(stageKey);
+  const taskId=typeof stageId==='string'?stageId:String(stageId||'');
+  if(!normalizedStage || !taskId) return;
+  const existing=getCrmPlanFreezeTaskRecord(normalizedStage, taskId);
+  if(existing){
+    if(!window.confirm('Снять закрепление распределения для этого заказа?')){
+      return;
+    }
+    removeCrmPlanFreezeTaskRecord(normalizedStage, taskId);
+    save('Снятие закрепления распределения',{ skipAutoOptimize:true });
+    renderCrmStageTable();
+    return;
+  }
+  let schedule=crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage
+    ? crmStageScheduleCache
+    : null;
+  if(!schedule){
+    const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
+    if(Array.isArray(rows) && rows.length){
+      schedule=buildCrmStageSchedule(normalizedStage, rows)||schedule;
+    }
+  }
+  if(!schedule){
+    alert('Невозможно закрепить: нет данных для расчёта распределения.');
+    return;
+  }
+  const segments=collectCrmStageSegmentsForTask(schedule, taskId, orderId);
+  if(!segments.length){
+    alert('Невозможно закрепить: распределение для заказа отсутствует.');
+    return;
+  }
+  setCrmPlanFreezeTaskRecord(normalizedStage, taskId, {
+    pinned:true,
+    manual:true,
+    capturedAt:new Date().toISOString(),
+    orderId:orderId||'',
+    segments
+  });
+  save('Закрепление распределения',{ skipAutoOptimize:true });
+  renderCrmStageTable();
 }
 
 function handleCrmStageManualOptimization(){
@@ -13117,6 +13624,7 @@ const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
 const crmPlanFreezeInput=boardForm?.querySelector('input[name="planFreezeDays"]')||null;
 const crmPlanFreezeFillBtn=boardForm?.querySelector('#crmPlanFreezeFillBtn')||null;
 const crmPlanFreezeForceBtn=boardForm?.querySelector('#crmPlanFreezeForceBtn')||null;
+const crmAutoPinInput=boardForm?.querySelector('input[name="autoPinOrders"]')||null;
 const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]')||null;
 const crmExtraMinimumInput=boardForm?.querySelector('input[name="extraMinimum"]')||null;
 const crmCapacityContainer=boardForm?.querySelector('#crmCapacitySettings')||null;
@@ -14012,6 +14520,9 @@ function openBoard(){
   if(crmPlanFreezeInput){
     crmPlanFreezeInput.value=String(getPlanFreezeDays());
   }
+  if(crmAutoPinInput){
+    crmAutoPinInput.checked=!!state.settings.autoPinOrders;
+  }
   const extraSettings=getExtraTimeSettings();
   const scheduleMap=getCrmStageSchedules();
   if(crmExtraPercentInput){
@@ -14059,6 +14570,9 @@ boardForm.addEventListener('submit',e=>{
   state.settings.journalRetention={mode:journalModeRaw,value:journalRetentionValue};
   const planFreezeRaw=crmPlanFreezeInput?crmPlanFreezeInput.value:'';
   state.settings.planFreezeDays=sanitizePlanFreezeDays(planFreezeRaw);
+  if(boardForm.autoPinOrders){
+    state.settings.autoPinOrders=!!boardForm.autoPinOrders.checked;
+  }
   const extraPercentRaw=crmExtraPercentInput?crmExtraPercentInput.value:'';
   const extraMinimumRaw=crmExtraMinimumInput?crmExtraMinimumInput.value:'';
   state.settings.extraTime={
