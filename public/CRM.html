@@ -9020,15 +9020,16 @@ function buildCrmStageSchedule(stageKey, rows, options){
       if(isHourless){
         const remaining=Math.max(0, Number(task.rest)||0);
         if(remaining<=1e-6) return;
-        take=Math.min(1, remaining);
+        const availableRaw=Number(day.meta?.pubRem);
+        const available=Math.max(0, Number.isFinite(availableRaw)?availableRaw:0);
+        if(available<=1e-6) return;
+        take=Math.min(1, remaining, available);
         if(take<=1e-6) return;
         usage.units=(usage.units||0)+take;
         usage.segments.push({ date:addDays(date,0), hours:take, late:false, section });
         day.segments.push({ uid:task.id, hours:take, late:false, section, orderId:task.orderId||'' });
         day.meta.pubUsed=(day.meta.pubUsed||0)+take;
-        const available=Math.max(0, day.meta.pubRem||0);
-        const consume=Math.min(take, available);
-        day.meta.pubRem=Math.max(0, available-consume);
+        day.meta.pubRem=Math.max(0, available-take);
         day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
         task.rest=Math.max(0, remaining-take);
       }else{
@@ -9040,22 +9041,27 @@ function buildCrmStageSchedule(stageKey, rows, options){
         }else{
           desired=Math.max(0, desired);
         }
-        take=Math.min(remaining, desired);
+        let available=0;
+        if(section==='reserve'){
+          const availableRaw=Number(day.meta?.resRem);
+          available=Math.max(0, Number.isFinite(availableRaw)?availableRaw:0);
+        }else{
+          const availableRaw=Number(day.meta?.pubRem);
+          available=Math.max(0, Number.isFinite(availableRaw)?availableRaw:0);
+        }
+        if(available<=1e-6) return;
+        take=Math.min(remaining, desired, available);
         if(take<=1e-6) return;
         usage.used+=take;
         usage.segments.push({ date:addDays(date,0), hours:take, late:false, section });
         day.segments.push({ uid:task.id, hours:take, late:false, section, orderId:task.orderId||'' });
         if(section==='reserve'){
           day.meta.resUsed=(day.meta.resUsed||0)+take;
-          const available=Math.max(0, day.meta.resRem||0);
-          const consume=Math.min(take, available);
-          day.meta.resRem=Math.max(0, available-consume);
+          day.meta.resRem=Math.max(0, available-take);
           day.meta.resLim=Math.max(day.meta.resLim||0, day.meta.resUsed||0);
         }else{
           day.meta.pubUsed=(day.meta.pubUsed||0)+take;
-          const available=Math.max(0, day.meta.pubRem||0);
-          const consume=Math.min(take, available);
-          day.meta.pubRem=Math.max(0, available-consume);
+          day.meta.pubRem=Math.max(0, available-take);
           day.meta.pubCap=Math.max(day.meta.pubCap||0, (day.meta.pubUsed||0)+(day.meta.pubRem||0));
         }
         task.rest=Math.max(0, remaining-take);
