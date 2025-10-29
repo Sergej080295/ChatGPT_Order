@@ -6694,9 +6694,15 @@ function collectCrmPlanFreezeSegments(stageKey, iso){
   const normalizedStage=normalizeCrmStageKey(stageKey);
   const normalizedIso=coerceCalendarIso(iso);
   if(!normalizedStage || !normalizedIso) return [];
-  const schedule=crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage
+  let schedule=crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage
     ? crmStageScheduleCache
     : null;
+  if(!schedule || !schedule.perDay || !schedule.perDay.has(normalizedIso)){
+    const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
+    if(Array.isArray(rows) && rows.length){
+      schedule=buildCrmStageSchedule(normalizedStage, rows)||schedule;
+    }
+  }
   if(!schedule || !schedule.perDay){
     return [];
   }
