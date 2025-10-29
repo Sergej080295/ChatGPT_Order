@@ -4754,6 +4754,7 @@
                   </label>
                   <div class="crm-settings-actions">
                     <button type="button" class="pc-btn pc-btn--secondary" id="crmPlanFreezeFillBtn">Заполнить пустоту</button>
+                    <button type="button" class="pc-btn pc-btn--ghost" id="crmPlanFreezeForceBtn">Принудительная оптимизация</button>
                   </div>
                 </div>
                 <div class="crm-settings-inline">
@@ -5324,6 +5325,7 @@ function sanitizePlanFreezeDays(value){
 function sanitizeCrmPlanFreezeDay(raw){
   if(!raw || typeof raw!=='object') return null;
   const manual=raw.manual===true;
+  const released=raw.released===true;
   const capturedAt=typeof raw.capturedAt==='string'?raw.capturedAt.trim():'';
   const segments=[];
   const source=Array.isArray(raw.segments)?raw.segments:[];
@@ -5349,7 +5351,7 @@ function sanitizeCrmPlanFreezeDay(raw){
     if(!taskId) return;
     segments.push({ taskId, orderId, hours, section });
   });
-  return { manual, capturedAt:capturedAt||'', segments };
+  return { manual, capturedAt:capturedAt||'', segments, released };
 }
 
 function sanitizeCrmPlanFreeze(raw){
@@ -6398,6 +6400,7 @@ function ensureCrmStageCalendars(target){
 }
 
 let crmPlanFreezeDirty=false;
+let crmPlanFreezeBypass=false;
 
 function markCrmPlanFreezeDirty(){
   crmPlanFreezeDirty=true;
@@ -6559,6 +6562,9 @@ function equalPlanFreezeSegments(a, b){
 }
 
 function prepareCrmPlanFreezeForStage(board, stageKey){
+  if(crmPlanFreezeBypass){
+    return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), changed:false };
+  }
   const normalized=normalizeCrmStageKey(stageKey);
   if(!board || !normalized){
     return { stageMap:{}, locks:new Map(), captureDays:new Set(), horizon:new Set(), changed:false };
@@ -6594,6 +6600,13 @@ function prepareCrmPlanFreezeForStage(board, stageKey){
   Object.keys(sanitized).forEach(iso=>{
     const record=sanitized[iso];
     if(record.manual) return;
+    if(record.released){
+      if(!horizonSet.has(iso)){
+        delete sanitized[iso];
+        changed=true;
+      }
+      return;
+    }
     if(record.capturedAt){
       return;
     }
@@ -6605,6 +6618,9 @@ function prepareCrmPlanFreezeForStage(board, stageKey){
   horizonDays.forEach(iso=>{
     const record=sanitized[iso];
     if(record){
+      if(record.released){
+        return;
+      }
       if(!record.capturedAt){
         captureDays.add(iso);
       }
@@ -6627,6 +6643,7 @@ function prepareCrmPlanFreezeForStage(board, stageKey){
 }
 
 function finalizeCrmPlanFreezeForStage(board, stageKey, schedule, captureDays){
+  if(crmPlanFreezeBypass) return;
   if(!board || !schedule) return;
   const normalized=normalizeCrmStageKey(stageKey);
   if(!normalized) return;
@@ -6655,7 +6672,10 @@ function finalizeCrmPlanFreezeForStage(board, stageKey, schedule, captureDays){
         }
       });
     }
-    const record=stageMap[normalizedIso]||{ manual:false, capturedAt:'', segments:[] };
+    const record=stageMap[normalizedIso]||{ manual:false, capturedAt:'', segments:[], released:false };
+    if(record.released){
+      return;
+    }
     if(!equalPlanFreezeSegments(record.segments, segments) || !record.capturedAt){
       record.segments=segments;
       record.capturedAt=new Date().toISOString();
@@ -6697,6 +6717,85 @@ function collectCrmPlanFreezeSegments(stageKey, iso){
   return segments;
 }
 
+function evaluateCrmStageDateWarnings(stageKey, iso){
+  const normalizedStage=normalizeCrmStageKey(stageKey);
+  const normalizedIso=coerceCalendarIso(iso);
+  const result={ off:false, exception:false, reserve:false, freeze:false, freezeManual:false };
+  if(!normalizedStage || !normalizedIso) return result;
+  const date=new Date(`${normalizedIso}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return result;
+  const evaluator=getCrmStageScheduleEvaluator(normalizedStage);
+  if(evaluator && typeof evaluator.isWorking==='function' && !evaluator.isWorking(date)){
+    result.off=true;
+  }
+  const calendar=getCrmStageCalendar(normalizedStage);
+  if(calendar?.exceptions instanceof Map && calendar.exceptions.has(normalizedIso)){
+    const value=Number(calendar.exceptions.get(normalizedIso));
+    if(!Number.isFinite(value) || value<=0.001){
+      result.exception=true;
+    }
+  }
+  if(calendar?.reserves instanceof Map && calendar.reserves.has(normalizedIso)){
+    const reserveValue=Number(calendar.reserves.get(normalizedIso));
+    if(!Number.isFinite(reserveValue) || reserveValue>0.001){
+      result.reserve=true;
+    }
+  }
+  const freezeRecord=getCrmPlanFreezeRecord(normalizedStage, normalizedIso);
+  if(freezeRecord && !freezeRecord.released){
+    result.freeze=true;
+    result.freezeManual=!!freezeRecord.manual;
+  }
+  return result;
+}
+
+function enforceStageDateConstraints(tr, input){
+  if(!tr || !input) return true;
+  const nameInput=tr.querySelector('[data-k="name"]');
+  const stageKey=resolveCrmStageKey(nameInput?.value||'');
+  const rawValue=input.value||'';
+  const iso=coerceCalendarIso(rawValue);
+  const previousValue=typeof input.dataset.prevValue==='string'
+    ? input.dataset.prevValue
+    : (typeof input.dataset.lastAccepted==='string'
+      ? input.dataset.lastAccepted
+      : (typeof input.dataset.original==='string'?input.dataset.original:''));
+  if(stageKey && iso){
+    const warnings=evaluateCrmStageDateWarnings(stageKey, iso);
+    if(warnings.freeze){
+      const human=fmtDateHuman(iso);
+      const prefix=warnings.freezeManual
+        ? 'План на эту дату зафиксирован вручную.'
+        : 'План на эту дату зафиксирован автоматически.';
+      alert(`${prefix}\nСнимите фиксацию плана для ${human}, чтобы назначить эту дату.`);
+      const revert=previousValue||'';
+      input.value=revert;
+      input.dataset.lastAccepted=revert;
+      input.dataset.prevValue=revert;
+      return false;
+    }
+    const reasons=[];
+    if(warnings.off) reasons.push('выходной день по графику');
+    if(warnings.exception) reasons.push('день из раздела «Исключения»');
+    if(warnings.reserve) reasons.push('день с бронью мощностей');
+    if(reasons.length){
+      const human=fmtDateHuman(iso);
+      const message=`Дата ${human} отмечена как ${reasons.join(', ')}. Продолжить?`;
+      if(!window.confirm(message)){
+        const revert=previousValue||'';
+        input.value=revert;
+        input.dataset.lastAccepted=revert;
+        input.dataset.prevValue=revert;
+        return false;
+      }
+    }
+  }
+  const accepted=input.value||'';
+  input.dataset.lastAccepted=accepted;
+  input.dataset.prevValue=accepted;
+  return true;
+}
+
 function toggleCrmPlanFreezeDay(stageKey, iso){
   if(!crmCanManageStages()) return;
   const normalizedStage=normalizeCrmStageKey(stageKey);
@@ -6704,12 +6803,16 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
   if(!normalizedStage || !normalizedIso) return;
   const existing=getCrmPlanFreezeRecord(normalizedStage, normalizedIso);
   if(existing && existing.manual){
+    if(!window.confirm('Снять фиксацию плана для этого дня?')){
+      return;
+    }
     const freezeDays=getPlanFreezeDays();
     const horizonSet=new Set(collectCrmPlanFreezeHorizon(normalizedStage, freezeDays));
     const payload={
       manual:false,
       capturedAt:existing.capturedAt||'',
-      segments:Array.isArray(existing.segments)?existing.segments.slice():[]
+      segments:Array.isArray(existing.segments)?existing.segments.slice():[],
+      released:false
     };
     if(horizonSet.has(normalizedIso)){
       setCrmPlanFreezeRecord(normalizedStage, normalizedIso, payload);
@@ -6720,11 +6823,38 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
     renderCrmStageTable();
     return;
   }
+  if(existing && existing.released){
+    const segments=collectCrmPlanFreezeSegments(normalizedStage, normalizedIso);
+    setCrmPlanFreezeRecord(normalizedStage, normalizedIso, {
+      manual:true,
+      capturedAt:new Date().toISOString(),
+      segments,
+      released:false
+    });
+    save('Фиксация дня плана');
+    renderCrmStageTable();
+    return;
+  }
+  if(existing && !existing.manual){
+    if(!window.confirm('День зафиксирован автоматически. Снять закрепление?')){
+      return;
+    }
+    setCrmPlanFreezeRecord(normalizedStage, normalizedIso, {
+      manual:false,
+      capturedAt:'',
+      segments:[],
+      released:true
+    });
+    save('Отмена автоматической фиксации плана');
+    renderCrmStageTable();
+    return;
+  }
   const segments=collectCrmPlanFreezeSegments(normalizedStage, normalizedIso);
   setCrmPlanFreezeRecord(normalizedStage, normalizedIso, {
     manual:true,
     capturedAt:new Date().toISOString(),
-    segments
+    segments,
+    released:false
   });
   save('Фиксация дня плана');
   renderCrmStageTable();
@@ -11662,6 +11792,50 @@ function handleCrmStageManualOptimization(){
   renderCurrentView();
 }
 
+function handleCrmPlanForceOptimization(){
+  if(!crmCanManageStages()){
+    showToast({ title:'CRM', message:'У вас нет прав для оптимизации очереди.', tone:'warn' });
+    return;
+  }
+  if(crmAutoOptimizeGuard) return;
+  if(!window.confirm('Принудительно пересчитать последовательность, игнорируя фиксацию плана?')){
+    return;
+  }
+  crmAutoOptimizeGuard=true;
+  if(crmPlanFreezeForceBtn){
+    crmPlanFreezeForceBtn.disabled=true;
+  }
+  let queueChanged=false;
+  let freezeChanged=false;
+  try{
+    const previous=crmPlanFreezeBypass;
+    crmPlanFreezeBypass=true;
+    try{
+      queueChanged=runCrmAutoOptimization({ reason:'force' })||false;
+      renderCrmStageTable();
+    }finally{
+      crmPlanFreezeBypass=previous;
+    }
+    freezeChanged=refillCrmPlanFreeze()||false;
+    flushCrmPlanFreezeDirty();
+    renderCrmStageTable();
+    if(queueChanged||freezeChanged){
+      save('Принудительная оптимизация очереди');
+    }
+  }finally{
+    crmAutoOptimizeGuard=false;
+    if(crmPlanFreezeForceBtn){
+      crmPlanFreezeForceBtn.disabled=false;
+    }
+  }
+  if(queueChanged||freezeChanged){
+    showToast({ title:'CRM', message:'Очередь пересчитана без учёта фиксации плана.', tone:'success' });
+  }else{
+    showToast({ title:'CRM', message:'Пересчёт не потребовал изменений.', tone:'info', autoClose:3500 });
+  }
+  renderCurrentView();
+}
+
 function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
@@ -12469,8 +12643,32 @@ function appendStageRow(st){
   }
   const startInput=tr.querySelector('[data-k="start"]');
   const endInput=tr.querySelector('[data-k="end"]');
-  if(startInput){applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');startInput.addEventListener('change',()=>{applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');syncAutoDates();updateStageRowExpectation(tr);});}
-  if(endInput){applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');endInput.addEventListener('change',()=>{applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');syncAutoDates();updateStageRowExpectation(tr);});}
+  if(startInput){
+    applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');
+    startInput.dataset.lastAccepted=startInput.value||'';
+    startInput.addEventListener('focus',()=>{
+      startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
+    });
+    startInput.addEventListener('change',()=>{
+      enforceStageDateConstraints(tr, startInput);
+      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+      syncAutoDates();
+      updateStageRowExpectation(tr);
+    });
+  }
+  if(endInput){
+    applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');
+    endInput.dataset.lastAccepted=endInput.value||'';
+    endInput.addEventListener('focus',()=>{
+      endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
+    });
+    endInput.addEventListener('change',()=>{
+      enforceStageDateConstraints(tr, endInput);
+      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+      syncAutoDates();
+      updateStageRowExpectation(tr);
+    });
+  }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr);
   return tr;
 }
@@ -12651,6 +12849,7 @@ const crmUnaccountedEditorClose=$('#crmUnaccountedEditorClose');
 const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
 const crmPlanFreezeInput=boardForm?.querySelector('input[name="planFreezeDays"]')||null;
 const crmPlanFreezeFillBtn=boardForm?.querySelector('#crmPlanFreezeFillBtn')||null;
+const crmPlanFreezeForceBtn=boardForm?.querySelector('#crmPlanFreezeForceBtn')||null;
 const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]')||null;
 const crmExtraMinimumInput=boardForm?.querySelector('input[name="extraMinimum"]')||null;
 const crmCapacityContainer=boardForm?.querySelector('#crmCapacitySettings')||null;
@@ -13518,6 +13717,11 @@ if(crmPlanFreezeFillBtn){
     if(refillCrmPlanFreeze()){
       renderCrmStageTable();
     }
+  });
+}
+if(crmPlanFreezeForceBtn){
+  crmPlanFreezeForceBtn.addEventListener('click',()=>{
+    handleCrmPlanForceOptimization();
   });
 }
 
