@@ -95,3 +95,104 @@ CRM использует собственную гидратацию: `ensureSta
 ### 7.5 Прочие уведомления
 
 * Сообщения о блокировке записи и индикатор состояния БД зависят от статуса, который приходит из `plannerRemote` (например, `WRITE_MODE_FORBIDDEN`). Это косвенно связывает UX CRM с настройками Планировщика.【F:public/CRM.html†L9468-L9524】
+
+## 8. Развёртывание и обслуживание серверной части
+
+### 8.1 Требования к окружению
+
+* **ОС:** Linux (Ubuntu 20.04+, Debian 11+, Rocky 8+). Возможен запуск и на Windows/macOS для тестов, но боевой сценарий описан для Linux.
+* **Node.js:** версия 18 или новее. Сервер проверяет `engines.node` и использует современные API Node.js.【F:package.json†L12-L21】
+* **npm:** входит в комплект Node.js и требуется для установки зависимостей.
+* **SQLite:** встроенный движок хранения. Дополнительный PostgreSQL не нужен — все таблицы создаются автоматически внутри файла `data/planner.db` при первом запуске.【F:server.js†L19-L103】
+* **Порты:** открытый HTTP‑порт (по умолчанию `3000`) или любой другой, настроенный через переменную окружения `PORT`. Для внешнего доступа обычно настраивается обратный прокси (nginx/Traefik) с TLS.
+
+### 8.2 Подготовка сервера
+
+1. Установите Node.js 18 LTS. Для Ubuntu/Debian удобно использовать официальный репозиторий NodeSource:
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+   sudo apt-get install -y nodejs build-essential
+   ```
+   На других дистрибутивах используйте аналогичный способ или `nvm`.
+2. Создайте пользователя/директорию для приложения и склонируйте репозиторий:
+   ```bash
+   sudo mkdir -p /opt/planner-crm
+   sudo chown <user>:<group> /opt/planner-crm
+   git clone <repo-url> /opt/planner-crm
+   cd /opt/planner-crm
+   ```
+3. Установите npm‑зависимости:
+   ```bash
+   npm ci
+   ```
+4. Проверьте наличие каталога `data/` (он хранит базу SQLite и экспорт пользователей). Если каталога нет, создайте его и выдайте права на запись пользователю, под которым работает сервер:
+   ```bash
+   mkdir -p data
+   chown <user>:<group> data
+   chmod 750 data
+   ```
+
+### 8.3 Настройка переменных окружения
+
+Сервер считывает настройки из переменных окружения при старте. В боевом окружении удобно оформить их в файле `/etc/default/planner-crm` или через unit systemd.
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP‑порт сервера Express.【F:server.js†L18-L23】 |
+| `SESSION_TTL_HOURS` | `12` | Время жизни сессии в часах.【F:server.js†L25-L29】 |
+| `AUTH_MODE` | `local` | Тип авторизации. Сейчас поддерживается только локальный режим с SQLite.【F:server.js†L29-L119】 |
+| `ALLOW_GUEST` | `true` | Разрешить гостевой вход без пароля.【F:server.js†L29-L119】 |
+| `AUTH_MAX_FAILED_ATTEMPTS` | `5` | Лимит неудачных попыток входа, после которого учётка блокируется.【F:server.js†L31-L119】 |
+| `AUTH_LOCKOUT_MINUTES` | `15` | Длительность блокировки учётки после превышения лимита попыток.【F:server.js†L31-L119】 |
+| `COOKIE_SECURE` | зависит от `NODE_ENV` | Принудительное использование `Secure`‑cookie (включайте при работе за HTTPS).【F:server.js†L33-L36】 |
+| `DEFAULT_ADMIN_LOGIN` | `admin` | Логин создаваемой при запуске локальной админ‑учётки.【F:server.js†L35-L119】 |
+| `DEFAULT_ADMIN_PASSWORD` | `admin123` | Пароль для первоначального входа. Обязательно поменяйте его после запуска.【F:server.js†L35-L119】 |
+
+Дополнительно можно задать `PORT`, `NODE_ENV=production` и другие переменные Node.js (например, `LOG_LEVEL`). Все остальные настройки (CRM, план, пользователи) хранятся внутри базы SQLite и JSON‑снапшота в каталоге `data/`.
+
+### 8.4 Первый запуск
+
+1. Запустите сервер вручную для проверки:
+   ```bash
+   npm start
+   ```
+   Команда запускает `node server.js`, создаёт файл `data/planner.db`, таблицы и дефолтную учётную запись администратора.【F:package.json†L6-L21】【F:server.js†L19-L119】
+2. Откройте в браузере `http://<server>:3000/CRM.html`. Войдите под логином и паролем из переменных `DEFAULT_ADMIN_LOGIN`/`DEFAULT_ADMIN_PASSWORD`.
+3. После входа перейдите в настройки пользователей и задайте надёжный пароль, затем выключите гостевой доступ, если он не нужен. Все изменения сохраняются в SQLite и JSON‑снапшоте (`data/planner-state.json`).【F:server.js†L19-L120】【F:server.js†L2240-L2290】
+
+### 8.5 Автозапуск через systemd
+
+Для продакшна рекомендуется оформить сервис systemd:
+
+```
+[Unit]
+Description=Planner CRM Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/planner-crm
+Environment=NODE_ENV=production
+Environment=PORT=8080
+Environment=DEFAULT_ADMIN_LOGIN=admin
+Environment=DEFAULT_ADMIN_PASSWORD=<СЛОЖНЫЙ_ПАРОЛЬ>
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+User=planner
+Group=planner
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Сохраните файл как `/etc/systemd/system/planner-crm.service`, выполните `sudo systemctl daemon-reload`, затем `sudo systemctl enable --now planner-crm`. Логи доступны через `journalctl -u planner-crm`.
+
+### 8.6 Обновления и резервное копирование
+
+* Для обновления остановите сервис, выполните `git pull`, `npm ci` и запустите заново.
+* Все данные пользователей, снапшоты планов и история сохраняются в `data/planner.db` и `data/planner-state.json`. Создайте регулярный backup этих файлов (например, через `rsync` или снапшоты файловой системы).【F:server.js†L19-L103】
+* Скрипт `npm run migrate` оставлен для совместимости, но фактически выводит сообщение, что SQL‑миграции отключены. Дополнительных действий при обновлениях не требуется.【F:scripts/run_migrations.js†L1-L5】
+
+### 8.7 Интеграция с обратным прокси
+
+Если требуется HTTPS или доступ с нестандартного порта, установите nginx/Traefik и настройте проксирование на локальный порт приложения (`localhost:3000`). Не забудьте пробросить заголовки `X-Forwarded-*` и включить `COOKIE_SECURE=true`, когда сервер доступен только по HTTPS.
