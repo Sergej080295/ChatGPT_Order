@@ -174,6 +174,7 @@ Type=simple
 WorkingDirectory=/opt/planner-crm
 Environment=NODE_ENV=production
 Environment=PORT=8080
+Environment=COOKIE_SECURE=false
 Environment=DEFAULT_ADMIN_LOGIN=admin
 Environment=DEFAULT_ADMIN_PASSWORD=<СЛОЖНЫЙ_ПАРОЛЬ>
 ExecStart=/usr/bin/npm start
@@ -196,3 +197,22 @@ WantedBy=multi-user.target
 ### 8.7 Интеграция с обратным прокси
 
 Если требуется HTTPS или доступ с нестандартного порта, установите nginx/Traefik и настройте проксирование на локальный порт приложения (`localhost:3000`). Не забудьте пробросить заголовки `X-Forwarded-*` и включить `COOKIE_SECURE=true`, когда сервер доступен только по HTTPS.
+
+### 8.8 Типичные проблемы и диагностика
+
+**Форма входа очищается без ошибки.** Симптом: после ввода логина/пароля страница как будто перезагружается, поля очищаются, а в журнале браузера нет сообщений об ошибке. В журнале `journalctl -u planner-crm` видно, что запрос `/auth/login` проходит успешно, но дальнейшие запросы (`/`, `/me`) возвращают страницу логина.
+
+Причина — cookie сессии помечается флагом `Secure`, когда сервер запущен с `NODE_ENV=production`. Браузер принимает такую cookie только через HTTPS. Если сервер доступен по обычному HTTP, то cookie отбрасывается, и после успешного `/auth/login` пользователь остаётся неавторизованным.
+
+**Решение:**
+
+1. Убедитесь, что сервис действительно работает по HTTP (без HTTPS‑прокси). Если используется HTTPS‑прокси, проверьте, что внешний URL начинается с `https://` и сертификат валиден.
+2. Если HTTPS нет, добавьте в конфигурацию окружения `Environment=COOKIE_SECURE=false` (см. пример выше) или создайте файл `/etc/default/planner-crm`:
+   ```ini
+   COOKIE_SECURE=false
+   ```
+   и подключите его через `EnvironmentFile=/etc/default/planner-crm` в unit‑файле systemd.
+3. Перезапустите сервис: `sudo systemctl restart planner-crm`.
+4. Очистите cookie в браузере или откройте режим инкогнито и повторно выполните вход. После выдачи новой сессии поля не будут сбрасываться.
+
+Когда для сервера настроен HTTPS (например, через nginx с `proxy_set_header X-Forwarded-Proto https;`), верните `COOKIE_SECURE=true`, чтобы защитить cookie.
