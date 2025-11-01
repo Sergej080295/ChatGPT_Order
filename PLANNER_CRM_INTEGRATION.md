@@ -56,9 +56,9 @@ CRM использует собственную гидратацию: `ensureSta
 
 ### 4.3 Фиксация плана и заполнение пустот
 
-Настройка «Фиксация плана» сохраняет распределение на выбранное количество рабочих дней. Клиент обрабатывает её через `prepareCrmPlanFreezeForStage()` и `buildCrmStageSchedule()`, подмешивая ранее зафиксированные сегменты и блокируя перераспределение внутри горизонта даже при досрочном завершении заказов.【F:public/CRM.html†L6571-L6678】【F:public/CRM.html†L8078-L8449】
+Настройка «Фиксация плана» сохраняет распределение на выбранное количество рабочих дней. Клиент обрабатывает её через `prepareCrmPlanFreezeForStage()` и `buildCrmStageSchedule()`, подмешивая ранее зафиксированные сегменты и блокируя перераспределение внутри горизонта даже при досрочном завершении заказов.【F:public/CRM.html†L6782-L7006】【F:public/CRM.html†L8715-L9095】
 
-Кнопка «Заполнить пустоту» очищает автоматические фиксации и пересчитывает расписание, а иконка-скрепка в представлении «Подетально» позволяет вручную закреплять отдельные дни. Все изменения фиксируются через `markCrmPlanFreezeDirty()`/`flushCrmPlanFreezeDirty()` и синхронизируются вместе с остальными настройками CRM.【F:public/CRM.html†L4745-L4778】【F:public/CRM.html†L6400-L6774】【F:public/CRM.html†L8337-L8449】
+Иконка-скрепка в представлении «Подетально» позволяет вручную закреплять отдельные дни. Все изменения фиксируются через `markCrmPlanFreezeDirty()`/`flushCrmPlanFreezeDirty()` и синхронизируются вместе с остальными настройками CRM.【F:public/CRM.html†L4760-L4799】【F:public/CRM.html†L6501-L6512】【F:public/CRM.html†L12521-L12566】
 
 ## 5. Синхронизация и предотвращение конфликтов
 
@@ -95,3 +95,161 @@ CRM использует собственную гидратацию: `ensureSta
 ### 7.5 Прочие уведомления
 
 * Сообщения о блокировке записи и индикатор состояния БД зависят от статуса, который приходит из `plannerRemote` (например, `WRITE_MODE_FORBIDDEN`). Это косвенно связывает UX CRM с настройками Планировщика.【F:public/CRM.html†L9468-L9524】
+
+## 8. Развёртывание и обслуживание серверной части
+
+### 8.1 Требования к окружению
+
+* **ОС:** Linux (Ubuntu 20.04+, Debian 11+, Rocky 8+). Возможен запуск и на Windows/macOS для тестов, но боевой сценарий описан для Linux.
+* **Node.js:** версия 18 или новее. Сервер проверяет `engines.node` и использует современные API Node.js.【F:package.json†L12-L21】
+* **npm:** входит в комплект Node.js и требуется для установки зависимостей.
+* **SQLite:** встроенный движок хранения. Дополнительный PostgreSQL не нужен — все таблицы создаются автоматически внутри файла `data/planner.db` при первом запуске.【F:server.js†L211-L285】
+* **Порты:** открытый HTTP‑порт (по умолчанию `3000`) или любой другой, настроенный через переменную окружения `PORT`. Для внешнего доступа обычно настраивается обратный прокси (nginx/Traefik) с TLS.
+
+### 8.2 Подготовка сервера
+
+1. Установите Node.js 18 LTS. Для Ubuntu/Debian удобно использовать официальный репозиторий NodeSource:
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+   sudo apt-get install -y nodejs build-essential
+   ```
+   На других дистрибутивах используйте аналогичный способ или `nvm`.
+2. Создайте пользователя/директорию для приложения и склонируйте репозиторий:
+   ```bash
+   sudo mkdir -p /opt/planner-crm
+   sudo chown <user>:<group> /opt/planner-crm
+   git clone <repo-url> /opt/planner-crm
+   cd /opt/planner-crm
+   ```
+3. Установите npm‑зависимости:
+   ```bash
+   npm ci
+   ```
+4. Проверьте каталог хранения данных. По умолчанию сервер пишет в поддиректорию `data/` рядом с приложением, а при отсутствии прав автоматически переключится на `~/.local/share/planner-crm` (или `~/.planner-crm`). Лучше заранее выдать права на запись выбранному пути:
+   ```bash
+   mkdir -p data
+   chown <user>:<group> data
+   chmod 750 data
+   ```
+   Если требуется другой путь (например, на отдельном разделе), задайте переменную `DATA_DIR=/var/lib/planner-crm` и убедитесь, что каталог принадлежит пользователю сервиса. Сервер также принимает устаревшее имя `PLANNER_DATA_DIR`.
+
+### 8.3 Настройка переменных окружения
+
+Сервер считывает настройки из переменных окружения при старте. В боевом окружении удобно оформить их в файле `/etc/default/planner-crm` или через unit systemd.
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP‑порт сервера Express.【F:server.js†L22-L26】 |
+| `DATA_DIR` / `PLANNER_DATA_DIR` | `./data` | Каталог, куда сервер складывает SQLite и резервный JSON. Если путь недоступен, сервер переключится на домашний `~/.local/share/planner-crm`.【F:server.js†L20-L205】 |
+| `SESSION_TTL_HOURS` | `12` | Время жизни сессии в часах.【F:server.js†L43-L50】 |
+| `AUTH_MODE` | `local` | Тип авторизации. Сейчас поддерживается только локальный режим с SQLite.【F:server.js†L46-L54】 |
+| `ALLOW_GUEST` | `true` | Разрешить гостевой вход без пароля.【F:server.js†L46-L49】 |
+| `AUTH_MAX_FAILED_ATTEMPTS` | `5` | Лимит неудачных попыток входа, после которого учётка блокируется.【F:server.js†L48-L49】 |
+| `AUTH_LOCKOUT_MINUTES` | `15` | Длительность блокировки учётки после превышения лимита попыток.【F:server.js†L48-L49】 |
+| `COOKIE_SECURE` | зависит от `NODE_ENV` | Принудительное использование `Secure`‑cookie (включайте при работе за HTTPS).【F:server.js†L51-L53】 |
+| `DEFAULT_ADMIN_LOGIN` | `admin` | Логин создаваемой при запуске локальной админ‑учётки.【F:server.js†L52-L53】 |
+| `DEFAULT_ADMIN_PASSWORD` | `admin123` | Пароль для первоначального входа. Обязательно поменяйте его после запуска.【F:server.js†L52-L53】 |
+
+Дополнительно можно задать `PORT`, `NODE_ENV=production` и другие переменные Node.js (например, `LOG_LEVEL`). Все остальные настройки (CRM, план, пользователи) хранятся внутри базы SQLite и JSON‑снапшота в каталоге `data/`.
+
+### 8.4 Первый запуск
+
+1. Запустите сервер вручную для проверки:
+   ```bash
+   npm start
+   ```
+   Команда запускает `node server.js`, создаёт файл `data/planner.db`, таблицы и дефолтную учётную запись администратора.【F:package.json†L6-L21】【F:server.js†L20-L205】
+2. Откройте в браузере `http://<server>:3000/CRM.html`. Войдите под логином и паролем из переменных `DEFAULT_ADMIN_LOGIN`/`DEFAULT_ADMIN_PASSWORD`.
+3. После входа перейдите в настройки пользователей и задайте надёжный пароль, затем выключите гостевой доступ, если он не нужен. Все изменения сохраняются в SQLite и JSON‑снапшоте (`data/planner-state.json`).【F:server.js†L20-L205】【F:server.js†L2240-L2290】
+
+### 8.5 Автозапуск через systemd
+
+Для продакшна рекомендуется оформить сервис systemd:
+
+```
+[Unit]
+Description=Planner CRM Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/planner-crm
+Environment=NODE_ENV=production
+Environment=PORT=8080
+Environment=COOKIE_SECURE=false
+Environment=DEFAULT_ADMIN_LOGIN=admin
+Environment=DEFAULT_ADMIN_PASSWORD=<СЛОЖНЫЙ_ПАРОЛЬ>
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+User=planner
+Group=planner
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Сохраните файл как `/etc/systemd/system/planner-crm.service`, выполните `sudo systemctl daemon-reload`, затем `sudo systemctl enable --now planner-crm`. Логи доступны через `journalctl -u planner-crm`.
+
+Перед запуском проверьте, что каталог приложения и каталог данных (значение `DATA_DIR` или путь, который сервер выводит в логе при старте) принадлежат пользователю `planner`, под которым работает unit. Иначе сервер не сможет записывать снапшоты и вернёт ошибку `StoragePermission` при сохранении заказа:
+
+```bash
+sudo chown -R planner:planner /opt/planner-crm
+sudo chmod 750 /opt/planner-crm/data
+```
+
+Если в журнале появляется строка вида `Каталог данных по умолчанию /opt/planner-crm/data недоступен (...) Используется /home/planner/.local/share/planner-crm`, дополнительно выдайте права на указанный резервный путь:
+
+```bash
+sudo -u planner mkdir -p /home/planner/.local/share/planner-crm
+sudo chown -R planner:planner /home/planner/.local/share/planner-crm
+sudo chmod 750 /home/planner/.local/share/planner-crm
+```
+
+Если база уже создана под другим пользователем, остановите сервис, выполните команды выше и перезапустите unit: `sudo systemctl restart planner-crm`.
+
+### 8.6 Обновления и резервное копирование
+
+* Для обновления остановите сервис, выполните `git pull`, `npm ci` и запустите заново.
+* Все данные пользователей, снапшоты планов и история сохраняются в каталоге `DATA_DIR` (по умолчанию `data/planner.db` и `data/planner-state.json`, при fallback — `~/.local/share/planner-crm`). Создайте регулярный backup этих файлов (например, через `rsync` или снапшоты файловой системы).【F:server.js†L20-L205】
+* Скрипт `npm run migrate` оставлен для совместимости, но фактически выводит сообщение, что SQL‑миграции отключены. Дополнительных действий при обновлениях не требуется.【F:scripts/run_migrations.js†L1-L5】
+
+### 8.7 Интеграция с обратным прокси
+
+Если требуется HTTPS или доступ с нестандартного порта, установите nginx/Traefik и настройте проксирование на локальный порт приложения (`localhost:3000`). Не забудьте пробросить заголовки `X-Forwarded-*` и включить `COOKIE_SECURE=true`, когда сервер доступен только по HTTPS.
+
+### 8.8 Типичные проблемы и диагностика
+
+**Форма входа очищается без ошибки.** Симптом: после ввода логина/пароля страница как будто перезагружается, поля очищаются, а в журнале браузера нет сообщений об ошибке. В журнале `journalctl -u planner-crm` видно, что запрос `/auth/login` проходит успешно, но дальнейшие запросы (`/`, `/me`) возвращают страницу логина.
+
+Причина — cookie сессии помечается флагом `Secure`, когда сервер запущен с `NODE_ENV=production`. Браузер принимает такую cookie только через HTTPS. Если сервер доступен по обычному HTTP, то cookie отбрасывается, и после успешного `/auth/login` пользователь остаётся неавторизованным.
+
+**Решение:**
+
+1. Убедитесь, что сервис действительно работает по HTTP (без HTTPS‑прокси). Если используется HTTPS‑прокси, проверьте, что внешний URL начинается с `https://` и сертификат валиден.
+2. Если HTTPS нет, добавьте в конфигурацию окружения `Environment=COOKIE_SECURE=false` (см. пример выше) или создайте файл `/etc/default/planner-crm`:
+   ```ini
+   COOKIE_SECURE=false
+   ```
+   и подключите его через `EnvironmentFile=/etc/default/planner-crm` в unit‑файле systemd.
+3. Перезапустите сервис: `sudo systemctl restart planner-crm`.
+4. Очистите cookie в браузере или откройте режим инкогнито и повторно выполните вход. После выдачи новой сессии поля не будут сбрасываться.
+
+Когда для сервера настроен HTTPS (например, через nginx с `proxy_set_header X-Forwarded-Proto https;`), верните `COOKIE_SECURE=true`, чтобы защитить cookie.
+
+**Ошибка StoragePermission при сохранении.** Симптом: при попытке создать заказ или сохранить настройки появляется тост «Сервер не может записать данные CRM. Проверьте права доступа к каталогу data/.», а в журнале `journalctl -u planner-crm` фиксируется сообщение `StoragePermission` с путём к файлу.
+
+Причина — пользователь, от имени которого запущен сервис, не имеет прав на запись в каталог данных (`data/`, домашний `~/.local/share/planner-crm` или путь, заданный переменной `DATA_DIR`). При старте сервер пытается автоматически переключиться на доступный путь и пишет соответствующий лог; если все кандидаты закрыты, любые сохранения завершаются `StoragePermission`.
+
+**Решение:** остановите сервис, выдайте права на основной и резервный пути и запустите снова:
+
+```bash
+sudo systemctl stop planner-crm
+sudo chown -R planner:planner /opt/planner-crm
+sudo chmod 750 /opt/planner-crm/data
+sudo -u planner mkdir -p /home/planner/.local/share/planner-crm
+sudo chown -R planner:planner /home/planner/.local/share/planner-crm
+sudo chmod 750 /home/planner/.local/share/planner-crm
+sudo systemctl start planner-crm
+```
+
+После изменения прав попробуйте ещё раз сохранить заказ — сервер вернёт код `200`, а изменения станут видны всем пользователям.

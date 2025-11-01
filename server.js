@@ -3,6 +3,7 @@
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const express = require('express');
 const compression = require('compression');
@@ -16,12 +17,28 @@ try {
   bcrypt = require('./lib/bcryptjs');
 }
 
+const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
+
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR_INFO = resolveDataDirectory();
+const DATA_DIR = DATA_DIR_INFO.path;
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
 const USERS_EXPORT_FILE = path.join(DATA_DIR, 'users.json');
+
+if (Array.isArray(DATA_DIR_INFO.previousErrors) && DATA_DIR_INFO.previousErrors.length) {
+  const failedDefault = DATA_DIR_INFO.previousErrors.find((entry) => entry && entry.path === DEFAULT_DATA_DIR);
+  if (failedDefault) {
+    const reason = failedDefault.error?.message || failedDefault.reason || 'неизвестная ошибка';
+    console.warn(`[CRM] Каталог данных по умолчанию ${DEFAULT_DATA_DIR} недоступен (${reason}). Используется ${DATA_DIR}.`);
+  }
+}
+if (DATA_DIR_INFO.source === 'env') {
+  console.info(`[CRM] Используется каталог данных ${DATA_DIR} из переменной окружения.`);
+} else if (DATA_DIR_INFO.source === 'fallback' && !DATA_DIR_INFO.silent) {
+  console.info(`[CRM] Используется резервный каталог данных ${DATA_DIR}.`);
+}
 
 const SESSION_COOKIE_NAME = 'pc_session';
 const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
@@ -35,6 +52,158 @@ const COOKIE_SECURE = parseBoolean(process.env.COOKIE_SECURE ?? (process.env.NOD
 const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
 const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
+
+class StorageWriteError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'StorageWriteError';
+    this.code = 'STORAGE_PERMISSION';
+    if (options && typeof options === 'object') {
+      if (options.path) {
+        this.path = options.path;
+      }
+      if (options.cause) {
+        this.cause = options.cause;
+      }
+    }
+  }
+}
+
+function isStoragePermissionError(err) {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+  const code = typeof err.code === 'string' ? err.code : null;
+  const errno = typeof err.errno === 'number' ? err.errno : null;
+  const name = typeof err.name === 'string' ? err.name : null;
+  const normalizedCode = code ? code.toUpperCase() : '';
+  const normalizedName = name ? name.toUpperCase() : '';
+  if (['EACCES', 'EPERM', 'EROFS', 'SQLITE_READONLY', 'SQLITE_CANTOPEN', 'SQLITE_PERM'].includes(normalizedCode)) {
+    return true;
+  }
+  if (['SQLITE_READONLY', 'SQLITE_IOERR'].includes(normalizedName)) {
+    return true;
+  }
+  if (errno === -13) { // POSIX EACCES
+    return true;
+  }
+  const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+  if (message.includes('read-only') || message.includes('permission denied')) {
+    return true;
+  }
+  return false;
+}
+
+function ensureWritableDirectory(targetPath) {
+  if (!targetPath) {
+    throw new Error('Каталог данных не задан');
+  }
+  fs.mkdirSync(targetPath, { recursive: true });
+  const probePath = path.join(targetPath, `.permcheck-${process.pid}-${Date.now()}`);
+  let created = false;
+  try {
+    fs.writeFileSync(probePath, 'ok', { mode: 0o600 });
+    created = true;
+  } finally {
+    if (created) {
+      try {
+        fs.unlinkSync(probePath);
+      } catch (_err) {
+        /* ignore */
+      }
+    }
+  }
+  fs.accessSync(targetPath, fs.constants.R_OK | fs.constants.W_OK);
+}
+
+function normalizeDataDirCandidate(dir) {
+  if (dir === null || dir === undefined) {
+    return null;
+  }
+  const trimmed = String(dir).trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return path.resolve(trimmed);
+  } catch (_err) {
+    return trimmed;
+  }
+}
+
+function resolveDataDirectory() {
+  const envDirRaw = process.env.DATA_DIR || process.env.PLANNER_DATA_DIR;
+  const envDir = normalizeDataDirCandidate(envDirRaw);
+  const homeDir = typeof os.homedir === 'function' ? os.homedir() : null;
+  const seen = new Set();
+  const candidates = [];
+
+  const pushCandidate = (entry) => {
+    if (!entry || !entry.path) {
+      return;
+    }
+    if (seen.has(entry.path)) {
+      return;
+    }
+    seen.add(entry.path);
+    candidates.push(entry);
+  };
+
+  if (envDir) {
+    pushCandidate({ path: envDir, source: 'env', mandatory: true, label: 'DATA_DIR' });
+  }
+
+  pushCandidate({ path: DEFAULT_DATA_DIR, source: 'default', mandatory: false, label: 'project data/' });
+
+  if (homeDir) {
+    pushCandidate({
+      path: path.join(homeDir, '.local', 'share', 'planner-crm'),
+      source: 'fallback',
+      mandatory: false,
+      label: 'home data dir'
+    });
+    pushCandidate({
+      path: path.join(homeDir, '.planner-crm'),
+      source: 'fallback',
+      mandatory: false,
+      label: 'legacy home data dir'
+    });
+  }
+
+  const errors = [];
+
+  for (const candidate of candidates) {
+    try {
+      ensureWritableDirectory(candidate.path);
+      return {
+        ...candidate,
+        previousErrors: errors.slice(),
+        silent: candidate.source !== 'env' && errors.length === 0
+      };
+    } catch (err) {
+      const record = {
+        ...candidate,
+        error: err,
+        reason: isStoragePermissionError(err) ? 'permission' : err?.code || err?.message || 'error'
+      };
+      errors.push(record);
+      if (candidate.mandatory) {
+        const message = `Каталог данных ${candidate.path} недоступен: ${err?.message || err}`;
+        const failure = new Error(message);
+        failure.cause = err;
+        failure.previousErrors = errors.slice();
+        throw failure;
+      }
+    }
+  }
+
+  const summary = errors.length
+    ? errors.map((entry) => `${entry.path} (${entry.reason || entry.label || 'ошибка'})`).join('; ')
+    : 'нет доступных путей';
+  const fallbackError = new Error(`Не удалось подобрать каталог данных. Проверенные пути: ${summary}`);
+  fallbackError.previousErrors = errors;
+  throw fallbackError;
+}
 
 let sqlite = null;
 let lastSessionCleanup = 0;
@@ -1576,11 +1745,21 @@ async function writeLocalStateFile(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Local state payload must be an object');
   }
-  await ensureDataDir();
-  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-  const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
-  await fsp.writeFile(tmpPath, serialized, 'utf8');
-  await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+  try {
+    await ensureDataDir();
+    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+    const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
+    await fsp.writeFile(tmpPath, serialized, 'utf8');
+    await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+  } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи локального снапшота', {
+        cause: err,
+        path: LOCAL_STATE_FILE
+      });
+    }
+    throw err;
+  }
 }
 
 function safeParseJson(text, fallback = null) {
@@ -1690,6 +1869,12 @@ function writeSnapshotToSql(record) {
       updated_at: savedAt
     });
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи снапшота планировщика', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.error('Failed to write snapshot to sqlite storage', err);
     throw err;
   }
@@ -1885,6 +2070,12 @@ function writePlannerSettingsToSql(settings) {
     });
     return sanitized;
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи настроек планировщика', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.error('Failed to write planner settings to sqlite storage', err);
     throw err;
   }
@@ -2633,6 +2824,12 @@ function writeStageAllocationsToSql(stageEntries) {
     });
     tx(normalized);
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи распределений переделов', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.warn('Failed to persist stage allocations to sqlite', err);
   }
 }
@@ -5724,6 +5921,16 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
   } catch (err) {
     if (err && err.message && err.message.includes('Snapshot payload')) {
       res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err && (err instanceof StorageWriteError || err.code === 'STORAGE_PERMISSION')) {
+      const detail = {
+        error: 'StoragePermission',
+        message: 'Сервер не может записать данные CRM. Проверьте права доступа к каталогу data/.',
+        path: err.path || DATA_DIR
+      };
+      logSaveEvent('error', 'save failed due to storage permissions', { requestId, path: detail.path });
+      res.status(507).json(detail);
       return;
     }
     logSaveEvent('error', 'save failed', { requestId, error: err?.message || String(err) });
