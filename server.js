@@ -5,16 +5,78 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const express = require('express');
-const compression = require('compression');
-const Database = require('better-sqlite3');
+function requireWithAutoInstall(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (err) {
+    if (!isMissingDependencyError(err, moduleName)) {
+      throw err;
+    }
+    try {
+      attemptAutoInstall();
+    } catch (installErr) {
+      const message = `[CRM] Не удалось автоматически установить зависимости (${installErr?.message || installErr}).`;
+      console.error(message);
+      throw err;
+    }
+    return require(moduleName);
+  }
+}
+
+function attemptAutoInstall() {
+  if (autoInstallAttempted) {
+    throw new Error('повторная установка зависимостей не выполнялась');
+  }
+  autoInstallAttempted = true;
+
+  const spawnSync = require('child_process').spawnSync;
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  console.warn('[CRM] Не найдены обязательные зависимости. Выполняется "npm install --production"...');
+  const result = spawnSync(
+    npmCommand,
+    ['install', '--production', '--no-audit', '--no-fund'],
+    {
+      cwd: __dirname,
+      stdio: 'inherit',
+      env: process.env,
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`npm завершился с кодом ${result.status}`);
+  }
+  console.info('[CRM] Автоматическая установка зависимостей завершена успешно.');
+}
+
+function isMissingDependencyError(err, moduleName) {
+  if (!err || err.code !== 'MODULE_NOT_FOUND') {
+    return false;
+  }
+  if (typeof err.message !== 'string') {
+    return false;
+  }
+  return err.message.includes(`'${moduleName}'`);
+}
+
+let autoInstallAttempted = false;
+
+const express = requireWithAutoInstall('express');
+const compression = requireWithAutoInstall('compression');
+const Database = requireWithAutoInstall('better-sqlite3');
 
 let bcrypt;
 try {
-  bcrypt = require('bcryptjs');
+  bcrypt = requireWithAutoInstall('bcryptjs');
 } catch (err) {
-  console.warn('[CRM] Модуль "bcryptjs" не установлен, используется резервная сборка из lib/bcryptjs.js.');
-  bcrypt = require('./lib/bcryptjs');
+  if (err && err.code === 'MODULE_NOT_FOUND') {
+    console.warn('[CRM] Модуль "bcryptjs" не установлен, используется резервная сборка из lib/bcryptjs.js.');
+    bcrypt = require('./lib/bcryptjs');
+  } else {
+    throw err;
+  }
 }
 
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
