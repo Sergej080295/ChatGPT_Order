@@ -36,6 +36,47 @@ const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() 
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
 const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
 
+class StorageWriteError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'StorageWriteError';
+    this.code = 'STORAGE_PERMISSION';
+    if (options && typeof options === 'object') {
+      if (options.path) {
+        this.path = options.path;
+      }
+      if (options.cause) {
+        this.cause = options.cause;
+      }
+    }
+  }
+}
+
+function isStoragePermissionError(err) {
+  if (!err || typeof err !== 'object') {
+    return false;
+  }
+  const code = typeof err.code === 'string' ? err.code : null;
+  const errno = typeof err.errno === 'number' ? err.errno : null;
+  const name = typeof err.name === 'string' ? err.name : null;
+  const normalizedCode = code ? code.toUpperCase() : '';
+  const normalizedName = name ? name.toUpperCase() : '';
+  if (['EACCES', 'EPERM', 'EROFS', 'SQLITE_READONLY', 'SQLITE_CANTOPEN', 'SQLITE_PERM'].includes(normalizedCode)) {
+    return true;
+  }
+  if (['SQLITE_READONLY', 'SQLITE_IOERR'].includes(normalizedName)) {
+    return true;
+  }
+  if (errno === -13) { // POSIX EACCES
+    return true;
+  }
+  const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+  if (message.includes('read-only') || message.includes('permission denied')) {
+    return true;
+  }
+  return false;
+}
+
 let sqlite = null;
 let lastSessionCleanup = 0;
 
@@ -1576,11 +1617,21 @@ async function writeLocalStateFile(payload) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Local state payload must be an object');
   }
-  await ensureDataDir();
-  const serialized = `${JSON.stringify(payload, null, 2)}\n`;
-  const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
-  await fsp.writeFile(tmpPath, serialized, 'utf8');
-  await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+  try {
+    await ensureDataDir();
+    const serialized = `${JSON.stringify(payload, null, 2)}\n`;
+    const tmpPath = `${LOCAL_STATE_FILE}.tmp`;
+    await fsp.writeFile(tmpPath, serialized, 'utf8');
+    await fsp.rename(tmpPath, LOCAL_STATE_FILE);
+  } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи локального снапшота', {
+        cause: err,
+        path: LOCAL_STATE_FILE
+      });
+    }
+    throw err;
+  }
 }
 
 function safeParseJson(text, fallback = null) {
@@ -1690,6 +1741,12 @@ function writeSnapshotToSql(record) {
       updated_at: savedAt
     });
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи снапшота планировщика', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.error('Failed to write snapshot to sqlite storage', err);
     throw err;
   }
@@ -1885,6 +1942,12 @@ function writePlannerSettingsToSql(settings) {
     });
     return sanitized;
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи настроек планировщика', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.error('Failed to write planner settings to sqlite storage', err);
     throw err;
   }
@@ -2633,6 +2696,12 @@ function writeStageAllocationsToSql(stageEntries) {
     });
     tx(normalized);
   } catch (err) {
+    if (isStoragePermissionError(err)) {
+      throw new StorageWriteError('Недостаточно прав для записи распределений переделов', {
+        cause: err,
+        path: SQLITE_FILE
+      });
+    }
     console.warn('Failed to persist stage allocations to sqlite', err);
   }
 }
@@ -5724,6 +5793,16 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
   } catch (err) {
     if (err && err.message && err.message.includes('Snapshot payload')) {
       res.status(400).json({ error: err.message });
+      return;
+    }
+    if (err && (err instanceof StorageWriteError || err.code === 'STORAGE_PERMISSION')) {
+      const detail = {
+        error: 'StoragePermission',
+        message: 'Сервер не может записать данные CRM. Проверьте права доступа к каталогу data/.',
+        path: err.path || DATA_DIR
+      };
+      logSaveEvent('error', 'save failed due to storage permissions', { requestId, path: detail.path });
+      res.status(507).json(detail);
       return;
     }
     logSaveEvent('error', 'save failed', { requestId, error: err?.message || String(err) });

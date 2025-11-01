@@ -188,6 +188,15 @@ WantedBy=multi-user.target
 
 Сохраните файл как `/etc/systemd/system/planner-crm.service`, выполните `sudo systemctl daemon-reload`, затем `sudo systemctl enable --now planner-crm`. Логи доступны через `journalctl -u planner-crm`.
 
+Перед запуском проверьте, что каталог приложения и особенно `data/` принадлежат пользователю `planner`, под которым работает unit. Иначе сервер не сможет записывать снапшоты и вернёт ошибку `StoragePermission` при сохранении заказа:
+
+```bash
+sudo chown -R planner:planner /opt/planner-crm
+sudo chmod 750 /opt/planner-crm/data
+```
+
+Если база уже создана под другим пользователем, остановите сервис, выполните команды выше и перезапустите unit: `sudo systemctl restart planner-crm`.
+
 ### 8.6 Обновления и резервное копирование
 
 * Для обновления остановите сервис, выполните `git pull`, `npm ci` и запустите заново.
@@ -216,3 +225,18 @@ WantedBy=multi-user.target
 4. Очистите cookie в браузере или откройте режим инкогнито и повторно выполните вход. После выдачи новой сессии поля не будут сбрасываться.
 
 Когда для сервера настроен HTTPS (например, через nginx с `proxy_set_header X-Forwarded-Proto https;`), верните `COOKIE_SECURE=true`, чтобы защитить cookie.
+
+**Ошибка StoragePermission при сохранении.** Симптом: при попытке создать заказ или сохранить настройки появляется тост «Сервер не может записать данные CRM. Проверьте права доступа к каталогу data/.», а в журнале `journalctl -u planner-crm` фиксируется сообщение `StoragePermission` с путём к файлу.
+
+Причина — пользователь, от имени которого запущен сервис, не имеет прав на запись в каталог `data/` или файл `planner.db`. Это часто происходит, если проект был распакован под `root`, а сервис стартует от другого пользователя.
+
+**Решение:** остановите сервис, выдайте права и запустите снова:
+
+```bash
+sudo systemctl stop planner-crm
+sudo chown -R planner:planner /opt/planner-crm
+sudo chmod 750 /opt/planner-crm/data
+sudo systemctl start planner-crm
+```
+
+После изменения прав попробуйте ещё раз сохранить заказ — сервер вернёт код `200`, а изменения станут видны всем пользователям.
