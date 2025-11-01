@@ -112,7 +112,9 @@
     };
   };
 
-  if ('EventSource' in window) {
+  const realtimeAllowed = false;
+
+  if (realtimeAllowed && 'EventSource' in window) {
     connect();
   }
 
@@ -822,6 +824,7 @@ body.overview-fs-active{overflow:hidden}
           </svg>
         </button>
       </div>
+      <button id="refreshBtn" class="btn small ghost">Обновить</button>
       <button id="saveBtn" class="btn small">Сохранить</button>
       <button id="logBtn" class="btn small ghost icon-only" title="Журнал" aria-label="Журнал">
         <svg viewBox="0 0 24 24" role="img" aria-hidden="true">
@@ -1962,7 +1965,10 @@ function createRemoteBridge(){
     if(adapter){
       const saver = adapter.saveState || adapter.setState || adapter.pushState || adapter.write || adapter.put;
       if(typeof saver === 'function'){
-        try{ await saver.call(adapter, payload, meta); return true; }
+        try{
+          const adapterResult = await saver.call(adapter, payload, meta);
+          return adapterResult === undefined ? true : adapterResult;
+        }
         catch(err){ lastError = err; console.warn('remote save failed', err); }
       }
     }
@@ -1999,7 +2005,9 @@ function createRemoteBridge(){
           }
           throw err;
         }
-        return parsedDetail ?? trimmedDetail ?? '';
+        if(parsedDetail !== null) return parsedDetail;
+        if(trimmedDetail) return trimmedDetail;
+        return { ok:true };
       };
       const guessContentType = (body)=>{
         if(typeof body === 'string'){
@@ -2023,16 +2031,16 @@ function createRemoteBridge(){
           if(typeof payload === 'string'){
             wrapper.hash = simpleHash(payload);
           }
-          await attempt(JSON.stringify(wrapper), 'application/json');
-          return true;
+          const wrappedResult = await attempt(JSON.stringify(wrapper), 'application/json');
+          return wrappedResult === undefined ? true : wrappedResult;
         }catch(err){
           lastError = err;
           console.warn('endpoint save failed (wrapped)', err);
         }
       }
       try{
-        await attempt(payload, guessContentType(payload));
-        return true;
+        const directResult = await attempt(payload, guessContentType(payload));
+        return directResult === undefined ? true : directResult;
       }catch(err){
         lastError = err;
         console.warn('endpoint save failed', err);
@@ -2323,19 +2331,12 @@ function handleRemoteBridgeEvent(evt){
 
 function updateRealtimeMode(){
   if(remoteSubscriptionStop){
-    if(!remoteSyncEnabled()){
-      try{ remoteSubscriptionStop(); }catch(_){ /* ignore */ }
-      remoteSubscriptionStop = null;
-    }
+    try{ remoteSubscriptionStop(); }catch(_){ /* ignore */ }
+    remoteSubscriptionStop = null;
   }
-  if(remoteSyncEnabled()){
-    if(!remoteSubscriptionStop){
-      try{ remoteSubscriptionStop = remoteBridge.subscribe(handleRemoteBridgeEvent); }
-      catch(_){ remoteSubscriptionStop = null; }
-    }
-    startRemotePolling();
-  }else{
-    if(remotePollTimer){ clearTimeout(remotePollTimer); remotePollTimer = null; }
+  if(remotePollTimer){
+    clearTimeout(remotePollTimer);
+    remotePollTimer = null;
   }
   refreshDataModeIndicator();
 }
@@ -5526,10 +5527,48 @@ function buildRoutePayload(orderEntry, doneStageSet, stageTasks, metricsByStage=
     }
 
     const tasksForStage = stageMap?.get(stage) || [];
+    const detail = {};
     if(tasksForStage.length){
-      stageDetails[stage] = {
-        uids: tasksForStage.map(task => task.uid)
+      detail.uids = tasksForStage.map(task => task.uid);
+    }
+
+    const crmTaskWithMeta = tasksForStage.find(task => task && task.crmMeta && typeof task.crmMeta === 'object');
+    let crmMeta = crmTaskWithMeta ? { ...crmTaskWithMeta.crmMeta } : null;
+    if(!crmMeta){
+      const orderInfo = orderEntry?.order || {};
+      const orderCrm = orderInfo.crm && typeof orderInfo.crm === 'object' ? orderInfo.crm : {};
+      const candidate = {
+        boardId: orderCrm.boardId || orderCrm.crmBoardId || '',
+        crmOrderId: orderCrm.id || orderCrm.crmOrderId || '',
+        orderId: orderInfo.orderId || '',
+        orderIdentity: orderInfo.orderIdentity || orderEntry.key || '',
+        lane: orderCrm.lane || orderCrm.status || ''
       };
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageId') && seg.crmStageId !== undefined){
+        candidate.stageId = seg.crmStageId;
+      }
+      if(seg && Object.prototype.hasOwnProperty.call(seg, 'crmStageName') && seg.crmStageName){
+        candidate.stageName = seg.crmStageName;
+      }
+      candidate.stageKey = stage;
+      const hasMeaningfulMeta = Object.values(candidate).some(value => {
+        if(value === null || value === undefined) return false;
+        if(typeof value === 'string') return value.trim().length > 0;
+        return true;
+      });
+      if(hasMeaningfulMeta){
+        crmMeta = candidate;
+      }
+    }
+
+    if(crmMeta){
+      if(!crmMeta.stageKey) crmMeta.stageKey = stage;
+      if(!crmMeta.stageName) crmMeta.stageName = seg?.crmStageName || STAGE_TITLE[stage] || stage;
+      detail.crmMeta = crmMeta;
+    }
+
+    if(Object.keys(detail).length){
+      stageDetails[stage] = detail;
     }
 
     const metrics = metricsByStage && metricsByStage[stage]
@@ -5906,6 +5945,12 @@ function applyStageProgress(identity, stage, value, options={}){
     ? !!options.interactive
     : INTERACTIVE_PROGRESS_SOURCES.has(source);
   let completionMoment = new Date(defaultMoment);
+  const explicitCrmMetaRaw = options && typeof options.crmMeta === 'object' ? options.crmMeta : null;
+  const explicitCrmMeta = explicitCrmMetaRaw ? { ...explicitCrmMetaRaw } : null;
+  if(explicitCrmMeta){
+    if(!explicitCrmMeta.stageKey) explicitCrmMeta.stageKey = stage;
+    if(!explicitCrmMeta.stageName) explicitCrmMeta.stageName = STAGE_TITLE[stage] || stage;
+  }
   const progressBeforeMap = new Map();
   const progressAfterMap = new Map();
   const summaryRecords = new Map();
@@ -5916,6 +5961,17 @@ function applyStageProgress(identity, stage, value, options={}){
   const ensureCrmMeta = taskObj => {
     if(!taskObj) return null;
     if(taskObj.crmMeta && taskObj.crmMeta.stageKey){
+      return taskObj;
+    }
+    if(explicitCrmMeta){
+      const merged = { ...explicitCrmMeta };
+      if(taskObj.crmMeta && typeof taskObj.crmMeta === 'object'){
+        taskObj.crmMeta = { ...merged, ...taskObj.crmMeta };
+      }else{
+        taskObj.crmMeta = merged;
+      }
+      if(!taskObj.crmMeta.stageKey) taskObj.crmMeta.stageKey = stage;
+      if(!taskObj.crmMeta.stageName) taskObj.crmMeta.stageName = STAGE_TITLE[stage] || stage;
       return taskObj;
     }
     const fallback = crmReferenceTask || findCrmStageTaskForIdentity(identity, stage);
@@ -5939,8 +5995,36 @@ function applyStageProgress(identity, stage, value, options={}){
     return taskObj;
   };
   const queueCrmUpdate = (taskObj, progressValue, doneFlag, doneMoment, extraOptions={})=>{
-    const enriched = ensureCrmMeta(taskObj);
+    let enriched = ensureCrmMeta(taskObj);
+    if(!enriched && explicitCrmMeta){
+      enriched = ensureCrmMeta({
+        crmMeta: { ...explicitCrmMeta },
+        route: {}
+      });
+    }
     if(!enriched || !enriched.crmMeta) return;
+    if(!enriched.route || typeof enriched.route !== 'object'){
+      enriched.route = {};
+    }
+    if(doneFlag && doneMoment){
+      const doneDate = doneMoment instanceof Date ? doneMoment : new Date(doneMoment);
+      if(!Number.isNaN(doneDate.getTime())){
+        const seg = { ...(enriched.route[stage] || {}) };
+        seg.doneAt = doneDate;
+        enriched.route[stage] = seg;
+        enriched.doneMeta = {
+          ...(enriched.doneMeta || {}),
+          when: doneDate,
+          source: extraOptions.doneSource || source
+        };
+      }
+    }else if(!doneFlag && enriched.route[stage]){
+      const seg = { ...(enriched.route[stage]) };
+      if('doneAt' in seg){
+        delete seg.doneAt;
+        enriched.route[stage] = seg;
+      }
+    }
     const payload = buildCrmUpdateFromTask(enriched, stage, {
       progress: progressValue,
       done: !!doneFlag,
@@ -6004,6 +6088,23 @@ function applyStageProgress(identity, stage, value, options={}){
   });
 
   if(!uidSet.size){
+    if(explicitCrmMeta){
+      queueCrmUpdate(null, normalized, markDone, markDone ? completionMoment : null);
+      if(crmUpdates.length){
+        applyCrmProgressUpdates(crmUpdates);
+      }
+      updateDoneAttention();
+      updateStageSnapshotFromAggregated(stage);
+      rebuildAndRenderMasterRoute();
+      recompute();
+      const persistOptions = {
+        source,
+        stageOverride: stage,
+        force: options.force === true || interactive || markDone
+      };
+      persistMaybe('data', persistOptions);
+      return true;
+    }
     if(!options.silent) alert('Не удалось определить задачи для выбранного передела.');
     return false;
   }
@@ -6307,6 +6408,10 @@ function handleRouteStageToggle(stage, toggleEl){
   const stageTitle = STAGE_TITLE[stage] || stage;
   const hasTasks = (currentRouteContext.stageDetails?.[stage]?.uids || []).length > 0;
   const isDone = (currentRouteContext.doneStages || []).includes(stage);
+  const stageMeta = currentRouteContext.stageDetails?.[stage];
+  const crmMeta = stageMeta && stageMeta.crmMeta && typeof stageMeta.crmMeta === 'object'
+    ? stageMeta.crmMeta
+    : null;
   if(!hasTasks && !isDone){
     alert('Нет задач для изменения статуса этого передела.');
     return;
@@ -6319,7 +6424,8 @@ function handleRouteStageToggle(stage, toggleEl){
       : `Снять отметку готовности с передела «${stageTitle}»?`;
     if(!confirm(question)) return;
     const targetValue = shouldMarkDone ? 100 : 0;
-    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, { source:'route-dialog' })){
+    const progressOpts = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+    if(applyStageProgress(currentRouteContext.identity, stage, targetValue, progressOpts)){
       if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
         currentRouteContext.sourceTask.progress = targetValue;
       }
@@ -6341,7 +6447,8 @@ function handleRouteStageToggle(stage, toggleEl){
     alert('Введите число от 0 до 100.');
     return;
   }
-  if(applyStageProgress(currentRouteContext.identity, stage, value, { source:'route-dialog' })){
+  const options = crmMeta ? { source:'route-dialog', crmMeta } : { source:'route-dialog' };
+  if(applyStageProgress(currentRouteContext.identity, stage, value, options)){
     if(currentRouteContext.sourceTask && currentRouteContext.sourceTask.stage === stage){
       currentRouteContext.sourceTask.progress = value;
     }
@@ -12204,6 +12311,51 @@ function loadStageFromLS(stage){
   }catch(_){ return null; }
 }
 
+function normalizeRemoteSaveResult(result, overrides={}){
+  const base={
+    ok:true,
+    persisted:true,
+    unchanged:false,
+    rev:null,
+    hash:null,
+    etag:null,
+    raw:result
+  };
+  if(result && typeof result==='object'){
+    if(Object.prototype.hasOwnProperty.call(result,'ok')) base.ok=result.ok!==false;
+    if(Object.prototype.hasOwnProperty.call(result,'unchanged')){
+      base.unchanged=!!result.unchanged;
+      if(base.unchanged) base.persisted=false;
+    }
+    if(Object.prototype.hasOwnProperty.call(result,'persisted')){
+      base.persisted=!!result.persisted;
+      if(result.persisted===false) base.unchanged=base.unchanged||true;
+    }
+    if(result.hash) base.hash=String(result.hash).trim()||null;
+    if(result.etag) base.etag=String(result.etag).trim()||null;
+    const revNum=Number(result.rev);
+    if(Number.isFinite(revNum) && revNum>0) base.rev=revNum;
+    if(!Object.prototype.hasOwnProperty.call(result,'persisted')){
+      if(base.ok && base.unchanged){
+        base.persisted=false;
+      }else if(base.ok){
+        base.persisted=true;
+      }else{
+        base.persisted=false;
+      }
+    }
+  }else if(result===false){
+    base.ok=false;
+    base.persisted=false;
+  }else if(result===true || result===undefined || result===null){
+    base.persisted=result!==null;
+  }else{
+    base.message=String(result);
+  }
+  if(!base.ok) base.persisted=false;
+  return { ...base, ...overrides };
+}
+
 function persistNow(stageOverride, opts={}){
   const {
     source='manual',
@@ -12216,10 +12368,35 @@ function persistNow(stageOverride, opts={}){
     uiOnly=false,
     summaryOverride: summaryOverrideOpt=null,
     ordersSummaryOverride: ordersSummaryOverrideOpt=null,
-    sharedContext=null
+    sharedContext=null,
+    forceRemote=false,
+    confirmRemote=false,
+    forcePersist=null
   } = opts;
   const normalizedSettingsMeta = settingsMeta && typeof settingsMeta === 'object' ? clonePlain(settingsMeta) : null;
-  let pushPromise = Promise.resolve(true);
+  const confirmAfterRemoteSave = async (resultMeta={})=>{
+    if(!confirmRemote) return;
+    if(!remoteBridge.hasRemote) return;
+    if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function') return;
+    try{
+      const latest=await window.plannerRemote.loadState({ withMeta:true });
+      if(!latest) return;
+      const rawState = typeof latest.state==='string' ? latest.state : JSON.stringify(latest.state||{});
+      const meta={};
+      if(latest.hash) meta.hash=latest.hash;
+      if(latest.etag) meta.etag=latest.etag;
+      applyStateFromExternal(rawState,{ preserveProcess:true, origin:'remote', skipToasts:true, meta });
+      if(window.plannerRemote.applyFingerprint){
+        window.plannerRemote.applyFingerprint({
+          hash: meta.hash || resultMeta.hash || null,
+          etag: meta.etag || resultMeta.etag || null
+        });
+      }
+    }catch(err){
+      console.warn('remote confirmation load failed', err);
+    }
+  };
+  let pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:true, persisted:false, unchanged:true }));
   if(!userCanEdit() && source !== 'system') return;
   if(multiStage && Array.isArray(multiStage.entries)){
     const entriesRaw = multiStage.entries.filter(entry=> entry && entry.stage);
@@ -12390,95 +12567,111 @@ function persistNow(stageOverride, opts={}){
 
       const targetStageLabel = visibleStageLabel;
 
-      if(remoteSyncEnabled()){
-        pushPromise = remoteBridge.push(payload, {
-          stage: targetStageLabel,
-          diff: combinedDiff,
-          version:null,
-          source,
-          user:userAlias,
-          session:SESSION_ID,
-          summary: summaryLine || undefined,
-          authors: authorsMap,
-          ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
-          time: nowStr,
-          changeType
-        })
-          .then(()=>{ setDataMode('remote'); return true; })
-          .catch(async err=>{
-            const sharedAttempt = sharedContext === 'sharedSettings';
-            if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
-              if(sharedAttempt){
-                err.__sharedHandled = true;
-                handleSharedSettingsCommitError(err);
-              }
-              const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
-              const stageName = meaningfulEntries.length>1
-                ? 'несколько переделов'
-                : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
-              const lastAuthor = detail?.lastAuthor;
-              const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
-              if(!sharedAttempt){
-                const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
-                if(authorName){
-                  messageParts.push(`Последние правки: ${authorName}.`);
-                }
-                messageParts.push('Актуальные данные загружены заново.');
-                showToast({
-                  title:'Конфликт синхронизации',
-                  message: messageParts.join(' '),
-                  actions:[{label:'OK', handler:(el)=> el.remove()}]
-                });
-              }
-              try{
-                const latest = await remoteBridge.pull();
-                if(latest){
-                  applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
-                }
-              }catch(pullErr){
-                console.warn('failed to refresh after conflict', pullErr);
-              }
-              setDataMode('remote');
-              if(sharedAttempt){
-                throw err;
-              }
-              return;
+  const forceRemoteWrite = forceRemote === true
+    || (force && forceRemote !== false && source !== 'system');
+  const forcePersistRequest = forcePersist === true
+    || (forcePersist !== false && forceRemoteWrite);
+  const shouldPushRemote = remoteBridge.hasRemote && (remoteSyncEnabled() || forceRemoteWrite);
+
+  if(shouldPushRemote){
+    const metaPayload = {
+      stage: targetStageLabel,
+      diff: combinedDiff,
+      version:null,
+      source,
+      user:userAlias,
+      session:SESSION_ID,
+      summary: summaryLine || undefined,
+      authors: authorsMap,
+      ordersSummary: visibleEntries.length ? (combinedSummary || null) : null,
+      time: nowStr,
+      changeType
+    };
+    if(forcePersistRequest) metaPayload.forcePersist = true;
+    pushPromise = remoteBridge.push(payload, metaPayload)
+      .then(async rawResult=>{
+        const normalized=normalizeRemoteSaveResult(rawResult);
+        setDataMode('remote');
+        if(normalized.ok && normalized.persisted){
+          await confirmAfterRemoteSave(normalized);
+        }
+        return normalized;
+      })
+      .catch(async err=>{
+        const sharedAttempt = sharedContext === 'sharedSettings';
+        if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
+          if(sharedAttempt){
+            err.__sharedHandled = true;
+            handleSharedSettingsCommitError(err);
+          }
+          const detail = (err.detail && typeof err.detail === 'object') ? err.detail : null;
+          const stageName = meaningfulEntries.length>1
+            ? 'несколько переделов'
+            : (detail?.stage ? (STAGE_TITLE[detail.stage] || detail.stage) : (STAGE_TITLE[targetStageLabel] || targetStageLabel));
+          const lastAuthor = detail?.lastAuthor;
+          const authorName = lastAuthor?.name || lastAuthor?.user || lastAuthor?.session || '';
+          if(!sharedAttempt){
+            const messageParts = [`Изменения для «${stageName}» не сохранены — на сервере появилась более свежая версия.`];
+            if(authorName){
+              messageParts.push(`Последние правки: ${authorName}.`);
             }
-            console.warn('remote push failed', err);
-            const hadLocal = enableLocalStore;
-            if(!hadLocal){
-              applyStoragePrefs({ local:true });
-            }
-            let detailText = '';
-            if(err){
-              if(typeof err.detail === 'string' && err.detail.trim()){
-                detailText = err.detail.trim();
-              }else if(err.detail && typeof err.detail === 'object'){
-                const extra = err.detail.message || err.detail.error || err.body || '';
-                if(extra) detailText = String(extra).trim();
-              }
-              if(!detailText && err.message){
-                detailText = err.message;
-              }
-            }
-            const detailSuffix = detailText ? ` (${detailText})` : '';
+            messageParts.push('Актуальные данные загружены заново.');
             showToast({
-              title:'Ошибка синхронизации',
-              message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+              title:'Конфликт синхронизации',
+              message: messageParts.join(' '),
               actions:[{label:'OK', handler:(el)=> el.remove()}]
             });
-            const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
-            setDataMode(modeAfter);
-            if(sharedAttempt){
-              err.__sharedHandled = true;
-              handleSharedSettingsCommitError(err);
-              throw err;
+          }
+          try{
+            const latest = await remoteBridge.pull();
+            if(latest){
+              applyStateFromExternal(latest, { origin:'remote', skipToasts:true });
             }
-          });
-      }else{
-        setDataMode(enableLocalStore ? 'local' : 'session');
-        pushPromise = Promise.resolve(true);
-      }
+          }catch(pullErr){
+            console.warn('failed to refresh after conflict', pullErr);
+          }
+          setDataMode('remote');
+          if(sharedAttempt){
+            throw err;
+          }
+          return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, conflict:true, error:err });
+        }
+        console.warn('remote push failed', err);
+        const hadLocal = enableLocalStore;
+        if(!hadLocal){
+          applyStoragePrefs({ local:true });
+        }
+        let detailText = '';
+        if(err){
+          if(typeof err.detail === 'string' && err.detail.trim()){
+            detailText = err.detail.trim();
+          }else if(err.detail && typeof err.detail === 'object'){
+            const extra = err.detail.message || err.detail.error || err.body || '';
+            if(extra) detailText = String(extra).trim();
+          }
+          if(!detailText && err.message){
+            detailText = err.message;
+          }
+        }
+        const detailSuffix = detailText ? ` (${detailText})` : '';
+        showToast({
+          title:'Ошибка синхронизации',
+          message:`Не удалось сохранить изменения в базе данных${detailSuffix}. SQL недоступна, включено локальное резервное сохранение.`,
+          actions:[{label:'OK', handler:(el)=> el.remove()}]
+        });
+        const modeAfter = remoteSyncEnabled() ? 'hybrid' : (enableLocalStore ? 'local' : 'session');
+        setDataMode(modeAfter);
+        if(sharedAttempt){
+          err.__sharedHandled = true;
+          handleSharedSettingsCommitError(err);
+          throw err;
+        }
+        return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, error:err, fallback:true });
+      });
+  }else{
+    setDataMode(enableLocalStore ? 'local' : 'session');
+    pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:false, persisted:false, unchanged:true, offline:true }));
+  }
 
       if(hasChanges && announce){
         announceStateUpdate({
@@ -12497,7 +12690,7 @@ function persistNow(stageOverride, opts={}){
     }catch(e){
       console.warn('persist failed', e);
     }
-    return;
+    return pushPromise;
   }
   try{
     const curStage = stageOverride || $("#process")?.value || 'bend';
@@ -12785,6 +12978,7 @@ function persistNow(stageOverride, opts={}){
     if(remoteSyncEnabled()){
       if(skipRemote){
         setDataMode('remote');
+        pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:true, persisted:false, unchanged:true, skipped:true }));
       }else{
         const remoteStage = isSettingsChange && !diffChanged ? SETTINGS_STAGE_KEY : curStage;
         const remoteSummary = summaryForMeta || undefined;
@@ -12802,7 +12996,7 @@ function persistNow(stageOverride, opts={}){
         const remoteOrdersSummary = announcementChanged ? (effectiveOrdersSummary || null) : null;
         resetRemoteToastKey();
         skipRealtimeToastOnce = true;
-        pushPromise = remoteBridge.push(payload, {
+        const metaPayload = {
           stage:remoteStage,
           diff:remoteDiff,
           version:remoteVersion,
@@ -12815,8 +13009,17 @@ function persistNow(stageOverride, opts={}){
           time: nowStr,
           changeType: isSettingsChange && !diffChanged ? describeChangeType('settings') : changeType,
           ...remoteExtras
-        })
-          .then(()=>{ setDataMode('remote'); return true; })
+        };
+        if(forcePersistRequest) metaPayload.forcePersist = true;
+        pushPromise = remoteBridge.push(payload, metaPayload)
+          .then(async rawResult=>{
+            const normalized=normalizeRemoteSaveResult(rawResult);
+            setDataMode('remote');
+            if(normalized.ok && normalized.persisted){
+              await confirmAfterRemoteSave(normalized);
+            }
+            return normalized;
+          })
           .catch(async err=>{
             const sharedAttempt = sharedContext === 'sharedSettings';
             if(err?.status === 409 || err?.status === 412 || err?.name === 'PlannerConflictError'){
@@ -12852,7 +13055,7 @@ function persistNow(stageOverride, opts={}){
               if(sharedAttempt){
                 throw err;
               }
-              return;
+              return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, conflict:true, error:err });
             }
             console.warn('remote push failed', err);
             const hadLocal = enableLocalStore;
@@ -12884,11 +13087,12 @@ function persistNow(stageOverride, opts={}){
               handleSharedSettingsCommitError(err);
               throw err;
             }
+            return normalizeRemoteSaveResult(null,{ ok:false, persisted:false, error:err, fallback:true });
           });
       }
     }else{
       setDataMode(enableLocalStore ? 'local' : 'session');
-      pushPromise = Promise.resolve(true);
+      pushPromise = Promise.resolve(normalizeRemoteSaveResult(null,{ ok:false, persisted:false, unchanged:true, offline:true }));
     }
 
     if(announce){
@@ -15339,11 +15543,99 @@ function wireHandlers(){
     prefsDraft.shiftOnProgress = shiftOnProgress;
     markSharedSettingsDirty('preferences');
   });
-  $("#saveBtn").addEventListener('click', ()=>{
-    if(!userCanEdit()){ notifyReadOnly(); return; }
-    persistNow(undefined,{force:true});
-    alert('Состояние сохранено.');
-  });
+  const refreshBtn = $("#refreshBtn");
+  if(refreshBtn){
+    const defaultLabel = refreshBtn.textContent;
+    const setBusy = (busy)=>{
+      refreshBtn.disabled = !!busy;
+      refreshBtn.textContent = busy ? 'Обновляем…' : (defaultLabel || 'Обновить');
+    };
+    refreshBtn.addEventListener('click', async ()=>{
+      setBusy(true);
+      try{
+        if(!window.plannerRemote || typeof window.plannerRemote.loadState!=='function'){
+          throw new Error('SQL-сервис недоступен');
+        }
+        const latest = await window.plannerRemote.loadState({ withMeta:true });
+        const rawState = latest && typeof latest.state === 'string' ? latest.state : '';
+        if(rawState){
+          const meta = {};
+          if(latest && typeof latest.hash === 'string'){ meta.hash = latest.hash; }
+          if(latest && typeof latest.etag === 'string'){ meta.etag = latest.etag; }
+          applyStateFromExternal(rawState, { preserveProcess:true, origin:'remote', skipToasts:true, meta });
+          if(window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function'){
+            window.plannerRemote.applyFingerprint({ etag: latest?.etag || null, hash: latest?.hash || null });
+          }
+          if(typeof showToast === 'function'){
+            showToast({ title:'Состояние обновлено', message:'Загружены актуальные данные из базы SQL.' });
+          }
+        }else{
+          if(typeof showToast === 'function'){
+            showToast({ title:'Обновление', message:'Нет данных для загрузки из базы.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+          }
+        }
+      }catch(err){
+        console.warn('manual refresh failed', err);
+        if(typeof showToast === 'function'){
+          showToast({ title:'Ошибка обновления', message:'Не удалось получить данные из базы SQL.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+        }else{
+          alert('Не удалось получить данные из базы SQL.');
+        }
+      }finally{
+        setBusy(false);
+      }
+    });
+  }
+
+  const saveBtn = $("#saveBtn");
+  if(saveBtn){
+    const defaultLabel = saveBtn.textContent || 'Сохранить';
+    const setBusy = (busy)=>{
+      saveBtn.disabled = !!busy;
+      saveBtn.textContent = busy ? 'Сохраняем…' : (defaultLabel || 'Сохранить');
+    };
+    saveBtn.addEventListener('click', async ()=>{
+      if(!userCanEdit()){ notifyReadOnly(); return; }
+      setBusy(true);
+      try{
+        const result = await persistNow(undefined,{force:true, forceRemote:true, confirmRemote:true, forcePersist:true});
+        if(result && typeof result==='object'){
+          if(result.ok && result.persisted){
+            if(typeof showToast==='function'){
+              showToast({ title:'Сохранено', message:'Изменения записаны в базу SQL.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+            }
+          }else if(result.ok && result.unchanged){
+            if(typeof showToast==='function'){
+              showToast({ title:'Без изменений', message:'В базе уже находилась актуальная версия данных.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+            }
+          }else if(result.conflict){
+            // уведомление уже показано обработчиком
+          }else if(result.offline || result.fallback){
+            if(typeof showToast==='function'){
+              showToast({ title:'Сохранение в офлайн-режиме', message:'SQL недоступна, включено локальное резервное сохранение.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+            }
+          }else{
+            if(typeof showToast==='function'){
+              const detail = result?.message ? ` (${result.message})` : '';
+              showToast({ title:'Ошибка сохранения', message:`Не удалось записать данные в базу SQL${detail}.`, actions:[{ label:'OK', handler:el=>el.remove() }] });
+            }
+          }
+        }else{
+          if(typeof showToast==='function'){
+            showToast({ title:'Сохранение', message:'Запрос выполнен.', actions:[{ label:'OK', handler:el=>el.remove() }] });
+          }
+        }
+      }catch(err){
+        console.warn('manual save failed', err);
+        if(typeof showToast==='function'){
+          const detail = err && err.message ? ` (${err.message})` : '';
+          showToast({ title:'Ошибка сохранения', message:`Не удалось записать данные в базу SQL${detail}.`, actions:[{ label:'OK', handler:el=>el.remove() }] });
+        }
+      }finally{
+        setBusy(false);
+      }
+    });
+  }
   
   // Авто оптимизация
   $("#autoOptimize").addEventListener('change', e=>{

@@ -109,7 +109,9 @@
     };
   };
 
-  if ('EventSource' in window) {
+  const realtimeAllowed = false;
+
+  if (realtimeAllowed && 'EventSource' in window) {
     connect();
   }
 
@@ -626,6 +628,11 @@
   body[data-theme="light"] .planner-button{background:linear-gradient(135deg,rgba(27,92,255,.22),rgba(27,92,255,.08));border-color:rgba(27,92,255,.45);color:#1b5cff}
   body[data-theme="light"] .planner-button:hover{box-shadow:0 8px 18px rgba(27,92,255,.18);background:linear-gradient(135deg,rgba(27,92,255,.3),rgba(27,92,255,.12))}
 
+  .sync-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-left:auto;margin-top:12px}
+  .sync-actions label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .sync-actions button{min-width:110px}
+  .sync-actions .ghost{background:#fff}
+
   .tt{position:fixed;z-index:9998;background:var(--tooltipBg);color:var(--text);border:1px solid var(--tooltipBd);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);font-size:12px;max-width:320px;pointer-events:none}
   .tt h5{margin:0 0 6px 0;font-size:12px;color:var(--muted)}
   .tt ul{margin:0;padding-left:16px}
@@ -658,6 +665,11 @@
       <button id="themeBtn" title="Переключить тему">🌙</button>
     </div>
     <input id="q" class="search grow" type="text" placeholder="Поиск: № заказа, имя, переделы…" />
+    <div class="sync-actions">
+      <label><input id="crmAutosaveToggle" type="checkbox" checked /> Автосохранение</label>
+      <button id="crmRefreshBtn" class="ghost">Обновить</button>
+      <button id="crmSaveBtn" class="primary">Сохранить</button>
+    </div>
   </div>
 </header>
 
@@ -764,6 +776,9 @@ const DEFAULT_STAGES=['Подготовка в работу','Закупка','�
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const CRM_AUTOSAVE_PREF_KEY='mini_crm_autosave_pref_v1';
+let crmAutosaveOn=true;
+let crmHasPendingChanges=false;
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 const defaultBoard=()=>({id:(crypto.randomUUID?.()||('crm-'+Math.random().toString(16).slice(2,10))),name:'Список заказов',lanes:[...DEFAULT_LANES],orders:[]});
 const deepClone=value=>{
@@ -1645,6 +1660,78 @@ $('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;try{const text=await f.text();const obj=JSON.parse(text);if(!obj?.boards?.length)throw new Error('Неверный формат');state=obj;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
+const crmSaveBtn=$('#crmSaveBtn');
+if(crmSaveBtn){
+  crmSaveBtn.addEventListener('click',async ()=>{
+    if(crmSyncInFlight){return;}
+    crmSyncTimer=null;
+    crmPendingSummary=crmPendingSummary||'Изменения CRM';
+    crmHasPendingChanges=true;
+    updateSyncButtons();
+    try{
+      const ok=await pushCrmToServer();
+      if(!ok){ crmHasPendingChanges=true; }
+    }catch(err){
+      console.error('CRM manual save failed',err);
+      crmHasPendingChanges=true;
+      showToast({title:'CRM',message:'Не удалось сохранить изменения.',tone:'error',autoClose:5000});
+    }finally{
+      updateSyncButtons();
+    }
+  });
+}
+
+const crmRefreshBtn=$('#crmRefreshBtn');
+if(crmRefreshBtn){
+  crmRefreshBtn.addEventListener('click',async ()=>{
+    if(!window.plannerRemote||typeof window.plannerRemote.loadState!=='function'){
+      showToast({title:'CRM',message:'Подключение к планировщику недоступно.',tone:'error'});
+      return;
+    }
+    const defaultLabel=crmRefreshBtn.textContent;
+    crmRefreshBtn.disabled=true;
+    crmRefreshBtn.textContent='Обновляем…';
+    try{
+      const loaded=await window.plannerRemote.loadState({ withMeta:true });
+      const raw=loaded&&typeof loaded.state==='string'?loaded.state:'';
+      if(raw){
+        const parsed=JSON.parse(raw);
+        syncCrmNotificationsMutedFromPlanner(parsed);
+        syncCrmAutosaveFromPlanner(parsed);
+        if(parsed&&parsed.crm){
+          applyRemoteCrm(parsed.crm);
+        }
+        showToast({title:'CRM',message:'Данные обновлены из SQL.',tone:'success'});
+      }else{
+        showToast({title:'CRM',message:'Нет данных для загрузки из базы.',tone:'warn'});
+      }
+    }catch(err){
+      console.error('CRM refresh failed',err);
+      showToast({title:'CRM',message:'Не удалось получить данные из SQL.',tone:'error',autoClose:5000});
+    }finally{
+      crmRefreshBtn.disabled=false;
+      crmRefreshBtn.textContent=defaultLabel||'Обновить';
+      updateSyncButtons();
+    }
+  });
+}
+
+const crmAutosaveToggle=$('#crmAutosaveToggle');
+if(crmAutosaveToggle){
+  crmAutosaveToggle.checked=!!crmAutosaveOn;
+  crmAutosaveToggle.addEventListener('change',()=>{
+    crmAutosaveOn=!!crmAutosaveToggle.checked;
+    try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY, crmAutosaveOn?'1':'0');}catch(_err){/* ignore */}
+    crmPendingSummary='Настройки CRM';
+    crmHasPendingChanges=true;
+    if(crmAutosaveOn){
+      queueSync(crmPendingSummary);
+    }else{
+      updateSyncButtons();
+    }
+  });
+}
+
 /* === CRM ↔ Planner Sync === */
 const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
 const toastLayer=document.getElementById('toastLayer');
@@ -1689,6 +1776,30 @@ function syncCrmNotificationsMutedFromPlanner(state){
     window.__CRM_NOTIFICATIONS_MUTED__=next;
   }
 }
+
+function derivePlannerAutosave(state){
+  if(!state||typeof state!=='object') return undefined;
+  if(typeof state.autosaveOn==='boolean') return state.autosaveOn;
+  const meta=state.meta||{};
+  if(typeof meta.autosaveOn==='boolean') return meta.autosaveOn;
+  const metaPrefs=meta.preferences||{};
+  if(typeof metaPrefs.autosaveOn==='boolean') return metaPrefs.autosaveOn;
+  const settings=meta.settings||{};
+  const settingsPrefs=settings.preferences||{};
+  if(typeof settingsPrefs.autosaveOn==='boolean') return settingsPrefs.autosaveOn;
+  const prefs=state.preferences||{};
+  if(typeof prefs.autosaveOn==='boolean') return prefs.autosaveOn;
+  return undefined;
+}
+
+function syncCrmAutosaveFromPlanner(state){
+  const next=derivePlannerAutosave(state);
+  if(typeof next==='boolean'){
+    crmAutosaveOn=next;
+    try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY, crmAutosaveOn?'1':'0');}catch(_err){/* ignore */}
+    updateSyncButtons();
+  }
+}
 let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
@@ -1698,6 +1809,13 @@ let crmAlias=(()=>{
   catch(_err){/* ignore */}
   return 'CRM оператор';
 })();
+
+try{
+  const storedAutosave=localStorage.getItem(CRM_AUTOSAVE_PREF_KEY);
+  if(storedAutosave!==null){
+    crmAutosaveOn=storedAutosave==='1' || storedAutosave==='true';
+  }
+}catch(_err){/* ignore */}
 
 function setCrmAlias(name){
   crmAlias=(name||'CRM оператор').trim()||'CRM оператор';
@@ -1719,8 +1837,34 @@ function showToast({title='CRM',message='',tone='info',autoClose=3200}={}){
 
 function queueSync(summary){
   crmPendingSummary=summary||'Изменения CRM';
-  if(crmSyncTimer) clearTimeout(crmSyncTimer);
-  crmSyncTimer=setTimeout(pushCrmToServer,450);
+  crmHasPendingChanges=true;
+  if(crmAutosaveOn){
+    if(crmSyncTimer) clearTimeout(crmSyncTimer);
+    crmSyncTimer=setTimeout(()=>{ pushCrmToServer(); },450);
+  }
+  updateSyncButtons();
+}
+
+function updateSyncButtons(){
+  const saveBtn=$('#crmSaveBtn');
+  if(saveBtn){
+    if(crmSyncInFlight){
+      saveBtn.disabled=true;
+      saveBtn.textContent='Сохраняем…';
+    }else{
+      saveBtn.disabled=!crmHasPendingChanges;
+      const suffix=crmHasPendingChanges?'*':'';
+      saveBtn.textContent=`Сохранить${suffix}`;
+    }
+  }
+  const refreshBtn=$('#crmRefreshBtn');
+  if(refreshBtn){
+    refreshBtn.disabled=!!crmSyncInFlight;
+  }
+  const toggle=$('#crmAutosaveToggle');
+  if(toggle){
+    toggle.checked=!!crmAutosaveOn;
+  }
 }
 
 function buildCrmOrdersSummary(snapshot){
@@ -1748,8 +1892,10 @@ async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
   crmSyncInFlight=true;
+  updateSyncButtons();
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
     crmSyncInFlight=false;
+    updateSyncButtons();
     return;
   }
   const snapshot=deepClone(state);
@@ -1780,6 +1926,25 @@ async function pushCrmToServer(){
     }
     if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
     syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+    const autosaveValue=!!crmAutosaveOn;
+    plannerSnapshot.autosaveOn=autosaveValue;
+    const plannerMeta=plannerSnapshot.meta||{};
+    plannerSnapshot.meta=plannerMeta;
+    const metaPreferences=plannerMeta.preferences&&typeof plannerMeta.preferences==='object'?
+      {...plannerMeta.preferences}:{ };
+    metaPreferences.autosaveOn=autosaveValue;
+    plannerMeta.preferences=metaPreferences;
+    const plannerSettings=plannerMeta.settings&&typeof plannerMeta.settings==='object'?
+      {...plannerMeta.settings}:{ };
+    const settingsPreferences=plannerSettings.preferences&&typeof plannerSettings.preferences==='object'?
+      {...plannerSettings.preferences}:{ };
+    settingsPreferences.autosaveOn=autosaveValue;
+    plannerSettings.preferences=settingsPreferences;
+    plannerMeta.settings=plannerSettings;
+    const rootPreferences=plannerSnapshot.preferences&&typeof plannerSnapshot.preferences==='object'?
+      {...plannerSnapshot.preferences}:{ };
+    rootPreferences.autosaveOn=autosaveValue;
+    plannerSnapshot.preferences=rootPreferences;
     plannerSnapshot.crm=snapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
@@ -1822,7 +1987,8 @@ async function pushCrmToServer(){
       user:crmAlias,
       time:nowLabel,
       changeType:'CRM',
-      ordersSummary:summaryObj
+      ordersSummary:summaryObj,
+      forcePersist:true
     };
     if(baseHash) metaPayload.baseHash=baseHash;
     if(baseEtag) metaPayload.baseEtag=baseEtag;
@@ -1863,6 +2029,9 @@ async function pushCrmToServer(){
   }
 
   if(success){
+    crmHasPendingChanges=false;
+    try{localStorage.setItem(CRM_AUTOSAVE_PREF_KEY, crmAutosaveOn?'1':'0');}catch(_err){/* ignore */}
+    updateSyncButtons();
     showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
   }else if(lastError){
     crmSuppressNext=false;
@@ -1881,6 +2050,8 @@ async function pushCrmToServer(){
   }
 
   crmSyncInFlight=false;
+  updateSyncButtons();
+  return success;
 }
 
 function applyRemoteCrm(crm){
@@ -1895,22 +2066,11 @@ function applyRemoteCrm(crm){
   state=cloned;
   persistLocal();
   renderAll();
+  crmHasPendingChanges=false;
+  updateSyncButtons();
 }
 
-if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
-  window.plannerRemote.onRemoteUpdate(payload=>{
-    if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload||!payload.state) return;
-    try{
-      const parsed=JSON.parse(payload.state);
-      syncCrmNotificationsMutedFromPlanner(parsed);
-      if(parsed&&parsed.crm){
-        applyRemoteCrm(parsed.crm);
-        showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
-      }
-    }catch(err){ console.warn('CRM remote update parse failed',err); }
-  });
-}
+/* Автообновление отключено — данные подтягиваются вручную кнопкой «Обновить». */
 
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden' && crmSyncTimer){
@@ -1931,6 +2091,7 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){renderBoardSelect();renderColumns();renderCards();updateLaneHeightVar();}
 renderAll();
+updateSyncButtons();
 
 /* hotkeys */
 document.addEventListener('keydown',e=>{
