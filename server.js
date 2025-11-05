@@ -61,6 +61,69 @@ function isMissingDependencyError(err, moduleName) {
   return err.message.includes(`'${moduleName}'`);
 }
 
+function sanitizeCookieName(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const cleaned = trimmed.replace(/[^0-9A-Za-z_-]+/g, '');
+  if (!cleaned) {
+    return null;
+  }
+  const normalized = cleaned.replace(/^[-_]+/, '');
+  return normalized || null;
+}
+
+function resolveSessionCookieName(port) {
+  const fromEnv = sanitizeCookieName(process.env.SESSION_COOKIE_NAME);
+  if (fromEnv) {
+    return {
+      name: fromEnv,
+      source: 'env',
+      notice: `[CRM] Имя cookie сессии установлено из SESSION_COOKIE_NAME: ${fromEnv}.`
+    };
+  }
+
+  const suffix = sanitizeCookieName(process.env.SESSION_COOKIE_SUFFIX);
+  if (suffix) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${suffix}`;
+    return {
+      name,
+      source: 'suffix',
+      notice: `[CRM] Имя cookie сессии дополнено суффиксом SESSION_COOKIE_SUFFIX: ${name}.`
+    };
+  }
+
+  const instance = sanitizeCookieName(process.env.INSTANCE_ID || process.env.PLANNER_INSTANCE || process.env.APP_INSTANCE);
+  if (instance) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${instance}`;
+    return {
+      name,
+      source: 'instance',
+      notice: `[CRM] Имя cookie сессии дополнено идентификатором экземпляра: ${name}.`
+    };
+  }
+
+  const numericPort = Number.isFinite(port) ? port : Number.parseInt(port, 10);
+  if (Number.isFinite(numericPort) && numericPort > 0 && numericPort !== 3000) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${numericPort}`;
+    return {
+      name,
+      source: 'port',
+      notice: `[CRM] Имя cookie сессии скорректировано по порту ${numericPort}: ${name}.`
+    };
+  }
+
+  return {
+    name: DEFAULT_SESSION_COOKIE_NAME,
+    source: 'default',
+    notice: `[CRM] Используется базовое имя cookie сессии: ${DEFAULT_SESSION_COOKIE_NAME}.`
+  };
+}
+
 let autoInstallAttempted = false;
 
 const express = requireWithAutoInstall('express');
@@ -79,9 +142,18 @@ try {
   }
 }
 
-const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
+const DEFAULT_SESSION_COOKIE_NAME = 'pc_session';
 
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const SESSION_COOKIE_INFO = resolveSessionCookieName(PORT);
+const SESSION_COOKIE_NAME = SESSION_COOKIE_INFO.name;
+
+if (SESSION_COOKIE_INFO.notice) {
+  console.info(SESSION_COOKIE_INFO.notice);
+}
+
+const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
+
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR_INFO = resolveDataDirectory();
 const DATA_DIR = DATA_DIR_INFO.path;
@@ -102,7 +174,6 @@ if (DATA_DIR_INFO.source === 'env') {
   console.info(`[CRM] Используется резервный каталог данных ${DATA_DIR}.`);
 }
 
-const SESSION_COOKIE_NAME = 'pc_session';
 const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
 const SESSION_RENEW_THRESHOLD_MS = SESSION_TTL_MS / 3;
 const AUTH_MODE = (process.env.AUTH_MODE || 'local').trim().toLowerCase();

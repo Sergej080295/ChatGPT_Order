@@ -116,7 +116,10 @@
   }
 
   const loadState = async (options = {}) => {
-    const res = await fetch(STATE_ENDPOINT, { headers: { 'Accept': 'application/json,text/plain' } });
+    const res = await fetch(STATE_ENDPOINT, {
+      headers: { 'Accept': 'application/json,text/plain' },
+      credentials: 'same-origin'
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       throw new Error(detail || `HTTP ${res.status}`);
@@ -192,7 +195,8 @@
       const res = await fetch(STATE_ENDPOINT, {
         method: 'PUT',
         headers,
-        body
+        body,
+        credentials: 'same-origin'
       });
       const text = await res.text().catch(() => '') || '';
       const trimmed = text.trim();
