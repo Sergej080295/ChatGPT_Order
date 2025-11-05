@@ -124,6 +124,135 @@ function resolveSessionCookieName(port) {
   };
 }
 
+function resolveCookieSecureConfiguration() {
+  const explicit = process.env.COOKIE_SECURE;
+  if (explicit !== undefined) {
+    const secure = parseBoolean(explicit, true);
+    return {
+      enforced: secure,
+      preferSecure: secure,
+      notice: `[CRM] Флаг Secure для cookie задан через COOKIE_SECURE=${secure ? 'true' : 'false'}.`
+    };
+  }
+
+  const urlSources = [
+    ['PUBLIC_URL', process.env.PUBLIC_URL],
+    ['APP_URL', process.env.APP_URL],
+    ['APP_ORIGIN', process.env.APP_ORIGIN],
+    ['BASE_URL', process.env.BASE_URL]
+  ];
+
+  for (const [label, value] of urlSources) {
+    const protocol = detectUrlProtocol(value);
+    if (protocol === 'https:') {
+      return {
+        enforced: null,
+        preferSecure: true,
+        notice: `[CRM] Флаг Secure для cookie определяется автоматически (https) на основе ${label}.`
+      };
+    }
+    if (protocol === 'http:') {
+      return {
+        enforced: null,
+        preferSecure: false,
+        notice: `[CRM] Флаг Secure для cookie отключён для HTTP (источник ${label}).`
+      };
+    }
+  }
+
+  const defaultSecure = parseBoolean(process.env.COOKIE_SECURE_DEFAULT, false);
+  if (defaultSecure) {
+    return {
+      enforced: true,
+      preferSecure: true,
+      notice: '[CRM] Флаг Secure для cookie принудительно включён через COOKIE_SECURE_DEFAULT=true.'
+    };
+  }
+
+  return {
+    enforced: null,
+    preferSecure: false,
+    notice: '[CRM] Флаг Secure для cookie выбирается автоматически по протоколу запроса.'
+  };
+}
+
+function detectUrlProtocol(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed, 'http://localhost');
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.protocol;
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+  return null;
+}
+
+function isForwardedSecure(req) {
+  if (!req || !req.headers) {
+    return false;
+  }
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  if (typeof forwardedProto === 'string' && forwardedProto.trim()) {
+    const primary = forwardedProto.split(',')[0].trim().toLowerCase();
+    if (primary === 'https') {
+      return true;
+    }
+  }
+  const forwarded = req.headers.forwarded;
+  if (typeof forwarded === 'string' && forwarded.includes('proto=')) {
+    const segments = forwarded.split(';');
+    for (const segment of segments) {
+      const [key, rawValue] = segment.split('=');
+      if (typeof key === 'string' && key.trim().toLowerCase() === 'proto') {
+        if (typeof rawValue === 'string' && rawValue.trim().toLowerCase() === 'https') {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function isRequestSecure(req) {
+  if (!req) {
+    return false;
+  }
+  if (req.secure === true) {
+    return true;
+  }
+  if (req.protocol === 'https') {
+    return true;
+  }
+  if (req.connection?.encrypted) {
+    return true;
+  }
+  return isForwardedSecure(req);
+}
+
+function shouldUseSecureCookies(req) {
+  if (COOKIE_SECURE_ENFORCED === true) {
+    return true;
+  }
+  if (COOKIE_SECURE_ENFORCED === false) {
+    return false;
+  }
+  if (isRequestSecure(req)) {
+    return true;
+  }
+  if (COOKIE_SECURE_PREFERRED) {
+    return true;
+  }
+  return false;
+}
+
 let autoInstallAttempted = false;
 
 const express = requireWithAutoInstall('express');
@@ -147,9 +276,15 @@ const DEFAULT_SESSION_COOKIE_NAME = 'pc_session';
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const SESSION_COOKIE_INFO = resolveSessionCookieName(PORT);
 const SESSION_COOKIE_NAME = SESSION_COOKIE_INFO.name;
+const COOKIE_SECURE_CONFIG = resolveCookieSecureConfiguration();
+const COOKIE_SECURE_ENFORCED = COOKIE_SECURE_CONFIG.enforced;
+const COOKIE_SECURE_PREFERRED = COOKIE_SECURE_CONFIG.preferSecure;
 
 if (SESSION_COOKIE_INFO.notice) {
   console.info(SESSION_COOKIE_INFO.notice);
+}
+if (COOKIE_SECURE_CONFIG.notice) {
+  console.info(COOKIE_SECURE_CONFIG.notice);
 }
 
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
@@ -181,7 +316,6 @@ const ALLOW_GUEST_LOGIN = parseBoolean(process.env.ALLOW_GUEST ?? 'true', true);
 const MAX_FAILED_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_MAX_FAILED_ATTEMPTS || '5', 10));
 const LOCKOUT_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_LOCKOUT_MINUTES || '15', 10));
 const SESSION_IDLE_TIMEOUT_MS = Math.max(SESSION_TTL_MS, 60 * 60 * 1000);
-const COOKIE_SECURE = parseBoolean(process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production'), process.env.NODE_ENV === 'production');
 const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
 const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
@@ -615,7 +749,7 @@ function sessionMiddleware(req, res, next) {
     }
     const session = resolveSession(token);
     if (!session) {
-      clearSessionCookie(res);
+      clearSessionCookie(req, res);
       req.session = null;
       req.user = null;
       return next();
@@ -1187,21 +1321,23 @@ function createSessionRecord({ userId = null, isGuest = false }) {
   return { id: sessionId, createdAt: nowIso, expiresAt: expiresIso };
 }
 
-function setSessionCookie(res, sessionId) {
+function setSessionCookie(req, res, sessionId) {
+  const secure = shouldUseSecureCookies(req);
   res.cookie(SESSION_COOKIE_NAME, sessionId, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    secure,
     path: '/',
     maxAge: SESSION_IDLE_TIMEOUT_MS
   });
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(req, res) {
+  const secure = shouldUseSecureCookies(req);
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    secure,
     path: '/'
   });
 }
@@ -1481,7 +1617,7 @@ app.post('/auth/login', async (req, res) => {
     payload.isGuest = false;
   }
   const session = createSessionRecord({ userId: user.id, isGuest: false });
-  setSessionCookie(res, session.id);
+  setSessionCookie(req, res, session.id);
   recordAuditEvent({ user: { id: user.id, login: user.login, roles: payload?.roles || [] }, action: 'auth.login' });
   res.json({
     user: payload,
@@ -1493,7 +1629,7 @@ app.post('/auth/login', async (req, res) => {
 
 app.post('/auth/guest', ensureGuestAllowed, (req, res) => {
   const session = createSessionRecord({ userId: null, isGuest: true });
-  setSessionCookie(res, session.id);
+  setSessionCookie(req, res, session.id);
   const guest = buildGuestUserPayload();
   recordAuditEvent({ user: { id: null, login: 'guest', roles: guest.roles }, action: 'auth.guest' });
   res.json({ user: guest, authMode: AUTH_MODE, allowGuest: ALLOW_GUEST_LOGIN, expiresAt: session.expiresAt });
@@ -1503,7 +1639,7 @@ app.post('/auth/logout', (req, res) => {
   if (req.session?.id) {
     destroySession(req.session.id);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   if (req.user) {
     recordAuditEvent({ user: { id: req.user.id, login: req.user.login, roles: req.user.roles }, action: 'auth.logout' });
   }
