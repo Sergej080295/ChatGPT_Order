@@ -5181,6 +5181,17 @@ function normalizeSearchTerm(value){
   if(value==null) return '';
   return String(value).trim().toLowerCase();
 }
+function safeRandomUUID(){
+  if(typeof crypto!=='undefined' && crypto && typeof crypto.randomUUID==='function'){
+    try{return crypto.randomUUID();}
+    catch(_err){/* ignore */}
+  }
+  const bytes=Array.from({length:16},()=>Math.floor(Math.random()*256));
+  bytes[6]=(bytes[6]&0x0f)|0x40;
+  bytes[8]=(bytes[8]&0x3f)|0x80;
+  const hex=bytes.map(b=>b.toString(16).padStart(2,'0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
 const generateBoardId=(hint)=>{
   if(typeof hint==='string'){
     const trimmed=hint.trim();
@@ -13566,7 +13577,7 @@ function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
-  const id=orderForm.id.value||crypto.randomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
+  const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
   const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
   let removedStages=[];
   if(editingOrderId){
@@ -14708,7 +14719,7 @@ splitForm.addEventListener('submit',e=>{
   const effectiveServicePct=(servicePct!==null&&Number.isFinite(servicePct)&&servicePct>=0&&servicePct<=100)?servicePct:null;
   const effectiveServiceValue=(serviceValue!==null&&Number.isFinite(serviceValue)&&serviceValue>=0)?serviceValue:null;
 
-  const child=deepClone(parent); child.id=crypto.randomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
+  const child=deepClone(parent); child.id=safeRandomUUID(); child.title=(splitForm.titlePart.value||parent.title+' — часть').trim();
   child.orderNo=parent.orderNo+(splitForm.suffix.value||'-1'); child.createdAt=new Date().toISOString();
   child.partOfPct=hasAnyStageShare?null:basePct; child.restOfPct=null; child.done=false; child.progress=0; child.progressManual=true;
   child.parentId=parent.id; child.isPart=true; child.childIds=[]; child._origPctUsed=0; parent.childIds=Array.isArray(parent.childIds)?parent.childIds:[]; parent.childIds.push(child.id);
