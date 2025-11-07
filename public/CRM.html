@@ -1579,6 +1579,14 @@
     justify-content: flex-end;
   }
 
+  .crm-toolbar__create-quick {
+    min-width: 40px;
+    padding-inline: var(--pc-spacing-xs);
+    font-size: 18px;
+    font-weight: var(--pc-font-weight-semibold);
+    line-height: 1.1;
+  }
+
   .pc-btn.crm-toolbar__alert,
   .pc-btn--ghost.crm-toolbar__alert,
   .pc-btn--secondary.crm-toolbar__alert {
@@ -4364,6 +4372,7 @@
           </svg>
           <span class="crm-toolbar__badge" id="crmTrashBadge" hidden>0</span>
         </button>
+        <button id="newOrderQuickBtn" class="pc-btn pc-btn--primary pc-btn--xs crm-toolbar__create-quick" type="button" aria-label="Создать новый заказ">+</button>
         <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button">+ Заказ</button>
         <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -6184,7 +6193,15 @@ const applyCrmWriteAccess=()=>{
     document.body.classList.toggle('crm-complete-disabled', !canComplete);
   }
   const newOrderBtn=$('#newOrderBtn');
-  if(newOrderBtn){ newOrderBtn.disabled = !canOrders; }
+  const newOrderQuickBtn=$('#newOrderQuickBtn');
+  if(newOrderBtn){
+    newOrderBtn.disabled=!canOrders;
+    newOrderBtn.hidden=!canOrders;
+  }
+  if(newOrderQuickBtn){
+    newOrderQuickBtn.disabled=!canOrders;
+    newOrderQuickBtn.hidden=!canOrders;
+  }
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
   if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
@@ -14940,6 +14957,10 @@ if(addBoardBtn){addBoardBtn.onclick=()=>{const b=defaultBoard();b.name='Нова
 const editBoardBtn=$('#editBoardBtn');
 if(editBoardBtn){editBoardBtn.onclick=openBoard;}
 $('#newOrderBtn').onclick=()=>openOrder(null);
+const newOrderQuickBtnEl=$('#newOrderQuickBtn');
+if(newOrderQuickBtnEl){
+  newOrderQuickBtnEl.onclick=()=>openOrder(null);
+}
 if(boardSelect){
   boardSelect.onchange=e=>{
     state.currentBoardId=e.target.value;
