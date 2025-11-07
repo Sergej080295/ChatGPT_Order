@@ -195,6 +195,56 @@ function detectUrlProtocol(value) {
   return null;
 }
 
+function resolveRequestBodyLimit(defaultBytes, maxBytes) {
+  const fallback = Number.isFinite(defaultBytes) && defaultBytes > 0 ? Math.floor(defaultBytes) : 10 * 1024 * 1024;
+  const ceiling = Number.isFinite(maxBytes) && maxBytes > fallback ? Math.floor(maxBytes) : 512 * 1024 * 1024;
+  const sources = [
+    ['REQUEST_BODY_LIMIT', process.env.REQUEST_BODY_LIMIT],
+    ['BODY_SIZE_LIMIT', process.env.BODY_SIZE_LIMIT],
+    ['MAX_BODY_SIZE', process.env.MAX_BODY_SIZE]
+  ];
+
+  let warning = null;
+  for (const [label, rawValue] of sources) {
+    if (rawValue === undefined || rawValue === null) {
+      continue;
+    }
+    const value = String(rawValue).trim();
+    if (!value) {
+      continue;
+    }
+    const parsed = parseDataSize(value, null);
+    if (parsed === null) {
+      warning = `[CRM] Значение ${label}=${value} не распознано. Используется лимит по умолчанию.`;
+      continue;
+    }
+    const normalized = Math.max(1, Math.floor(parsed));
+    const bytes = Math.min(normalized, ceiling);
+    const limitLabel = formatByteSize(bytes) || `${bytes} байт`;
+    const info = {
+      bytes,
+      source: label,
+      label: limitLabel,
+      notice: `[CRM] Лимит тела запросов установлен через ${label}: ${limitLabel}.`
+    };
+    if (bytes !== normalized) {
+      info.warning = `[CRM] Значение ${label} ограничено максимумом ${formatByteSize(ceiling) || `${ceiling} байт`}.`;
+    } else if (warning) {
+      info.warning = warning;
+    }
+    return info;
+  }
+
+  const limitLabel = formatByteSize(fallback) || `${fallback} байт`;
+  return {
+    bytes: fallback,
+    source: 'default',
+    label: limitLabel,
+    notice: `[CRM] Лимит тела запросов установлен по умолчанию: ${limitLabel}.`,
+    warning
+  };
+}
+
 function isForwardedSecure(req) {
   if (!req || !req.headers) {
     return false;
@@ -279,12 +329,21 @@ const SESSION_COOKIE_NAME = SESSION_COOKIE_INFO.name;
 const COOKIE_SECURE_CONFIG = resolveCookieSecureConfiguration();
 const COOKIE_SECURE_ENFORCED = COOKIE_SECURE_CONFIG.enforced;
 const COOKIE_SECURE_PREFERRED = COOKIE_SECURE_CONFIG.preferSecure;
+const DEFAULT_BODY_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
+const REQUEST_BODY_LIMIT_INFO = resolveRequestBodyLimit(DEFAULT_BODY_SIZE_LIMIT_BYTES, 512 * 1024 * 1024);
+const REQUEST_BODY_LIMIT_BYTES = REQUEST_BODY_LIMIT_INFO.bytes;
 
 if (SESSION_COOKIE_INFO.notice) {
   console.info(SESSION_COOKIE_INFO.notice);
 }
 if (COOKIE_SECURE_CONFIG.notice) {
   console.info(COOKIE_SECURE_CONFIG.notice);
+}
+if (REQUEST_BODY_LIMIT_INFO.notice) {
+  console.info(REQUEST_BODY_LIMIT_INFO.notice);
+}
+if (REQUEST_BODY_LIMIT_INFO.warning) {
+  console.warn(REQUEST_BODY_LIMIT_INFO.warning);
 }
 
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
@@ -734,8 +793,30 @@ let rolePermissionCache = new Map();
 
 const app = express();
 app.use(compression());
-app.use(express.json({ limit: '10mb', strict: false }));
-app.use(express.text({ limit: '10mb', type: ['text/plain', 'application/octet-stream'] }));
+app.use(express.json({ limit: REQUEST_BODY_LIMIT_BYTES, strict: false }));
+app.use(express.text({ limit: REQUEST_BODY_LIMIT_BYTES, type: ['text/plain', 'application/octet-stream'] }));
+app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT_BYTES }));
+app.use((err, req, res, next) => {
+  if (!err) {
+    next();
+    return;
+  }
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    const limitLabel = REQUEST_BODY_LIMIT_INFO.label;
+    const payload = {
+      error: 'Payload Too Large',
+      limit: REQUEST_BODY_LIMIT_BYTES,
+      limitHuman: limitLabel
+    };
+    if (req.accepts('json')) {
+      res.status(413).json(payload);
+    } else {
+      res.status(413).type('text/plain').send(`Payload Too Large. Максимальный размер: ${limitLabel}.`);
+    }
+    return;
+  }
+  next(err);
+});
 
 function sessionMiddleware(req, res, next) {
   try {
@@ -5320,6 +5401,70 @@ function parseBoolean(value, fallback = false) {
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   }
   return fallback;
+}
+
+function parseDataSize(value, fallback = null) {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?i?b?|[kmgt])?$/i);
+  if (!match) {
+    return fallback;
+  }
+  const numeric = Number.parseFloat(match[1]);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  const unitRaw = (match[2] || 'b').toLowerCase();
+  const unit = unitRaw.replace(/bytes?$/, 'b');
+  const unitMap = new Map([
+    ['b', 1],
+    ['kb', 1024],
+    ['kib', 1024],
+    ['k', 1024],
+    ['mb', 1024 * 1024],
+    ['mib', 1024 * 1024],
+    ['m', 1024 * 1024],
+    ['gb', 1024 * 1024 * 1024],
+    ['gib', 1024 * 1024 * 1024],
+    ['g', 1024 * 1024 * 1024],
+    ['tb', 1024 * 1024 * 1024 * 1024],
+    ['tib', 1024 * 1024 * 1024 * 1024],
+    ['t', 1024 * 1024 * 1024 * 1024]
+  ]);
+  const multiplier = unitMap.get(unit) || unitMap.get(`${unit}b`);
+  if (!multiplier) {
+    return fallback;
+  }
+  return numeric * multiplier;
+}
+
+function formatByteSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+  const units = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  const rounded = value >= 10 || index === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[index]}`;
 }
 
 function parseJsonColumn(value, fallback = null) {
