@@ -8810,11 +8810,26 @@ function buildCrmStageSchedule(stageKey, rows, options){
     }
     return a.start-b.start||a.end-b.end||a.label.localeCompare(b.label,'ru',{sensitivity:'base'});
   });
-  let minDate=allowPullback?addDays(todayBaseline,0):new Date(tasks[0].start);
-  let maxDate=new Date(tasks[0].end);
+  let minDate=allowPullback?addDays(todayBaseline,0):null;
+  let maxDate=null;
   const today=todayBaseline;
+  tasks.forEach(task=>{
+    const start=task.start instanceof Date?task.start:null;
+    const end=task.end instanceof Date?task.end:start;
+    if(!allowPullback){
+      if(start && (minDate===null || start<minDate)){
+        minDate=new Date(start);
+      }
+    }
+    if(end && (!maxDate || end>maxDate)){
+      maxDate=new Date(end);
+    }
+  });
+  if(minDate===null){
+    minDate=addDays(todayBaseline,0);
+  }
   if(minDate<today) minDate=today;
-  if(maxDate<minDate) maxDate=new Date(minDate);
+  if(!maxDate || maxDate<minDate) maxDate=new Date(minDate);
   pinnedDates.forEach(date=>{
     if(date<minDate) minDate=new Date(date);
     if(date>maxDate) maxDate=new Date(date);
