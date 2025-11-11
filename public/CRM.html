@@ -8763,11 +8763,12 @@ function buildCrmStageSchedule(stageKey, rows, options){
   const scheduleEvaluator=getCrmStageScheduleEvaluator(stageKey);
   const errors=[];
   const todayBaseline=today0();
+  const baselineDate=addDays(todayBaseline,0);
   const tasks=rows.map(row=>{
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
     const end=row.endDate instanceof Date?new Date(row.endDate):null;
-    const baseStart=start?addDays(start,0):addDays(todayBaseline,0);
-    const safeStart=allowPullback && baseStart>todayBaseline?addDays(todayBaseline,0):baseStart;
+    const baseStart=start?addDays(start,0):baselineDate;
+    const safeStart=allowPullback && baseStart>baselineDate?addDays(baselineDate,0):baseStart;
     let safeEnd=end?addDays(end,0):safeStart;
     if(safeEnd<safeStart) safeEnd=new Date(safeStart);
     const total=isHourless?1:Math.max(0, Number(row.totalHours)||0);
@@ -8810,9 +8811,20 @@ function buildCrmStageSchedule(stageKey, rows, options){
     }
     return a.start-b.start||a.end-b.end||a.label.localeCompare(b.label,'ru',{sensitivity:'base'});
   });
+  const clampToBaseline=(candidate)=>{
+    if(!(candidate instanceof Date) || Number.isNaN(candidate.getTime())){
+      return addDays(baselineDate,0);
+    }
+    if(candidate>baselineDate){
+      return addDays(baselineDate,0);
+    }
+    if(!allowPullback && candidate<baselineDate){
+      return addDays(baselineDate,0);
+    }
+    return candidate;
+  };
   let minDate=allowPullback?addDays(todayBaseline,0):null;
   let maxDate=null;
-  const today=todayBaseline;
   tasks.forEach(task=>{
     const start=task.start instanceof Date?task.start:null;
     const end=task.end instanceof Date?task.end:start;
@@ -8826,15 +8838,16 @@ function buildCrmStageSchedule(stageKey, rows, options){
     }
   });
   if(minDate===null){
-    minDate=addDays(todayBaseline,0);
+    minDate=addDays(baselineDate,0);
+  }else{
+    minDate=clampToBaseline(minDate);
   }
-  if(minDate<today) minDate=today;
   if(!maxDate || maxDate<minDate) maxDate=new Date(minDate);
   pinnedDates.forEach(date=>{
     if(date<minDate) minDate=new Date(date);
     if(date>maxDate) maxDate=new Date(date);
   });
-  if(minDate<today) minDate=today;
+  minDate=clampToBaseline(minDate);
   freezeLocks.forEach((_record, iso)=>{
     const normalizedIso=coerceCalendarIso(iso);
     if(!normalizedIso) return;
@@ -8855,8 +8868,8 @@ function buildCrmStageSchedule(stageKey, rows, options){
     if(date<minDate) minDate=new Date(date);
     if(date>maxDate) maxDate=new Date(date);
   });
+  minDate=clampToBaseline(minDate);
   const perDay=new Map();
-  if(minDate<today) minDate=today;
   const perTask=new Map();
   const ensureDay=(date)=>{
     const ds=fmtDateISO(date);
