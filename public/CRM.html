@@ -8768,7 +8768,14 @@ function buildCrmStageSchedule(stageKey, rows, options){
     const start=row.startDate instanceof Date?new Date(row.startDate):null;
     const end=row.endDate instanceof Date?new Date(row.endDate):null;
     const baseStart=start?addDays(start,0):baselineDate;
-    const safeStart=allowPullback && baseStart>baselineDate?addDays(baselineDate,0):baseStart;
+    let safeStart;
+    if(baseStart<baselineDate){
+      safeStart=addDays(baselineDate,0);
+    }else if(allowPullback && baseStart>baselineDate){
+      safeStart=addDays(baselineDate,0);
+    }else{
+      safeStart=baseStart;
+    }
     let safeEnd=end?addDays(end,0):safeStart;
     if(safeEnd<safeStart) safeEnd=new Date(safeStart);
     const total=isHourless?1:Math.max(0, Number(row.totalHours)||0);
