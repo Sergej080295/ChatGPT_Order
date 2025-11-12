@@ -14,6 +14,67 @@
   let source = null;
   let currentEtag = null;
   let currentHash = null;
+  const MIN_REFRESH_INTERVAL_MS = 15000;
+  const DEFAULT_REFRESH_INTERVAL_MS = 60000;
+  let refreshTimerId = null;
+  let refreshPromise = null;
+  let lastRefreshAt = 0;
+
+  const parseIntervalInput = (value) => {
+    if (value == null) return null;
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return null;
+      return value;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      const direct = Number(trimmed);
+      if (Number.isFinite(direct)) return direct;
+      const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)(ms|s|m)$/i);
+      if (match) {
+        const base = Number(match[1]);
+        if (!Number.isFinite(base)) return null;
+        const unit = match[2].toLowerCase();
+        if (unit === 'ms') return base;
+        if (unit === 's') return base * 1000;
+        if (unit === 'm') return base * 60000;
+      }
+    }
+    return null;
+  };
+
+  const resolveAutoRefreshInterval = () => {
+    const candidates = [
+      window.CRM_AUTO_REFRESH_MS,
+      window.PLANNER_AUTO_REFRESH_MS,
+      window.__CRM_AUTO_REFRESH_MS__,
+      document.documentElement?.dataset?.crmAutoRefresh
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseIntervalInput(candidate);
+      if (parsed == null) continue;
+      if (parsed <= 0) return 0;
+      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
+    }
+    return DEFAULT_REFRESH_INTERVAL_MS;
+  };
+
+  let autoRefreshIntervalMs = resolveAutoRefreshInterval();
+
+  const hasPendingLocalChanges = () => {
+    try {
+      if (typeof crmSyncInFlight !== 'undefined' && crmSyncInFlight) return true;
+    } catch (_err) {
+      /* ignore */
+    }
+    try {
+      if (typeof crmSyncTimer !== 'undefined' && crmSyncTimer) return true;
+    } catch (_err) {
+      /* ignore */
+    }
+    return false;
+  };
 
   const parseEtagHash = (value) => {
     if (!value || typeof value !== 'string') return null;
@@ -86,7 +147,7 @@
       try { source.close(); } catch (err) { /* ignore */ }
     }
     source = new EventSource(EVENTS_ENDPOINT);
-    source.onmessage = (event) => {
+    source.onmessage = async (event) => {
       if (!event?.data) {
         notify(null);
         return;
@@ -94,7 +155,23 @@
       try {
         const payload = JSON.parse(event.data);
         if (payload && typeof payload === 'object') {
-          updateFingerprint({ etag: payload.etag, hash: payload.hash });
+          if (!payload.reason) {
+            payload.reason = 'sse';
+          }
+          const prevHash = currentHash;
+          const eventHash = typeof payload.hash === 'string' ? payload.hash.trim() : null;
+          const eventEtag = typeof payload.etag === 'string' ? payload.etag : null;
+          if (eventHash || eventEtag) {
+            updateFingerprint({ etag: eventEtag, hash: eventHash });
+          }
+          const needsState = typeof payload.state !== 'string' || payload.state.trim() === '';
+          const shouldRefresh = needsState && (!eventHash || eventHash !== prevHash) && !hasPendingLocalChanges();
+          if (shouldRefresh) {
+            const result = await requestStateRefresh(payload.reason || 'sse', payload);
+            if (result) {
+              return;
+            }
+          }
         }
         notify(payload);
       } catch (err) {
@@ -110,10 +187,6 @@
       setTimeout(connect, reconnectDelay);
     };
   };
-
-  if ('EventSource' in window) {
-    connect();
-  }
 
   const loadState = async (options = {}) => {
     const res = await fetch(STATE_ENDPOINT, {
@@ -236,6 +309,87 @@
     return attemptSave(0);
   };
 
+  const requestStateRefresh = (reason = 'refresh', basePayload) => {
+    if (refreshPromise) {
+      return refreshPromise;
+    }
+    const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
+    refreshPromise = (async () => {
+      try {
+        const meta = await loadState({ withMeta: true });
+        lastRefreshAt = Date.now();
+        if (meta && typeof meta.state === 'string' && meta.state) {
+          const payload = {
+            ...(basePayload && typeof basePayload === 'object' ? basePayload : {})
+          };
+          payload.reason = payload.reason || effectiveReason;
+          if (!payload.type) payload.type = 'state';
+          payload.state = meta.state;
+          if (meta.etag) payload.etag = meta.etag;
+          if (meta.hash) payload.hash = meta.hash;
+          notify(payload);
+          return payload;
+        }
+        return null;
+      } catch (err) {
+        console.warn('plannerRemote state refresh failed', err);
+        return null;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+    return refreshPromise;
+  };
+
+  const scheduleAutoRefresh = () => {
+    if (refreshTimerId) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
+      return;
+    }
+    const tick = () => {
+      if (document.hidden) return;
+      if (hasPendingLocalChanges()) return;
+      const now = Date.now();
+      if (refreshPromise) return;
+      if (lastRefreshAt && now - lastRefreshAt < Math.max(3000, Math.floor(autoRefreshIntervalMs / 4))) {
+        return;
+      }
+      requestStateRefresh('interval');
+    };
+    refreshTimerId = setInterval(tick, autoRefreshIntervalMs);
+  };
+
+  const handleFocusRefresh = () => {
+    if (document.hidden) return;
+    if (hasPendingLocalChanges()) return;
+    const now = Date.now();
+    if (refreshPromise) return;
+    if (lastRefreshAt && now - lastRefreshAt < 5000) return;
+    requestStateRefresh('focus');
+  };
+
+  const handleVisibilityChange = () => {
+    if (!document.hidden) {
+      handleFocusRefresh();
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleFocusRefresh, { passive: true });
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
+
+  scheduleAutoRefresh();
+
+  if ('EventSource' in window) {
+    connect();
+  } else {
+    requestStateRefresh('interval');
+  }
+
   window.plannerRemote = {
     loadState,
     saveState,
@@ -251,6 +405,21 @@
     },
     getFingerprint() {
       return { etag: currentEtag, hash: currentHash };
+    },
+    refresh(reason) {
+      return requestStateRefresh(reason || 'manual');
+    },
+    setAutoRefreshInterval(value) {
+      const parsed = parseIntervalInput(value);
+      if (parsed == null) {
+        return autoRefreshIntervalMs;
+      }
+      autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
+      scheduleAutoRefresh();
+      return autoRefreshIntervalMs;
+    },
+    getAutoRefreshInterval() {
+      return autoRefreshIntervalMs;
     }
   };
 })();
@@ -17477,7 +17646,10 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
       setCrmDataSource(CRM_DATA_SOURCE.remote);
       if(parsed&&parsed.crm){
         applyRemoteCrm(parsed.crm);
-        showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
+        const shouldToast=!payload||!payload.reason||payload.reason==='sse';
+        if(shouldToast){
+          showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
+        }
       }
     }catch(err){ console.warn('CRM remote update parse failed',err); }
   });
