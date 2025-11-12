@@ -686,7 +686,9 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'manageOrders',
   'completeOrders',
   'viewAudit',
-  'useJournal'
+  'useJournal',
+  'editComments',
+  'deleteComments'
 ]);
 
 function createStageAccessDefaults(enabled) {
@@ -707,6 +709,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
+    editComments: true,
+    deleteComments: true,
     stageAccess: createStageAccessDefaults(true)
   },
   admin: {
@@ -719,6 +723,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
+    editComments: true,
+    deleteComments: true,
     stageAccess: createStageAccessDefaults(true)
   },
   master: {
@@ -731,6 +737,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: false,
     viewAudit: false,
     useJournal: true,
+    editComments: false,
+    deleteComments: false,
     stageAccess: createStageAccessDefaults(true)
   },
   guest: {
@@ -743,6 +751,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: false,
     viewAudit: false,
     useJournal: false,
+    editComments: false,
+    deleteComments: false,
     stageAccess: createStageAccessDefaults(false)
   }
 };

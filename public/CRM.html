@@ -5391,7 +5391,7 @@ const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
 const CRM_HOURLESS_SCHEDULE_PRESET_MAP=new Map(CRM_HOURLESS_SCHEDULE_PRESETS.map(item=>[item.key,item]));
 const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-01-01', extras:[] });
 const CRM_STAGE_IGNORE='__ignore__';
-const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, cascadeReady:true, showLateTips:true, allowCommentEdit:false, allowCommentDelete:false };
+const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, cascadeReady:true, showLateTips:true };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
@@ -5989,8 +5989,6 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
-    if(typeof raw.allowCommentEdit==='boolean') result.allowCommentEdit=raw.allowCommentEdit;
-    if(typeof raw.allowCommentDelete==='boolean') result.allowCommentDelete=raw.allowCommentDelete;
   }
   return result;
 }
@@ -6365,6 +6363,8 @@ const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manage
 const crmCanUseJournal=()=> !!crmPermissions.useJournal;
 const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
+const crmCanEditComments=()=> crmWriteAccessEnabled() && !!crmPermissions.editComments;
+const crmCanDeleteComments=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteComments;
 const crmCanManageStage=(stage)=>{
   if(!crmCanManageStages()) return false;
   const key=resolveCrmStageKey(stage)|| (typeof stage==='string'?stage.trim().toLowerCase():null);
@@ -6687,7 +6687,7 @@ function ensureStageHoursPreference(normalized, label){
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) };
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
   const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
   const stageAccess=crmDefaultStageAccess(false);
@@ -7951,14 +7951,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -7981,6 +7981,14 @@ const CRM_ROLE_PERMISSION_GROUPS=[
       { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
       { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
       { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
+    ]
+  },
+  {
+    key:'comments',
+    title:'Комментарии',
+    items:[
+      { key:'editComments', label:'Редактировать комментарии', hint:'Изменение текста существующих комментариев в заказе.' },
+      { key:'deleteComments', label:'Удалять комментарии', hint:'Удаление комментариев из карточки заказа.' }
     ]
   },
   {
@@ -13661,9 +13669,8 @@ function renderOrderComments(){
   if(orderCommentThread){
     orderCommentThread.innerHTML='';
     if(orderCommentsDraft.length){
-      const prefs=getCrmPreferences();
-      const allowEdit=!!prefs.allowCommentEdit;
-      const allowDelete=!!prefs.allowCommentDelete;
+      const allowEdit=crmCanEditComments();
+      const allowDelete=crmCanDeleteComments();
       const showActions=allowEdit||allowDelete;
       const fragment=document.createDocumentFragment();
       orderCommentsDraft.forEach(comment=>{
@@ -13743,8 +13750,7 @@ function appendOrderComment(text){
 }
 
 function editOrderComment(commentId){
-  const prefs=getCrmPreferences();
-  if(!prefs.allowCommentEdit) return false;
+  if(!crmCanEditComments()) return false;
   const id=typeof commentId==='string'?commentId.trim():'';
   if(!id) return false;
   const index=orderCommentsDraft.findIndex(comment=>comment&&comment.id===id);
@@ -13771,8 +13777,7 @@ function editOrderComment(commentId){
 }
 
 function deleteOrderComment(commentId){
-  const prefs=getCrmPreferences();
-  if(!prefs.allowCommentDelete) return false;
+  if(!crmCanDeleteComments()) return false;
   const id=typeof commentId==='string'?commentId.trim():'';
   if(!id) return false;
   const index=orderCommentsDraft.findIndex(comment=>comment&&comment.id===id);
@@ -14805,25 +14810,7 @@ function renderCrmPreferencesSettingsUI(){
   const tipsText=document.createElement('span');
   tipsText.textContent='Показывать советы по просроченным заказам';
   tipsOption.append(tipsCheckbox, tipsText);
-  const commentEditOption=document.createElement('label');
-  commentEditOption.className='crm-settings-checkbox';
-  const commentEditCheckbox=document.createElement('input');
-  commentEditCheckbox.type='checkbox';
-  commentEditCheckbox.name='prefCommentEdit';
-  commentEditCheckbox.checked=!!prefs.allowCommentEdit;
-  const commentEditText=document.createElement('span');
-  commentEditText.textContent='Разрешить редактирование комментариев';
-  commentEditOption.append(commentEditCheckbox, commentEditText);
-  const commentDeleteOption=document.createElement('label');
-  commentDeleteOption.className='crm-settings-checkbox';
-  const commentDeleteCheckbox=document.createElement('input');
-  commentDeleteCheckbox.type='checkbox';
-  commentDeleteCheckbox.name='prefCommentDelete';
-  commentDeleteCheckbox.checked=!!prefs.allowCommentDelete;
-  const commentDeleteText=document.createElement('span');
-  commentDeleteText.textContent='Разрешить удаление комментариев';
-  commentDeleteOption.append(commentDeleteCheckbox, commentDeleteText);
-  control.append(autoOption, cascadeOption, tipsOption, commentEditOption, commentDeleteOption);
+  control.append(autoOption, cascadeOption, tipsOption);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -15332,9 +15319,7 @@ boardForm.addEventListener('submit',e=>{
   state.settings.preferences=sanitizeCrmPreferences({
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
-    showLateTips:!!boardForm.prefShowLateTips?.checked,
-    allowCommentEdit:!!boardForm.prefCommentEdit?.checked,
-    allowCommentDelete:!!boardForm.prefCommentDelete?.checked
+    showLateTips:!!boardForm.prefShowLateTips?.checked
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
