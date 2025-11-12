@@ -8207,6 +8207,7 @@ if(crmStageSelect){
   decorateStageSelectOptions();
   crmStageSelect.value=initialStageViewKey;
   updateStageSelectAppearance(crmStageSelect.value);
+  setupStageSelectObserver();
 }
 if(crmStageFilter){
   crmStageFilter.value=getCrmStageFilter(initialStageViewKey);
@@ -8288,6 +8289,17 @@ function decorateStageSelectOptions(){
   });
 }
 
+function setupStageSelectObserver(){
+  if(!crmStageSelect || typeof MutationObserver==='undefined') return;
+  if(crmStageSelectObserver){
+    crmStageSelectObserver.disconnect();
+  }
+  crmStageSelectObserver=new MutationObserver(()=>{
+    decorateStageSelectOptions();
+  });
+  crmStageSelectObserver.observe(crmStageSelect, { childList:true });
+}
+
 function updateStageSelectAppearance(stageKey){
   if(!crmStageSelectShell) return;
   const key=typeof stageKey==='string'?stageKey.trim():'';
@@ -8301,6 +8313,7 @@ const CRM_STAGE_FILTER_LABELS={
 };
 let crmStageRowsCache=[];
 let crmStageSelectionId=null;
+let crmStageSelectObserver=null;
 
 Object.keys(CRM_STAGE_ALIASES).forEach(key=>{
   CRM_STAGE_ALIASES[key]=CRM_STAGE_ALIASES[key].map(name=>normalizeStageName(name)).filter(Boolean);
