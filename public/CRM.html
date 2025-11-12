@@ -1738,6 +1738,7 @@
   }
 
   .crm-stage-select-chip {
+    --crm-stage-chip-icon: none;
     position: absolute;
     left: 10px;
     display: inline-flex;
@@ -1746,10 +1747,6 @@
     width: 1.5rem;
     height: 1.5rem;
     border-radius: 0.6rem;
-    font-size: 0.85rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
     background: color-mix(in srgb, var(--pc-surface-strong) 70%, transparent);
     color: var(--pc-text-strong);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-text-muted) 45%, transparent);
@@ -1758,7 +1755,25 @@
   }
 
   .crm-stage-select-chip::after {
-    content: attr(data-icon);
+    content: '';
+    display: block;
+    width: 1.2rem;
+    height: 1.2rem;
+    background: var(--crm-stage-chip-icon) center/contain no-repeat;
+  }
+
+  .crm-stage-select-chip.is-fallback::after {
+    content: attr(data-letter);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: none;
   }
 
   .crm-stage-select-shell[data-stage=""] .crm-stage-select-chip {
@@ -2486,22 +2501,85 @@
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
   }
 
-  .crm-route-legend-letter {
+  .crm-route-legend-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: color-mix(in srgb, #ffffff 30%, transparent);
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 18px 18px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, rgba(15, 23, 42, 0.08) 100%, transparent);
+    flex-shrink: 0;
+  }
+
+  .crm-route-legend-icon.crm-route-legend-icon--fallback {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 999px;
-    background: color-mix(in srgb, #ffffff 35%, transparent);
-    color: currentColor;
     font-size: 11px;
     font-weight: var(--pc-font-weight-bold);
     text-transform: uppercase;
+    color: currentColor;
+    background: color-mix(in srgb, rgba(255, 255, 255, 0.55) 100%, transparent);
+  }
+
+  body.theme-dark .crm-route-legend-icon {
+    background: color-mix(in srgb, rgba(255, 255, 255, 0.14) 100%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, rgba(255, 255, 255, 0.25) 100%, transparent);
+  }
+
+  body.theme-dark .crm-route-legend-icon.crm-route-legend-icon--fallback {
+    background: color-mix(in srgb, rgba(255, 255, 255, 0.22) 100%, transparent);
   }
 
   .crm-route-legend-name {
     line-height: 1.2;
+  }
+
+  .crm-stage-route-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+  }
+
+  .crm-stage-route-label__icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 18px 18px;
+    background-color: color-mix(in srgb, var(--pc-surface-strong) 60%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-border) 40%, transparent);
+    flex-shrink: 0;
+  }
+
+  .crm-stage-route-label__icon.crm-stage-route-label__icon--fallback {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: var(--pc-font-weight-semibold);
+    font-size: 11px;
+    text-transform: uppercase;
+    color: currentColor;
+    background: color-mix(in srgb, rgba(255, 255, 255, 0.55) 100%, transparent);
+  }
+
+  .crm-stage-route-label__text {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1.25;
+  }
+
+  body.theme-dark .crm-stage-route-label__icon {
+    background-color: color-mix(in srgb, rgba(255, 255, 255, 0.16) 100%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, rgba(255, 255, 255, 0.25) 100%, transparent);
+  }
+
+  body.theme-dark .crm-stage-route-label__icon.crm-stage-route-label__icon--fallback {
+    background: color-mix(in srgb, rgba(255, 255, 255, 0.24) 100%, transparent);
   }
 
   .crm-stage-route-detailed,
@@ -4724,7 +4802,7 @@
         <div class="crm-toolbar__stage-controls" id="crmStageControls" hidden>
           <label class="crm-toolbar__stage-field" for="crmStageSelect">Передел
             <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
-              <span class="crm-stage-select-chip" id="crmStageSelectChip" aria-hidden="true" data-icon=""></span>
+              <span class="crm-stage-select-chip" id="crmStageSelectChip" aria-hidden="true" data-letter=""></span>
               <select id="crmStageSelect" class="pc-select">
               <option value="draw">Подготовка в работу</option>
               <option value="proc">Закупка</option>
@@ -8202,18 +8280,21 @@ const CRM_STAGE_LABELS={
   pack:'Упаковка',
   ship:'Отгрузка'
 };
-const CRM_STAGE_ICONS={
-  draw:'📐',
-  proc:'🛒',
-  shear:'✂️',
-  laser:'🔦',
-  bend:'🗜️',
-  weld:'🔩',
-  mech:'⚙️',
-  coop:'🤝',
-  pack:'📦',
-  ship:'🚚'
-};
+function svgDataUri(svg){
+  return 'data:image/svg+xml;base64,'+btoa(svg.replace(/\s+/g,' ').trim());
+}
+const CRM_STAGE_BADGES=Object.freeze({
+  draw:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><path fill="#facc15" d="M32 6L4 58h56z"/><path fill="#1f2937" d="M30 24h4l-1 18h-2z"/><circle cx="32" cy="48" r="3.5" fill="#1f2937"/></svg>'),
+  proc:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="6" y="10" width="52" height="44" rx="8" fill="#16a34a"/><path fill="#dcfce7" d="M16 20h28v6H16z"/><path fill="#14532d" d="M14 26h32l-3 12H18z"/><circle cx="22" cy="46" r="5" fill="#0f172a"/><circle cx="38" cy="46" r="5" fill="#0f172a"/></svg>'),
+  shear:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="20" cy="22" r="9" fill="#f97316"/><circle cx="20" cy="42" r="9" fill="#f97316"/><path fill="#111827" d="M24 22l22-10 4 4-20 10 20 10-4 4-22-10z"/></svg>'),
+  laser:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="14" width="48" height="36" rx="10" fill="#0ea5e9"/><rect x="16" y="26" width="32" height="6" rx="3" fill="#e0f2fe"/><path fill="#f43f5e" d="M10 32h44v4H10z"/><circle cx="12" cy="34" r="4" fill="#f43f5e"/><circle cx="52" cy="34" r="4" fill="#f43f5e"/></svg>'),
+  bend:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="10" width="48" height="44" rx="8" fill="#ef4444"/><rect x="18" y="20" width="28" height="8" rx="2" fill="#fee2e2"/><path fill="#fee2e2" d="M18 36h28l-4 8H22z"/></svg>'),
+  weld:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="10" width="48" height="44" rx="10" fill="#7f1d1d"/><path fill="#facc15" d="M32 18l3 10h10l-8 6 3 10-8-6-8 6 3-10-8-6h10z"/><rect x="18" y="40" width="28" height="6" rx="3" fill="#f97316"/></svg>'),
+  mech:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="10" width="48" height="44" rx="10" fill="#6b7280"/><circle cx="32" cy="32" r="14" fill="#f8fafc"/><circle cx="32" cy="32" r="7" fill="#1f2937"/><rect x="30" y="14" width="4" height="8" rx="2" fill="#1f2937"/><rect x="30" y="42" width="4" height="8" rx="2" fill="#1f2937"/><rect x="14" y="30" width="8" height="4" rx="2" fill="#1f2937"/><rect x="42" y="30" width="8" height="4" rx="2" fill="#1f2937"/><rect x="20" y="18" width="6" height="6" rx="1.5" fill="#1f2937"/><rect x="38" y="18" width="6" height="6" rx="1.5" fill="#1f2937"/><rect x="20" y="40" width="6" height="6" rx="1.5" fill="#1f2937"/><rect x="38" y="40" width="6" height="6" rx="1.5" fill="#1f2937"/></svg>'),
+  coop:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="10" width="48" height="44" rx="10" fill="#14b8a6"/><path fill="#ccfbf1" d="M18 34l10-10 8 8 8-8 8 8-16 16z"/><path fill="#0f766e" d="M18 34l8 8-4 4-8-8z"/><path fill="#0f766e" d="M44 24l8 8-4 4-8-8z"/></svg>'),
+  pack:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="8" y="12" width="48" height="40" rx="8" fill="#b45309"/><path fill="#fbbf24" d="M16 20l16-10 16 10v22a6 6 0 0 1-6 6H22a6 6 0 0 1-6-6z"/><path fill="#fde68a" d="M16 20h32l-4 20H20z"/><path fill="#92400e" d="M30 20h4v20h-4z"/></svg>'),
+  ship:svgDataUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="6" y="18" width="38" height="26" rx="6" fill="#8b5cf6"/><path fill="#ede9fe" d="M44 26h10l4 8v12H44z"/><rect x="12" y="24" width="18" height="12" rx="3" fill="#ede9fe"/><circle cx="20" cy="48" r="6" fill="#1f2937"/><circle cx="38" cy="48" r="6" fill="#1f2937"/><circle cx="52" cy="48" r="6" fill="#1f2937"/></svg>')
+});
 const CRM_STAGE_LETTERS={
   draw:'П',
   proc:'З',
@@ -8282,7 +8363,16 @@ function updateStageSelectAppearance(stageKey){
   if(!crmStageSelectShell||!crmStageSelectChip) return;
   const key=typeof stageKey==='string'?stageKey.trim():'';
   crmStageSelectShell.dataset.stage=key;
-  crmStageSelectChip.dataset.icon=stageLetterForKey(key);
+  const letter=stageLetterForKey(key);
+  crmStageSelectChip.dataset.letter=letter;
+  const iconUrl=CRM_STAGE_BADGES[key]||'';
+  if(iconUrl){
+    crmStageSelectChip.style.setProperty('--crm-stage-chip-icon', `url("${iconUrl}")`);
+    crmStageSelectChip.classList.remove('is-fallback');
+  }else{
+    crmStageSelectChip.style.removeProperty('--crm-stage-chip-icon');
+    crmStageSelectChip.classList.toggle('is-fallback', !!letter);
+  }
   const prefix='crm-stage-select--';
   Array.from(crmStageSelectShell.classList).forEach(cls=>{
     if(cls.startsWith(prefix)){
@@ -8319,12 +8409,6 @@ function resolveCrmStageKey(name){
     if(aliases.includes(normalized)) return key;
   }
   return null;
-}
-
-function crmStageIconLabel(stageKey, fallback){
-  const icon=CRM_STAGE_ICONS[stageKey]||'◻︎';
-  const label=CRM_STAGE_LABELS[stageKey]||fallback||stageKey||'Передел';
-  return `${icon} ${label}`;
 }
 
 function getCrmStageFilter(stageKey){
@@ -11146,13 +11230,20 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
       label.classList.toggle('is-off', !checkbox.checked);
       const chip=document.createElement('span');
       chip.className=['crm-route-legend-chip', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
-      const letter=document.createElement('span');
-      letter.className='crm-route-legend-letter';
-      letter.textContent=CRM_STAGE_LETTERS[stage]||stage.charAt(0).toUpperCase();
+      const icon=document.createElement('span');
+      icon.className='crm-route-legend-icon';
+      const iconUrl=CRM_STAGE_BADGES[stage]||'';
+      if(iconUrl){
+        icon.style.backgroundImage=`url("${iconUrl}")`;
+      }else{
+        icon.style.backgroundImage='';
+        icon.classList.add('crm-route-legend-icon--fallback');
+        icon.textContent=CRM_STAGE_LETTERS[stage]||stage.charAt(0).toUpperCase();
+      }
       const name=document.createElement('span');
       name.className='crm-route-legend-name';
       name.textContent=CRM_STAGE_LABELS[stage]||stage;
-      chip.appendChild(letter);
+      chip.appendChild(icon);
       chip.appendChild(name);
       label.appendChild(checkbox);
       label.appendChild(chip);
@@ -11333,11 +11424,23 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     }
     const labelCell=document.createElement('td');
     labelCell.classList.add('crm-stage-route-label');
-    let labelText=crmStageIconLabel(key, stage?.name||key);
-    if(snapshot.occurrenceTotal>1){
-      labelText+=` №${snapshot.occurrenceIndex}`;
+    const labelIcon=document.createElement('span');
+    labelIcon.className='crm-stage-route-label__icon';
+    const badgeUrl=CRM_STAGE_BADGES[key]||'';
+    if(badgeUrl){
+      labelIcon.style.backgroundImage=`url("${badgeUrl}")`;
+    }else{
+      labelIcon.style.backgroundImage='';
+      labelIcon.classList.add('crm-stage-route-label__icon--fallback');
+      labelIcon.textContent=CRM_STAGE_LETTERS[key]||key.slice(0,1).toUpperCase();
     }
-    labelCell.textContent=labelText;
+    const labelTextSpan=document.createElement('span');
+    labelTextSpan.className='crm-stage-route-label__text';
+    const baseLabel=stage?.name || CRM_STAGE_LABELS[key] || key;
+    const suffix=snapshot.occurrenceTotal>1?` №${snapshot.occurrenceIndex}`:'';
+    labelTextSpan.textContent=`${baseLabel}${suffix}`;
+    labelCell.appendChild(labelIcon);
+    labelCell.appendChild(labelTextSpan);
     tr.appendChild(labelCell);
 
     const periodCell=document.createElement('td');
