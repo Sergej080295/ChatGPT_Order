@@ -1726,12 +1726,167 @@
   }
 
   .crm-stage-select-shell {
-    display: flex;
-    align-items: center;
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+    min-width: 180px;
   }
 
   .crm-stage-select-shell select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .pc-select-display {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: var(--pc-radius-sm);
+    border: 1px solid var(--pc-border);
+    background: var(--pc-surface);
+    color: var(--pc-text);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color var(--pc-transition-short), box-shadow var(--pc-transition-short), background var(--pc-transition-short);
+  }
+
+  .pc-select-display:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--pc-info) 70%, var(--pc-border));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc-info) 18%, transparent);
+  }
+
+  .pc-select-display[aria-disabled="true"] {
+    cursor: default;
+    background: color-mix(in srgb, var(--pc-surface) 80%, transparent);
+    color: color-mix(in srgb, var(--pc-text-muted) 80%, transparent);
+  }
+
+  .crm-stage-select-display {
+    position: relative;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .crm-stage-select-display__main {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
     flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .crm-stage-select-display__label {
+    font-weight: var(--pc-font-weight-medium);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .crm-stage-select-display__chevron {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-stage-select-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 42;
+    border-radius: var(--pc-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 75%, transparent);
+    background: var(--pc-surface);
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.16);
+    padding: 6px;
+    display: grid;
+    gap: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .crm-stage-select-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    border: none;
+    background: none;
+    border-radius: var(--pc-radius-sm);
+    padding: 8px 10px;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    text-align: left;
+    transition: background var(--pc-transition-short), color var(--pc-transition-short), box-shadow var(--pc-transition-short);
+  }
+
+  .crm-stage-select-option:hover,
+  .crm-stage-select-option:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--pc-primary) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-primary) 30%, transparent);
+  }
+
+  .crm-stage-select-option[aria-selected="true"] {
+    background: color-mix(in srgb, var(--pc-primary) 20%, transparent);
+    color: color-mix(in srgb, var(--pc-primary) 92%, black 8%);
+  }
+
+  .crm-stage-select-option[aria-disabled="true"] {
+    cursor: default;
+    color: var(--pc-text-muted);
+    background: none;
+    box-shadow: none;
+  }
+
+  .crm-stage-select-option__label {
+    flex: 1 1 auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: var(--pc-font-weight-medium);
+  }
+
+  body.theme-dark .pc-select-display {
+    border-color: color-mix(in srgb, var(--pc-border) 65%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    color: var(--pc-text);
+  }
+
+  body.theme-dark .crm-stage-select-menu {
+    border-color: color-mix(in srgb, var(--pc-border) 60%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 94%, transparent);
+    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.45);
+  }
+
+  body.theme-dark .crm-stage-select-option:hover,
+  body.theme-dark .crm-stage-select-option:focus-visible {
+    background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pc-primary) 35%, transparent);
+  }
+
+  body.theme-dark .crm-stage-select-option[aria-selected="true"] {
+    background: color-mix(in srgb, var(--pc-primary) 28%, transparent);
+    color: color-mix(in srgb, var(--pc-primary) 92%, white 8%);
+  }
+
+  .crm-stage-select-menu[hidden] {
+    display: none;
   }
 
   .crm-toolbar__stage-buttons {
@@ -8207,6 +8362,8 @@ if(crmStageSelect){
   decorateStageSelectOptions();
   crmStageSelect.value=initialStageViewKey;
   updateStageSelectAppearance(crmStageSelect.value);
+  enhanceCrmStageSelect();
+  updateCrmStageSelectDisplay();
   setupStageSelectObserver();
 }
 if(crmStageFilter){
@@ -8296,6 +8453,9 @@ function setupStageSelectObserver(){
   }
   crmStageSelectObserver=new MutationObserver(()=>{
     decorateStageSelectOptions();
+    buildCrmStageSelectMenu();
+    updateCrmStageSelectDisplay();
+    updateCrmStageSelectMenuSelection();
   });
   crmStageSelectObserver.observe(crmStageSelect, { childList:true });
 }
@@ -8314,10 +8474,285 @@ const CRM_STAGE_FILTER_LABELS={
 let crmStageRowsCache=[];
 let crmStageSelectionId=null;
 let crmStageSelectObserver=null;
+let crmStageSelectDisplay=null;
+let crmStageSelectDisplayIcon=null;
+let crmStageSelectDisplayLabel=null;
+let crmStageSelectMenu=null;
+let crmStageSelectMenuItems=[];
+let crmStageSelectMenuOpen=false;
+let crmStageSelectDismissHandler=null;
 
 Object.keys(CRM_STAGE_ALIASES).forEach(key=>{
   CRM_STAGE_ALIASES[key]=CRM_STAGE_ALIASES[key].map(name=>normalizeStageName(name)).filter(Boolean);
 });
+
+function enhanceCrmStageSelect(){
+  if(!crmStageSelect || !crmStageSelectShell) return;
+  if(crmStageSelectShell.dataset.enhanced==='1') return;
+  crmStageSelectShell.dataset.enhanced='1';
+  crmStageSelect.tabIndex=-1;
+  crmStageSelect.setAttribute('aria-hidden','true');
+  crmStageSelect.classList.add('crm-stage-select-native');
+  const display=document.createElement('button');
+  display.type='button';
+  display.className='pc-select-display crm-stage-select-display';
+  display.setAttribute('role','combobox');
+  display.setAttribute('aria-haspopup','listbox');
+  display.setAttribute('aria-expanded','false');
+  const main=document.createElement('span');
+  main.className='crm-stage-select-display__main';
+  const icon=document.createElement('span');
+  icon.className='crm-stage-route-label__icon';
+  const label=document.createElement('span');
+  label.className='crm-stage-select-display__label';
+  main.append(icon, label);
+  const chevron=document.createElement('span');
+  chevron.className='crm-stage-select-display__chevron';
+  chevron.innerHTML='<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 6l4.5 5 4.5-5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  display.append(main, chevron);
+  const menu=document.createElement('div');
+  menu.className='crm-stage-select-menu';
+  menu.setAttribute('role','listbox');
+  menu.setAttribute('tabindex','-1');
+  menu.hidden=true;
+  const menuId=(crmStageSelectShell.id||'crmStageSelectShell')+'Menu';
+  menu.id=menuId;
+  display.setAttribute('aria-controls', menuId);
+  crmStageSelectShell.append(display, menu);
+  crmStageSelectDisplay=display;
+  crmStageSelectDisplayIcon=icon;
+  crmStageSelectDisplayLabel=label;
+  crmStageSelectMenu=menu;
+  display.addEventListener('click', toggleCrmStageSelectMenu);
+  display.addEventListener('keydown', handleCrmStageSelectDisplayKeyDown);
+  menu.addEventListener('keydown', handleCrmStageSelectMenuKeyDown);
+  if(!crmStageSelectDismissHandler){
+    crmStageSelectDismissHandler=(event)=>{
+      if(!crmStageSelectShell.contains(event.target)){
+        closeCrmStageSelectMenu(false);
+      }
+    };
+    document.addEventListener('click', crmStageSelectDismissHandler);
+  }
+  buildCrmStageSelectMenu();
+  updateCrmStageSelectDisplay();
+}
+
+function buildCrmStageSelectMenu(){
+  if(!crmStageSelectMenu || !crmStageSelect) return;
+  crmStageSelectMenu.innerHTML='';
+  crmStageSelectMenuItems=[];
+  Array.from(crmStageSelect.options||[]).forEach(option=>{
+    if(option.hidden) return;
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='crm-stage-select-option';
+    btn.dataset.value=option.value;
+    btn.setAttribute('role','option');
+    btn.tabIndex=-1;
+    if(option.disabled){
+      btn.disabled=true;
+      btn.setAttribute('aria-disabled','true');
+    }
+    const icon=document.createElement('span');
+    icon.className='crm-stage-route-label__icon';
+    const iconSymbol=stageIconForKey(option.value);
+    if(iconSymbol){
+      icon.textContent=iconSymbol;
+      icon.classList.remove('crm-stage-route-label__icon--fallback');
+    }else{
+      icon.textContent=stageLetterForKey(option.value);
+      icon.classList.add('crm-stage-route-label__icon--fallback');
+    }
+    const label=document.createElement('span');
+    label.className='crm-stage-select-option__label';
+    const baseLabel=option.dataset.baseLabel||stripStageOptionPrefix(option.textContent, option.value);
+    label.textContent=baseLabel||option.textContent||option.label||option.value;
+    btn.append(icon, label);
+    if(option.disabled){
+      btn.classList.add('is-disabled');
+    }else{
+      btn.addEventListener('click',()=>applyCrmStageSelectValue(option.value, true));
+    }
+    crmStageSelectMenu.appendChild(btn);
+    crmStageSelectMenuItems.push(btn);
+  });
+  updateCrmStageSelectMenuSelection();
+  if(crmStageSelectMenuOpen){
+    requestAnimationFrame(()=>focusCrmStageSelectMenuValue(crmStageSelect?.value||''));
+  }
+}
+
+function updateCrmStageSelectDisplay(){
+  if(!crmStageSelectDisplay || !crmStageSelect) return;
+  const currentOption=crmStageSelect.options[crmStageSelect.selectedIndex]||null;
+  const stageKey=currentOption?currentOption.value:'';
+  const iconSymbol=stageIconForKey(stageKey);
+  if(iconSymbol){
+    crmStageSelectDisplayIcon.textContent=iconSymbol;
+    crmStageSelectDisplayIcon.classList.remove('crm-stage-route-label__icon--fallback');
+  }else{
+    crmStageSelectDisplayIcon.textContent=stageLetterForKey(stageKey)||'';
+    crmStageSelectDisplayIcon.classList.add('crm-stage-route-label__icon--fallback');
+  }
+  const baseLabel=currentOption?(currentOption.dataset.baseLabel||stripStageOptionPrefix(currentOption.textContent, stageKey)):'Передел';
+  crmStageSelectDisplayLabel.textContent=baseLabel||'Передел';
+  if(crmStageSelectDisplay){
+    crmStageSelectDisplay.setAttribute('aria-expanded', crmStageSelectMenuOpen?'true':'false');
+  }
+}
+
+function updateCrmStageSelectMenuSelection(){
+  if(!crmStageSelectMenuItems.length) return;
+  const current=crmStageSelect?.value||'';
+  crmStageSelectMenuItems.forEach(btn=>{
+    const selected=btn.dataset.value===current;
+    btn.setAttribute('aria-selected', selected?'true':'false');
+    btn.classList.toggle('is-selected', selected);
+  });
+}
+
+function toggleCrmStageSelectMenu(){
+  if(crmStageSelectMenuOpen){
+    closeCrmStageSelectMenu();
+  }else{
+    openCrmStageSelectMenu();
+  }
+}
+
+function openCrmStageSelectMenu(){
+  if(!crmStageSelectMenu || crmStageSelectMenuOpen) return;
+  crmStageSelectMenu.hidden=false;
+  crmStageSelectMenuOpen=true;
+  if(crmStageSelectDisplay){
+    crmStageSelectDisplay.setAttribute('aria-expanded','true');
+  }
+  focusCrmStageSelectMenuValue(crmStageSelect?.value||'');
+}
+
+function closeCrmStageSelectMenu(focusDisplay=true){
+  if(!crmStageSelectMenu || !crmStageSelectMenuOpen) return;
+  crmStageSelectMenu.hidden=true;
+  crmStageSelectMenuOpen=false;
+  if(focusDisplay && crmStageSelectDisplay){
+    crmStageSelectDisplay.setAttribute('aria-expanded','false');
+    crmStageSelectDisplay.focus({ preventScroll:true });
+  }else if(crmStageSelectDisplay){
+    crmStageSelectDisplay.setAttribute('aria-expanded','false');
+  }
+}
+
+function focusCrmStageSelectMenuValue(value){
+  const index=getCrmStageSelectMenuIndexByValue(value);
+  if(index>=0){
+    focusCrmStageSelectMenuIndex(index);
+  }else{
+    focusCrmStageSelectMenuIndex(0);
+  }
+}
+
+function focusCrmStageSelectMenuIndex(index){
+  if(!crmStageSelectMenuItems.length) return;
+  const clamped=Math.min(Math.max(index,0), crmStageSelectMenuItems.length-1);
+  const btn=crmStageSelectMenuItems[clamped];
+  if(btn && !btn.disabled){
+    btn.focus({ preventScroll:true });
+  }else if(btn){
+    const nextIndex=findNextEnabledStageOption(clamped, 1);
+    if(nextIndex!==null) crmStageSelectMenuItems[nextIndex].focus({ preventScroll:true });
+  }
+}
+
+function findNextEnabledStageOption(start, direction){
+  if(!crmStageSelectMenuItems.length) return null;
+  let idx=start;
+  for(let i=0;i<crmStageSelectMenuItems.length;i+=1){
+    idx=(idx+direction+crmStageSelectMenuItems.length)%crmStageSelectMenuItems.length;
+    const btn=crmStageSelectMenuItems[idx];
+    if(btn && !btn.disabled){
+      return idx;
+    }
+  }
+  return null;
+}
+
+function getCrmStageSelectMenuIndexByValue(value){
+  if(!crmStageSelectMenuItems.length) return -1;
+  return crmStageSelectMenuItems.findIndex(btn=>btn.dataset.value===value);
+}
+
+function handleCrmStageSelectDisplayKeyDown(event){
+  if(event.defaultPrevented) return;
+  if(event.key==='ArrowDown' || event.key==='ArrowUp'){
+    event.preventDefault();
+    const currentIndex=getCrmStageSelectMenuIndexByValue(crmStageSelect?.value||'');
+    openCrmStageSelectMenu();
+    if(event.key==='ArrowDown'){
+      if(currentIndex<0){
+        focusCrmStageSelectMenuIndex(0);
+      }else{
+        const next=findNextEnabledStageOption(currentIndex, 1);
+        if(next!==null) focusCrmStageSelectMenuIndex(next);
+      }
+    }else if(event.key==='ArrowUp'){
+      if(currentIndex<0){
+        focusCrmStageSelectMenuIndex(crmStageSelectMenuItems.length-1);
+      }else{
+        const prev=findNextEnabledStageOption(currentIndex, -1);
+        if(prev!==null) focusCrmStageSelectMenuIndex(prev);
+      }
+    }
+  }else if(event.key===' ' || event.key==='Enter'){
+    event.preventDefault();
+    toggleCrmStageSelectMenu();
+  }else if(event.key==='Escape'){
+    event.preventDefault();
+    closeCrmStageSelectMenu();
+  }
+}
+
+function handleCrmStageSelectMenuKeyDown(event){
+  if(event.defaultPrevented) return;
+  const target=event.target.closest('.crm-stage-select-option');
+  const currentIndex=target?crmStageSelectMenuItems.indexOf(target):-1;
+  if(event.key==='ArrowDown'){
+    event.preventDefault();
+    const next=findNextEnabledStageOption(currentIndex, 1);
+    if(next!==null) focusCrmStageSelectMenuIndex(next);
+  }else if(event.key==='ArrowUp'){
+    event.preventDefault();
+    const prev=findNextEnabledStageOption(currentIndex, -1);
+    if(prev!==null) focusCrmStageSelectMenuIndex(prev);
+  }else if(event.key==='Home'){
+    event.preventDefault();
+    focusCrmStageSelectMenuIndex(0);
+  }else if(event.key==='End'){
+    event.preventDefault();
+    focusCrmStageSelectMenuIndex(crmStageSelectMenuItems.length-1);
+  }else if(event.key==='Escape'){
+    event.preventDefault();
+    closeCrmStageSelectMenu();
+  }else if(event.key==='Enter' || event.key===' '){
+    event.preventDefault();
+    if(target && !target.disabled){
+      applyCrmStageSelectValue(target.dataset.value, true);
+    }
+  }
+}
+
+function applyCrmStageSelectValue(value, shouldDispatch){
+  if(!crmStageSelect) return;
+  const previous=crmStageSelect.value;
+  crmStageSelect.value=value;
+  decorateStageSelectOptions();
+  updateCrmStageSelectDisplay();
+  updateCrmStageSelectMenuSelection();
+  if(shouldDispatch && previous!==value){
+    const evt=new Event('change', { bubbles:true });
+    crmStageSelect.dispatchEvent(evt);
+  }
+  closeCrmStageSelectMenu();
+}
 
 function normalizeCrmFilter(value){
   if(typeof value!=='string') return 'current';
@@ -17087,6 +17522,9 @@ if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
     const stageKey=crmStageSelect.value||'draw';
     updateStageSelectAppearance(stageKey);
+    updateCrmStageSelectDisplay();
+    updateCrmStageSelectMenuSelection();
+    closeCrmStageSelectMenu();
     const filter=getCrmStageFilter(stageKey);
     persistCrmSessionStage(stageKey);
     if(crmStageFilter && crmStageFilter.value!==filter){
