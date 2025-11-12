@@ -8233,23 +8233,58 @@ function stageLetterForKey(stageKey){
   return CRM_STAGE_LETTERS[key]||key.slice(0,1).toUpperCase();
 }
 
+function stripStageOptionPrefix(label, stageKey){
+  const text=typeof label==='string'?label.trim():'';
+  if(!text) return '';
+  const icon=stageIconForKey(stageKey);
+  if(icon && text.startsWith(icon)){
+    return text.slice(icon.length).trim();
+  }
+  const letter=stageLetterForKey(stageKey);
+  if(letter){
+    const letterPrefix=`${letter} ·`;
+    if(text.startsWith(letterPrefix)){
+      return text.slice(letterPrefix.length).trim();
+    }
+  }
+  return text;
+}
+
+function formatStageOptionLabel(stageKey, baseLabel){
+  const label=typeof baseLabel==='string'?baseLabel.trim():'';
+  if(!label) return label;
+  const icon=stageIconForKey(stageKey);
+  if(icon){
+    return `${icon} ${label}`;
+  }
+  const letter=stageLetterForKey(stageKey);
+  if(letter){
+    return `${letter} · ${label}`;
+  }
+  return label;
+}
+
+function decorateStageOptionElement(option, stageKeyOverride){
+  if(!option) return;
+  const value=(stageKeyOverride??option.value??'').trim();
+  if(!option.dataset.baseLabel){
+    option.dataset.baseLabel=stripStageOptionPrefix(option.textContent, value);
+  }
+  const baseLabel=option.dataset.baseLabel||stripStageOptionPrefix(option.textContent, value);
+  const formatted=formatStageOptionLabel(value, baseLabel);
+  if(formatted){
+    option.textContent=formatted;
+    option.label=formatted;
+  }else{
+    option.textContent=baseLabel;
+    option.label=baseLabel;
+  }
+}
+
 function decorateStageSelectOptions(){
   if(!crmStageSelect) return;
   Array.from(crmStageSelect.options||[]).forEach(option=>{
-    const value=(option?.value||'').trim();
-    if(!option.dataset.baseLabel){
-      option.dataset.baseLabel=option.textContent.trim();
-    }
-    const baseLabel=option.dataset.baseLabel||option.textContent.trim();
-    const icon=stageIconForKey(value);
-    const letter=icon?'' : stageLetterForKey(value);
-    if(icon){
-      option.textContent=`${icon} ${baseLabel}`;
-    }else if(letter){
-      option.textContent=`${letter} · ${baseLabel}`;
-    }else{
-      option.textContent=baseLabel;
-    }
+    decorateStageOptionElement(option);
   });
 }
 
@@ -14968,7 +15003,10 @@ function renderCrmStageSchedulesUI(config){
   stageSelect.name='crmScheduleStage';
   availableStages.forEach(stage=>{
     if(!stage) return;
-    const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
+    const baseLabel=(CRM_STAGE_LABELS[stage]||stage)||'';
+    const opt=new Option(baseLabel, stage);
+    opt.dataset.baseLabel=baseLabel.trim();
+    decorateStageOptionElement(opt, stage);
     stageSelect.appendChild(opt);
   });
   stageField.append(stageLabel, stageSelect);
@@ -15157,7 +15195,10 @@ function renderCrmStartViewSettingsUI(){
   const group=document.createElement('optgroup');
   group.label='Переделы';
   CRM_STAGE_SEQUENCE.forEach(stage=>{
-    const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
+    const baseLabel=(CRM_STAGE_LABELS[stage]||stage)||'';
+    const opt=new Option(baseLabel, stage);
+    opt.dataset.baseLabel=baseLabel.trim();
+    decorateStageOptionElement(opt, stage);
     group.appendChild(opt);
   });
   select.appendChild(group);
@@ -15265,7 +15306,10 @@ function renderCrmMappingSettingsUI(){
       select.appendChild(new Option('Автоматически', ''));
       select.appendChild(new Option('Игнорировать', CRM_STAGE_IGNORE));
       CRM_STAGE_SEQUENCE.forEach(stage=>{
-        const opt=new Option(CRM_STAGE_LABELS[stage]||stage, stage);
+        const baseLabel=(CRM_STAGE_LABELS[stage]||stage)||'';
+        const opt=new Option(baseLabel, stage);
+        opt.dataset.baseLabel=baseLabel.trim();
+        decorateStageOptionElement(opt, stage);
         select.appendChild(opt);
       });
       const currentRecord=mapping?.[entry.normalized];
