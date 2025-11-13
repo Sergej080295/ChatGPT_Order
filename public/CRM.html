@@ -3945,6 +3945,18 @@
     font-size: 12px;
   }
 
+  .crm-order-history__actions {
+    margin: var(--pc-spacing-sm) 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-order-history__actions .pc-btn {
+    font-size: 12px;
+    padding: 4px 12px;
+  }
+
   .crm-order-history__event-stage {
     font-weight: var(--pc-font-weight-semibold);
     color: var(--pc-text);
@@ -3953,6 +3965,16 @@
   .crm-order-history__event-date {
     margin-left: 8px;
     color: var(--pc-text-muted);
+  }
+
+  .crm-order-history__event-extra {
+    margin-left: 20px;
+    font-size: 11px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-order-history__event-extra--warn {
+    color: var(--pc-danger);
   }
 
   .crm-order-history__changes {
@@ -3998,6 +4020,87 @@
   .crm-order-history__comment .crm-comment-text {
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .crm-order-mini-modal::backdrop {
+    background: color-mix(in srgb, var(--pc-backdrop) 65%, transparent);
+  }
+
+  .crm-order-mini {
+    width: min(360px, 92vw);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+    padding: var(--pc-spacing-md);
+  }
+
+  .crm-order-mini__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-order-mini__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+  }
+
+  .crm-order-mini__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-xs);
+    max-height: clamp(200px, 50vh, 380px);
+    overflow-y: auto;
+  }
+
+  .crm-order-mini__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .crm-order-mini__item {
+    padding: 10px 12px;
+    border-radius: var(--pc-radius-md);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 80%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 95%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .crm-order-mini__item strong {
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+  }
+
+  .crm-order-mini__item-meta {
+    font-size: 11px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-order-mini__empty {
+    font-size: 13px;
+    color: var(--pc-text-muted);
+    padding: var(--pc-spacing-sm) 0;
+  }
+
+  .crm-order-mini__actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  body.theme-dark .crm-order-mini__item {
+    border-color: color-mix(in srgb, var(--pc-border) 60%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 88%, transparent);
   }
 
   .crm-journal-comment {
@@ -5849,9 +5952,45 @@
       <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOrderHistoryCloseIcon" aria-label="Закрыть">✖</button>
     </div>
     <div class="crm-journal-detail__meta" id="crmOrderHistoryMeta"></div>
+    <div class="crm-order-history__actions">
+      <button class="pc-btn pc-btn--ghost" type="button" id="crmOrderHistoryStatuses">Статусы</button>
+      <button class="pc-btn pc-btn--ghost" type="button" id="crmOrderHistoryReadiness">Готовность</button>
+    </div>
     <div id="crmOrderHistoryContent" class="crm-journal-detail__section"></div>
     <div class="crm-modal-actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderHistoryClose">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="crmOrderStatusHistoryDlg" class="pc-modal crm-order-mini-modal">
+  <div class="crm-order-mini">
+    <div class="crm-order-mini__head">
+      <h3 class="crm-order-mini__title" id="crmOrderStatusHistoryTitle">История статусов</h3>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOrderStatusHistoryCloseIcon" aria-label="Закрыть">✖</button>
+    </div>
+    <div class="crm-order-mini__body">
+      <div class="crm-order-mini__empty" id="crmOrderStatusHistoryEmpty" hidden>История статусов пока пуста.</div>
+      <ul class="crm-order-mini__list" id="crmOrderStatusHistoryList"></ul>
+    </div>
+    <div class="crm-order-mini__actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderStatusHistoryClose">Закрыть</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="crmOrderReadinessDlg" class="pc-modal crm-order-mini-modal">
+  <div class="crm-order-mini">
+    <div class="crm-order-mini__head">
+      <h3 class="crm-order-mini__title" id="crmOrderReadinessTitle">Готовность переделов</h3>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOrderReadinessCloseIcon" aria-label="Закрыть">✖</button>
+    </div>
+    <div class="crm-order-mini__body">
+      <div class="crm-order-mini__empty" id="crmOrderReadinessEmpty" hidden>Записей о готовности пока нет.</div>
+      <ul class="crm-order-mini__list" id="crmOrderReadinessList"></ul>
+    </div>
+    <div class="crm-order-mini__actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderReadinessClose">Закрыть</button>
     </div>
   </div>
 </dialog>
@@ -7072,6 +7211,18 @@ let crmOrderHistoryMeta=null;
 let crmOrderHistoryContent=null;
 let crmOrderHistoryClose=null;
 let crmOrderHistoryCloseIcon=null;
+let crmOrderHistoryStatusesBtn=null;
+let crmOrderHistoryReadinessBtn=null;
+let crmOrderStatusDlg=null;
+let crmOrderStatusList=null;
+let crmOrderStatusEmpty=null;
+let crmOrderStatusClose=null;
+let crmOrderStatusCloseIcon=null;
+let crmOrderReadinessDlg=null;
+let crmOrderReadinessList=null;
+let crmOrderReadinessEmpty=null;
+let crmOrderReadinessClose=null;
+let crmOrderReadinessCloseIcon=null;
 let crmJournalClear=null;
 let orderDone=null;
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
@@ -8116,6 +8267,24 @@ function enforceStageDateConstraints(tr, input){
       }
     }
   }
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  if(startInput && endInput){
+    const startIso=coerceCalendarIso(startInput.value||'');
+    const endIso=coerceCalendarIso(endInput.value||'');
+    if(startIso && endIso){
+      const startDate=new Date(`${startIso}T00:00:00`);
+      const endDate=new Date(`${endIso}T00:00:00`);
+      if(!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime()) && endDate.getTime()<startDate.getTime()){
+        alert('Дата окончания передела не может быть раньше даты начала.');
+        const revert=previousValue||'';
+        input.value=revert;
+        input.dataset.lastAccepted=revert;
+        input.dataset.prevValue=revert;
+        return false;
+      }
+    }
+  }
   const accepted=input.value||'';
   input.dataset.lastAccepted=accepted;
   input.dataset.prevValue=accepted;
@@ -8605,6 +8774,18 @@ crmOrderHistoryMeta=$('#crmOrderHistoryMeta');
 crmOrderHistoryContent=$('#crmOrderHistoryContent');
 crmOrderHistoryClose=$('#crmOrderHistoryClose');
 crmOrderHistoryCloseIcon=$('#crmOrderHistoryCloseIcon');
+crmOrderHistoryStatusesBtn=document.getElementById('crmOrderHistoryStatuses');
+crmOrderHistoryReadinessBtn=document.getElementById('crmOrderHistoryReadiness');
+crmOrderStatusDlg=document.getElementById('crmOrderStatusHistoryDlg');
+crmOrderStatusList=document.getElementById('crmOrderStatusHistoryList');
+crmOrderStatusEmpty=document.getElementById('crmOrderStatusHistoryEmpty');
+crmOrderStatusClose=document.getElementById('crmOrderStatusHistoryClose');
+crmOrderStatusCloseIcon=document.getElementById('crmOrderStatusHistoryCloseIcon');
+crmOrderReadinessDlg=document.getElementById('crmOrderReadinessDlg');
+crmOrderReadinessList=document.getElementById('crmOrderReadinessList');
+crmOrderReadinessEmpty=document.getElementById('crmOrderReadinessEmpty');
+crmOrderReadinessClose=document.getElementById('crmOrderReadinessClose');
+crmOrderReadinessCloseIcon=document.getElementById('crmOrderReadinessCloseIcon');
 crmJournalClear=$('#crmJournalClear');
 orderHistoryBtn=$('#orderHistoryBtn');
 crmDbIndicator=$('#crmDbIndicator');
@@ -8624,6 +8805,8 @@ let editingOrderId=null;
 let orderCommentsDraft=[];
 let stageSourceMap=new Map();
 let pendingStageDeletes=[];
+let crmOrderHistoryCachedEntries=[];
+let crmOrderHistoryCachedOrderId='';
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -9572,11 +9755,19 @@ function extractJournalStageCompletions(entry){
     const prev=beforeMap.get(key);
     const doneNow=item?.done===true && (!prev || !prev.done);
     if(doneNow){
+      const stageKey=item?.key||'';
+      const doneAtRaw=typeof item?.doneAt==='string'?item.doneAt:(typeof item?.completedAt==='string'?item.completedAt:'');
+      const reasonRaw=typeof item?.delayReason==='string'?item.delayReason:'';
+      const completedLate=item?.completedLate===true || (!!reasonRaw && item?.done===true);
       completions.push({
         label:item?.label||`Передел ${item?.index||''}`,
         end:item?.end||item?.start||'',
         progress:typeof item?.progress==='number'?item.progress:null,
-        hours:typeof item?.hours==='number'?item.hours:null
+        hours:typeof item?.hours==='number'?item.hours:null,
+        key:stageKey,
+        doneAt:doneAtRaw||'',
+        delayReason:reasonRaw.trim(),
+        completedLate
       });
     }
   });
@@ -9585,6 +9776,153 @@ function extractJournalStageCompletions(entry){
 
 function formatHistoryDate(iso){
   return formatJournalFieldValue('end', iso);
+}
+
+function collectOrderStatusTimeline(entries){
+  if(!Array.isArray(entries)) return [];
+  const timeline=[];
+  const sorted=entries.slice().sort((a,b)=>{
+    const aDate=a?.createdAt||'';
+    const bDate=b?.createdAt||'';
+    return aDate.localeCompare(bDate);
+  });
+  sorted.forEach(entry=>{
+    if(entry?.type===CRM_JOURNAL_TYPES.orderCreated){
+      const status=entry?.details?.order?.status;
+      if(status){
+        timeline.push({
+          status:String(status),
+          previous:'',
+          createdAt:entry.createdAt||'',
+          actor:entry.actor||'',
+          summary:entry.summary||''
+        });
+      }
+    }
+    const changes=Array.isArray(entry?.details?.changes)?entry.details.changes:[];
+    changes.forEach(change=>{
+      if(change?.field==='status'){
+        timeline.push({
+          status:change.after==null?'':String(change.after),
+          previous:change.before==null?'':String(change.before),
+          createdAt:entry.createdAt||'',
+          actor:entry.actor||'',
+          summary:entry.summary||''
+        });
+      }
+    });
+  });
+  return timeline;
+}
+
+function collectOrderStageReadiness(entries){
+  if(!Array.isArray(entries)) return [];
+  const events=[];
+  const sorted=entries.slice().sort((a,b)=>{
+    const aDate=a?.createdAt||'';
+    const bDate=b?.createdAt||'';
+    return aDate.localeCompare(bDate);
+  });
+  sorted.forEach(entry=>{
+    const completions=extractJournalStageCompletions(entry)||[];
+    completions.forEach(item=>{
+      const whenRaw=item?.doneAt||entry.createdAt||'';
+      events.push({
+        stage:item?.label||'Передел',
+        stageKey:item?.key||'',
+        createdAt:whenRaw,
+        fallbackTimestamp:entry.createdAt||'',
+        actor:entry.actor||'',
+        delayReason:item?.delayReason||'',
+        completedLate:!!item?.completedLate
+      });
+    });
+  });
+  return events;
+}
+
+function refreshOrderHistoryDetailsButtons(entries){
+  const statusEvents=collectOrderStatusTimeline(entries);
+  const readinessEvents=collectOrderStageReadiness(entries);
+  if(crmOrderHistoryStatusesBtn){
+    crmOrderHistoryStatusesBtn.disabled=statusEvents.length===0;
+  }
+  if(crmOrderHistoryReadinessBtn){
+    crmOrderHistoryReadinessBtn.disabled=readinessEvents.length===0;
+  }
+}
+
+function renderOrderStatusHistory(entries){
+  if(!crmOrderStatusList||!crmOrderStatusEmpty) return;
+  const events=collectOrderStatusTimeline(entries);
+  crmOrderStatusList.innerHTML='';
+  const empty=events.length===0;
+  crmOrderStatusEmpty.hidden=!empty;
+  crmOrderStatusList.hidden=empty;
+  if(empty) return;
+  events.forEach(event=>{
+    const li=document.createElement('li');
+    li.className='crm-order-mini__item';
+    const title=document.createElement('strong');
+    title.textContent=event.status?`Статус: ${event.status}`:'Статус изменён';
+    li.appendChild(title);
+    if(event.previous){
+      const prev=document.createElement('div');
+      prev.className='crm-order-mini__item-meta';
+      prev.textContent=`Было: ${event.previous}`;
+      li.appendChild(prev);
+    }
+    const timeMeta=document.createElement('div');
+    timeMeta.className='crm-order-mini__item-meta';
+    timeMeta.textContent=`Дата: ${formatJournalTimestamp(event.createdAt)}`;
+    li.appendChild(timeMeta);
+    if(event.actor){
+      const actorMeta=document.createElement('div');
+      actorMeta.className='crm-order-mini__item-meta';
+      actorMeta.textContent=`Автор: ${event.actor}`;
+      li.appendChild(actorMeta);
+    }
+    crmOrderStatusList.appendChild(li);
+  });
+}
+
+function renderOrderReadinessHistory(entries){
+  if(!crmOrderReadinessList||!crmOrderReadinessEmpty) return;
+  const events=collectOrderStageReadiness(entries);
+  crmOrderReadinessList.innerHTML='';
+  const empty=events.length===0;
+  crmOrderReadinessEmpty.hidden=!empty;
+  crmOrderReadinessList.hidden=empty;
+  if(empty) return;
+  events.forEach(event=>{
+    const li=document.createElement('li');
+    li.className='crm-order-mini__item';
+    const title=document.createElement('strong');
+    title.textContent=event.stage;
+    li.appendChild(title);
+    const timeMeta=document.createElement('div');
+    timeMeta.className='crm-order-mini__item-meta';
+    timeMeta.textContent=`Дата: ${formatJournalTimestamp(event.createdAt||event.fallbackTimestamp)}`;
+    li.appendChild(timeMeta);
+    if(event.actor){
+      const actorMeta=document.createElement('div');
+      actorMeta.className='crm-order-mini__item-meta';
+      actorMeta.textContent=`Автор: ${event.actor}`;
+      li.appendChild(actorMeta);
+    }
+    if(event.delayReason){
+      const reason=document.createElement('div');
+      reason.className='crm-order-mini__item-meta';
+      reason.textContent=`Причина просрочки: ${event.delayReason}`;
+      li.appendChild(reason);
+    }else if(event.completedLate){
+      const reason=document.createElement('div');
+      reason.className='crm-order-mini__item-meta';
+      reason.textContent='Просрочка без указанной причины.';
+      li.appendChild(reason);
+    }
+    crmOrderReadinessList.appendChild(li);
+  });
 }
 
 function refreshOrderHistoryButton(orderId){
@@ -9622,7 +9960,10 @@ function summarizeStagesForJournal(stages){
       hours:isHourless?null:roundHours(hours||0),
       progress:done?100:progress,
       done,
-      useReserve:!!stage?.useReserve
+      useReserve:!!stage?.useReserve,
+      doneAt:typeof stage?.doneAt==='string'?stage.doneAt:'',
+      delayReason:typeof stage?.delayReason==='string'?stage.delayReason:'',
+      completedLate:stage?.completedLate===true
     };
   });
 }
@@ -9670,7 +10011,10 @@ function stageSignatureForJournal(stage){
     value:hourless?String(stage?.value??''):hours,
     done:!!stage?.done,
     progress:normalizeStageProgress(stage?.progress??0),
-    useReserve:!!stage?.useReserve
+    useReserve:!!stage?.useReserve,
+    doneAt:typeof stage?.doneAt==='string'?stage.doneAt:'',
+    delayReason:typeof stage?.delayReason==='string'?stage.delayReason:'',
+    completedLate:stage?.completedLate===true
   };
   return JSON.stringify(snapshot);
 }
@@ -13629,6 +13973,7 @@ function renderCrmStageTable(){
   }
   const schedule=buildCrmStageSchedule(stageKey, allRows);
   crmStageScheduleCache=schedule||null;
+  const todayStart=today0().getTime();
   allRows.forEach(entry=>{
     const statusInfo=computeCrmStageStatus(entry, schedule);
     entry.statusLabel=statusInfo.label;
@@ -13636,6 +13981,17 @@ function renderCrmStageTable(){
     entry.statusTitle=statusInfo.title;
     entry.isLate=statusInfo.className==='status-late';
     entry.lateDays=statusInfo.lateDays||0;
+    if(!entry.isLate && !entry.done && entry.endDate instanceof Date){
+      const dueTime=entry.endDate.getTime();
+      if(Number.isFinite(dueTime) && dueTime<todayStart){
+        const diffDays=Math.max(1, Math.ceil((todayStart-dueTime)/86400000));
+        entry.isLate=true;
+        entry.lateDays=diffDays;
+        entry.statusLabel=`+${diffDays}дн`;
+        entry.statusClass='status-late';
+        entry.statusTitle=`Просрочка ${diffDays} ${formatDayWord(diffDays)}`;
+      }
+    }
     if(!crmStageRowMatchesFilter(activeFilter, entry)){
       return;
     }
@@ -13669,7 +14025,7 @@ function renderCrmStageTable(){
         stageKey:entry.stageKey,
         plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
         scheduledEnd:statusInfo.scheduledEnd||null,
-        lateDays:statusInfo.lateDays||0,
+        lateDays:entry.lateDays||statusInfo.lateDays||0,
         tips:advice
       });
     }
@@ -15034,18 +15390,27 @@ function handleDateTodayChange(){
 }
 
 function handleOrderDoneChange(){
-  if(!orderDone || !orderDone.checked) return;
-  if(!stagesTableBody) return;
+  if(!orderDone || !stagesTableBody) return;
+  const markDone=orderDone.checked;
+  let allAccepted=true;
   stagesTableBody.querySelectorAll('tr').forEach(tr=>{
     const done=tr.querySelector('[data-k="done"]');
+    if(!done) return;
     const prog=tr.querySelector('[data-k="progress"]');
-    if(done) done.checked=true;
-    if(prog){
-      prog.value=100;
+    const prevProgress=prog?prog.value:'';
+    if(markDone && !done.checked){
+      done.checked=true;
+      if(!handleStageDoneToggle(tr, done, { prevProgress })){
+        allAccepted=false;
+      }
+    }else if(!markDone && done.checked){
+      done.checked=false;
+      handleStageDoneToggle(tr, done, { prevProgress });
     }
   });
-  syncAutoProgress();
-  updateAllStageExpectations();
+  if(markDone && !allAccepted){
+    orderDone.checked=false;
+  }
 }
 
 if(addStageBtn){
@@ -15270,6 +15635,105 @@ function updateStageAutoHours(tr){
   }
 }
 
+function updateStageSourceExtras(tr, extras){
+  if(!tr || !extras || typeof extras!=='object') return;
+  if(!(stageSourceMap instanceof Map)) return;
+  const stageId=tr.dataset?.stageId||'';
+  if(!stageId) return;
+  const current=stageSourceMap.get(stageId)||{};
+  stageSourceMap.set(stageId,{ ...current, ...extras });
+}
+
+function getStageRowDueDate(tr){
+  if(!tr) return null;
+  const endInput=tr.querySelector('[data-k="end"]');
+  const iso=endInput?coerceCalendarIso(endInput.value||'') : null;
+  if(!iso) return null;
+  const date=new Date(`${iso}T23:59:59.999`);
+  if(Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function requestStageDelayReason(initialReason){
+  let current=typeof initialReason==='string'?initialReason.trim():'';
+  while(true){
+    const input=window.prompt('Этап завершён с просрочкой. Укажите причину:', current);
+    if(input===null){
+      return null;
+    }
+    const trimmed=String(input).trim();
+    if(trimmed){
+      return trimmed;
+    }
+    window.alert('Необходимо указать причину просрочки, чтобы завершить этап.');
+    current='';
+  }
+}
+
+function processStageCompletionChange(tr, isDone){
+  if(!tr) return true;
+  if(!isDone){
+    tr.dataset.doneAt='';
+    tr.dataset.completedLate='false';
+    delete tr.dataset.delayReason;
+    updateStageSourceExtras(tr,{ doneAt:'', delayReason:'', completedLate:false });
+    return true;
+  }
+  const now=new Date();
+  const doneAtIso=now.toISOString();
+  const dueDate=getStageRowDueDate(tr);
+  let completedLate=false;
+  let reason='';
+  if(dueDate && now.getTime()>dueDate.getTime()){
+    completedLate=true;
+    reason=requestStageDelayReason(tr.dataset?.delayReason||'');
+    if(reason===null){
+      return false;
+    }
+  }
+  tr.dataset.doneAt=doneAtIso;
+  tr.dataset.completedLate=completedLate?'true':'false';
+  if(completedLate){
+    tr.dataset.delayReason=reason;
+  }else{
+    delete tr.dataset.delayReason;
+  }
+  updateStageSourceExtras(tr,{ doneAt:doneAtIso, delayReason:completedLate?reason:'', completedLate });
+  return true;
+}
+
+function handleStageDoneToggle(tr, doneEl, options={}){
+  if(!tr||!doneEl) return true;
+  const progEl=tr.querySelector('[data-k="progress"]');
+  const isBoolOnly=!progEl;
+  const prevProgress=options.prevProgress!==undefined?options.prevProgress:(progEl?progEl.value:'');
+  if(doneEl.checked){
+    if(!isBoolOnly && progEl){
+      progEl.value=100;
+    }
+    const accepted=processStageCompletionChange(tr,true);
+    if(!accepted){
+      doneEl.checked=false;
+      if(!isBoolOnly && progEl){
+        progEl.value=prevProgress;
+      }
+      return false;
+    }
+  }else{
+    const accepted=processStageCompletionChange(tr,false);
+    if(!accepted){
+      doneEl.checked=true;
+      return false;
+    }
+    if(!isBoolOnly && progEl && Number(progEl.value)>=100){
+      progEl.value=0;
+    }
+  }
+  syncAutoProgress();
+  updateStageRowExpectation(tr);
+  return true;
+}
+
 function refreshStageReorderControls(){
   if(!stagesTableBody) return;
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
@@ -15314,6 +15778,17 @@ function appendStageRow(st){
   const tr=document.createElement('tr');
   const stageId=ensureStageIdentity(st);
   tr.dataset.stageId=stageId;
+  if(typeof st.doneAt==='string' && st.doneAt){
+    tr.dataset.doneAt=st.doneAt;
+  }
+  if(typeof st.delayReason==='string' && st.delayReason){
+    tr.dataset.delayReason=st.delayReason;
+  }
+  if(st.completedLate===true || (typeof st.delayReason==='string' && st.delayReason.trim())){
+    tr.dataset.completedLate='true';
+  }else if(st.completedLate===false){
+    tr.dataset.completedLate='false';
+  }
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
@@ -15356,9 +15831,41 @@ function appendStageRow(st){
   if(moveDownBtn){
     moveDownBtn.addEventListener('click',()=>moveStageRow(tr,'down'));
   }
-  const progEl=tr.querySelector('[data-k="progress"]');const doneEl=tr.querySelector('[data-k="done"]');
-  if(doneEl){doneEl.addEventListener('change',()=>{if(!isBoolOnly&&progEl){if(doneEl.checked)progEl.value=100; if(!doneEl.checked&&Number(progEl.value)==100)progEl.value=0} syncAutoProgress();updateStageRowExpectation(tr);})}
-  if(progEl&&!isBoolOnly){progEl.addEventListener('input',e=>{const v=Number(e.target.value||0);if(v>=100&&doneEl)doneEl.checked=true;if(v<100&&doneEl&&doneEl.checked)doneEl.checked=false;syncAutoProgress();updateStageRowExpectation(tr);})}
+  const progEl=tr.querySelector('[data-k="progress"]');
+  const doneEl=tr.querySelector('[data-k="done"]');
+  if(doneEl){
+    doneEl.addEventListener('change',()=>{
+      handleStageDoneToggle(tr, doneEl, { prevProgress:progEl?progEl.value:'' });
+    });
+  }
+  if(progEl && !isBoolOnly){
+    progEl.addEventListener('focus',()=>{
+      progEl.dataset.prevValue=progEl.value||'';
+    });
+    progEl.addEventListener('input',e=>{
+      const v=Number(e.target.value||0);
+      const prevValue=progEl.dataset.prevValue!==undefined?progEl.dataset.prevValue:progEl.value;
+      if(doneEl){
+        if(v>=100 && !doneEl.checked){
+          doneEl.checked=true;
+          if(!handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue })){
+            e.target.value=prevValue;
+            syncAutoProgress();
+            updateStageRowExpectation(tr);
+            return;
+          }
+          return;
+        }
+        if(v<100 && doneEl.checked){
+          doneEl.checked=false;
+          handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue });
+          return;
+        }
+      }
+      syncAutoProgress();
+      updateStageRowExpectation(tr);
+    });
+  }
   const valueInput=tr.querySelector('[data-k="value"]');
   if(valueInput&&!suppressValue){
     valueInput.addEventListener('input',()=>updateStageAutoHours(tr));
@@ -15446,7 +15953,10 @@ function readStageRow(tr){
     originalStart:startInput?.dataset?.original||'',
     originalEnd:endInput?.dataset?.original||'',
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
-    crmStageId:stageId
+    crmStageId:stageId,
+    doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
+    delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
+    completedLate:tr.dataset?.completedLate==='true'
   };
 }
 
@@ -15531,6 +16041,19 @@ function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
   const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
+  const invalidStage=stages.find(stage=>{
+    const startIso=coerceCalendarIso(stage?.start||'');
+    const endIso=coerceCalendarIso(stage?.end||'');
+    if(!startIso || !endIso) return false;
+    const startDate=new Date(`${startIso}T00:00:00`);
+    const endDate=new Date(`${endIso}T00:00:00`);
+    if(Number.isNaN(startDate.getTime())||Number.isNaN(endDate.getTime())) return false;
+    return endDate.getTime()<startDate.getTime();
+  });
+  if(invalidStage){
+    alert(`Дата окончания передела «${invalidStage.name||'Передел'}» не может быть раньше даты начала.`);
+    return;
+  }
   const comments=orderCommentsDraft.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
   const commentSummary=comments.length?comments[comments.length-1].text:'';
   const previousCommentsRaw=Array.isArray(previousSnapshot?.comments)?previousSnapshot.comments:[];
@@ -17542,6 +18065,11 @@ function renderCrmOrderHistoryEntry(entry){
       if(dateLabel && dateLabel!=='—'){
         details.push(dateLabel);
       }
+      const finishedAtIso=ev.doneAt||entry.createdAt||'';
+      const finishedAt=finishedAtIso?formatJournalTimestamp(finishedAtIso):'';
+      if(finishedAt && finishedAt!=='—'){
+        details.push(finishedAt);
+      }
       if(typeof ev.hours==='number'&&Number.isFinite(ev.hours)&&ev.hours>0){
         details.push(`${formatHoursRu(ev.hours)} ч`);
       }
@@ -17550,6 +18078,13 @@ function renderCrmOrderHistoryEntry(entry){
       }
       dateSpan.textContent=details.length?details.join(' • '):'—';
       li.append(stageSpan,dateSpan);
+      if(ev.completedLate){
+        const reason=document.createElement('div');
+        reason.className='crm-order-history__event-extra crm-order-history__event-extra--warn';
+        const reasonText=ev.delayReason?`Просрочка: ${ev.delayReason}`:'Просрочка без указанной причины';
+        reason.textContent=reasonText;
+        li.appendChild(reason);
+      }
       events.appendChild(li);
     });
     item.appendChild(events);
@@ -17630,6 +18165,8 @@ function openCrmOrderHistory(orderId){
     return;
   }
   const entries=collectOrderHistoryEntries(id);
+  crmOrderHistoryCachedEntries=entries;
+  crmOrderHistoryCachedOrderId=id;
   const board=currentBoard();
   const order=board?.orders?.find(o=>o.id===id) || null;
   const fallbackTitle=entries.length?resolveJournalOrderTitle(entries[0]):'';
@@ -17667,6 +18204,7 @@ function openCrmOrderHistory(orderId){
       crmOrderHistoryContent.appendChild(list);
     }
   }
+  refreshOrderHistoryDetailsButtons(entries);
   try{crmOrderHistoryDlg.showModal();}
   catch(_err){crmOrderHistoryDlg.open=true;}
 }
@@ -17674,6 +18212,34 @@ function openCrmOrderHistory(orderId){
 function closeCrmOrderHistory(){
   if(crmOrderHistoryDlg){
     crmOrderHistoryDlg.close();
+  }
+  closeCrmOrderStatusHistory();
+  closeCrmOrderStageReadiness();
+}
+
+function openCrmOrderStatusHistory(){
+  if(!crmOrderStatusDlg) return;
+  renderOrderStatusHistory(crmOrderHistoryCachedEntries);
+  try{crmOrderStatusDlg.showModal();}
+  catch(_err){crmOrderStatusDlg.open=true;}
+}
+
+function closeCrmOrderStatusHistory(){
+  if(crmOrderStatusDlg){
+    crmOrderStatusDlg.close();
+  }
+}
+
+function openCrmOrderStageReadiness(){
+  if(!crmOrderReadinessDlg) return;
+  renderOrderReadinessHistory(crmOrderHistoryCachedEntries);
+  try{crmOrderReadinessDlg.showModal();}
+  catch(_err){crmOrderReadinessDlg.open=true;}
+}
+
+function closeCrmOrderStageReadiness(){
+  if(crmOrderReadinessDlg){
+    crmOrderReadinessDlg.close();
   }
 }
 
@@ -18323,6 +18889,18 @@ if(orderHistoryBtn){
     }
   });
 }
+if(crmOrderHistoryStatusesBtn){
+  crmOrderHistoryStatusesBtn.addEventListener('click',()=>{
+    if(crmOrderHistoryStatusesBtn.disabled) return;
+    openCrmOrderStatusHistory();
+  });
+}
+if(crmOrderHistoryReadinessBtn){
+  crmOrderHistoryReadinessBtn.addEventListener('click',()=>{
+    if(crmOrderHistoryReadinessBtn.disabled) return;
+    openCrmOrderStageReadiness();
+  });
+}
 if(crmOrderHistoryClose){
   crmOrderHistoryClose.addEventListener('click',()=>closeCrmOrderHistory());
 }
@@ -18333,6 +18911,30 @@ if(crmOrderHistoryDlg){
   crmOrderHistoryDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
     closeCrmOrderHistory();
+  });
+}
+if(crmOrderStatusClose){
+  crmOrderStatusClose.addEventListener('click',()=>closeCrmOrderStatusHistory());
+}
+if(crmOrderStatusCloseIcon){
+  crmOrderStatusCloseIcon.addEventListener('click',()=>closeCrmOrderStatusHistory());
+}
+if(crmOrderStatusDlg){
+  crmOrderStatusDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmOrderStatusHistory();
+  });
+}
+if(crmOrderReadinessClose){
+  crmOrderReadinessClose.addEventListener('click',()=>closeCrmOrderStageReadiness());
+}
+if(crmOrderReadinessCloseIcon){
+  crmOrderReadinessCloseIcon.addEventListener('click',()=>closeCrmOrderStageReadiness());
+}
+if(crmOrderReadinessDlg){
+  crmOrderReadinessDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmOrderStageReadiness();
   });
 }
 const crmUnaccountedDlg=document.getElementById('crmUnaccountedDlg');
