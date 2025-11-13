@@ -354,6 +354,7 @@ const DATA_DIR = DATA_DIR_INFO.path;
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
 const USERS_EXPORT_FILE = path.join(DATA_DIR, 'users.json');
+const CREDENTIALS_FILE = path.join(DATA_DIR, 'credentials.json');
 
 if (Array.isArray(DATA_DIR_INFO.previousErrors) && DATA_DIR_INFO.previousErrors.length) {
   const failedDefault = DATA_DIR_INFO.previousErrors.find((entry) => entry && entry.path === DEFAULT_DATA_DIR);
@@ -377,6 +378,16 @@ const LOCKOUT_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_LOCKOUT_MIN
 const SESSION_IDLE_TIMEOUT_MS = Math.max(SESSION_TTL_MS, 60 * 60 * 1000);
 const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+const DEFAULT_CREDENTIALS_TEMPLATE = {
+  users: [
+    {
+      login: DEFAULT_ADMIN_LOGIN,
+      password: DEFAULT_ADMIN_PASSWORD,
+      displayName: 'Системный администратор',
+      roles: ['superadmin']
+    }
+  ]
+};
 const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
 
 class StorageWriteError extends Error {
@@ -960,6 +971,10 @@ function ensureAuthBootstrap() {
     }
   });
 
+  ensureCredentialTemplateFile();
+  const manualEntries = readManualCredentialEntries();
+  applyManualCredentialEntries(db, manualEntries, now);
+
   const totalUsersRow = db.prepare('SELECT COUNT(*) AS count FROM users').get();
   const userCount = Number(totalUsersRow?.count || 0);
   if (userCount > 0) {
@@ -1161,6 +1176,243 @@ function ensureUsersExportSnapshot() {
   } catch (err) {
     console.warn('Failed to write users snapshot', err);
   }
+}
+
+function ensureCredentialTemplateFile() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(CREDENTIALS_FILE)) {
+      fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify(DEFAULT_CREDENTIALS_TEMPLATE, null, 2), 'utf8');
+      console.info(`[CRM] Создан файл учётных записей ${CREDENTIALS_FILE}.`);
+    }
+  } catch (err) {
+    console.warn(`[CRM] Не удалось подготовить файл учётных записей ${CREDENTIALS_FILE}:`, err);
+  }
+}
+
+function looksLikeBcryptHash(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value.trim());
+}
+
+function normalizeCredentialEntry(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const login = sanitizeLogin(raw.login || raw.username || raw.user);
+  if (!login) {
+    return null;
+  }
+  const displayNameRaw = typeof raw.displayName === 'string' ? raw.displayName : raw.name;
+  const displayName = displayNameRaw && displayNameRaw.trim() ? displayNameRaw.trim() : login;
+  let password = '';
+  if (typeof raw.password === 'string') {
+    password = raw.password.trim();
+  } else if (typeof raw.pass === 'string') {
+    password = raw.pass.trim();
+  }
+  if (!password && typeof raw.passwordHash === 'string') {
+    password = raw.passwordHash.trim();
+  }
+  const isActive = raw.isActive !== undefined ? !!parseBoolean(raw.isActive, true) : true;
+  const roleCandidates = [];
+  if (Array.isArray(raw.roles)) {
+    roleCandidates.push(...raw.roles);
+  }
+  if (typeof raw.role === 'string') {
+    roleCandidates.push(raw.role);
+  }
+  const normalizedRoles = Array.from(
+    new Set(
+      roleCandidates
+        .map((value) => normalizeRoleSlug(value))
+        .filter(Boolean)
+    )
+  );
+  return {
+    login,
+    displayName,
+    password,
+    passwordIsHash: looksLikeBcryptHash(password),
+    isActive,
+    roles: normalizedRoles
+  };
+}
+
+function readManualCredentialEntries() {
+  try {
+    const raw = fs.readFileSync(CREDENTIALS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed?.users) ? parsed.users : [];
+    const result = [];
+    for (const entry of list) {
+      const normalized = normalizeCredentialEntry(entry);
+      if (normalized) {
+        result.push(normalized);
+      }
+    }
+    return result;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return [];
+    }
+    console.warn(`[CRM] Не удалось прочитать учётные записи из ${CREDENTIALS_FILE}:`, err);
+    return [];
+  }
+}
+
+function applyManualCredentialEntries(db, entries, nowIso) {
+  if (!Array.isArray(entries) || !entries.length) {
+    return false;
+  }
+  const selectUser = db.prepare('SELECT id, password_hash, display_name FROM users WHERE login = ?');
+  const insertUser = db.prepare(
+    `INSERT INTO users (login, password_hash, display_name, is_active, created_at, updated_at, last_login_at, password_updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
+  );
+  const updateUser = db.prepare(
+    `UPDATE users
+        SET display_name = ?, is_active = ?, updated_at = ?, password_hash = ?, password_updated_at = ?
+      WHERE id = ?`
+  );
+  const updateUserNoPassword = db.prepare(
+    `UPDATE users
+        SET display_name = ?, is_active = ?, updated_at = ?
+      WHERE id = ?`
+  );
+  const selectUserRoles = db.prepare(
+    `SELECT r.id, r.slug
+       FROM user_roles ur
+       JOIN roles r ON r.id = ur.role_id
+      WHERE ur.user_id = ?`
+  );
+  const deleteUserRole = db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ?');
+  const insertUserRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
+  const selectRoleId = db.prepare('SELECT id FROM roles WHERE slug = ?');
+  const roleIdCache = new Map();
+  const getRoleId = (slug) => {
+    if (roleIdCache.has(slug)) {
+      return roleIdCache.get(slug);
+    }
+    const row = selectRoleId.get(slug);
+    const id = row?.id ? Number(row.id) : null;
+    if (id) {
+      roleIdCache.set(slug, id);
+    }
+    return id;
+  };
+
+  let changeCount = 0;
+  for (const entry of entries) {
+    const userRow = selectUser.get(entry.login);
+    let passwordHash = null;
+    let shouldUpdatePassword = false;
+    if (entry.passwordIsHash && entry.password) {
+      passwordHash = entry.password;
+      shouldUpdatePassword = !userRow || userRow.password_hash !== passwordHash;
+    } else if (entry.password && bcrypt) {
+      if (userRow && userRow.password_hash) {
+        try {
+          if (bcrypt.compareSync(entry.password, userRow.password_hash)) {
+            passwordHash = userRow.password_hash;
+            shouldUpdatePassword = false;
+          } else {
+            passwordHash = bcrypt.hashSync(entry.password, 10);
+            shouldUpdatePassword = true;
+          }
+        } catch (err) {
+          console.warn(`[CRM] Не удалось сравнить пароль для ${entry.login}:`, err);
+          passwordHash = bcrypt.hashSync(entry.password, 10);
+          shouldUpdatePassword = true;
+        }
+      } else {
+        passwordHash = bcrypt.hashSync(entry.password, 10);
+        shouldUpdatePassword = true;
+      }
+    }
+
+    if (!userRow && !passwordHash) {
+      console.warn(`[CRM] Учётная запись ${entry.login} пропущена: требуется пароль или passwordHash.`);
+      continue;
+    }
+
+    if (userRow) {
+      if (shouldUpdatePassword && passwordHash) {
+        const info = updateUser.run(entry.displayName, entry.isActive ? 1 : 0, nowIso, passwordHash, nowIso, userRow.id);
+        changeCount += info?.changes || 0;
+      } else {
+        const info = updateUserNoPassword.run(entry.displayName, entry.isActive ? 1 : 0, nowIso, userRow.id);
+        changeCount += info?.changes || 0;
+      }
+      if (entry.roles && entry.roles.length) {
+        const desired = new Set(entry.roles);
+        const currentRows = selectUserRoles.all(userRow.id) || [];
+        const current = new Map();
+        currentRows.forEach((row) => {
+          const slug = normalizeRoleSlug(row.slug);
+          if (slug && row.id) {
+            current.set(slug, Number(row.id));
+          }
+        });
+        for (const slug of desired) {
+          const roleId = getRoleId(slug);
+          if (!roleId) {
+            console.warn(`[CRM] Роль ${slug} для пользователя ${entry.login} не найдена.`);
+            continue;
+          }
+          if (!current.has(slug)) {
+            const info = insertUserRole.run(userRow.id, roleId);
+            changeCount += info?.changes || 0;
+          }
+        }
+        for (const [slug, roleId] of current.entries()) {
+          if (!desired.has(slug)) {
+            const info = deleteUserRole.run(userRow.id, roleId);
+            changeCount += info?.changes || 0;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (!entry.roles || !entry.roles.length) {
+      console.warn(`[CRM] Учётная запись ${entry.login} пропущена: требуется хотя бы одна роль.`);
+      continue;
+    }
+
+    const info = insertUser.run(
+      entry.login,
+      passwordHash,
+      entry.displayName,
+      entry.isActive ? 1 : 0,
+      nowIso,
+      nowIso,
+      nowIso
+    );
+    const userId = Number(info?.lastInsertRowid);
+    if (!Number.isFinite(userId)) {
+      console.warn(`[CRM] Не удалось создать пользователя ${entry.login}.`);
+      continue;
+    }
+    changeCount += info?.changes || 0;
+    for (const slug of entry.roles) {
+      const roleId = getRoleId(slug);
+      if (!roleId) {
+        console.warn(`[CRM] Роль ${slug} для пользователя ${entry.login} не найдена.`);
+        continue;
+      }
+      const roleInfo = insertUserRole.run(userId, roleId);
+      changeCount += roleInfo?.changes || 0;
+    }
+  }
+
+  if (changeCount > 0) {
+    console.info(`[CRM] Синхронизировано учётных записей из credentials.json: ${changeCount}.`);
+    return true;
+  }
+  return false;
 }
 
 function computePermissions(roleSlugs) {
