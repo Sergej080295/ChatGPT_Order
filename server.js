@@ -848,7 +848,12 @@ function sessionMiddleware(req, res, next) {
     req.session = session;
     req.user = session.user;
     res.locals.currentUser = session.user;
-    touchSession(session.id, session.lastSeenAt);
+    const renewal = touchSession(session.id, session.lastSeenAt);
+    if (renewal) {
+      session.lastSeenAt = renewal.lastSeenAt;
+      session.expiresAt = renewal.expiresAt;
+      setSessionCookie(req, res, session.id);
+    }
     return next();
   } catch (err) {
     return next(err);
@@ -1376,18 +1381,19 @@ function loadSessionRecord(sessionId) {
 }
 
 function touchSession(sessionId, previousLastSeenIso) {
-  if (!sessionId) return;
+  if (!sessionId) return null;
   const db = getDatabase();
   const now = Date.now();
   const lastSeen = previousLastSeenIso ? Date.parse(previousLastSeenIso) : 0;
   if (Number.isFinite(lastSeen) && now - lastSeen < SESSION_RENEW_THRESHOLD_MS) {
-    return;
+    return null;
   }
   const nowIso = new Date(now).toISOString();
   const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
   db
     .prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?')
     .run(nowIso, expiresIso, sessionId);
+  return { lastSeenAt: nowIso, expiresAt: expiresIso };
 }
 
 function destroySession(sessionId) {

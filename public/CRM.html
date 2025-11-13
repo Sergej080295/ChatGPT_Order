@@ -14,13 +14,150 @@
   let source = null;
   let currentEtag = null;
   let currentHash = null;
-  const MIN_REFRESH_INTERVAL_MS = 15000;
-  const DEFAULT_REFRESH_INTERVAL_MS = 60000;
+  const MIN_REFRESH_INTERVAL_MS = 5000;
+  const DEFAULT_REFRESH_INTERVAL_MS = 5000;
   let refreshTimerId = null;
   let refreshPromise = null;
   let lastRefreshAt = 0;
 
-  const parseIntervalInput = (value) => {
+  const MIN_KEEPALIVE_INTERVAL_MS = 15000;
+  const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
+  const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
+  const SESSION_REDIRECT_DELAY_MS = 1500;
+  let keepAliveIntervalMs = null;
+  let idleLogoutThresholdMs = DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
+  let keepAliveTimerId = null;
+  let keepAlivePromise = null;
+  let lastActivityAt = Date.now();
+  let sessionExpired = false;
+
+  const resolveKeepAliveInterval = () => {
+    const candidates = [
+      window.CRM_KEEPALIVE_MS,
+      window.PLANNER_KEEPALIVE_MS,
+      window.__CRM_KEEPALIVE_MS__,
+      document.documentElement?.dataset?.crmKeepalive
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseIntervalInput(candidate);
+      if (parsed == null) continue;
+      if (parsed <= 0) return 0;
+      return Math.max(MIN_KEEPALIVE_INTERVAL_MS, Math.floor(parsed));
+    }
+    return DEFAULT_KEEPALIVE_INTERVAL_MS;
+  };
+
+  keepAliveIntervalMs = resolveKeepAliveInterval();
+
+  const resolveIdleLogoutThreshold = () => {
+    const candidates = [
+      window.CRM_IDLE_LOGOUT_MS,
+      window.PLANNER_IDLE_LOGOUT_MS,
+      window.__CRM_IDLE_LOGOUT_MS__,
+      document.documentElement?.dataset?.crmIdleLogout
+    ];
+    for (const candidate of candidates) {
+      const parsed = parseIntervalInput(candidate);
+      if (parsed == null) continue;
+      if (parsed <= 0) return 0;
+      return Math.max(60000, Math.floor(parsed));
+    }
+    return DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
+  };
+
+  idleLogoutThresholdMs = resolveIdleLogoutThreshold();
+
+  const markUserActivity = () => {
+    lastActivityAt = Date.now();
+  };
+
+  const handleSessionExpired = (origin) => {
+    if (sessionExpired) {
+      return;
+    }
+    sessionExpired = true;
+    if (refreshTimerId) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+    }
+    if (keepAliveTimerId) {
+      clearInterval(keepAliveTimerId);
+      keepAliveTimerId = null;
+    }
+    if (source) {
+      try { source.close(); }
+      catch (_err) { /* ignore */ }
+      source = null;
+    }
+    const reason = origin ? ` (источник: ${origin})` : '';
+    try {
+      showToast({
+        title: 'CRM',
+        message: `Сессия истекла${reason}. Выполните вход повторно.`,
+        tone: 'warn',
+        autoClose: 6000
+      });
+    } catch (_err) {
+      /* ignore toast errors */
+    }
+    setTimeout(() => {
+      window.location.href = '/login';
+    }, SESSION_REDIRECT_DELAY_MS);
+  };
+
+  const requestSessionProbe = (reason = 'interval') => {
+    if (sessionExpired) {
+      return Promise.resolve(null);
+    }
+    if (keepAlivePromise) {
+      return keepAlivePromise;
+    }
+    keepAlivePromise = (async () => {
+      try {
+        const res = await fetch('/me', {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Accept': 'application/json' }
+        });
+        if (res.status === 401) {
+          handleSessionExpired(reason || 'keepalive');
+          return null;
+        }
+        if (!res.ok) {
+          return null;
+        }
+        return await res.json().catch(() => null);
+      } catch (_err) {
+        return null;
+      } finally {
+        keepAlivePromise = null;
+      }
+    })();
+    return keepAlivePromise;
+  };
+
+  const scheduleKeepAlive = () => {
+    if (keepAliveTimerId) {
+      clearInterval(keepAliveTimerId);
+      keepAliveTimerId = null;
+    }
+    if (!keepAliveIntervalMs || keepAliveIntervalMs <= 0) {
+      return;
+    }
+    const tick = () => {
+      if (sessionExpired) return;
+      const now = Date.now();
+      if (idleLogoutThresholdMs > 0 && now - lastActivityAt > idleLogoutThresholdMs) {
+        handleSessionExpired('idle-timeout');
+        return;
+      }
+      requestSessionProbe('keepalive');
+    };
+    keepAliveTimerId = setInterval(tick, keepAliveIntervalMs);
+  };
+
+  function parseIntervalInput(value) {
     if (value == null) return null;
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) return null;
@@ -42,7 +179,7 @@
       }
     }
     return null;
-  };
+  }
 
   const resolveAutoRefreshInterval = () => {
     const candidates = [
@@ -195,6 +332,9 @@
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
+      if (res.status === 401) {
+        handleSessionExpired('state-load');
+      }
       throw new Error(detail || `HTTP ${res.status}`);
     }
     const text = await res.text();
@@ -279,6 +419,9 @@
         catch (_err) { parsed = null; }
       }
       if (!res.ok) {
+        if (res.status === 401) {
+          handleSessionExpired('state-save');
+        }
         const err = new Error(parsed?.error || trimmed || `HTTP ${res.status}`);
         err.status = res.status;
         if (parsed !== null) {
@@ -373,16 +516,29 @@
 
   const handleVisibilityChange = () => {
     if (!document.hidden) {
+      markUserActivity();
+      requestSessionProbe('visibility');
       handleFocusRefresh();
     }
   };
 
+  const handleWindowFocus = () => {
+    markUserActivity();
+    requestSessionProbe('focus');
+    handleFocusRefresh();
+  };
+
   if (typeof window !== 'undefined') {
-    window.addEventListener('focus', handleFocusRefresh, { passive: true });
+    window.addEventListener('focus', handleWindowFocus, { passive: true });
+    ['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach((eventName) => {
+      window.addEventListener(eventName, markUserActivity, { passive: true });
+    });
   }
   document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
 
   scheduleAutoRefresh();
+  scheduleKeepAlive();
+  requestSessionProbe('startup');
 
   if ('EventSource' in window) {
     connect();
@@ -12247,6 +12403,9 @@ async function crmRequestJson(url, options={}){
     catch(_err){ data=null; }
   }
   if(!res.ok){
+    if(res.status===401){
+      handleSessionExpired('request');
+    }
     const message=(data&&data.error)||`Ошибка ${res.status}`;
     const err=new Error(message);
     err.status=res.status;
