@@ -6026,7 +6026,14 @@ const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
 const CRM_HOURLESS_SCHEDULE_PRESET_MAP=new Map(CRM_HOURLESS_SCHEDULE_PRESETS.map(item=>[item.key,item]));
 const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-01-01', extras:[] });
 const CRM_STAGE_IGNORE='__ignore__';
-const CRM_DEFAULT_PREFERENCES={ autoOptimize:true, cascadeReady:true, showLateTips:true };
+const CRM_MIN_AUTO_REFRESH_SECONDS=5;
+const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
+const CRM_DEFAULT_PREFERENCES={
+  autoOptimize:true,
+  cascadeReady:true,
+  showLateTips:true,
+  autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS
+};
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
@@ -6620,12 +6627,63 @@ function sanitizeCrmStageCalendars(source){
   return result;
 }
 
+function normalizeAutoRefreshSeconds(value){
+  if(value===null||value===undefined) return null;
+  let seconds=null;
+  if(typeof value==='number'){
+    if(!Number.isFinite(value)) return null;
+    seconds=value;
+  }else if(typeof value==='string'){
+    const trimmed=value.trim();
+    if(!trimmed) return null;
+    const unitMatch=trimmed.match(/^([0-9]+(?:[.,][0-9]+)?)(ms|s|m)?$/i);
+    if(unitMatch){
+      const baseRaw=unitMatch[1]?.replace(',', '.');
+      const base=Number(baseRaw);
+      if(!Number.isFinite(base)) return null;
+      const unit=(unitMatch[2]||'s').toLowerCase();
+      if(unit==='ms'){
+        seconds=base/1000;
+      }else if(unit==='m'){
+        seconds=base*60;
+      }else{
+        seconds=base;
+      }
+    }else{
+      const normalized=trimmed.replace(',', '.');
+      const direct=Number(normalized);
+      if(!Number.isFinite(direct)) return null;
+      seconds=direct;
+    }
+  }else{
+    return null;
+  }
+  if(seconds===null || !Number.isFinite(seconds)) return null;
+  if(seconds<=0) return 0;
+  return Math.max(CRM_MIN_AUTO_REFRESH_SECONDS, Math.round(seconds));
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
+    const intervalKeys=[
+      'autoRefreshSeconds',
+      'autoRefreshIntervalSeconds',
+      'autoRefreshInterval',
+      'refreshIntervalSeconds',
+      'autoRefresh',
+      'refreshInterval'
+    ];
+    for(const key of intervalKeys){
+      if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
+      const normalized=normalizeAutoRefreshSeconds(raw[key]);
+      if(normalized===null) continue;
+      result.autoRefreshSeconds=normalized;
+      break;
+    }
   }
   return result;
 }
@@ -6727,6 +6785,41 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getPreferredAutoRefreshIntervalMs(){
+  const prefs=getCrmPreferences();
+  const seconds=Number(prefs?.autoRefreshSeconds);
+  if(Number.isFinite(seconds) && seconds>0){
+    return Math.round(seconds*1000);
+  }
+  return 0;
+}
+
+let crmAppliedAutoRefreshMs=null;
+
+function updatePlannerAutoRefreshFromPreferences(){
+  const targetMs=getPreferredAutoRefreshIntervalMs();
+  let effective=targetMs;
+  const remote=window.plannerRemote;
+  if(remote && typeof remote.setAutoRefreshInterval==='function'){
+    if(!(crmAppliedAutoRefreshMs!==null && crmAppliedAutoRefreshMs===targetMs)){
+      const applied=remote.setAutoRefreshInterval(targetMs);
+      if(Number.isFinite(applied)){
+        effective=applied;
+      }
+    }else{
+      effective=crmAppliedAutoRefreshMs;
+    }
+  }
+  crmAppliedAutoRefreshMs=effective;
+  if(document && document.documentElement){
+    if(effective>0){
+      document.documentElement.dataset.crmAutoRefresh=String(effective);
+    }else{
+      delete document.documentElement.dataset.crmAutoRefresh;
+    }
+  }
 }
 function cloneForTrash(value){
   try{return JSON.parse(JSON.stringify(value));}
@@ -15947,7 +16040,31 @@ function renderCrmPreferencesSettingsUI(){
   const tipsText=document.createElement('span');
   tipsText.textContent='Показывать советы по просроченным заказам';
   tipsOption.append(tipsCheckbox, tipsText);
-  control.append(autoOption, cascadeOption, tipsOption);
+  const refreshField=document.createElement('label');
+  refreshField.className='crm-field';
+  const refreshLabel=document.createElement('span');
+  refreshLabel.className='crm-field__label';
+  refreshLabel.textContent='Интервал автообновления, сек';
+  const refreshInput=document.createElement('input');
+  refreshInput.type='number';
+  refreshInput.className='pc-input';
+  refreshInput.name='prefAutoRefreshSeconds';
+  refreshInput.min='0';
+  refreshInput.step='1';
+  refreshInput.inputMode='numeric';
+  refreshInput.placeholder=String(CRM_DEFAULT_AUTO_REFRESH_SECONDS);
+  if(Number.isFinite(prefs.autoRefreshSeconds)){
+    if(prefs.autoRefreshSeconds>0){
+      refreshInput.value=String(Math.round(prefs.autoRefreshSeconds));
+    }else if(prefs.autoRefreshSeconds===0){
+      refreshInput.value='0';
+    }
+  }
+  const refreshHint=document.createElement('span');
+  refreshHint.className='crm-field__hint';
+  refreshHint.textContent=`Минимум ${CRM_MIN_AUTO_REFRESH_SECONDS} с. Укажите 0, чтобы отключить автообновление.`;
+  refreshField.append(refreshLabel, refreshInput, refreshHint);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -16462,7 +16579,8 @@ boardForm.addEventListener('submit',e=>{
   state.settings.preferences=sanitizeCrmPreferences({
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
-    showLateTips:!!boardForm.prefShowLateTips?.checked
+    showLateTips:!!boardForm.prefShowLateTips?.checked,
+    autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:''
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
@@ -17832,6 +17950,7 @@ document.addEventListener('click',e=>{
 
 /* INIT */
 function renderAll(){
+  updatePlannerAutoRefreshFromPreferences();
   renderBoardSelect();
   renderColumns();
   renderCurrentView();
