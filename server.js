@@ -691,6 +691,7 @@ const STAGE_SLUGS = Object.freeze([
 const ROLE_PERMISSION_KEYS = Object.freeze([
   'view',
   'write',
+  'viewOrderDetails',
   'manageUsers',
   'manageSettings',
   'manageStages',
@@ -713,6 +714,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   superadmin: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: true,
     manageSettings: true,
     manageStages: true,
@@ -727,6 +729,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   admin: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: true,
     manageStages: true,
@@ -741,6 +744,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   master: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: true,
@@ -755,6 +759,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   guest: {
     view: true,
     write: false,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: false,

@@ -605,7 +605,8 @@
 </script>
 <script>
 (function bootstrapCrmSnapshot(){
-  const KEY = 'mini_crm_v13c';
+  const STORAGE_KEY='planecore_crm_v13c';
+  const LEGACY_KEYS=['mini_crm_v13c'];
   try {
     window.__CRM_DATA_SOURCE__ = 'local';
     const xhr = new XMLHttpRequest();
@@ -645,7 +646,8 @@
       if (parsed && typeof parsed === 'object' && parsed.crm) {
         window.__CRM_INITIAL_STATE__ = parsed.crm;
         try {
-          localStorage.setItem(KEY, JSON.stringify(parsed.crm));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.crm));
+          LEGACY_KEYS.forEach(name=>{ if(name!==STORAGE_KEY){ try{localStorage.removeItem(name);}catch(_err){/* ignore */} }});
         } catch (_err) {
           /* ignore */
         }
@@ -6088,8 +6090,18 @@
 </dialog>
 
 <script>
-const KEY='mini_crm_v13c';
-const SETTINGS_KEY='mini_crm_settings_v1';
+const CRM_STATE_STORAGE_KEY='planecore_crm_v13c';
+const CRM_STATE_STORAGE_FALLBACKS=['mini_crm_v13c'];
+const CRM_SETTINGS_STORAGE_KEY='planecore_crm_settings_v1';
+const CRM_SETTINGS_STORAGE_FALLBACKS=['mini_crm_settings_v1'];
+const CRM_SEARCH_STORAGE_KEY='planecore_crm_search_v1';
+const CRM_SEARCH_STORAGE_FALLBACKS=['mini_crm_search_v1'];
+const CRM_SESSION_VIEW_KEY='planecore_crm_session_view_v1';
+const CRM_SESSION_VIEW_FALLBACKS=['mini_crm_session_view_v1'];
+const CRM_SESSION_STAGE_KEY='planecore_crm_session_stage_v1';
+const CRM_SESSION_STAGE_FALLBACKS=['mini_crm_session_stage_v1'];
+const CRM_ALIAS_STORAGE_KEY='planecore_crm_user_alias_v1';
+const CRM_ALIAS_STORAGE_FALLBACKS=['mini_crm_user_alias_v1'];
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -6100,6 +6112,27 @@ const fmtDateISO=d=>{
   const day=String(date.getDate()).padStart(2,'0');
   return `${year}-${month}-${day}`;
 };
+function readStorageValue(primary,fallbacks=[]){
+  const keys=[primary, ...fallbacks];
+  for(const name of keys){
+    try{
+      const value=localStorage.getItem(name);
+      if(typeof value==='string'&&value){
+        if(name!==primary){
+          try{localStorage.setItem(primary,value);}catch(_err){/* ignore */}
+        }
+        return value;
+      }
+    }catch(_err){/* ignore */}
+  }
+  return null;
+}
+function removeLegacyStorage(primary,fallbacks=[]){
+  fallbacks.forEach(name=>{
+    if(!name||name===primary) return;
+    try{localStorage.removeItem(name);}catch(_err){/* ignore */}
+  });
+}
 const CRM_CALENDAR_FORMATTER=new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'});
 function parseCalendarInputDate(value){
   if(value===null||value===undefined) return null;
@@ -6669,13 +6702,15 @@ function loadStoredCrmSettings(){
 function persistStoredCrmSettings(settings){
   try{
     if(!settings||typeof settings!=='object'){
-      localStorage.removeItem(SETTINGS_KEY);
+      localStorage.removeItem(CRM_SETTINGS_STORAGE_KEY);
+      removeLegacyStorage(CRM_SETTINGS_STORAGE_KEY, CRM_SETTINGS_STORAGE_FALLBACKS);
       cachedStoredCrmSettings=null;
       cachedStoredCrmSettingsLoaded=true;
       return;
     }
     const sanitized=sanitizeCrmSettings(settings);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(sanitized));
+    localStorage.setItem(CRM_SETTINGS_STORAGE_KEY, JSON.stringify(sanitized));
+    removeLegacyStorage(CRM_SETTINGS_STORAGE_KEY, CRM_SETTINGS_STORAGE_FALLBACKS);
     cachedStoredCrmSettings=sanitized;
     cachedStoredCrmSettingsLoaded=true;
   }catch(err){
@@ -7238,6 +7273,7 @@ const crmWriteAccessEnabled=()=>{
   if(!crmPermissions.write) return false;
   return currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
 };
+const crmCanViewOrderDetails=()=> !!crmPermissions.viewOrderDetails;
 const crmCanManageOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.manageOrders;
 const crmCanCompleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.completeOrders;
 const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manageStages;
@@ -7283,6 +7319,7 @@ let lastCrmWriteBlockedAt=0;
 const applyCrmWriteAccess=()=>{
   const canWrite=crmWriteAccessEnabled();
   const canOrders=crmCanManageOrders();
+  const canViewOrders=crmCanViewOrderDetails();
   const canStages=crmCanManageStages();
   const canComplete=crmCanCompleteOrders();
   const selectedStage=crmStageSelect?.value||'draw';
@@ -7290,6 +7327,7 @@ const applyCrmWriteAccess=()=>{
   if(document.body){
     document.body.classList.toggle('crm-write-disabled', !canWrite);
     document.body.classList.toggle('crm-order-disabled', !canOrders);
+    document.body.classList.toggle('crm-order-view-disabled', !canViewOrders);
     document.body.classList.toggle('crm-stage-disabled', !canStages);
     document.body.classList.toggle('crm-complete-disabled', !canComplete);
   }
@@ -7310,22 +7348,33 @@ const applyCrmWriteAccess=()=>{
   updateCrmDbIndicator();
 };
 
-const CRM_SEARCH_STORAGE_KEY='mini_crm_search_v1';
-const CRM_SESSION_VIEW_KEY='mini_crm_session_view_v1';
-const CRM_SESSION_STAGE_KEY='mini_crm_session_stage_v1';
 
 function readCrmSessionValue(key){
-  try{
-    const value=sessionStorage.getItem(key);
-    return typeof value==='string'?value:null;
-  }catch(_err){
-    return null;
+  const fallbacks=key===CRM_SESSION_VIEW_KEY
+    ? CRM_SESSION_VIEW_FALLBACKS
+    : key===CRM_SESSION_STAGE_KEY
+      ? CRM_SESSION_STAGE_FALLBACKS
+      : [];
+  const keys=[key, ...fallbacks];
+  for(const name of keys){
+    try{
+      const value=sessionStorage.getItem(name);
+      if(typeof value==='string'){
+        if(name!==key){
+          try{sessionStorage.setItem(key,value);}catch(_err){/* ignore */}
+          try{sessionStorage.removeItem(name);}catch(_err){/* ignore */}
+        }
+        return value;
+      }
+    }catch(_err){/* ignore */}
   }
+  return null;
 }
 
 function persistCrmSessionView(){
   try{
     sessionStorage.setItem(CRM_SESSION_VIEW_KEY, currentCrmView);
+    CRM_SESSION_VIEW_FALLBACKS.forEach(name=>{ if(name!==CRM_SESSION_VIEW_KEY){ try{sessionStorage.removeItem(name);}catch(_err){/* ignore */} }});
   }catch(_err){/* ignore */}
 }
 
@@ -7334,13 +7383,14 @@ function persistCrmSessionStage(stageKey){
   if(!normalized) return;
   try{
     sessionStorage.setItem(CRM_SESSION_STAGE_KEY, normalized);
+    CRM_SESSION_STAGE_FALLBACKS.forEach(name=>{ if(name!==CRM_SESSION_STAGE_KEY){ try{sessionStorage.removeItem(name);}catch(_err){/* ignore */} }});
   }catch(_err){/* ignore */}
 }
 
 let orderSearchRaw='';
 let orderSearchNormalized='';
 try{
-  const stored=localStorage.getItem(CRM_SEARCH_STORAGE_KEY);
+  const stored=readStorageValue(CRM_SEARCH_STORAGE_KEY, CRM_SEARCH_STORAGE_FALLBACKS);
   if(typeof stored==='string'){
     orderSearchRaw=stored;
     orderSearchNormalized=normalizeSearchTerm(stored);
@@ -7568,7 +7618,7 @@ function ensureStageHoursPreference(normalized, label){
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) };
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
   const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
   const stageAccess=crmDefaultStageAccess(false);
@@ -7602,12 +7652,17 @@ function load(){
     window.__CRM_INITIAL_STATE__=null;
     return initial;
   }
-  try{return JSON.parse(localStorage.getItem(KEY))}catch{return null}
+  const raw=readStorageValue(CRM_STATE_STORAGE_KEY, CRM_STATE_STORAGE_FALLBACKS);
+  if(!raw) return null;
+  try{return JSON.parse(raw);}catch{return null;}
 }
 function persistLocal(){
   state=ensureCrmStateShape(state);
   persistStoredCrmSettings(state.settings);
-  try{localStorage.setItem(KEY,JSON.stringify(state));}
+  try{
+    localStorage.setItem(CRM_STATE_STORAGE_KEY,JSON.stringify(state));
+    removeLegacyStorage(CRM_STATE_STORAGE_KEY, CRM_STATE_STORAGE_FALLBACKS);
+  }
   catch(err){console.warn('CRM local save failed',err);}
 }
 let crmAutoOptimizeGuard=false;
@@ -8849,14 +8904,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -8876,6 +8931,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
     key:'orders',
     title:'Заказы и очередь',
     items:[
+      { key:'viewOrderDetails', label:'Просмотр карточки заказа', hint:'Открывать окно заказа для просмотра данных.' },
       { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
       { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
       { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
@@ -9543,6 +9599,75 @@ function normalizeDate(value){
   if(Number.isNaN(date.getTime())) return null;
   date.setHours(0,0,0,0);
   return date;
+}
+
+function stageEntryIsDone(stage){
+  if(!stage||typeof stage!=='object') return false;
+  if(stage.done===true) return true;
+  const progress=normalizeStageProgress(stage.progress);
+  return progress>=100;
+}
+
+function extractStageDueIso(stage){
+  if(!stage||typeof stage!=='object') return null;
+  const candidates=[];
+  const pushCandidate=value=>{
+    const iso=coerceCalendarIso(value);
+    if(iso) candidates.push(iso);
+  };
+  pushCandidate(stage.end);
+  pushCandidate(stage.originalEnd);
+  pushCandidate(stage.due);
+  pushCandidate(stage.dueDate);
+  pushCandidate(stage.deadline);
+  pushCandidate(stage.crmDeadline);
+  pushCandidate(stage.crmDue);
+  const schedule=stage.crmSchedule&&typeof stage.crmSchedule==='object'?stage.crmSchedule:null;
+  if(schedule){
+    pushCandidate(schedule.end);
+    pushCandidate(schedule.due);
+    pushCandidate(schedule.date);
+    if(Array.isArray(schedule.segments)){
+      schedule.segments.forEach(segment=>{
+        if(!segment||typeof segment!=='object') return;
+        pushCandidate(segment.end||segment.date);
+      });
+    }
+  }
+  if(Array.isArray(stage.segments)){
+    stage.segments.forEach(segment=>{
+      if(!segment||typeof segment!=='object') return;
+      pushCandidate(segment.end||segment.date);
+    });
+  }
+  return candidates.length?candidates.reduce((latest,iso)=>{
+    if(!latest) return iso;
+    const latestTime=new Date(`${latest}T00:00:00`).getTime();
+    const nextTime=new Date(`${iso}T00:00:00`).getTime();
+    if(Number.isNaN(nextTime)) return latest;
+    if(Number.isNaN(latestTime)) return iso;
+    return nextTime>latestTime?iso:latest;
+  },null):null;
+}
+
+function stageEntryIsLate(stage,{ todayTime=today0().getTime() }={}){
+  if(!stage||typeof stage!=='object') return false;
+  if(stage.completedLate===true) return true;
+  const dueIso=extractStageDueIso(stage);
+  if(!dueIso) return false;
+  const dueDate=new Date(`${dueIso}T23:59:59.999`);
+  if(Number.isNaN(dueDate.getTime())) return false;
+  if(stageEntryIsDone(stage)){
+    if(stage.completedLate===false) return false;
+    if(stage.doneAt){
+      const doneAt=new Date(stage.doneAt);
+      if(!Number.isNaN(doneAt.getTime()) && doneAt.getTime()>dueDate.getTime()){
+        return true;
+      }
+    }
+    return false;
+  }
+  return dueDate.getTime()<todayTime;
 }
 
 function getOrderStartTimestamp(order){
@@ -10285,10 +10410,24 @@ function collectCrmOrdersForList(filterMode){
     const isDone=!!(order?.done)|| (stagesDone&&indicatorDone);
     if(!isDone) meta.totalActive+=1;
     if(!orderMatchesSearch(order)) return;
-    const isLate=CRM_PROGRESS_STAGES.some(stageKey=>{
+    const stageMap=snapshot&&snapshot.map instanceof Map?snapshot.map:new Map();
+    const todayTime=today0().getTime();
+    const progressLate=CRM_PROGRESS_STAGES.some(stageKey=>{
       const info=progress[stageKey];
-      return info?info.behind:false;
+      if(info?.behind) return true;
+      const stage=stageMap.get(stageKey);
+      return stageEntryIsLate(stage,{ todayTime });
     });
+    let hourlessLate=false;
+    CRM_INDICATOR_STAGES.forEach(stageKey=>{
+      const indicatorInfo=indicator[stageKey];
+      if(!indicatorInfo) return;
+      const stage=stageMap.get(stageKey);
+      const overdue=stageEntryIsLate(stage,{ todayTime });
+      indicatorInfo.slip=overdue;
+      if(overdue) hourlessLate=true;
+    });
+    const isLate=progressLate||hourlessLate;
     const isActive=!isDone;
     const startTimestamp=getOrderStartTimestamp(order);
     let include=true;
@@ -13829,10 +13968,14 @@ function renderOrdersTable(){
     `;
     const btn=tr.querySelector('.order-eye-btn');
     if(btn){
-      if(entry.order?.id){
+      const canView=crmCanViewOrderDetails();
+      if(entry.order?.id && canView){
         btn.addEventListener('click',()=>openOrder(entry.order.id));
       }else{
         btn.disabled=true;
+        if(!canView){
+          btn.title='Недостаточно прав для просмотра заказа.';
+        }
       }
     }
     crmOrdersTableBody.appendChild(tr);
@@ -14074,10 +14217,14 @@ function renderCrmStageTable(){
     `;
     const btn=tr.querySelector('.order-eye-btn');
     if(btn){
-      if(entry.order?.id){
+      const canView=crmCanViewOrderDetails();
+      if(entry.order?.id && canView){
         btn.addEventListener('click',evt=>{evt.stopPropagation();openOrder(entry.order.id);});
       }else{
         btn.disabled=true;
+        if(!canView){
+          btn.title='Недостаточно прав для просмотра заказа.';
+        }
       }
     }
     const routeBtn=tr.querySelector('.crm-stage-route-mini');
@@ -14700,8 +14847,10 @@ function setOrderSearch(value,{render=true,persist=true}={}){
     try{
       if(orderSearchNormalized){
         localStorage.setItem(CRM_SEARCH_STORAGE_KEY,orderSearchRaw);
+        removeLegacyStorage(CRM_SEARCH_STORAGE_KEY, CRM_SEARCH_STORAGE_FALLBACKS);
       }else{
         localStorage.removeItem(CRM_SEARCH_STORAGE_KEY);
+        removeLegacyStorage(CRM_SEARCH_STORAGE_KEY, CRM_SEARCH_STORAGE_FALLBACKS);
       }
     }catch(_err){/* ignore */}
   }
@@ -15454,9 +15603,60 @@ if(orderCommentThread){
   orderCommentThread.addEventListener('click',handleOrderCommentThreadAction);
 }
 
+function setOrderFormReadOnly(readOnly){
+  if(!orderDlg) return;
+  orderDlg.classList.toggle('crm-order-readonly', !!readOnly);
+  const controls=orderDlg.querySelectorAll('input, select, textarea, button');
+  controls.forEach(control=>{
+    if(!control) return;
+    if(control.type==='hidden') return;
+    if(control.closest('.dlg-head') && control.getAttribute('aria-label')==='Закрыть') return;
+    if(control.id==='orderHistoryBtn'){
+      control.disabled=false;
+      return;
+    }
+    if(readOnly){
+      if(control.dataset.readonlyWasDisabled===undefined){
+        control.dataset.readonlyWasDisabled=control.disabled?'1':'0';
+      }
+      control.disabled=true;
+    }else if(control.dataset.readonlyWasDisabled!==undefined){
+      control.disabled=control.dataset.readonlyWasDisabled==='1';
+      delete control.dataset.readonlyWasDisabled;
+    }
+  });
+  if(orderCommentSend){
+    orderCommentSend.disabled=readOnly || !crmCanEditComments();
+  }
+  if(deleteOrderBtn){
+    deleteOrderBtn.disabled=readOnly;
+  }
+  if(splitBtn){
+    splitBtn.disabled=readOnly;
+  }
+  if(addStageBtn){
+    addStageBtn.disabled=readOnly;
+  }
+  if(presetStagesBtn){
+    presetStagesBtn.disabled=readOnly;
+  }
+  if(allStagesBtn){
+    allStagesBtn.disabled=readOnly;
+  }
+  if(dateTodayChk){
+    dateTodayChk.disabled=readOnly;
+  }
+}
+
 function openOrder(id=null){
-  if(!crmCanManageOrders()){
-    showToast({ title:'CRM', message:'У вас нет прав для редактирования заказов.', tone:'warn' });
+  const canView=crmCanViewOrderDetails();
+  const canEdit=crmCanManageOrders();
+  if(!id && !canEdit){
+    showToast({ title:'CRM', message:'У вас нет прав для создания заказов.', tone:'warn' });
+    return;
+  }
+  if(id && !canView){
+    showToast({ title:'CRM', message:'У вас нет прав для просмотра заказа.', tone:'warn' });
     return;
   }
   const b=currentBoard();
@@ -15480,13 +15680,16 @@ function openOrder(id=null){
     }
     fillOrderForm(o,b);
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
-    deleteOrderBtn.style.display='';
-    deleteOrderBtn.onclick=()=>{
-      if(!confirm('Удалить этот заказ?'))return;
-      handleOrderRemoval(o,b);
-      renderCurrentView();
-      orderDlg.close();
-    };
+    if(deleteOrderBtn){
+      deleteOrderBtn.style.display=canEdit?'':'none';
+      deleteOrderBtn.onclick=()=>{
+        if(!canEdit) return;
+        if(!confirm('Удалить этот заказ?'))return;
+        handleOrderRemoval(o,b);
+        renderCurrentView();
+        orderDlg.close();
+      };
+    }
   }else{
     editingOrderId=null;
     dlgTitle.textContent='Новый заказ';
@@ -15497,14 +15700,17 @@ function openOrder(id=null){
     orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES);
     window._editingOrigValues=null;
-    deleteOrderBtn.style.display='none';
-    deleteOrderBtn.onclick=null;
+    if(deleteOrderBtn){
+      deleteOrderBtn.style.display='none';
+      deleteOrderBtn.onclick=null;
+    }
     orderCommentsDraft=[];
     renderOrderComments();
     collapseOrderCommentSection();
     resetOrderCommentInputs();
     if(orderNotesHidden){ orderNotesHidden.value=''; }
   }
+  setOrderFormReadOnly(!canEdit);
   refreshOrderHistoryButton(editingOrderId);
   orderDlg.showModal();
 }
@@ -15541,6 +15747,7 @@ function fillOrderForm(o,b){
     appendStageRow(st);
   });
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
+  applyOrderAutoCompletionState();
 }
 
 function parseDateInputValue(value){
@@ -16035,11 +16242,47 @@ function calcAutoProgress(stages){
   const total=s.reduce((acc,stage)=>acc+normalizeStageProgress(stage?.progress),0);
   return Math.round(total/s.length);
 }
-function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations()}
+function applyOrderAutoCompletionState(){
+  if(!orderForm||!stagesTableBody) return;
+  const stages=readStages();
+  if(!Array.isArray(stages)||!stages.length) return;
+  const allComplete=stages.every(stage=>stageEntryIsDone(stage));
+  if(orderDone){
+    orderDone.checked=allComplete;
+  }
+  if(!statusSel) return;
+  if(!allComplete) return;
+  const shippingEntry=stages.find(stage=>{
+    const key=resolveCrmStageKey(stage?.name);
+    return key==='ship';
+  });
+  const overdue=shippingEntry?stageEntryIsLate(shippingEntry):false;
+  const options=Array.from(statusSel.options||[]);
+  const findOption=label=>{
+    if(!label) return null;
+    const normalized=label.trim().toLowerCase();
+    return options.find(opt=>{
+      const text=(opt.textContent||'').trim().toLowerCase();
+      const value=String(opt.value||'').trim().toLowerCase();
+      return text===normalized||value===normalized;
+    })||null;
+  };
+  const targetLate=findOption('Отгружено с просроком')||findOption('Отгружено с просрочкой');
+  const targetDone=findOption('Отгружено');
+  const desired=overdue?(targetLate||targetDone):(targetDone||targetLate);
+  if(desired && statusSel.value!==desired.value){
+    statusSel.value=desired.value;
+  }
+}
+function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
+  if(!crmCanManageOrders()){
+    showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
+    return;
+  }
   const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
   const invalidStage=stages.find(stage=>{
     const startIso=coerceCalendarIso(stage?.start||'');
@@ -17465,7 +17708,7 @@ if(boardSelect){
   };
 }
 
-$('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`mini_crm_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
+$('#exportBtn').onclick=()=>{const data=JSON.stringify(state,null,2);const blob=new Blob([data],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`planecore_export_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;a.click()};
 $('#importBtn').addEventListener('click',()=>$('#importInput').click());
 $('#importInput').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;const prevSettings=state?.settings;try{const text=await f.text();const obj=JSON.parse(text);if(!obj||typeof obj!=='object')throw new Error('Неверный формат');const imported=ensureCrmStateShape(obj);let mergedSettings=imported.settings;if(prevSettings){mergedSettings=mergeCrmSettings(prevSettings, mergedSettings);}const storedSettings=loadStoredCrmSettings();if(storedSettings){mergedSettings=mergeCrmSettings(storedSettings, mergedSettings);}imported.settings=mergedSettings;state=imported;save('Импорт CRM');renderAll();alert('Импорт завершён')}catch(err){console.error(err);alert('Ошибка импорта: '+err.message)}finally{e.target.value=''}};
 
@@ -17484,7 +17727,6 @@ if(orderSearchClear){
 updateSearchUI();
 
 /* === CRM ↔ Planner Sync === */
-const CRM_ALIAS_STORAGE_KEY='mini_crm_user_alias_v1';
 const toastLayer=document.getElementById('toastLayer');
 function positionToastLayer(){
   if(!toastLayer) return;
@@ -17547,7 +17789,7 @@ function resolveCrmUserDisplay(){
 
 let crmAlias=(()=>{
   let stored='';
-  try{stored=localStorage.getItem(CRM_ALIAS_STORAGE_KEY)||'';}
+  try{stored=readStorageValue(CRM_ALIAS_STORAGE_KEY, CRM_ALIAS_STORAGE_FALLBACKS)||'';}
   catch(_err){stored='';}
   const trimmed=stored.trim();
   if(trimmed && trimmed!==CRM_DEFAULT_ACTOR){
@@ -17563,7 +17805,10 @@ let crmAlias=(()=>{
 function setCrmAlias(name){
   const base=(name||CRM_DEFAULT_ACTOR).trim()||CRM_DEFAULT_ACTOR;
   crmAlias=base;
-  try{localStorage.setItem(CRM_ALIAS_STORAGE_KEY,crmAlias);}catch(_err){/* ignore */}
+  try{
+    localStorage.setItem(CRM_ALIAS_STORAGE_KEY,crmAlias);
+    removeLegacyStorage(CRM_ALIAS_STORAGE_KEY, CRM_ALIAS_STORAGE_FALLBACKS);
+  }catch(_err){/* ignore */}
 }
 
 function getCrmActorName(){
