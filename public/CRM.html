@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>PlaneCore v13c — Orders · Stages</title>
+<title>PlaneCore — Orders · Stages</title>
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <script>
@@ -14,7 +14,7 @@
   let source = null;
   let currentEtag = null;
   let currentHash = null;
-  const MIN_REFRESH_INTERVAL_MS = 5000;
+  const MIN_REFRESH_INTERVAL_MS = 1000;
   const DEFAULT_REFRESH_INTERVAL_MS = 5000;
   let refreshTimerId = null;
   let refreshPromise = null;
@@ -486,23 +486,29 @@
 
   const scheduleAutoRefresh = () => {
     if (refreshTimerId) {
-      clearInterval(refreshTimerId);
+      clearTimeout(refreshTimerId);
       refreshTimerId = null;
     }
     if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
     const tick = () => {
-      if (document.hidden) return;
-      if (hasPendingLocalChanges()) return;
-      const now = Date.now();
-      if (refreshPromise) return;
-      if (lastRefreshAt && now - lastRefreshAt < Math.max(3000, Math.floor(autoRefreshIntervalMs / 4))) {
+      refreshTimerId = null;
+      if (document.hidden) {
+        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
-      requestStateRefresh('interval');
+      if (hasPendingLocalChanges()) {
+        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+        return;
+      }
+      const now = Date.now();
+      if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
+        requestStateRefresh('interval');
+      }
+      refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
     };
-    refreshTimerId = setInterval(tick, autoRefreshIntervalMs);
+    refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
   };
 
   const handleFocusRefresh = () => {
@@ -8884,6 +8890,8 @@ crmJournalClear=$('#crmJournalClear');
 orderHistoryBtn=$('#orderHistoryBtn');
 crmDbIndicator=$('#crmDbIndicator');
 crmSettingsLinks=Array.from(document.querySelectorAll('[data-action="open-settings"]'));
+let lastOrdersScroll={ top:0, left:0 };
+let lastOrdersTotalsScroll={ left:0 };
 const crmHeaderEl=document.querySelector('.pc-header');
 const CRM_ADMIN_HINT_DEFAULT=crmAdminUserHint?crmAdminUserHint.textContent.trim():'Выберите пользователя из списка или заполните форму для создания нового.';
 let crmAdminBusyCounter=0;
@@ -13955,12 +13963,15 @@ function bindCrmOrdersScrollSync(){
   const syncFromPanel=()=>{
     if(syncing) return;
     syncing=true;
+    lastOrdersScroll.top=crmOrdersPanelEl.scrollTop||0;
+    lastOrdersScroll.left=crmOrdersPanelEl.scrollLeft||0;
     crmOrdersTotalsBox.scrollLeft=crmOrdersPanelEl.scrollLeft;
     syncing=false;
   };
   const syncFromTotals=()=>{
     if(syncing) return;
     syncing=true;
+    lastOrdersTotalsScroll.left=crmOrdersTotalsBox.scrollLeft||0;
     crmOrdersPanelEl.scrollLeft=crmOrdersTotalsBox.scrollLeft;
     syncing=false;
   };
@@ -18789,13 +18800,13 @@ function captureCrmScrollSnapshot(){
   const snapshot={};
   if(crmOrdersPanelEl){
     snapshot.orders={
-      top:crmOrdersPanelEl.scrollTop||0,
-      left:crmOrdersPanelEl.scrollLeft||0
+      top:crmOrdersPanelEl.scrollTop||lastOrdersScroll.top||0,
+      left:crmOrdersPanelEl.scrollLeft||lastOrdersScroll.left||0
     };
   }
   if(crmOrdersTotalsBox){
     snapshot.ordersTotals={
-      left:crmOrdersTotalsBox.scrollLeft||0
+      left:crmOrdersTotalsBox.scrollLeft||lastOrdersTotalsScroll.left||0
     };
   }
   return snapshot;
@@ -18812,11 +18823,9 @@ function restoreCrmScrollSnapshot(snapshot){
       crmOrdersTotalsBox.scrollLeft=snapshot.ordersTotals.left||0;
     }
   };
-  if(typeof requestAnimationFrame==='function'){
-    requestAnimationFrame(apply);
-  }else{
-    setTimeout(apply,0);
-  }
+  const run=()=>{ if(typeof requestAnimationFrame==='function'){ requestAnimationFrame(apply); } else { setTimeout(apply,0); } };
+  run();
+  setTimeout(run,60);
 }
 
 function applyRemoteCrm(crm){
