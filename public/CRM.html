@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Mini CRM v13c — Orders · Stages</title>
+<title>PlaneCore v13c — Orders · Stages</title>
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <script>
@@ -6200,11 +6200,14 @@ const CRM_HOURLESS_SCHEDULE_DEFAULT=Object.freeze({ preset:'daily', start:'2024-
 const CRM_STAGE_IGNORE='__ignore__';
 const CRM_MIN_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
+const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
+const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
   showLateTips:true,
-  autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS
+  autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
+  routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -6837,6 +6840,27 @@ function normalizeAutoRefreshSeconds(value){
   return Math.max(CRM_MIN_AUTO_REFRESH_SECONDS, Math.round(seconds));
 }
 
+function normalizeRouteHorizonDays(value){
+  if(value===null||value===undefined) return null;
+  let num=null;
+  if(typeof value==='number'){
+    if(!Number.isFinite(value)) return null;
+    num=value;
+  }else if(typeof value==='string'){
+    const trimmed=value.trim();
+    if(!trimmed) return null;
+    const normalized=trimmed.replace(',', '.');
+    const direct=Number(normalized);
+    if(!Number.isFinite(direct)) return null;
+    num=direct;
+  }else{
+    return null;
+  }
+  if(num===null || !Number.isFinite(num)) return null;
+  if(num<=0) return 0;
+  return Math.max(0, Math.min(CRM_MAX_ROUTE_HORIZON_DAYS, Math.round(num)));
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -6856,6 +6880,14 @@ function sanitizeCrmPreferences(raw){
       const normalized=normalizeAutoRefreshSeconds(raw[key]);
       if(normalized===null) continue;
       result.autoRefreshSeconds=normalized;
+      break;
+    }
+    const horizonKeys=['routeHorizonDays','horizonDays','ganttHorizonDays','routeDaysAhead'];
+    for(const key of horizonKeys){
+      if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
+      const normalized=normalizeRouteHorizonDays(raw[key]);
+      if(normalized===null) continue;
+      result.routeHorizonDays=normalized;
       break;
     }
   }
@@ -6968,6 +7000,13 @@ function getPreferredAutoRefreshIntervalMs(){
     return Math.round(seconds*1000);
   }
   return 0;
+}
+
+function getCrmRouteHorizonDays(){
+  const prefs=getCrmPreferences();
+  const normalized=normalizeRouteHorizonDays(prefs?.routeHorizonDays);
+  if(normalized===null) return CRM_DEFAULT_ROUTE_HORIZON_DAYS;
+  return normalized;
 }
 
 let crmAppliedAutoRefreshMs=null;
@@ -10806,6 +10845,13 @@ function buildCrmStageSchedule(stageKey, rows, options){
     if(date<minDate) minDate=new Date(date);
     if(date>maxDate) maxDate=new Date(date);
   });
+  const horizonDays=Math.max(0, getCrmRouteHorizonDays());
+  if(horizonDays>0){
+    const horizonLimit=addDays(todayBaseline, horizonDays);
+    if(!maxDate || maxDate<horizonLimit){
+      maxDate=new Date(horizonLimit);
+    }
+  }
   minDate=clampToBaseline(minDate);
   const perDay=new Map();
   const perTask=new Map();
@@ -11872,6 +11918,13 @@ function buildCrmRouteDataset(rows, filterMode){
   }
   if(minDate && minDate>today) minDate=new Date(today);
   if(maxDate && minDate && maxDate<minDate) maxDate=new Date(minDate);
+  const horizonDays=Math.max(0, getCrmRouteHorizonDays());
+  if(horizonDays>0){
+    const horizonLimit=addDays(today, horizonDays);
+    if(!maxDate || maxDate<horizonLimit){
+      maxDate=new Date(horizonLimit);
+    }
+  }
   const hasTimeline=minDate instanceof Date && maxDate instanceof Date;
   const days=[];
   if(hasTimeline){
@@ -16830,7 +16883,28 @@ function renderCrmPreferencesSettingsUI(){
   refreshHint.className='crm-field__hint';
   refreshHint.textContent=`Минимум ${CRM_MIN_AUTO_REFRESH_SECONDS} с. Укажите 0, чтобы отключить автообновление.`;
   refreshField.append(refreshLabel, refreshInput, refreshHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField);
+  const horizonField=document.createElement('label');
+  horizonField.className='crm-field';
+  const horizonLabel=document.createElement('span');
+  horizonLabel.className='crm-field__label';
+  horizonLabel.textContent='Дней вперёд для отображения';
+  const horizonInput=document.createElement('input');
+  horizonInput.type='number';
+  horizonInput.className='pc-input';
+  horizonInput.name='prefRouteHorizonDays';
+  horizonInput.min='0';
+  horizonInput.step='1';
+  horizonInput.inputMode='numeric';
+  horizonInput.placeholder=String(CRM_DEFAULT_ROUTE_HORIZON_DAYS);
+  const normalizedHorizon=normalizeRouteHorizonDays(prefs.routeHorizonDays);
+  if(normalizedHorizon!==null && normalizedHorizon>=0){
+    horizonInput.value=String(normalizedHorizon);
+  }
+  const horizonHint=document.createElement('span');
+  horizonHint.className='crm-field__hint';
+  horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
+  horizonField.append(horizonLabel, horizonInput, horizonHint);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -17346,7 +17420,8 @@ boardForm.addEventListener('submit',e=>{
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
-    autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:''
+    autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
+    routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:''
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
@@ -18710,8 +18785,43 @@ async function pushCrmToServer(){
   crmSyncInFlight=false;
 }
 
+function captureCrmScrollSnapshot(){
+  const snapshot={};
+  if(crmOrdersPanelEl){
+    snapshot.orders={
+      top:crmOrdersPanelEl.scrollTop||0,
+      left:crmOrdersPanelEl.scrollLeft||0
+    };
+  }
+  if(crmOrdersTotalsBox){
+    snapshot.ordersTotals={
+      left:crmOrdersTotalsBox.scrollLeft||0
+    };
+  }
+  return snapshot;
+}
+
+function restoreCrmScrollSnapshot(snapshot){
+  if(!snapshot || typeof snapshot!=='object') return;
+  const apply=()=>{
+    if(snapshot.orders && crmOrdersPanelEl){
+      crmOrdersPanelEl.scrollTop=snapshot.orders.top||0;
+      crmOrdersPanelEl.scrollLeft=snapshot.orders.left||0;
+    }
+    if(snapshot.ordersTotals && crmOrdersTotalsBox){
+      crmOrdersTotalsBox.scrollLeft=snapshot.ordersTotals.left||0;
+    }
+  };
+  if(typeof requestAnimationFrame==='function'){
+    requestAnimationFrame(apply);
+  }else{
+    setTimeout(apply,0);
+  }
+}
+
 function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
+  const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
   const storedSettings=loadStoredCrmSettings();
@@ -18720,6 +18830,7 @@ function applyRemoteCrm(crm){
   }
   persistLocal();
   renderAll();
+  restoreCrmScrollSnapshot(uiSnapshot);
 }
 
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
