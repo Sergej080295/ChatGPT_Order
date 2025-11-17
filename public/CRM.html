@@ -18797,7 +18797,9 @@ async function pushCrmToServer(){
 }
 
 function captureCrmScrollSnapshot(){
-  const snapshot={};
+  const pageTop=typeof window!=='undefined' ? (window.scrollY||document.documentElement.scrollTop||document.body.scrollTop||0) : 0;
+  const pageLeft=typeof window!=='undefined' ? (window.scrollX||document.documentElement.scrollLeft||document.body.scrollLeft||0) : 0;
+  const snapshot={ page:{ top:pageTop, left:pageLeft } };
   if(crmOrdersPanelEl){
     snapshot.orders={
       top:crmOrdersPanelEl.scrollTop||lastOrdersScroll.top||0,
@@ -18809,18 +18811,54 @@ function captureCrmScrollSnapshot(){
       left:crmOrdersTotalsBox.scrollLeft||lastOrdersTotalsScroll.left||0
     };
   }
+  if(columns){
+    const laneScroll={};
+    columns.querySelectorAll('.drop').forEach(drop=>{
+      const lane=drop.dataset?.lane;
+      if(!lane) return;
+      laneScroll[lane]=drop.scrollTop||0;
+    });
+    snapshot.kanban={
+      lanes:laneScroll,
+      container:{
+        top:columns.scrollTop||0,
+        left:columns.scrollLeft||0
+      }
+    };
+  }
   return snapshot;
 }
 
 function restoreCrmScrollSnapshot(snapshot){
   if(!snapshot || typeof snapshot!=='object') return;
   const apply=()=>{
+    if(snapshot.page){
+      const top=Number(snapshot.page.top)||0;
+      const left=Number(snapshot.page.left)||0;
+      if(typeof window!=='undefined' && typeof window.scrollTo==='function'){
+        window.scrollTo(left, top);
+      }
+    }
     if(snapshot.orders && crmOrdersPanelEl){
       crmOrdersPanelEl.scrollTop=snapshot.orders.top||0;
       crmOrdersPanelEl.scrollLeft=snapshot.orders.left||0;
     }
     if(snapshot.ordersTotals && crmOrdersTotalsBox){
       crmOrdersTotalsBox.scrollLeft=snapshot.ordersTotals.left||0;
+    }
+    if(snapshot.kanban && columns){
+      const laneScroll=snapshot.kanban.lanes||{};
+      columns.querySelectorAll('.drop').forEach(drop=>{
+        const lane=drop.dataset?.lane;
+        if(!lane) return;
+        if(Object.prototype.hasOwnProperty.call(laneScroll,lane)){
+          drop.scrollTop=laneScroll[lane]||0;
+        }
+      });
+      if(snapshot.kanban.container){
+        columns.scrollTop=snapshot.kanban.container.top||0;
+        columns.scrollLeft=snapshot.kanban.container.left||0;
+      }
     }
   };
   const run=()=>{ if(typeof requestAnimationFrame==='function'){ requestAnimationFrame(apply); } else { setTimeout(apply,0); } };
