@@ -2347,6 +2347,44 @@ async function ensureDataDir() {
   }
 }
 
+async function runPersistenceHealthcheck() {
+  const errors = [];
+  try {
+    await ensureDataDir();
+    const probePath = path.join(DATA_DIR, `.healthcheck-${process.pid}-${Date.now()}`);
+    await fsp.writeFile(probePath, 'ok', { mode: 0o600 });
+    await fsp.unlink(probePath).catch(() => {});
+  } catch (err) {
+    errors.push(`Каталог данных: ${err?.message || err}`);
+  }
+
+  try {
+    const db = getDatabase();
+    const nowIso = new Date().toISOString();
+    const payload = { ok: true, ts: nowIso };
+    db.prepare(
+      `INSERT OR REPLACE INTO kv_store (key, value_json, updated_at)
+       VALUES (@key, @value, @updatedAt)`
+    ).run({
+      key: '__healthcheck__',
+      value: JSON.stringify(payload),
+      updatedAt: nowIso
+    });
+  } catch (err) {
+    errors.push(`SQLite: ${err?.message || err}`);
+  }
+
+  if (errors.length) {
+    const message = `Проверка сохранности данных не пройдена: ${errors.join('; ')}`;
+    console.error(`[CRM] ${message}`);
+    const failure = new Error(message);
+    failure.code = 'PERSISTENCE_HEALTHCHECK_FAILED';
+    throw failure;
+  }
+
+  console.info('[CRM] Проверка сохранности данных пройдена успешно.');
+}
+
 async function readLocalStateFile() {
   try {
     const raw = await fsp.readFile(LOCAL_STATE_FILE, 'utf8');
@@ -6734,6 +6772,7 @@ async function bootstrap() {
   await getLatestRevision();
   await getCachedSnapshot();
   await ensureSqlHydrated();
+  await runPersistenceHealthcheck();
   app.listen(PORT, () => {
     console.log(`Planner hybrid storage server listening on port ${PORT}`);
   });
