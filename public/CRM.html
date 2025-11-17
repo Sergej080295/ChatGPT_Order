@@ -10856,8 +10856,10 @@ function buildCrmStageSchedule(stageKey, rows, options){
   });
   const horizonDays=Math.max(0, getCrmRouteHorizonDays());
   if(horizonDays>0){
-    const horizonLimit=addDays(todayBaseline, horizonDays);
-    if(!maxDate || maxDate<horizonLimit){
+    if(maxDate){
+      maxDate=addDays(maxDate, horizonDays);
+    }else{
+      const horizonLimit=addDays(todayBaseline, horizonDays);
       maxDate=new Date(horizonLimit);
     }
   }
@@ -11931,8 +11933,10 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
   if(maxDate && minDate && maxDate<minDate) maxDate=new Date(minDate);
   const horizonDays=Math.max(0, getCrmRouteHorizonDays());
   if(horizonDays>0){
-    const horizonLimit=addDays(today, horizonDays);
-    if(!maxDate || maxDate<horizonLimit){
+    if(maxDate){
+      maxDate=addDays(maxDate, horizonDays);
+    }else{
+      const horizonLimit=addDays(today, horizonDays);
       maxDate=new Date(horizonLimit);
     }
   }
