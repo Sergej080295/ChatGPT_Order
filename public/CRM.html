@@ -9063,6 +9063,7 @@ const CRM_ROUTE_STAGE_CLASS={
 };
 
 let crmStageRowsCache=[];
+let crmStageRowsFullCache=[];
 let crmStageSelectionId=null;
 let crmStageSelectObserver=null;
 let crmStageSelectDisplay=null;
@@ -11679,7 +11680,9 @@ function applyCrmStageSelectionHighlight(){
   });
 }
 
-function buildCrmRouteDataset(rows, filterMode){
+function buildCrmRouteDataset(rows, filterMode, options={}){
+  const opts=options&&typeof options==='object'?options:{};
+  const ignoreSearch=opts.ignoreSearch===true;
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
   const safeRows=Array.isArray(rows)?rows:[];
   const board=currentBoard();
@@ -11734,7 +11737,7 @@ function buildCrmRouteDataset(rows, filterMode){
       const statusKey=normalizeStatusKey(order.status||'');
       if(statusKey && ignoredSet.has(statusKey)) return null;
     }
-    if(orderSearchNormalized && !orderMatchesSearch(order)) return null;
+    if(!ignoreSearch && orderSearchNormalized && !orderMatchesSearch(order)) return null;
     const key=resolveOrderIdentity(order,index,'route');
     if(!key) return null;
     if(ordersMap.has(key)) return ordersMap.get(key);
@@ -12533,7 +12536,7 @@ function updateCrmRouteStageVisibility(stageKey, isVisible){
 
 function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
   if(!crmStageRouteWrap) return;
-  const dataset=buildCrmRouteDataset(rows, filterMode);
+  const dataset=buildCrmRouteDataset(rows, filterMode,{ ignoreSearch:true });
   const normalizedDayFilter=CRM_ROUTE_DAY_FILTERS.has(dayFilter)?dayFilter:'all';
   const visibleDays=filterCrmRouteDays(dataset.days, dataset.dayUsage, normalizedDayFilter);
   if(crmStageRouteLegend){
@@ -12878,11 +12881,12 @@ function renderCrmStageViews(schedule, rows, stageKey, filterMode){
   const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
   const key=stageKey||crmStageSelect?.value||'draw';
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:getCrmStageFilter(key);
+  const routeRows=crmStageRowsFullCache.length?crmStageRowsFullCache.slice():effectiveRows.slice();
   crmStageScheduleCache=schedule||null;
   renderCrmStageStack(schedule||null);
   renderCrmStageGantt(effectiveRows, schedule||null);
   crmStageRouteContext={
-    rows:effectiveRows.slice(),
+    rows:routeRows,
     stageKey:key,
     filter
   };
@@ -14152,7 +14156,7 @@ function renderCrmStageTable(){
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
-  const { rows:allRows }=collectCrmStageRows(stageKey);
+  const { rows:allRows }=collectCrmStageRows(stageKey,{ ignoreSearch:true });
   crmStageTableBody.innerHTML='';
   const visibleRows=[];
   const overdueEntries=[];
@@ -14165,6 +14169,7 @@ function renderCrmStageTable(){
     const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
     stats.textContent=`${label}: 0 • Активных: 0`;
   }
+  crmStageRowsFullCache=allRows.slice();
   if(!allRows.length){
     if(crmStageEmpty){
       crmStageEmpty.hidden=false;
@@ -14182,6 +14187,7 @@ function renderCrmStageTable(){
   crmStageScheduleCache=schedule||null;
   const todayStart=today0().getTime();
   allRows.forEach(entry=>{
+    const matchesSearch=!orderSearchNormalized || orderMatchesSearch(entry.order);
     const statusInfo=computeCrmStageStatus(entry, schedule);
     entry.statusLabel=statusInfo.label;
     entry.statusClass=statusInfo.className;
@@ -14200,6 +14206,9 @@ function renderCrmStageTable(){
       }
     }
     if(!crmStageRowMatchesFilter(activeFilter, entry)){
+      return;
+    }
+    if(orderSearchNormalized && !matchesSearch){
       return;
     }
     entry.displayIndex=visibleRows.length+1;
