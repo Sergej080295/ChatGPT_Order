@@ -3527,6 +3527,37 @@
     min-height: 0;
   }
 
+  .crm-order-route {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .crm-order-route__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: 24px;
+    padding: 2px 6px;
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-border) 32%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-border) 55%, transparent);
+    font-size: 14px;
+    line-height: 1.1;
+  }
+
+  body.theme-dark .crm-order-route__icon {
+    background: color-mix(in srgb, var(--pc-border) 45%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-border) 70%, transparent);
+  }
+
+  .crm-order-route--empty {
+    color: var(--pc-text-muted);
+  }
+
   #crmOrdersTable {
     border-collapse: separate;
     border-spacing: 0;
@@ -5364,6 +5395,7 @@
         <colgroup>
           <col style="width:56px">
           <col style="width:72px">
+          <col style="width:120px">
           <col style="width:240px">
           <col style="width:92px">
           <col style="width:92px">
@@ -5380,6 +5412,7 @@
           <tr>
             <th>№</th>
             <th></th>
+            <th title="Маршрут заказа">Маршрут</th>
             <th>Заказ</th>
             <th>Закупка</th>
             <th>Рубка</th>
@@ -5398,14 +5431,15 @@
     </div>
     <div class="orders-overview-totals" id="crmOrdersTotals" style="display:none">
       <table>
-        <colgroup>
-          <col style="width:56px">
-          <col style="width:72px">
-          <col style="width:240px">
-          <col style="width:92px">
-          <col style="width:92px">
-          <col style="width:150px">
-          <col style="width:150px">
+          <colgroup>
+            <col style="width:56px">
+            <col style="width:72px">
+            <col style="width:120px">
+            <col style="width:240px">
+            <col style="width:92px">
+            <col style="width:92px">
+            <col style="width:150px">
+            <col style="width:150px">
           <col style="width:150px">
           <col style="width:150px">
           <col style="width:150px">
@@ -5416,6 +5450,7 @@
         <tbody>
           <tr>
             <td class="orders-total" data-total="orders">Итого: 0</td>
+            <td></td>
             <td></td>
             <td></td>
             <td data-total-stage="proc">0 шт</td>
@@ -13897,6 +13932,31 @@ function renderIndicatorCell(info){
   return `<span class="stage-check" ${attrs.join(' ')}></span>`;
 }
 
+function buildOrderRouteIcons(order){
+  const stages=Array.isArray(order?.stages)?order.stages:[];
+  const seen=new Set();
+  const icons=[];
+  stages.forEach(stage=>{
+    if(!stage||typeof stage!=='object') return;
+    const stageKey=resolveCrmStageKey(stage.name);
+    if(!stageKey||seen.has(stageKey)) return;
+    seen.add(stageKey);
+    const icon=stageIconForKey(stageKey)||stageLetterForKey(stageKey);
+    const label=CRM_STAGE_LABELS[stageKey]||String(stage.name||stageKey);
+    icons.push({ key:stageKey, icon, label });
+  });
+  return icons;
+}
+
+function renderOrderRouteCell(order){
+  const icons=buildOrderRouteIcons(order);
+  if(!icons.length){
+    return '<div class="crm-order-route crm-order-route--empty">—</div>';
+  }
+  const markup=icons.map(info=>`<span class="crm-order-route__icon" title="${escapeHtml(info.label)}">${escapeHtml(info.icon)}</span>`).join('');
+  return `<div class="crm-order-route">${markup}</div>`;
+}
+
 function renderProgressCell(info){
   if(!info || (!info.segment && info.hours<=0 && info.pct<=0)){
     return '<span class="muted">—</span>';
@@ -14011,7 +14071,7 @@ function renderOrdersTable(){
   if(!rows.length){
     const tr=document.createElement('tr');
     const td=document.createElement('td');
-    td.colSpan=13;
+    td.colSpan=14;
     td.className='orders-overview-empty';
     td.textContent='Нет заказов для отображения';
     tr.appendChild(td);
@@ -14031,6 +14091,7 @@ function renderOrdersTable(){
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
+      <td>${renderOrderRouteCell(entry.order)}</td>
       <td>${escapeHtml(title)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.proc)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.shear)}</td>
