@@ -15342,6 +15342,7 @@ function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
 const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+let suppressAutoStatusUpdate=false;
 
 function sanitizeOrderComment(raw){
   if(!raw||typeof raw!=='object') return null;
@@ -15829,7 +15830,9 @@ function openOrder(id=null){
       alert('Заказ не найден');
       return;
     }
+    suppressAutoStatusUpdate=true;
     fillOrderForm(o,b);
+    suppressAutoStatusUpdate=false;
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
     if(deleteOrderBtn){
       deleteOrderBtn.style.display=canEdit?'':'none';
@@ -16400,6 +16403,9 @@ function applyOrderAutoCompletionState(){
   const allComplete=stages.every(stage=>stageEntryIsDone(stage));
   if(orderDone){
     orderDone.checked=allComplete;
+  }
+  if(suppressAutoStatusUpdate){
+    return;
   }
   if(!statusSel) return;
   if(!allComplete) return;
