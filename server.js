@@ -2700,20 +2700,50 @@ function readPlannerSettingsFromSql() {
   }
 }
 
+function mergeSharedSettings(existingSettings, incomingRaw) {
+  const existing = sanitizeSharedSettingsForStorage(existingSettings);
+  const incoming = sanitizeSharedSettingsForStorage(incomingRaw);
+  const has = (key) => Object.prototype.hasOwnProperty.call(incomingRaw || {}, key);
+
+  const merged = { ...existing };
+
+  if (has('capacity')) merged.capacity = incoming.capacity;
+  if (has('parallel')) merged.parallel = incoming.parallel;
+  if (has('plannerMode')) merged.plannerMode = incoming.plannerMode;
+  if (has('notificationsMuted')) merged.notificationsMuted = incoming.notificationsMuted;
+  if (has('tableColumns')) merged.tableColumns = incoming.tableColumns;
+  if (has('extraTime')) merged.extraTime = incoming.extraTime;
+  if (has('crmStageMapping')) merged.crmStageMapping = incoming.crmStageMapping;
+  if (has('logLimit')) merged.logLimit = incoming.logLimit;
+  if (has('admin')) merged.admin = incoming.admin;
+
+  for (const [key, value] of Object.entries(incoming)) {
+    if (KNOWN_SHARED_SETTINGS_KEYS.has(key)) continue;
+    if (has(key)) merged[key] = value;
+  }
+
+  return merged;
+}
+
 function writePlannerSettingsToSql(settings) {
-  const sanitized = sanitizeSharedSettingsForStorage(settings);
-  const updatedAt = typeof sanitized.updatedAt === 'string' && sanitized.updatedAt.trim()
-    ? sanitized.updatedAt.trim()
-    : new Date().toISOString();
+  const incomingRaw = isPlainObject(settings) ? settings : {};
+  const existing = readPlannerSettingsFromSql();
+  const merged = mergeSharedSettings(existing?.settings || {}, incomingRaw);
+  const sanitized = sanitizeSharedSettingsForStorage(merged);
+
+  const updatedAt = typeof incomingRaw.updatedAt === 'string' && incomingRaw.updatedAt.trim()
+    ? incomingRaw.updatedAt.trim()
+    : (existing?.updatedAt || new Date().toISOString());
   sanitized.updatedAt = updatedAt;
+
   const payload = JSON.stringify(sanitized);
   const hash = computeSnapshotHash(payload);
   try {
     const db = getDatabase();
-    const existing = db
+    const prev = db
       .prepare('SELECT settings_hash FROM planner_settings WHERE id = ?')
       .get(SETTINGS_ROW_ID);
-    if (existing && existing.settings_hash === hash) {
+    if (prev && prev.settings_hash === hash) {
       return sanitized;
     }
     db.prepare(
