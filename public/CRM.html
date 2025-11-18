@@ -18954,9 +18954,21 @@ function restoreCrmScrollSnapshot(snapshot){
       }
     }
   };
-  const run=()=>{ if(typeof requestAnimationFrame==='function'){ requestAnimationFrame(apply); } else { setTimeout(apply,0); } };
-  run();
-  setTimeout(run,60);
+  const runner=(attempts)=>{
+    if(attempts<=0) return;
+    if(typeof requestAnimationFrame==='function'){
+      requestAnimationFrame(()=>{
+        apply();
+        setTimeout(()=>runner(attempts-1),40);
+      });
+    }else{
+      setTimeout(()=>{
+        apply();
+        runner(attempts-1);
+      },0);
+    }
+  };
+  runner(5);
 }
 
 function applyRemoteCrm(crm){
