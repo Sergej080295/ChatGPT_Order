@@ -13949,12 +13949,9 @@ function buildOrderRouteIcons(order){
 }
 
 function renderOrderRouteCell(order){
-  const icons=buildOrderRouteIcons(order);
-  if(!icons.length){
-    return '<div class="crm-order-route crm-order-route--empty">—</div>';
-  }
-  const markup=icons.map(info=>`<span class="crm-order-route__icon" title="${escapeHtml(info.label)}">${escapeHtml(info.icon)}</span>`).join('');
-  return `<div class="crm-order-route">${markup}</div>`;
+  const disabled=!(order&&order.id);
+  const title=disabled?'Маршрут доступен после сохранения заказа':'Маршрут заказа';
+  return `<button class="crm-stage-route-mini crm-order-route-btn" type="button" title="${escapeHtml(title)}" ${disabled?'disabled':''}>⇆</button>`;
 }
 
 function renderProgressCell(info){
@@ -14114,6 +14111,17 @@ function renderOrdersTable(){
         if(!canView){
           btn.title='Недостаточно прав для просмотра заказа.';
         }
+      }
+    }
+    const routeBtn=tr.querySelector('.crm-order-route-btn');
+    if(routeBtn){
+      if(entry.order){
+        routeBtn.addEventListener('click',evt=>{
+          evt.stopPropagation();
+          openCrmStageRouteMini(entry.order);
+        });
+      }else{
+        routeBtn.disabled=true;
       }
     }
     crmOrdersTableBody.appendChild(tr);
