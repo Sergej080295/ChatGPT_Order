@@ -5,27 +5,356 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const express = require('express');
-const compression = require('compression');
-const Database = require('better-sqlite3');
+function requireWithAutoInstall(moduleName) {
+  try {
+    return require(moduleName);
+  } catch (err) {
+    if (!isMissingDependencyError(err, moduleName)) {
+      throw err;
+    }
+    try {
+      attemptAutoInstall();
+    } catch (installErr) {
+      const message = `[CRM] Не удалось автоматически установить зависимости (${installErr?.message || installErr}).`;
+      console.error(message);
+      throw err;
+    }
+    return require(moduleName);
+  }
+}
+
+function attemptAutoInstall() {
+  if (autoInstallAttempted) {
+    throw new Error('повторная установка зависимостей не выполнялась');
+  }
+  autoInstallAttempted = true;
+
+  const spawnSync = require('child_process').spawnSync;
+  const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  console.warn('[CRM] Не найдены обязательные зависимости. Выполняется "npm install --production"...');
+  const result = spawnSync(
+    npmCommand,
+    ['install', '--production', '--no-audit', '--no-fund'],
+    {
+      cwd: __dirname,
+      stdio: 'inherit',
+      env: process.env,
+    },
+  );
+
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`npm завершился с кодом ${result.status}`);
+  }
+  console.info('[CRM] Автоматическая установка зависимостей завершена успешно.');
+}
+
+function isMissingDependencyError(err, moduleName) {
+  if (!err || err.code !== 'MODULE_NOT_FOUND') {
+    return false;
+  }
+  if (typeof err.message !== 'string') {
+    return false;
+  }
+  return err.message.includes(`'${moduleName}'`);
+}
+
+function sanitizeCookieName(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const cleaned = trimmed.replace(/[^0-9A-Za-z_-]+/g, '');
+  if (!cleaned) {
+    return null;
+  }
+  const normalized = cleaned.replace(/^[-_]+/, '');
+  return normalized || null;
+}
+
+function resolveSessionCookieName(port) {
+  const fromEnv = sanitizeCookieName(process.env.SESSION_COOKIE_NAME);
+  if (fromEnv) {
+    return {
+      name: fromEnv,
+      source: 'env',
+      notice: `[CRM] Имя cookie сессии установлено из SESSION_COOKIE_NAME: ${fromEnv}.`
+    };
+  }
+
+  const suffix = sanitizeCookieName(process.env.SESSION_COOKIE_SUFFIX);
+  if (suffix) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${suffix}`;
+    return {
+      name,
+      source: 'suffix',
+      notice: `[CRM] Имя cookie сессии дополнено суффиксом SESSION_COOKIE_SUFFIX: ${name}.`
+    };
+  }
+
+  const instance = sanitizeCookieName(process.env.INSTANCE_ID || process.env.PLANNER_INSTANCE || process.env.APP_INSTANCE);
+  if (instance) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${instance}`;
+    return {
+      name,
+      source: 'instance',
+      notice: `[CRM] Имя cookie сессии дополнено идентификатором экземпляра: ${name}.`
+    };
+  }
+
+  const numericPort = Number.isFinite(port) ? port : Number.parseInt(port, 10);
+  if (Number.isFinite(numericPort) && numericPort > 0 && numericPort !== 3000) {
+    const name = `${DEFAULT_SESSION_COOKIE_NAME}_${numericPort}`;
+    return {
+      name,
+      source: 'port',
+      notice: `[CRM] Имя cookie сессии скорректировано по порту ${numericPort}: ${name}.`
+    };
+  }
+
+  return {
+    name: DEFAULT_SESSION_COOKIE_NAME,
+    source: 'default',
+    notice: `[CRM] Используется базовое имя cookie сессии: ${DEFAULT_SESSION_COOKIE_NAME}.`
+  };
+}
+
+function resolveCookieSecureConfiguration() {
+  const explicit = process.env.COOKIE_SECURE;
+  if (explicit !== undefined) {
+    const secure = parseBoolean(explicit, true);
+    return {
+      enforced: secure,
+      preferSecure: secure,
+      notice: `[CRM] Флаг Secure для cookie задан через COOKIE_SECURE=${secure ? 'true' : 'false'}.`
+    };
+  }
+
+  const urlSources = [
+    ['PUBLIC_URL', process.env.PUBLIC_URL],
+    ['APP_URL', process.env.APP_URL],
+    ['APP_ORIGIN', process.env.APP_ORIGIN],
+    ['BASE_URL', process.env.BASE_URL]
+  ];
+
+  for (const [label, value] of urlSources) {
+    const protocol = detectUrlProtocol(value);
+    if (protocol === 'https:') {
+      return {
+        enforced: null,
+        preferSecure: true,
+        notice: `[CRM] Флаг Secure для cookie определяется автоматически (https) на основе ${label}.`
+      };
+    }
+    if (protocol === 'http:') {
+      return {
+        enforced: null,
+        preferSecure: false,
+        notice: `[CRM] Флаг Secure для cookie отключён для HTTP (источник ${label}).`
+      };
+    }
+  }
+
+  const defaultSecure = parseBoolean(process.env.COOKIE_SECURE_DEFAULT, false);
+  if (defaultSecure) {
+    return {
+      enforced: true,
+      preferSecure: true,
+      notice: '[CRM] Флаг Secure для cookie принудительно включён через COOKIE_SECURE_DEFAULT=true.'
+    };
+  }
+
+  return {
+    enforced: null,
+    preferSecure: false,
+    notice: '[CRM] Флаг Secure для cookie выбирается автоматически по протоколу запроса.'
+  };
+}
+
+function detectUrlProtocol(value) {
+  if (!value || typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed, 'http://localhost');
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return parsed.protocol;
+    }
+  } catch (_err) {
+    /* ignore */
+  }
+  return null;
+}
+
+function resolveRequestBodyLimit(defaultBytes, maxBytes) {
+  const fallback = Number.isFinite(defaultBytes) && defaultBytes > 0 ? Math.floor(defaultBytes) : 10 * 1024 * 1024;
+  const ceiling = Number.isFinite(maxBytes) && maxBytes > fallback ? Math.floor(maxBytes) : 512 * 1024 * 1024;
+  const sources = [
+    ['REQUEST_BODY_LIMIT', process.env.REQUEST_BODY_LIMIT],
+    ['BODY_SIZE_LIMIT', process.env.BODY_SIZE_LIMIT],
+    ['MAX_BODY_SIZE', process.env.MAX_BODY_SIZE]
+  ];
+
+  let warning = null;
+  for (const [label, rawValue] of sources) {
+    if (rawValue === undefined || rawValue === null) {
+      continue;
+    }
+    const value = String(rawValue).trim();
+    if (!value) {
+      continue;
+    }
+    const parsed = parseDataSize(value, null);
+    if (parsed === null) {
+      warning = `[CRM] Значение ${label}=${value} не распознано. Используется лимит по умолчанию.`;
+      continue;
+    }
+    const normalized = Math.max(1, Math.floor(parsed));
+    const bytes = Math.min(normalized, ceiling);
+    const limitLabel = formatByteSize(bytes) || `${bytes} байт`;
+    const info = {
+      bytes,
+      source: label,
+      label: limitLabel,
+      notice: `[CRM] Лимит тела запросов установлен через ${label}: ${limitLabel}.`
+    };
+    if (bytes !== normalized) {
+      info.warning = `[CRM] Значение ${label} ограничено максимумом ${formatByteSize(ceiling) || `${ceiling} байт`}.`;
+    } else if (warning) {
+      info.warning = warning;
+    }
+    return info;
+  }
+
+  const limitLabel = formatByteSize(fallback) || `${fallback} байт`;
+  return {
+    bytes: fallback,
+    source: 'default',
+    label: limitLabel,
+    notice: `[CRM] Лимит тела запросов установлен по умолчанию: ${limitLabel}.`,
+    warning
+  };
+}
+
+function isForwardedSecure(req) {
+  if (!req || !req.headers) {
+    return false;
+  }
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  if (typeof forwardedProto === 'string' && forwardedProto.trim()) {
+    const primary = forwardedProto.split(',')[0].trim().toLowerCase();
+    if (primary === 'https') {
+      return true;
+    }
+  }
+  const forwarded = req.headers.forwarded;
+  if (typeof forwarded === 'string' && forwarded.includes('proto=')) {
+    const segments = forwarded.split(';');
+    for (const segment of segments) {
+      const [key, rawValue] = segment.split('=');
+      if (typeof key === 'string' && key.trim().toLowerCase() === 'proto') {
+        if (typeof rawValue === 'string' && rawValue.trim().toLowerCase() === 'https') {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function isRequestSecure(req) {
+  if (!req) {
+    return false;
+  }
+  if (req.secure === true) {
+    return true;
+  }
+  if (req.protocol === 'https') {
+    return true;
+  }
+  if (req.connection?.encrypted) {
+    return true;
+  }
+  return isForwardedSecure(req);
+}
+
+function shouldUseSecureCookies(req) {
+  if (COOKIE_SECURE_ENFORCED === true) {
+    return true;
+  }
+  if (COOKIE_SECURE_ENFORCED === false) {
+    return false;
+  }
+  if (isRequestSecure(req)) {
+    return true;
+  }
+  if (COOKIE_SECURE_PREFERRED) {
+    return true;
+  }
+  return false;
+}
+
+let autoInstallAttempted = false;
+
+const express = requireWithAutoInstall('express');
+const compression = requireWithAutoInstall('compression');
+const Database = requireWithAutoInstall('better-sqlite3');
 
 let bcrypt;
 try {
-  bcrypt = require('bcryptjs');
+  bcrypt = requireWithAutoInstall('bcryptjs');
 } catch (err) {
-  console.warn('[CRM] Модуль "bcryptjs" не установлен, используется резервная сборка из lib/bcryptjs.js.');
-  bcrypt = require('./lib/bcryptjs');
+  if (err && err.code === 'MODULE_NOT_FOUND') {
+    console.warn('[CRM] Модуль "bcryptjs" не установлен, используется резервная сборка из lib/bcryptjs.js.');
+    bcrypt = require('./lib/bcryptjs');
+  } else {
+    throw err;
+  }
+}
+
+const DEFAULT_SESSION_COOKIE_NAME = 'pc_session';
+
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const SESSION_COOKIE_INFO = resolveSessionCookieName(PORT);
+const SESSION_COOKIE_NAME = SESSION_COOKIE_INFO.name;
+const COOKIE_SECURE_CONFIG = resolveCookieSecureConfiguration();
+const COOKIE_SECURE_ENFORCED = COOKIE_SECURE_CONFIG.enforced;
+const COOKIE_SECURE_PREFERRED = COOKIE_SECURE_CONFIG.preferSecure;
+const DEFAULT_BODY_SIZE_LIMIT_BYTES = 10 * 1024 * 1024;
+const REQUEST_BODY_LIMIT_INFO = resolveRequestBodyLimit(DEFAULT_BODY_SIZE_LIMIT_BYTES, 512 * 1024 * 1024);
+const REQUEST_BODY_LIMIT_BYTES = REQUEST_BODY_LIMIT_INFO.bytes;
+
+if (SESSION_COOKIE_INFO.notice) {
+  console.info(SESSION_COOKIE_INFO.notice);
+}
+if (COOKIE_SECURE_CONFIG.notice) {
+  console.info(COOKIE_SECURE_CONFIG.notice);
+}
+if (REQUEST_BODY_LIMIT_INFO.notice) {
+  console.info(REQUEST_BODY_LIMIT_INFO.notice);
+}
+if (REQUEST_BODY_LIMIT_INFO.warning) {
+  console.warn(REQUEST_BODY_LIMIT_INFO.warning);
 }
 
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
 
-const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR_INFO = resolveDataDirectory();
 const DATA_DIR = DATA_DIR_INFO.path;
 const LOCAL_STATE_FILE = path.join(DATA_DIR, 'planner-state.json');
 const SQLITE_FILE = path.join(DATA_DIR, 'planner.db');
 const USERS_EXPORT_FILE = path.join(DATA_DIR, 'users.json');
+const CREDENTIALS_FILE = path.join(DATA_DIR, 'credentials.json');
 
 if (Array.isArray(DATA_DIR_INFO.previousErrors) && DATA_DIR_INFO.previousErrors.length) {
   const failedDefault = DATA_DIR_INFO.previousErrors.find((entry) => entry && entry.path === DEFAULT_DATA_DIR);
@@ -40,7 +369,6 @@ if (DATA_DIR_INFO.source === 'env') {
   console.info(`[CRM] Используется резервный каталог данных ${DATA_DIR}.`);
 }
 
-const SESSION_COOKIE_NAME = 'pc_session';
 const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
 const SESSION_RENEW_THRESHOLD_MS = SESSION_TTL_MS / 3;
 const AUTH_MODE = (process.env.AUTH_MODE || 'local').trim().toLowerCase();
@@ -48,9 +376,18 @@ const ALLOW_GUEST_LOGIN = parseBoolean(process.env.ALLOW_GUEST ?? 'true', true);
 const MAX_FAILED_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_MAX_FAILED_ATTEMPTS || '5', 10));
 const LOCKOUT_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_LOCKOUT_MINUTES || '15', 10));
 const SESSION_IDLE_TIMEOUT_MS = Math.max(SESSION_TTL_MS, 60 * 60 * 1000);
-const COOKIE_SECURE = parseBoolean(process.env.COOKIE_SECURE ?? (process.env.NODE_ENV === 'production'), process.env.NODE_ENV === 'production');
 const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+const DEFAULT_CREDENTIALS_TEMPLATE = {
+  users: [
+    {
+      login: DEFAULT_ADMIN_LOGIN,
+      password: DEFAULT_ADMIN_PASSWORD,
+      displayName: 'Системный администратор',
+      roles: ['superadmin']
+    }
+  ]
+};
 const DUMMY_BCRYPT_HASH = '$2b$10$Bk.MJErekvE/IjbhVyN0heNG48DL7Msis1TcSggoldLlYzUkyJDD2';
 
 class StorageWriteError extends Error {
@@ -354,13 +691,16 @@ const STAGE_SLUGS = Object.freeze([
 const ROLE_PERMISSION_KEYS = Object.freeze([
   'view',
   'write',
+  'viewOrderDetails',
   'manageUsers',
   'manageSettings',
   'manageStages',
   'manageOrders',
   'completeOrders',
   'viewAudit',
-  'useJournal'
+  'useJournal',
+  'editComments',
+  'deleteComments'
 ]);
 
 function createStageAccessDefaults(enabled) {
@@ -374,6 +714,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
   superadmin: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: true,
     manageSettings: true,
     manageStages: true,
@@ -381,11 +722,14 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
+    editComments: true,
+    deleteComments: true,
     stageAccess: createStageAccessDefaults(true)
   },
   admin: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: true,
     manageStages: true,
@@ -393,11 +737,14 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
+    editComments: true,
+    deleteComments: true,
     stageAccess: createStageAccessDefaults(true)
   },
   master: {
     view: true,
     write: true,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: true,
@@ -405,11 +752,14 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: false,
     viewAudit: false,
     useJournal: true,
+    editComments: false,
+    deleteComments: false,
     stageAccess: createStageAccessDefaults(true)
   },
   guest: {
     view: true,
     write: false,
+    viewOrderDetails: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: false,
@@ -417,6 +767,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     completeOrders: false,
     viewAudit: false,
     useJournal: false,
+    editComments: false,
+    deleteComments: false,
     stageAccess: createStageAccessDefaults(false)
   }
 };
@@ -467,8 +819,30 @@ let rolePermissionCache = new Map();
 
 const app = express();
 app.use(compression());
-app.use(express.json({ limit: '10mb', strict: false }));
-app.use(express.text({ limit: '10mb', type: ['text/plain', 'application/octet-stream'] }));
+app.use(express.json({ limit: REQUEST_BODY_LIMIT_BYTES, strict: false }));
+app.use(express.text({ limit: REQUEST_BODY_LIMIT_BYTES, type: ['text/plain', 'application/octet-stream'] }));
+app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT_BYTES }));
+app.use((err, req, res, next) => {
+  if (!err) {
+    next();
+    return;
+  }
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    const limitLabel = REQUEST_BODY_LIMIT_INFO.label;
+    const payload = {
+      error: 'Payload Too Large',
+      limit: REQUEST_BODY_LIMIT_BYTES,
+      limitHuman: limitLabel
+    };
+    if (req.accepts('json')) {
+      res.status(413).json(payload);
+    } else {
+      res.status(413).type('text/plain').send(`Payload Too Large. Максимальный размер: ${limitLabel}.`);
+    }
+    return;
+  }
+  next(err);
+});
 
 function sessionMiddleware(req, res, next) {
   try {
@@ -482,7 +856,7 @@ function sessionMiddleware(req, res, next) {
     }
     const session = resolveSession(token);
     if (!session) {
-      clearSessionCookie(res);
+      clearSessionCookie(req, res);
       req.session = null;
       req.user = null;
       return next();
@@ -490,7 +864,12 @@ function sessionMiddleware(req, res, next) {
     req.session = session;
     req.user = session.user;
     res.locals.currentUser = session.user;
-    touchSession(session.id, session.lastSeenAt);
+    const renewal = touchSession(session.id, session.lastSeenAt);
+    if (renewal) {
+      session.lastSeenAt = renewal.lastSeenAt;
+      session.expiresAt = renewal.expiresAt;
+      setSessionCookie(req, res, session.id);
+    }
     return next();
   } catch (err) {
     return next(err);
@@ -596,6 +975,10 @@ function ensureAuthBootstrap() {
       updateRolePermissions.run(serialized, now, slug);
     }
   });
+
+  ensureCredentialTemplateFile();
+  const manualEntries = readManualCredentialEntries();
+  applyManualCredentialEntries(db, manualEntries, now);
 
   const totalUsersRow = db.prepare('SELECT COUNT(*) AS count FROM users').get();
   const userCount = Number(totalUsersRow?.count || 0);
@@ -798,6 +1181,243 @@ function ensureUsersExportSnapshot() {
   } catch (err) {
     console.warn('Failed to write users snapshot', err);
   }
+}
+
+function ensureCredentialTemplateFile() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(CREDENTIALS_FILE)) {
+      fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify(DEFAULT_CREDENTIALS_TEMPLATE, null, 2), 'utf8');
+      console.info(`[CRM] Создан файл учётных записей ${CREDENTIALS_FILE}.`);
+    }
+  } catch (err) {
+    console.warn(`[CRM] Не удалось подготовить файл учётных записей ${CREDENTIALS_FILE}:`, err);
+  }
+}
+
+function looksLikeBcryptHash(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  return /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(value.trim());
+}
+
+function normalizeCredentialEntry(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const login = sanitizeLogin(raw.login || raw.username || raw.user);
+  if (!login) {
+    return null;
+  }
+  const displayNameRaw = typeof raw.displayName === 'string' ? raw.displayName : raw.name;
+  const displayName = displayNameRaw && displayNameRaw.trim() ? displayNameRaw.trim() : login;
+  let password = '';
+  if (typeof raw.password === 'string') {
+    password = raw.password.trim();
+  } else if (typeof raw.pass === 'string') {
+    password = raw.pass.trim();
+  }
+  if (!password && typeof raw.passwordHash === 'string') {
+    password = raw.passwordHash.trim();
+  }
+  const isActive = raw.isActive !== undefined ? !!parseBoolean(raw.isActive, true) : true;
+  const roleCandidates = [];
+  if (Array.isArray(raw.roles)) {
+    roleCandidates.push(...raw.roles);
+  }
+  if (typeof raw.role === 'string') {
+    roleCandidates.push(raw.role);
+  }
+  const normalizedRoles = Array.from(
+    new Set(
+      roleCandidates
+        .map((value) => normalizeRoleSlug(value))
+        .filter(Boolean)
+    )
+  );
+  return {
+    login,
+    displayName,
+    password,
+    passwordIsHash: looksLikeBcryptHash(password),
+    isActive,
+    roles: normalizedRoles
+  };
+}
+
+function readManualCredentialEntries() {
+  try {
+    const raw = fs.readFileSync(CREDENTIALS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed?.users) ? parsed.users : [];
+    const result = [];
+    for (const entry of list) {
+      const normalized = normalizeCredentialEntry(entry);
+      if (normalized) {
+        result.push(normalized);
+      }
+    }
+    return result;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      return [];
+    }
+    console.warn(`[CRM] Не удалось прочитать учётные записи из ${CREDENTIALS_FILE}:`, err);
+    return [];
+  }
+}
+
+function applyManualCredentialEntries(db, entries, nowIso) {
+  if (!Array.isArray(entries) || !entries.length) {
+    return false;
+  }
+  const selectUser = db.prepare('SELECT id, password_hash, display_name FROM users WHERE login = ?');
+  const insertUser = db.prepare(
+    `INSERT INTO users (login, password_hash, display_name, is_active, created_at, updated_at, last_login_at, password_updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
+  );
+  const updateUser = db.prepare(
+    `UPDATE users
+        SET display_name = ?, is_active = ?, updated_at = ?, password_hash = ?, password_updated_at = ?
+      WHERE id = ?`
+  );
+  const updateUserNoPassword = db.prepare(
+    `UPDATE users
+        SET display_name = ?, is_active = ?, updated_at = ?
+      WHERE id = ?`
+  );
+  const selectUserRoles = db.prepare(
+    `SELECT r.id, r.slug
+       FROM user_roles ur
+       JOIN roles r ON r.id = ur.role_id
+      WHERE ur.user_id = ?`
+  );
+  const deleteUserRole = db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ?');
+  const insertUserRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
+  const selectRoleId = db.prepare('SELECT id FROM roles WHERE slug = ?');
+  const roleIdCache = new Map();
+  const getRoleId = (slug) => {
+    if (roleIdCache.has(slug)) {
+      return roleIdCache.get(slug);
+    }
+    const row = selectRoleId.get(slug);
+    const id = row?.id ? Number(row.id) : null;
+    if (id) {
+      roleIdCache.set(slug, id);
+    }
+    return id;
+  };
+
+  let changeCount = 0;
+  for (const entry of entries) {
+    const userRow = selectUser.get(entry.login);
+    let passwordHash = null;
+    let shouldUpdatePassword = false;
+    if (entry.passwordIsHash && entry.password) {
+      passwordHash = entry.password;
+      shouldUpdatePassword = !userRow || userRow.password_hash !== passwordHash;
+    } else if (entry.password && bcrypt) {
+      if (userRow && userRow.password_hash) {
+        try {
+          if (bcrypt.compareSync(entry.password, userRow.password_hash)) {
+            passwordHash = userRow.password_hash;
+            shouldUpdatePassword = false;
+          } else {
+            passwordHash = bcrypt.hashSync(entry.password, 10);
+            shouldUpdatePassword = true;
+          }
+        } catch (err) {
+          console.warn(`[CRM] Не удалось сравнить пароль для ${entry.login}:`, err);
+          passwordHash = bcrypt.hashSync(entry.password, 10);
+          shouldUpdatePassword = true;
+        }
+      } else {
+        passwordHash = bcrypt.hashSync(entry.password, 10);
+        shouldUpdatePassword = true;
+      }
+    }
+
+    if (!userRow && !passwordHash) {
+      console.warn(`[CRM] Учётная запись ${entry.login} пропущена: требуется пароль или passwordHash.`);
+      continue;
+    }
+
+    if (userRow) {
+      if (shouldUpdatePassword && passwordHash) {
+        const info = updateUser.run(entry.displayName, entry.isActive ? 1 : 0, nowIso, passwordHash, nowIso, userRow.id);
+        changeCount += info?.changes || 0;
+      } else {
+        const info = updateUserNoPassword.run(entry.displayName, entry.isActive ? 1 : 0, nowIso, userRow.id);
+        changeCount += info?.changes || 0;
+      }
+      if (entry.roles && entry.roles.length) {
+        const desired = new Set(entry.roles);
+        const currentRows = selectUserRoles.all(userRow.id) || [];
+        const current = new Map();
+        currentRows.forEach((row) => {
+          const slug = normalizeRoleSlug(row.slug);
+          if (slug && row.id) {
+            current.set(slug, Number(row.id));
+          }
+        });
+        for (const slug of desired) {
+          const roleId = getRoleId(slug);
+          if (!roleId) {
+            console.warn(`[CRM] Роль ${slug} для пользователя ${entry.login} не найдена.`);
+            continue;
+          }
+          if (!current.has(slug)) {
+            const info = insertUserRole.run(userRow.id, roleId);
+            changeCount += info?.changes || 0;
+          }
+        }
+        for (const [slug, roleId] of current.entries()) {
+          if (!desired.has(slug)) {
+            const info = deleteUserRole.run(userRow.id, roleId);
+            changeCount += info?.changes || 0;
+          }
+        }
+      }
+      continue;
+    }
+
+    if (!entry.roles || !entry.roles.length) {
+      console.warn(`[CRM] Учётная запись ${entry.login} пропущена: требуется хотя бы одна роль.`);
+      continue;
+    }
+
+    const info = insertUser.run(
+      entry.login,
+      passwordHash,
+      entry.displayName,
+      entry.isActive ? 1 : 0,
+      nowIso,
+      nowIso,
+      nowIso
+    );
+    const userId = Number(info?.lastInsertRowid);
+    if (!Number.isFinite(userId)) {
+      console.warn(`[CRM] Не удалось создать пользователя ${entry.login}.`);
+      continue;
+    }
+    changeCount += info?.changes || 0;
+    for (const slug of entry.roles) {
+      const roleId = getRoleId(slug);
+      if (!roleId) {
+        console.warn(`[CRM] Роль ${slug} для пользователя ${entry.login} не найдена.`);
+        continue;
+      }
+      const roleInfo = insertUserRole.run(userId, roleId);
+      changeCount += roleInfo?.changes || 0;
+    }
+  }
+
+  if (changeCount > 0) {
+    console.info(`[CRM] Синхронизировано учётных записей из credentials.json: ${changeCount}.`);
+    return true;
+  }
+  return false;
 }
 
 function computePermissions(roleSlugs) {
@@ -1018,18 +1638,19 @@ function loadSessionRecord(sessionId) {
 }
 
 function touchSession(sessionId, previousLastSeenIso) {
-  if (!sessionId) return;
+  if (!sessionId) return null;
   const db = getDatabase();
   const now = Date.now();
   const lastSeen = previousLastSeenIso ? Date.parse(previousLastSeenIso) : 0;
   if (Number.isFinite(lastSeen) && now - lastSeen < SESSION_RENEW_THRESHOLD_MS) {
-    return;
+    return null;
   }
   const nowIso = new Date(now).toISOString();
   const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
   db
     .prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?')
     .run(nowIso, expiresIso, sessionId);
+  return { lastSeenAt: nowIso, expiresAt: expiresIso };
 }
 
 function destroySession(sessionId) {
@@ -1054,21 +1675,23 @@ function createSessionRecord({ userId = null, isGuest = false }) {
   return { id: sessionId, createdAt: nowIso, expiresAt: expiresIso };
 }
 
-function setSessionCookie(res, sessionId) {
+function setSessionCookie(req, res, sessionId) {
+  const secure = shouldUseSecureCookies(req);
   res.cookie(SESSION_COOKIE_NAME, sessionId, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    secure,
     path: '/',
     maxAge: SESSION_IDLE_TIMEOUT_MS
   });
 }
 
-function clearSessionCookie(res) {
+function clearSessionCookie(req, res) {
+  const secure = shouldUseSecureCookies(req);
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: COOKIE_SECURE,
+    secure,
     path: '/'
   });
 }
@@ -1348,7 +1971,7 @@ app.post('/auth/login', async (req, res) => {
     payload.isGuest = false;
   }
   const session = createSessionRecord({ userId: user.id, isGuest: false });
-  setSessionCookie(res, session.id);
+  setSessionCookie(req, res, session.id);
   recordAuditEvent({ user: { id: user.id, login: user.login, roles: payload?.roles || [] }, action: 'auth.login' });
   res.json({
     user: payload,
@@ -1360,7 +1983,7 @@ app.post('/auth/login', async (req, res) => {
 
 app.post('/auth/guest', ensureGuestAllowed, (req, res) => {
   const session = createSessionRecord({ userId: null, isGuest: true });
-  setSessionCookie(res, session.id);
+  setSessionCookie(req, res, session.id);
   const guest = buildGuestUserPayload();
   recordAuditEvent({ user: { id: null, login: 'guest', roles: guest.roles }, action: 'auth.guest' });
   res.json({ user: guest, authMode: AUTH_MODE, allowGuest: ALLOW_GUEST_LOGIN, expiresAt: session.expiresAt });
@@ -1370,7 +1993,7 @@ app.post('/auth/logout', (req, res) => {
   if (req.session?.id) {
     destroySession(req.session.id);
   }
-  clearSessionCookie(res);
+  clearSessionCookie(req, res);
   if (req.user) {
     recordAuditEvent({ user: { id: req.user.id, login: req.user.login, roles: req.user.roles }, action: 'auth.logout' });
   }
@@ -1724,6 +2347,44 @@ async function ensureDataDir() {
   }
 }
 
+async function runPersistenceHealthcheck() {
+  const errors = [];
+  try {
+    await ensureDataDir();
+    const probePath = path.join(DATA_DIR, `.healthcheck-${process.pid}-${Date.now()}`);
+    await fsp.writeFile(probePath, 'ok', { mode: 0o600 });
+    await fsp.unlink(probePath).catch(() => {});
+  } catch (err) {
+    errors.push(`Каталог данных: ${err?.message || err}`);
+  }
+
+  try {
+    const db = getDatabase();
+    const nowIso = new Date().toISOString();
+    const payload = { ok: true, ts: nowIso };
+    db.prepare(
+      `INSERT OR REPLACE INTO kv_store (key, value_json, updated_at)
+       VALUES (@key, @value, @updatedAt)`
+    ).run({
+      key: '__healthcheck__',
+      value: JSON.stringify(payload),
+      updatedAt: nowIso
+    });
+  } catch (err) {
+    errors.push(`SQLite: ${err?.message || err}`);
+  }
+
+  if (errors.length) {
+    const message = `Проверка сохранности данных не пройдена: ${errors.join('; ')}`;
+    console.error(`[CRM] ${message}`);
+    const failure = new Error(message);
+    failure.code = 'PERSISTENCE_HEALTHCHECK_FAILED';
+    throw failure;
+  }
+
+  console.info('[CRM] Проверка сохранности данных пройдена успешно.');
+}
+
 async function readLocalStateFile() {
   try {
     const raw = await fsp.readFile(LOCAL_STATE_FILE, 'utf8');
@@ -2039,20 +2700,50 @@ function readPlannerSettingsFromSql() {
   }
 }
 
+function mergeSharedSettings(existingSettings, incomingRaw) {
+  const existing = sanitizeSharedSettingsForStorage(existingSettings);
+  const incoming = sanitizeSharedSettingsForStorage(incomingRaw);
+  const has = (key) => Object.prototype.hasOwnProperty.call(incomingRaw || {}, key);
+
+  const merged = { ...existing };
+
+  if (has('capacity')) merged.capacity = incoming.capacity;
+  if (has('parallel')) merged.parallel = incoming.parallel;
+  if (has('plannerMode')) merged.plannerMode = incoming.plannerMode;
+  if (has('notificationsMuted')) merged.notificationsMuted = incoming.notificationsMuted;
+  if (has('tableColumns')) merged.tableColumns = incoming.tableColumns;
+  if (has('extraTime')) merged.extraTime = incoming.extraTime;
+  if (has('crmStageMapping')) merged.crmStageMapping = incoming.crmStageMapping;
+  if (has('logLimit')) merged.logLimit = incoming.logLimit;
+  if (has('admin')) merged.admin = incoming.admin;
+
+  for (const [key, value] of Object.entries(incoming)) {
+    if (KNOWN_SHARED_SETTINGS_KEYS.has(key)) continue;
+    if (has(key)) merged[key] = value;
+  }
+
+  return merged;
+}
+
 function writePlannerSettingsToSql(settings) {
-  const sanitized = sanitizeSharedSettingsForStorage(settings);
-  const updatedAt = typeof sanitized.updatedAt === 'string' && sanitized.updatedAt.trim()
-    ? sanitized.updatedAt.trim()
-    : new Date().toISOString();
+  const incomingRaw = isPlainObject(settings) ? settings : {};
+  const existing = readPlannerSettingsFromSql();
+  const merged = mergeSharedSettings(existing?.settings || {}, incomingRaw);
+  const sanitized = sanitizeSharedSettingsForStorage(merged);
+
+  const updatedAt = typeof incomingRaw.updatedAt === 'string' && incomingRaw.updatedAt.trim()
+    ? incomingRaw.updatedAt.trim()
+    : (existing?.updatedAt || new Date().toISOString());
   sanitized.updatedAt = updatedAt;
+
   const payload = JSON.stringify(sanitized);
   const hash = computeSnapshotHash(payload);
   try {
     const db = getDatabase();
-    const existing = db
+    const prev = db
       .prepare('SELECT settings_hash FROM planner_settings WHERE id = ?')
       .get(SETTINGS_ROW_ID);
-    if (existing && existing.settings_hash === hash) {
+    if (prev && prev.settings_hash === hash) {
       return sanitized;
     }
     db.prepare(
@@ -5053,6 +5744,70 @@ function parseBoolean(value, fallback = false) {
   return fallback;
 }
 
+function parseDataSize(value, fallback = null) {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value <= 0) {
+      return fallback;
+    }
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const match = trimmed.match(/^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?i?b?|[kmgt])?$/i);
+  if (!match) {
+    return fallback;
+  }
+  const numeric = Number.parseFloat(match[1]);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  const unitRaw = (match[2] || 'b').toLowerCase();
+  const unit = unitRaw.replace(/bytes?$/, 'b');
+  const unitMap = new Map([
+    ['b', 1],
+    ['kb', 1024],
+    ['kib', 1024],
+    ['k', 1024],
+    ['mb', 1024 * 1024],
+    ['mib', 1024 * 1024],
+    ['m', 1024 * 1024],
+    ['gb', 1024 * 1024 * 1024],
+    ['gib', 1024 * 1024 * 1024],
+    ['g', 1024 * 1024 * 1024],
+    ['tb', 1024 * 1024 * 1024 * 1024],
+    ['tib', 1024 * 1024 * 1024 * 1024],
+    ['t', 1024 * 1024 * 1024 * 1024]
+  ]);
+  const multiplier = unitMap.get(unit) || unitMap.get(`${unit}b`);
+  if (!multiplier) {
+    return fallback;
+  }
+  return numeric * multiplier;
+}
+
+function formatByteSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return null;
+  }
+  const units = ['Б', 'КиБ', 'МиБ', 'ГиБ', 'ТиБ'];
+  let value = bytes;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  const rounded = value >= 10 || index === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[index]}`;
+}
+
 function parseJsonColumn(value, fallback = null) {
   if (value === null || value === undefined) {
     return fallback;
@@ -6047,6 +6802,7 @@ async function bootstrap() {
   await getLatestRevision();
   await getCachedSnapshot();
   await ensureSqlHydrated();
+  await runPersistenceHealthcheck();
   app.listen(PORT, () => {
     console.log(`Planner hybrid storage server listening on port ${PORT}`);
   });
