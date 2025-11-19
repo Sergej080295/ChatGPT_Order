@@ -2717,6 +2717,8 @@
     display: grid;
     grid-template-rows: auto 1fr;
     min-height: 0;
+    position: relative;
+    overflow: hidden;
   }
 
   .crm-stage-gantt-header-row {
@@ -11500,6 +11502,8 @@ function renderCrmStageGantt(rows, schedule){
   crmStageGanttLeft.innerHTML='';
   crmStageGanttHeader.innerHTML='';
   crmStageGanttBody.innerHTML='';
+  crmStageGanttHeader.style.removeProperty('min-width');
+  crmStageGanttHeader.style.removeProperty('grid-template-columns');
   if(crmStageGanttLeftHeader){
     crmStageGanttLeftHeader.style.removeProperty('min-height');
   }
@@ -11544,6 +11548,10 @@ function renderCrmStageGantt(rows, schedule){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
+  const dayWidth=120;
+  const headerTemplate=`repeat(${filteredDays.length}, ${dayWidth}px)`;
+  crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
+  crmStageGanttHeader.style.minWidth=`${filteredDays.length*dayWidth}px`;
   if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=true;
   filteredDays.forEach(({ key, day })=>{
     const headerCell=document.createElement('span');
@@ -11577,6 +11585,8 @@ function renderCrmStageGantt(rows, schedule){
     fragmentLeft.appendChild(label);
     const rowEl=document.createElement('div');
     rowEl.className='crm-stage-gantt-row';
+    rowEl.style.gridTemplateColumns=headerTemplate;
+    rowEl.style.minWidth=`${filteredDays.length*dayWidth}px`;
     const record=perTask.get(row.identity);
     filteredDays.forEach(({ key, day })=>{
       const cell=document.createElement('div');
