@@ -2714,11 +2714,19 @@
   }
 
   .crm-stage-gantt-right {
-    display: grid;
-    grid-template-rows: auto 1fr;
+    display: flex;
+    flex-direction: column;
     min-height: 0;
+  }
+
+  .crm-stage-gantt-scroll {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
+    scrollbar-gutter: stable;
     position: relative;
-    overflow: hidden;
   }
 
   .crm-stage-gantt-header-row {
@@ -2730,6 +2738,9 @@
     background: color-mix(in srgb, var(--pc-border) 12%, transparent);
     font-size: 12px;
     text-align: center;
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
 
   .crm-stage-gantt-header-row span {
@@ -2763,7 +2774,8 @@
   }
 
   .crm-stage-gantt-body {
-    overflow: auto;
+    flex: 1;
+    min-height: 0;
   }
 
   .crm-stage-gantt-row {
@@ -5561,8 +5573,10 @@
             <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
           </div>
           <div class="crm-stage-gantt-right">
-            <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
-            <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+            <div class="crm-stage-gantt-scroll" id="crmStageGanttScroll">
+              <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
+              <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+            </div>
           </div>
         </div>
         <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
@@ -8821,6 +8835,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageGanttLeftHeader=$('#crmStageGanttLeftHeader'),
       crmStageGanttLeft=$('#crmStageGanttLeft'),
       crmStageGanttHeader=$('#crmStageGanttHeader'),
+      crmStageGanttScroll=$('#crmStageGanttScroll'),
       crmStageGanttBody=$('#crmStageGanttBody'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
       crmStageRouteWrap=$('#crmStageRoute'),
@@ -11504,6 +11519,7 @@ function renderCrmStageGantt(rows, schedule){
   crmStageGanttBody.innerHTML='';
   crmStageGanttHeader.style.removeProperty('min-width');
   crmStageGanttHeader.style.removeProperty('grid-template-columns');
+  crmStageGanttHeader.style.removeProperty('transform');
   if(crmStageGanttLeftHeader){
     crmStageGanttLeftHeader.style.removeProperty('min-height');
   }
@@ -11620,22 +11636,19 @@ function renderCrmStageGantt(rows, schedule){
   crmStageGanttLeft.appendChild(fragmentLeft);
   crmStageGanttBody.appendChild(fragmentBody);
   let syncLock=false;
-  const headerEl=crmStageGanttHeader;
-  if(crmStageGanttBody){
-    crmStageGanttBody.onscroll=null;
+  const scrollEl=crmStageGanttScroll||crmStageGanttBody;
+  if(scrollEl){
+    scrollEl.onscroll=null;
   }
   if(crmStageGanttLeft){
     crmStageGanttLeft.onscroll=null;
   }
-  if(crmStageGanttBody){
-    crmStageGanttBody.onscroll=()=>{
+  if(scrollEl){
+    scrollEl.onscroll=()=>{
       if(syncLock) return;
       syncLock=true;
       if(crmStageGanttLeft){
-        crmStageGanttLeft.scrollTop=crmStageGanttBody.scrollTop;
-      }
-      if(headerEl){
-        headerEl.style.transform=`translateX(${-crmStageGanttBody.scrollLeft}px)`;
+        crmStageGanttLeft.scrollTop=scrollEl.scrollTop;
       }
       syncLock=false;
     };
@@ -11644,8 +11657,8 @@ function renderCrmStageGantt(rows, schedule){
     crmStageGanttLeft.onscroll=()=>{
       if(syncLock) return;
       syncLock=true;
-      if(crmStageGanttBody){
-        crmStageGanttBody.scrollTop=crmStageGanttLeft.scrollTop;
+      if(scrollEl){
+        scrollEl.scrollTop=crmStageGanttLeft.scrollTop;
       }
       syncLock=false;
     };
