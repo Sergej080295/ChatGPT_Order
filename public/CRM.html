@@ -10810,13 +10810,32 @@ function collectCrmStageRows(stageKey, options={}){
   return { rows };
 }
 
-function runCrmAutoOptimization({ reason='auto', stageKeys=null }={}){
+function runCrmAutoOptimization({ reason='auto', stageKeys=null, targetEntries=null }={}){
   const board=currentBoard();
   if(!board) return false;
   let changed=false;
   let stageFilter=null;
+  const targetByStage=new Map();
+  if(Array.isArray(targetEntries)){
+    targetEntries.forEach(entry=>{
+      if(!entry) return;
+      const stageKey=normalizeCrmStageKey(entry.stageKey||'');
+      if(!stageKey) return;
+      const orderId=(entry.orderId||'').trim();
+      let set=targetByStage.get(stageKey);
+      if(!set){
+        set=new Set();
+        targetByStage.set(stageKey,set);
+      }
+      set.add(orderId);
+      if(!stageFilter){
+        stageFilter=new Set();
+      }
+      stageFilter.add(stageKey);
+    });
+  }
   if(stageKeys instanceof Set || Array.isArray(stageKeys)){
-    stageFilter=new Set();
+    stageFilter=stageFilter?new Set(stageFilter):new Set();
     const source=stageKeys instanceof Set?stageKeys:Array.from(stageKeys);
     source.forEach(value=>{
       const normalized=normalizeCrmStageKey(value||'');
@@ -10853,15 +10872,23 @@ function runCrmAutoOptimization({ reason='auto', stageKeys=null }={}){
       const slack=Number.isFinite(dueTime)
         ? ((dueTime-release)/86400000)-workDays
         : Number.POSITIVE_INFINITY;
+      const targetSet=targetByStage.get(stageKey);
+      const isTarget=!!(targetSet && targetSet.has(row.orderId||''));
       return {
         row,
         dueTime,
         release,
         slack,
-        workload
+        workload,
+        isTarget,
+        targetStartTime:start?start.getTime():todayTime
       };
     });
     prioritized.sort((a,b)=>{
+      if(a.isTarget!==b.isTarget) return a.isTarget?-1:1;
+      if(a.isTarget && b.isTarget && a.targetStartTime!==b.targetStartTime){
+        return a.targetStartTime-b.targetStartTime;
+      }
       if(a.dueTime!==b.dueTime) return a.dueTime-b.dueTime;
       if(a.slack!==b.slack) return a.slack-b.slack;
       if(a.release!==b.release) return a.release-b.release;
@@ -15961,7 +15988,7 @@ function calculateOrderStageDates(options={}){
   const orderId=(orderForm?.id?.value||'').trim();
   const orderTitle=deriveEditingOrderTitle();
   const errors=[];
-  const suggestions=[];
+  const suggestionMap=new Map();
   let changed=false;
   let previousEndDate=null;
   rows.forEach((tr,index)=>{
@@ -15996,29 +16023,26 @@ function calculateOrderStageDates(options={}){
     previousEndDate=scheduleResult.endDateObj||previousEndDate;
     changed=true;
     resetStageLinkOverride(tr);
-    if(scheduleResult.delayDays>0 && scheduleResult.blocking?.length){
-      suggestions.push({
-        id:`${stageKey}:${index}:start`,
-        stageLabel,
-        stageKey,
-        kind:'start',
-        delayDays:scheduleResult.delayDays,
-        blocking:scheduleResult.blocking,
-        targetStartIso:scheduleResult.earliestIso||'',
-        currentStartIso:scheduleResult.startIso||''
-      });
-    }
-    if(scheduleResult.finishDelayDays>0){
-      suggestions.push({
-        id:`${stageKey}:${index}:finish`,
-        stageLabel,
-        stageKey,
-        kind:'finish',
-        delayDays:scheduleResult.finishDelayDays,
-        blocking:Array.isArray(scheduleResult.finishBlocking)?scheduleResult.finishBlocking:[],
-        targetEndIso:scheduleResult.idealEndIso||'',
-        currentEndIso:scheduleResult.endIso||''
-      });
+    const hasStartPush=scheduleResult.delayDays>0;
+    const hasFinishPush=scheduleResult.finishDelayDays>0;
+    if(hasStartPush || hasFinishPush){
+      const key=`${stageKey}:${index}`;
+      const existing=suggestionMap.get(key)||{ id:key, stageKey, stageLabel, orderId, blocking:[], delayDays:0 };
+      if(hasStartPush){
+        existing.startDelayDays=Math.max(0, scheduleResult.delayDays);
+        existing.currentStartIso=scheduleResult.startIso||'';
+        existing.targetStartIso=scheduleResult.earliestIso||'';
+        existing.blockingStart=Array.isArray(scheduleResult.blocking)?scheduleResult.blocking:[];
+        existing.delayDays=Math.max(existing.delayDays||0, existing.startDelayDays);
+      }
+      if(hasFinishPush){
+        existing.finishDelayDays=Math.max(0, scheduleResult.finishDelayDays);
+        existing.currentEndIso=scheduleResult.endIso||'';
+        existing.targetEndIso=scheduleResult.idealEndIso||'';
+        existing.blockingFinish=Array.isArray(scheduleResult.finishBlocking)?scheduleResult.finishBlocking:[];
+        existing.delayDays=Math.max(existing.delayDays||0, existing.finishDelayDays);
+      }
+      suggestionMap.set(key, existing);
     }
   });
   if(errors.length){
@@ -16031,6 +16055,11 @@ function calculateOrderStageDates(options={}){
   }else if(!errors.length){
     showToast({ title:'PlaneCore', message:'Пересчёт не потребовался: свободных дат нет.', tone:'info', autoClose:3500 });
   }
+  const suggestions=Array.from(suggestionMap.values()).filter(entry=>{
+    const start=Math.max(0, Number(entry.startDelayDays)||0);
+    const finish=Math.max(0, Number(entry.finishDelayDays)||0);
+    return start>0 || finish>0;
+  });
   if(suggestions.length && !skipOptimizationPrompt){
     maybePromptStageOptimization(suggestions,{ mode });
   }else if(mode==='optimize' && !suggestions.length && !errors.length){
@@ -16190,7 +16219,7 @@ function collectStageBlockingTasks(schedule, candidateId, fromDate, toDate){
   if(!schedule || !schedule.perDay || !(fromDate instanceof Date) || !(toDate instanceof Date) || !(toDate>fromDate)){
     return [];
   }
-  const labels=new Map(Array.isArray(schedule.tasks)?schedule.tasks.map(task=>[task.id, task.label||'Заказ']):[]);
+  const labels=new Map(Array.isArray(schedule.tasks)?schedule.tasks.map(task=>[task.id, { label:task.label||'Заказ', orderId:task.orderId||'' }]):[]);
   const summary=new Map();
   for(let cursor=addDays(fromDate,0); cursor<toDate; cursor=addDays(cursor,1)){
     const iso=fmtDateISO(cursor);
@@ -16198,8 +16227,8 @@ function collectStageBlockingTasks(schedule, candidateId, fromDate, toDate){
     if(!day || !Array.isArray(day.segments)) continue;
     day.segments.forEach(seg=>{
       if(!seg || seg.uid===candidateId) return;
-      const label=labels.get(seg.uid)||'Заказ';
-      const entry=summary.get(seg.uid)||{ label, days:0 };
+      const meta=labels.get(seg.uid)||{ label:'Заказ', orderId:'' };
+      const entry=summary.get(seg.uid)||{ label:meta.label, orderId:meta.orderId, days:0 };
       entry.days+=1;
       summary.set(seg.uid, entry);
     });
@@ -16213,24 +16242,29 @@ function normalizeCrmOptimizationEntries(entries){
     if(!entry) return null;
     const stageKey=normalizeCrmStageKey(entry.stageKey||entry.stage||'');
     if(!stageKey) return null;
-    const delay=Math.max(0, Number(entry.delayDays)||0);
-    if(!(delay>0)) return null;
-    const kind=entry.kind==='finish'?'finish':'start';
+    const startDelay=Math.max(0, Number(entry.startDelayDays||entry.delayDays||0));
+    const finishDelay=Math.max(0, Number(entry.finishDelayDays||0));
+    const totalDelay=Math.max(startDelay, finishDelay);
+    if(!(totalDelay>0)) return null;
     const currentStartIso=coerceCalendarIso(entry.currentStartIso||entry.startIso||'');
     const targetStartIso=coerceCalendarIso(entry.targetStartIso||entry.earliestIso||'');
     const currentEndIso=coerceCalendarIso(entry.currentEndIso||entry.endIso||'');
     const targetEndIso=coerceCalendarIso(entry.targetEndIso||entry.idealEndIso||'');
-    const blocking=Array.isArray(entry.blocking)?entry.blocking:[];
+    const blockingStart=Array.isArray(entry.blockingStart)?entry.blockingStart:[];
+    const blockingFinish=Array.isArray(entry.blockingFinish)?entry.blockingFinish:[];
+    const mergedBlocking=[...blockingStart, ...blockingFinish];
     const blockingCountRaw=Number(entry.blockingCount);
-    const blockingCount=Number.isFinite(blockingCountRaw)?Math.max(0, Math.round(blockingCountRaw)):blocking.length;
+    const blockingCount=Number.isFinite(blockingCountRaw)?Math.max(0, Math.round(blockingCountRaw)):mergedBlocking.length;
     return {
-      id:entry.id||`opt-${stageKey}-${kind}-${index}`,
+      id:entry.id||`opt-${stageKey}-${index}`,
       stageKey,
       stageLabel:entry.stageLabel||CRM_STAGE_LABELS[stageKey]||stageKey,
-      kind,
-      delayDays:delay,
-      blocking,
+      delayDays:totalDelay,
+      startDelayDays:startDelay,
+      finishDelayDays:finishDelay,
+      blocking:mergedBlocking,
       blockingCount,
+      orderId:entry.orderId||entry.orderID||'',
       currentStartIso,
       targetStartIso,
       currentEndIso,
@@ -16291,18 +16325,19 @@ function renderCrmOptimizationEntries(entries){
     checkbox.value=entry.id;
     checkbox.checked=true;
     checkbox.dataset.stageKey=entry.stageKey;
-    checkbox.dataset.kind=entry.kind;
+    checkbox.dataset.orderId=entry.orderId||'';
     const body=document.createElement('div');
     body.className='crm-optimize-item__body';
     const title=document.createElement('div');
     title.className='crm-optimize-item__title';
-    const verb=entry.kind==='finish'?'Закончить':'Начать';
+    const verbParts=[];
+    if(entry.startDelayDays>0) verbParts.push('начать');
+    if(entry.finishDelayDays>0) verbParts.push('закончить');
+    const verb=verbParts.length===2?'Начать и закончить':verbParts[0]?verbParts[0].charAt(0).toUpperCase()+verbParts[0].slice(1):'Оптимизировать';
     title.textContent=`${verb} «${entry.stageLabel}» на ${entry.delayDays} дн. раньше`;
     const details=document.createElement('div');
     details.className='crm-optimize-item__details';
-    details.textContent=entry.kind==='finish'
-      ?'Можно закончить раньше за счёт перераспределения очереди без нарушения сроков.'
-      :'В ранних днях нет свободных часов. Перестановка очереди освободит окно без просрочек.';
+    details.textContent='Можно получить более раннее окно без нарушения сроков других заказов.';
     const stats=document.createElement('div');
     stats.className='crm-optimize-item__stats';
     const affected=Math.max(0, entry.blockingCount||entry.blocking?.length||0);
@@ -16311,18 +16346,19 @@ function renderCrmOptimizationEntries(entries){
       :'Дополнительные заказы затрагиваться не будут';
     const timeline=document.createElement('div');
     timeline.className='crm-optimize-item__timeline';
-    if(entry.kind==='start' && entry.targetStartIso){
-      const targetLabel=formatCrmOptimizationDate(entry.targetStartIso);
-      const currentLabel=formatCrmOptimizationDate(entry.currentStartIso||entry.startIso||'');
-      if(targetLabel && currentLabel){
-        timeline.textContent=`Начало: ${targetLabel} → ${currentLabel}`;
-      }
-    }else if(entry.kind==='finish' && entry.targetEndIso){
-      const targetLabel=formatCrmOptimizationDate(entry.targetEndIso);
-      const currentLabel=formatCrmOptimizationDate(entry.currentEndIso||entry.endIso||'');
-      if(targetLabel && currentLabel){
-        timeline.textContent=`Завершение: ${targetLabel} → ${currentLabel}`;
-      }
+    const startTarget=formatCrmOptimizationDate(entry.targetStartIso);
+    const startCurrent=formatCrmOptimizationDate(entry.currentStartIso||entry.startIso||'');
+    const endTarget=formatCrmOptimizationDate(entry.targetEndIso);
+    const endCurrent=formatCrmOptimizationDate(entry.currentEndIso||entry.endIso||'');
+    const parts=[];
+    if(startTarget && startCurrent){
+      parts.push(`Начало: ${startCurrent} → ${startTarget}`);
+    }
+    if(endTarget && endCurrent){
+      parts.push(`Окончание: ${endCurrent} → ${endTarget}`);
+    }
+    if(parts.length){
+      timeline.textContent=parts.join(' · ');
     }
     body.append(title, details, stats);
     if(timeline.textContent){
@@ -16384,12 +16420,15 @@ function closeCrmOptimizationPrompt(result){
 }
 
 function collectCrmOptimizationSelection(){
-  const selected=new Set();
+  const selected=[];
   if(!crmOptimizeList) return selected;
   const inputs=crmOptimizeList.querySelectorAll('input[type="checkbox"][name="crmOptimizeEntry"]');
   inputs.forEach(input=>{
     if(input.checked && input.dataset.stageKey){
-      selected.add(input.dataset.stageKey);
+      selected.push({
+        stageKey:input.dataset.stageKey,
+        orderId:input.dataset.orderId||''
+      });
     }
   });
   return selected;
@@ -16397,17 +16436,17 @@ function collectCrmOptimizationSelection(){
 
 function handleCrmOptimizationApply(){
   const selected=collectCrmOptimizationSelection();
-  if(!selected.size){
+  if(!selected.length){
     showToast({ title:'PlaneCore', message:'Выберите хотя бы один передел для оптимизации.', tone:'info', autoClose:3500 });
     return;
   }
-  closeCrmOptimizationPrompt({ stageKeys:selected });
+  closeCrmOptimizationPrompt({ stageEntries:selected });
 }
 
 function maybePromptStageOptimization(entries, context={}){
   openCrmOptimizationPrompt(entries).then(result=>{
-    if(!result || !(result.stageKeys instanceof Set) || result.stageKeys.size===0) return;
-    const changedQueue=runCrmAutoOptimization({ reason:'calc-dates', stageKeys:result.stageKeys });
+    if(!result || !Array.isArray(result.stageEntries) || result.stageEntries.length===0) return;
+    const changedQueue=runCrmAutoOptimization({ reason:'calc-dates', targetEntries:result.stageEntries });
     if(changedQueue){
       save('Оптимизация очереди перед расчётом дат');
       renderCurrentView();
