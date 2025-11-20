@@ -5673,13 +5673,40 @@
 </dialog>
 
 
+<dialog id="crmCalcModeDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong>Режим расчёта дат</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmCalcModeClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body crm-calc-mode">
+    <button type="button" class="crm-calc-mode__option" id="crmCalcModeFill">
+      <span class="crm-calc-mode__badge">Вариант 1</span>
+      <span class="crm-calc-mode__title">Заполнить пустоты</span>
+      <span class="crm-calc-mode__desc">Свободные слоты текущего плана заполняются по каждому переделу, остаток размещается в хвост очереди без изменения чужих дат.</span>
+    </button>
+    <button type="button" class="crm-calc-mode__option" id="crmCalcModeOptimize">
+      <span class="crm-calc-mode__badge">Вариант 2</span>
+      <span class="crm-calc-mode__title">Оптимизировать очередь</span>
+      <span class="crm-calc-mode__desc">Система подбирает более ранние даты старта и завершения, не нарушая сроки других заказов, и предложит подтвердить переносы, прежде чем применять.</span>
+    </button>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmCalcModeCancel">Отмена</button>
+  </div>
+</dialog>
+
+
 <dialog id="crmOptimizeDlg" class="pc-modal pc-modal--md">
   <div class="dlg-head">
     <strong>Оптимизация дат переделов</strong>
-    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOptimizeClose" aria-label="Закрыть">✖</button>
+    <div class="crm-optimize-head">
+      <button class="pc-btn pc-btn--ghost" type="button" id="crmOptimizeToggle" title="Переключить уровень детализации">Режим: <span id="crmOptimizeModeLabel">кратко</span></button>
+      <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOptimizeClose" aria-label="Закрыть">✖</button>
+    </div>
   </div>
   <form class="dlg-body" id="crmOptimizeForm">
     <p class="crm-modal-hint">Выберите переделы, которые можно начать или закончить раньше без просрочки других заказов. Оптимизация изменит порядок очереди только в выбранных переделах.</p>
+    <div id="crmOptimizeSummary" class="crm-optimize-summary" hidden></div>
     <div id="crmOptimizeList" class="crm-optimize-list"></div>
   </form>
   <div class="dlg-footer">
@@ -7424,8 +7451,10 @@ let crmOrderReadinessClose=null;
 let crmOrderReadinessCloseIcon=null;
 let crmJournalClear=null;
 let orderDone=null;
+let crmCalcModeResolver=null;
 let crmOptimizeResolver=null;
 let crmOptimizeCurrentEntries=[];
+let crmOptimizeCompact=true;
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
 const normalizeWriteMode=value=>{
   if(value===null||value===undefined) return DATA_WRITE_MODES.both;
@@ -8943,9 +8972,17 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
       crmStageReserveApply=$('#crmStageReserveApply'),
+      crmCalcModeDlg=$('#crmCalcModeDlg'),
+      crmCalcModeFill=$('#crmCalcModeFill'),
+      crmCalcModeOptimize=$('#crmCalcModeOptimize'),
+      crmCalcModeCancel=$('#crmCalcModeCancel'),
+      crmCalcModeClose=$('#crmCalcModeClose'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
       crmOptimizeForm=$('#crmOptimizeForm'),
       crmOptimizeList=$('#crmOptimizeList'),
+      crmOptimizeSummary=$('#crmOptimizeSummary'),
+      crmOptimizeToggle=$('#crmOptimizeToggle'),
+      crmOptimizeModeLabel=$('#crmOptimizeModeLabel'),
       crmOptimizeApply=$('#crmOptimizeApply'),
       crmOptimizeCancel=$('#crmOptimizeCancel'),
       crmOptimizeClose=$('#crmOptimizeClose'),
@@ -15865,12 +15902,50 @@ function handleClearStageDates(){
   showToast({ title:'PlaneCore', message:'Даты переделов очищены.', tone:'info', autoClose:3500 });
 }
 
+function openCalcModeDialog(){
+  if(!crmCalcModeDlg){
+    return Promise.resolve('fill');
+  }
+  if(crmCalcModeResolver){
+    return Promise.resolve(null);
+  }
+  try{
+    crmCalcModeDlg.showModal();
+  }catch(_err){
+    crmCalcModeDlg.open=true;
+  }
+  return new Promise(resolve=>{
+    crmCalcModeResolver=resolve;
+  });
+}
+
+function closeCalcModeDialog(result){
+  const resolver=crmCalcModeResolver;
+  crmCalcModeResolver=null;
+  if(crmCalcModeDlg?.open){
+    try{
+      crmCalcModeDlg.close();
+    }catch(_err){
+      crmCalcModeDlg.open=false;
+    }
+  }
+  if(typeof resolver==='function'){
+    resolver(result||null);
+  }
+}
+
 function handleStageDatesCalculation(options={}){
   if(!crmCanManageOrders()){
     showToast({ title:'PlaneCore', message:'Недостаточно прав для пересчёта дат.', tone:'warn' });
     return;
   }
-  calculateOrderStageDates(options);
+  openCalcModeDialog().then(mode=>{
+    if(mode==='optimize'){
+      calculateOrderStageDates({ ...options, mode:'optimize' });
+    }else if(mode==='fill'){
+      calculateOrderStageDates({ ...options, mode:'fill', skipOptimizationPrompt:true });
+    }
+  }).catch(err=>console.error(err));
 }
 
 function calculateOrderStageDates(options={}){
@@ -15881,7 +15956,8 @@ function calculateOrderStageDates(options={}){
     return;
   }
   const opts=options&&typeof options==='object'?options:{};
-  const skipOptimizationPrompt=opts.skipOptimizationPrompt===true;
+  const mode=opts.mode==='optimize'?'optimize':'fill';
+  const skipOptimizationPrompt=opts.skipOptimizationPrompt===true || mode!=='optimize';
   const orderId=(orderForm?.id?.value||'').trim();
   const orderTitle=deriveEditingOrderTitle();
   const errors=[];
@@ -15927,7 +16003,9 @@ function calculateOrderStageDates(options={}){
         stageKey,
         kind:'start',
         delayDays:scheduleResult.delayDays,
-        blocking:scheduleResult.blocking
+        blocking:scheduleResult.blocking,
+        targetStartIso:scheduleResult.earliestIso||'',
+        currentStartIso:scheduleResult.startIso||''
       });
     }
     if(scheduleResult.finishDelayDays>0){
@@ -15937,7 +16015,9 @@ function calculateOrderStageDates(options={}){
         stageKey,
         kind:'finish',
         delayDays:scheduleResult.finishDelayDays,
-        blocking: Array.isArray(scheduleResult.finishBlocking)?scheduleResult.finishBlocking:[]
+        blocking:Array.isArray(scheduleResult.finishBlocking)?scheduleResult.finishBlocking:[],
+        targetEndIso:scheduleResult.idealEndIso||'',
+        currentEndIso:scheduleResult.endIso||''
       });
     }
   });
@@ -15952,7 +16032,9 @@ function calculateOrderStageDates(options={}){
     showToast({ title:'PlaneCore', message:'Пересчёт не потребовался: свободных дат нет.', tone:'info', autoClose:3500 });
   }
   if(suggestions.length && !skipOptimizationPrompt){
-    maybePromptStageOptimization(suggestions);
+    maybePromptStageOptimization(suggestions,{ mode });
+  }else if(mode==='optimize' && !suggestions.length && !errors.length){
+    showToast({ title:'PlaneCore', message:'Оптимизация не требуется: все переделы уже размещены максимально рано.', tone:'info', autoClose:4000 });
   }
 }
 
@@ -16098,7 +16180,9 @@ function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestS
     delayDays,
     blocking,
     finishDelayDays,
-    finishBlocking
+    finishBlocking,
+    earliestIso:fmtDateISO(earliestClamped),
+    idealEndIso:idealEndDate?fmtDateISO(idealEndDate):null
   };
 }
 
@@ -16132,20 +16216,72 @@ function normalizeCrmOptimizationEntries(entries){
     const delay=Math.max(0, Number(entry.delayDays)||0);
     if(!(delay>0)) return null;
     const kind=entry.kind==='finish'?'finish':'start';
+    const currentStartIso=coerceCalendarIso(entry.currentStartIso||entry.startIso||'');
+    const targetStartIso=coerceCalendarIso(entry.targetStartIso||entry.earliestIso||'');
+    const currentEndIso=coerceCalendarIso(entry.currentEndIso||entry.endIso||'');
+    const targetEndIso=coerceCalendarIso(entry.targetEndIso||entry.idealEndIso||'');
+    const blocking=Array.isArray(entry.blocking)?entry.blocking:[];
+    const blockingCountRaw=Number(entry.blockingCount);
+    const blockingCount=Number.isFinite(blockingCountRaw)?Math.max(0, Math.round(blockingCountRaw)):blocking.length;
     return {
       id:entry.id||`opt-${stageKey}-${kind}-${index}`,
       stageKey,
       stageLabel:entry.stageLabel||CRM_STAGE_LABELS[stageKey]||stageKey,
       kind,
       delayDays:delay,
-      blocking:Array.isArray(entry.blocking)?entry.blocking:[]
+      blocking,
+      blockingCount,
+      currentStartIso,
+      targetStartIso,
+      currentEndIso,
+      targetEndIso
     };
   }).filter(Boolean);
+}
+
+function formatCrmOptimizationDate(iso){
+  if(typeof iso!=='string' || !iso) return '';
+  return fmtDateHuman(iso);
+}
+
+function updateCrmOptimizationSummary(entries){
+  if(!crmOptimizeSummary) return;
+  if(!Array.isArray(entries) || !entries.length){
+    crmOptimizeSummary.hidden=true;
+    crmOptimizeSummary.textContent='';
+    return;
+  }
+  const affectedOrders=entries.reduce((sum,entry)=>sum+Math.max(0, entry.blockingCount||entry.blocking?.length||0),0);
+  const affectedText=affectedOrders>0
+    ?`затронет ${affectedOrders} заказ(ов)`
+    :'без затрагивания других заказов';
+  crmOptimizeSummary.textContent=`Найдено ${entries.length} вариантов оптимизации, ${affectedText}.`;
+  crmOptimizeSummary.hidden=false;
+}
+
+function applyCrmOptimizeCompactState(){
+  if(crmOptimizeDlg){
+    crmOptimizeDlg.dataset.compact=crmOptimizeCompact?'1':'0';
+  }
+  if(crmOptimizeModeLabel){
+    crmOptimizeModeLabel.textContent=crmOptimizeCompact?'кратко':'подробно';
+  }
+}
+
+function setCrmOptimizeCompact(next){
+  crmOptimizeCompact=!!next;
+  applyCrmOptimizeCompactState();
+  renderCrmOptimizationEntries(crmOptimizeCurrentEntries);
 }
 
 function renderCrmOptimizationEntries(entries){
   if(!crmOptimizeList) return;
   crmOptimizeList.innerHTML='';
+  updateCrmOptimizationSummary(entries);
+  applyCrmOptimizeCompactState();
+  if(!Array.isArray(entries) || !entries.length){
+    return;
+  }
   entries.forEach(entry=>{
     const item=document.createElement('label');
     item.className='crm-optimize-item';
@@ -16165,9 +16301,33 @@ function renderCrmOptimizationEntries(entries){
     const details=document.createElement('div');
     details.className='crm-optimize-item__details';
     details.textContent=entry.kind==='finish'
-      ?'Можно освободить более ранние даты завершения, перераспределив текущую очередь.'
-      :'Ранние дни заняты другими заказами. Оптимизация подвинет их без потери сроков.';
-    body.append(title, details);
+      ?'Можно закончить раньше за счёт перераспределения очереди без нарушения сроков.'
+      :'В ранних днях нет свободных часов. Перестановка очереди освободит окно без просрочек.';
+    const stats=document.createElement('div');
+    stats.className='crm-optimize-item__stats';
+    const affected=Math.max(0, entry.blockingCount||entry.blocking?.length||0);
+    stats.textContent=affected>0
+      ?`Потребуется скорректировать ${affected} заказ(ов)`
+      :'Дополнительные заказы затрагиваться не будут';
+    const timeline=document.createElement('div');
+    timeline.className='crm-optimize-item__timeline';
+    if(entry.kind==='start' && entry.targetStartIso){
+      const targetLabel=formatCrmOptimizationDate(entry.targetStartIso);
+      const currentLabel=formatCrmOptimizationDate(entry.currentStartIso||entry.startIso||'');
+      if(targetLabel && currentLabel){
+        timeline.textContent=`Начало: ${targetLabel} → ${currentLabel}`;
+      }
+    }else if(entry.kind==='finish' && entry.targetEndIso){
+      const targetLabel=formatCrmOptimizationDate(entry.targetEndIso);
+      const currentLabel=formatCrmOptimizationDate(entry.currentEndIso||entry.endIso||'');
+      if(targetLabel && currentLabel){
+        timeline.textContent=`Завершение: ${targetLabel} → ${currentLabel}`;
+      }
+    }
+    body.append(title, details, stats);
+    if(timeline.textContent){
+      body.appendChild(timeline);
+    }
     if(entry.blocking.length){
       const list=document.createElement('ul');
       list.className='crm-optimize-item__blocking';
@@ -16189,6 +16349,8 @@ function openCrmOptimizationPrompt(entries){
   if(!crmOptimizeDlg) return Promise.resolve(null);
   const normalized=normalizeCrmOptimizationEntries(entries);
   if(!normalized.length) return Promise.resolve(null);
+  crmOptimizeCompact=true;
+  applyCrmOptimizeCompactState();
   crmOptimizeCurrentEntries=normalized;
   renderCrmOptimizationEntries(normalized);
   try{
@@ -16205,6 +16367,10 @@ function closeCrmOptimizationPrompt(result){
   const resolver=crmOptimizeResolver;
   crmOptimizeResolver=null;
   crmOptimizeCurrentEntries=[];
+  if(crmOptimizeSummary){
+    crmOptimizeSummary.hidden=true;
+    crmOptimizeSummary.textContent='';
+  }
   if(crmOptimizeDlg?.open){
     try{
       crmOptimizeDlg.close();
@@ -16238,7 +16404,7 @@ function handleCrmOptimizationApply(){
   closeCrmOptimizationPrompt({ stageKeys:selected });
 }
 
-function maybePromptStageOptimization(entries){
+function maybePromptStageOptimization(entries, context={}){
   openCrmOptimizationPrompt(entries).then(result=>{
     if(!result || !(result.stageKeys instanceof Set) || result.stageKeys.size===0) return;
     const changedQueue=runCrmAutoOptimization({ reason:'calc-dates', stageKeys:result.stageKeys });
@@ -16246,7 +16412,7 @@ function maybePromptStageOptimization(entries){
       save('Оптимизация очереди перед расчётом дат');
       renderCurrentView();
     }
-    calculateOrderStageDates({ skipOptimizationPrompt:true });
+    calculateOrderStageDates({ mode:context.mode||'optimize', skipOptimizationPrompt:true });
   }).catch(err=>console.error(err));
 }
 
@@ -19816,6 +19982,24 @@ if(crmStageReserveInput){
     renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
   });
 }
+if(crmCalcModeFill){
+  crmCalcModeFill.addEventListener('click',()=>closeCalcModeDialog('fill'));
+}
+if(crmCalcModeOptimize){
+  crmCalcModeOptimize.addEventListener('click',()=>closeCalcModeDialog('optimize'));
+}
+if(crmCalcModeCancel){
+  crmCalcModeCancel.addEventListener('click',()=>closeCalcModeDialog(null));
+}
+if(crmCalcModeClose){
+  crmCalcModeClose.addEventListener('click',()=>closeCalcModeDialog(null));
+}
+if(crmCalcModeDlg){
+  crmCalcModeDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCalcModeDialog(null);
+  });
+}
 if(crmOptimizeForm){
   crmOptimizeForm.addEventListener('submit',evt=>{
     evt.preventDefault();
@@ -19830,6 +20014,9 @@ if(crmOptimizeApply){
 }
 if(crmOptimizeCancel){
   crmOptimizeCancel.addEventListener('click',()=>closeCrmOptimizationPrompt(null));
+}
+if(crmOptimizeToggle){
+  crmOptimizeToggle.addEventListener('click',()=>setCrmOptimizeCompact(!crmOptimizeCompact));
 }
 if(crmOptimizeClose){
   crmOptimizeClose.addEventListener('click',()=>closeCrmOptimizationPrompt(null));
