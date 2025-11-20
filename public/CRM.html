@@ -4795,7 +4795,7 @@
   }
 
   dialog#orderDlg {
-    width: min(1120px, 96vw);
+    width: min(1240px, 98vw);
     border-radius: var(--pc-radius-xxl, 32px);
     overflow: hidden;
   }
@@ -5081,6 +5081,23 @@
     vertical-align: middle;
   }
 
+  #stagesTable th.col-progress,
+  #stagesTable td.col-progress {
+    width: 140px;
+  }
+
+  #stagesTable th.col-start,
+  #stagesTable td.col-start,
+  #stagesTable th.col-end,
+  #stagesTable td.col-end {
+    width: 136px;
+  }
+
+  #stagesTable th.col-rate,
+  #stagesTable td.col-rate {
+    width: 120px;
+  }
+
   #stagesTable input:not([type="checkbox"]),
   #stagesTable select {
     width: 100%;
@@ -5144,6 +5161,35 @@
 
   #stagesTable td.actions button {
     margin-left: 4px;
+  }
+
+  .section-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--pc-spacing-lg);
+    margin-top: var(--pc-spacing-md);
+    flex-wrap: wrap;
+  }
+
+  .section-toolbar .left,
+  .section-toolbar .right {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+  }
+
+  .crm-stage-date-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: var(--pc-spacing-sm);
+    margin-top: -4px;
+  }
+
+  .crm-stage-date-tools .pc-btn {
+    white-space: nowrap;
   }
 
   .stage-hours-cell {
@@ -5673,29 +5719,6 @@
 </dialog>
 
 
-<dialog id="crmCalcModeDlg" class="pc-modal pc-modal--sm">
-  <div class="dlg-head">
-    <strong>Режим расчёта дат</strong>
-    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmCalcModeClose" aria-label="Закрыть">✖</button>
-  </div>
-  <div class="dlg-body crm-calc-mode">
-    <button type="button" class="crm-calc-mode__option" id="crmCalcModeFill">
-      <span class="crm-calc-mode__badge">Вариант 1</span>
-      <span class="crm-calc-mode__title">Заполнить пустоты</span>
-      <span class="crm-calc-mode__desc">Свободные слоты текущего плана заполняются по каждому переделу, остаток размещается в хвост очереди без изменения чужих дат.</span>
-    </button>
-    <button type="button" class="crm-calc-mode__option" id="crmCalcModeOptimize">
-      <span class="crm-calc-mode__badge">Вариант 2</span>
-      <span class="crm-calc-mode__title">Оптимизировать очередь</span>
-      <span class="crm-calc-mode__desc">Система подбирает более ранние даты старта и завершения, не нарушая сроки других заказов, и предложит подтвердить переносы, прежде чем применять.</span>
-    </button>
-  </div>
-  <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmCalcModeCancel">Отмена</button>
-  </div>
-</dialog>
-
-
 <dialog id="crmOptimizeDlg" class="pc-modal pc-modal--md">
   <div class="dlg-head">
     <strong>Оптимизация дат переделов</strong>
@@ -5744,7 +5767,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-link" title="Связь с предыдущим переделом">⛓</th><th>Прогресс, %</th><th>Начало</th><th>Конец</th><th>Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-link" title="Связь с предыдущим переделом">⛓</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
             <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -6288,7 +6311,7 @@ const iconPart=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="28" fill="#15341e"/><path d="M32 4a28 28 0 0 0 0 56z" fill="#70e000"/></svg>`);
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
-const DEFAULT_STAGES=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
+const DEFAULT_STAGES=['Подготовка в работу','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
 const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
@@ -7451,7 +7474,6 @@ let crmOrderReadinessClose=null;
 let crmOrderReadinessCloseIcon=null;
 let crmJournalClear=null;
 let orderDone=null;
-let crmCalcModeResolver=null;
 let crmOptimizeResolver=null;
 let crmOptimizeCurrentEntries=[];
 let crmOptimizeCompact=true;
@@ -8972,11 +8994,6 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
       crmStageReserveApply=$('#crmStageReserveApply'),
-      crmCalcModeDlg=$('#crmCalcModeDlg'),
-      crmCalcModeFill=$('#crmCalcModeFill'),
-      crmCalcModeOptimize=$('#crmCalcModeOptimize'),
-      crmCalcModeCancel=$('#crmCalcModeCancel'),
-      crmCalcModeClose=$('#crmCalcModeClose'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
       crmOptimizeForm=$('#crmOptimizeForm'),
       crmOptimizeList=$('#crmOptimizeList'),
@@ -14436,7 +14453,7 @@ function renderCrmStageTable(){
   let totalRest=0;
   if(stats){
     const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=`${label}: 0 • Активных: 0`;
+    stats.textContent=label;
   }
   crmStageRowsFullCache=allRows.slice();
   if(!allRows.length){
@@ -14656,7 +14673,7 @@ function renderCrmStageTable(){
   };
   if(stats){
     const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=`${label}: ${counts.total} • Активных: ${counts.active}`;
+    stats.textContent=label;
   }
   updateCrmStageTotals(totals);
   renderCrmStageOverdue(overdueEntries);
@@ -15929,50 +15946,12 @@ function handleClearStageDates(){
   showToast({ title:'PlaneCore', message:'Даты переделов очищены.', tone:'info', autoClose:3500 });
 }
 
-function openCalcModeDialog(){
-  if(!crmCalcModeDlg){
-    return Promise.resolve('fill');
-  }
-  if(crmCalcModeResolver){
-    return Promise.resolve(null);
-  }
-  try{
-    crmCalcModeDlg.showModal();
-  }catch(_err){
-    crmCalcModeDlg.open=true;
-  }
-  return new Promise(resolve=>{
-    crmCalcModeResolver=resolve;
-  });
-}
-
-function closeCalcModeDialog(result){
-  const resolver=crmCalcModeResolver;
-  crmCalcModeResolver=null;
-  if(crmCalcModeDlg?.open){
-    try{
-      crmCalcModeDlg.close();
-    }catch(_err){
-      crmCalcModeDlg.open=false;
-    }
-  }
-  if(typeof resolver==='function'){
-    resolver(result||null);
-  }
-}
-
 function handleStageDatesCalculation(options={}){
   if(!crmCanManageOrders()){
     showToast({ title:'PlaneCore', message:'Недостаточно прав для пересчёта дат.', tone:'warn' });
     return;
   }
-  openCalcModeDialog().then(mode=>{
-    if(mode==='optimize'){
-      calculateOrderStageDates({ ...options, mode:'optimize' });
-    }else if(mode==='fill'){
-      calculateOrderStageDates({ ...options, mode:'fill', skipOptimizationPrompt:true });
-    }
-  }).catch(err=>console.error(err));
+  calculateOrderStageDates({ ...options, mode:'fill', skipOptimizationPrompt:true });
 }
 
 function calculateOrderStageDates(options={}){
@@ -15983,8 +15962,7 @@ function calculateOrderStageDates(options={}){
     return;
   }
   const opts=options&&typeof options==='object'?options:{};
-  const mode=opts.mode==='optimize'?'optimize':'fill';
-  const skipOptimizationPrompt=opts.skipOptimizationPrompt===true || mode!=='optimize';
+  const skipOptimizationPrompt=true;
   const orderId=(orderForm?.id?.value||'').trim();
   const orderTitle=deriveEditingOrderTitle();
   const errors=[];
@@ -16061,9 +16039,7 @@ function calculateOrderStageDates(options={}){
     return start>0 || finish>0;
   });
   if(suggestions.length && !skipOptimizationPrompt){
-    maybePromptStageOptimization(suggestions,{ mode });
-  }else if(mode==='optimize' && !suggestions.length && !errors.length){
-    showToast({ title:'PlaneCore', message:'Оптимизация не требуется: все переделы уже размещены максимально рано.', tone:'info', autoClose:4000 });
+    maybePromptStageOptimization(suggestions,{ mode:'fill' });
   }
 }
 
@@ -16969,10 +16945,10 @@ function appendStageRow(st){
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
     <td class="col-link"><button type="button" class="pc-icon-btn stage-link-toggle" aria-pressed="${linkEnabled?'true':'false'}" title="Связь с предыдущим переделом">${linkEnabled?'🔗':'⛓'}</button></td>
-    <td>${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
-    <td><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
-    <td><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
-    <td>${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
+    <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
+    <td class="col-start"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
+    <td class="col-end"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
+    <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
     <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
   const reorderCell=document.createElement('td');
   reorderCell.className='reorder';
@@ -18647,7 +18623,7 @@ function recordTrashEntry(entry){
 }
 
 function pushOrderToTrash(order, board){
-  if(!order) return;
+  if(!order || !order.id) return;
   const entry={
     id:generateTrashId(),
     type:CRM_TRASH_ENTRY_TYPES.order,
@@ -18664,7 +18640,7 @@ function pushOrderToTrash(order, board){
 }
 
 function pushStageToTrash(order, stage, board, position){
-  if(!order||!stage) return;
+  if(!order||!order.id||!stage) return;
   const stageId=ensureStageIdentity(stage);
   const stageClone=deepClone(stage);
   ensureStageIdentity(stageClone,stageId);
@@ -20019,24 +19995,6 @@ if(crmStageReserveInput){
   crmStageReserveInput.addEventListener('input',()=>{
     const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
     renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
-  });
-}
-if(crmCalcModeFill){
-  crmCalcModeFill.addEventListener('click',()=>closeCalcModeDialog('fill'));
-}
-if(crmCalcModeOptimize){
-  crmCalcModeOptimize.addEventListener('click',()=>closeCalcModeDialog('optimize'));
-}
-if(crmCalcModeCancel){
-  crmCalcModeCancel.addEventListener('click',()=>closeCalcModeDialog(null));
-}
-if(crmCalcModeClose){
-  crmCalcModeClose.addEventListener('click',()=>closeCalcModeDialog(null));
-}
-if(crmCalcModeDlg){
-  crmCalcModeDlg.addEventListener('cancel',evt=>{
-    evt.preventDefault();
-    closeCalcModeDialog(null);
   });
 }
 if(crmOptimizeForm){
