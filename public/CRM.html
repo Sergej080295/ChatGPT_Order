@@ -24,12 +24,14 @@
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
+  const CONNECTION_LOSS_REDIRECT_MS = 20000;
   let keepAliveIntervalMs = null;
   let idleLogoutThresholdMs = DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
   let keepAliveTimerId = null;
   let keepAlivePromise = null;
   let lastActivityAt = Date.now();
   let sessionExpired = false;
+  let connectionLossTimerId = null;
 
   const resolveKeepAliveInterval = () => {
     const candidates = [
@@ -71,10 +73,27 @@
     lastActivityAt = Date.now();
   };
 
+  const clearConnectionLossRedirect = () => {
+    if (connectionLossTimerId) {
+      clearTimeout(connectionLossTimerId);
+      connectionLossTimerId = null;
+    }
+  };
+
+  const armConnectionLossRedirect = (origin = 'connection-lost') => {
+    if (sessionExpired) return;
+    if (connectionLossTimerId) return;
+    connectionLossTimerId = setTimeout(() => {
+      connectionLossTimerId = null;
+      handleSessionExpired(origin);
+    }, CONNECTION_LOSS_REDIRECT_MS);
+  };
+
   const handleSessionExpired = (origin) => {
     if (sessionExpired) {
       return;
     }
+    clearConnectionLossRedirect();
     sessionExpired = true;
     if (refreshTimerId) {
       clearInterval(refreshTimerId);
@@ -127,8 +146,10 @@
         if (!res.ok) {
           return null;
         }
+        clearConnectionLossRedirect();
         return await res.json().catch(() => null);
       } catch (_err) {
+        armConnectionLossRedirect('keepalive');
         return null;
       } finally {
         keepAlivePromise = null;
@@ -284,6 +305,9 @@
       try { source.close(); } catch (err) { /* ignore */ }
     }
     source = new EventSource(EVENTS_ENDPOINT);
+    source.onopen = () => {
+      clearConnectionLossRedirect();
+    };
     source.onmessage = async (event) => {
       if (!event?.data) {
         notify(null);
@@ -317,6 +341,7 @@
       }
     };
     source.onerror = () => {
+      armConnectionLossRedirect('sse');
       if (source) {
         try { source.close(); } catch (err) { /* ignore */ }
       }
@@ -326,25 +351,31 @@
   };
 
   const loadState = async (options = {}) => {
-    const res = await fetch(STATE_ENDPOINT, {
-      headers: { 'Accept': 'application/json,text/plain' },
-      credentials: 'same-origin'
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      if (res.status === 401) {
-        handleSessionExpired('state-load');
+    try {
+      const res = await fetch(STATE_ENDPOINT, {
+        headers: { 'Accept': 'application/json,text/plain' },
+        credentials: 'same-origin'
+      });
+      clearConnectionLossRedirect();
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        if (res.status === 401) {
+          handleSessionExpired('state-load');
+        }
+        throw new Error(detail || `HTTP ${res.status}`);
       }
-      throw new Error(detail || `HTTP ${res.status}`);
+      const text = await res.text();
+      const bodyInfo = extractBodyFingerprint(text);
+      const etag = res.headers.get('ETag');
+      updateFingerprint({ etag, hash: bodyInfo?.hash });
+      if (options && (options.withMeta || options.returnMeta)) {
+        return { state: text, etag: currentEtag, hash: currentHash };
+      }
+      return text;
+    } catch (err) {
+      armConnectionLossRedirect('state-load');
+      throw err;
     }
-    const text = await res.text();
-    const bodyInfo = extractBodyFingerprint(text);
-    const etag = res.headers.get('ETag');
-    updateFingerprint({ etag, hash: bodyInfo?.hash });
-    if (options && (options.withMeta || options.returnMeta)) {
-      return { state: text, etag: currentEtag, hash: currentHash };
-    }
-    return text;
   };
 
   const saveState = async (payload, meta) => {
@@ -476,6 +507,7 @@
         return null;
       } catch (err) {
         console.warn('plannerRemote state refresh failed', err);
+        armConnectionLossRedirect('state-refresh');
         return null;
       } finally {
         refreshPromise = null;
@@ -1164,8 +1196,8 @@
   .crm-admin-form {
     display: grid;
     gap: var(--pc-spacing-md);
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    align-items: flex-end;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    align-items: start;
   }
 
   .crm-admin-field {
@@ -1200,8 +1232,9 @@
 
   .crm-admin-role-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: var(--pc-spacing-lg);
+    align-items: start;
   }
 
   .crm-admin-role-card {
@@ -1275,6 +1308,8 @@
   .crm-admin-permission-grid {
     display: grid;
     gap: var(--pc-spacing-lg);
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    align-items: start;
   }
 
   .crm-admin-permission-group h4 {
@@ -1302,7 +1337,7 @@
 
   .crm-admin-role-create {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: var(--pc-spacing-md);
     padding: var(--pc-spacing-lg);
     margin-bottom: var(--pc-spacing-lg);
@@ -1319,6 +1354,7 @@
   .crm-admin-role-create .crm-admin-field--actions {
     display: flex;
     align-items: flex-end;
+    justify-content: flex-start;
   }
 
   .crm-admin-permission-option {
@@ -2315,6 +2351,10 @@
 
   .crm-toolbar__stats {
     font-size: 13px;
+  }
+
+  .crm-toolbar__stats.is-hidden {
+    display: none;
   }
 
   .crm-orders-view {
@@ -14259,12 +14299,26 @@ function bindCrmOrdersScrollSync(){
   crmOrdersTotalsBox.dataset.totalsSyncBound='1';
 }
 
+function hideCrmToolbarStats(){
+  if(!stats) return;
+  stats.textContent='';
+  stats.classList.add('is-hidden');
+  stats.setAttribute('aria-hidden','true');
+}
+
+function showCrmToolbarStats(text){
+  if(!stats) return;
+  stats.textContent=text||'';
+  stats.classList.remove('is-hidden');
+  stats.removeAttribute('aria-hidden');
+}
+
 function updateCrmOrdersStats(meta){
   if(!stats) return;
   if(orderSearchNormalized){
-    stats.textContent=`Совпадений: ${meta.filteredTotal} • Активных: ${meta.filteredActive}`;
+    showCrmToolbarStats(`Совпадений: ${meta.filteredTotal} • Активных: ${meta.filteredActive}`);
   }else{
-    stats.textContent=`Всего: ${meta.totalOrders} • Активных: ${meta.totalActive}`;
+    showCrmToolbarStats(`Всего: ${meta.totalOrders} • Активных: ${meta.totalActive}`);
   }
 }
 
@@ -14451,10 +14505,7 @@ function renderCrmStageTable(){
   let totalBase=0;
   let totalExtra=0;
   let totalRest=0;
-  if(stats){
-    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=label;
-  }
+  hideCrmToolbarStats();
   crmStageRowsFullCache=allRows.slice();
   if(!allRows.length){
     if(crmStageEmpty){
@@ -14671,10 +14722,7 @@ function renderCrmStageTable(){
     active:activeCount,
     done:doneCount
   };
-  if(stats){
-    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    stats.textContent=label;
-  }
+  hideCrmToolbarStats();
   updateCrmStageTotals(totals);
   renderCrmStageOverdue(overdueEntries);
   renderCrmStageViews(schedule, visibleRows, stageKey, activeFilter);
@@ -15428,9 +15476,9 @@ function renderCards(){
   });
   if(stats){
     if(orderSearchNormalized){
-      stats.textContent=`Совпадений: ${filteredTotal} • Активных: ${filteredActive}`;
+      showCrmToolbarStats(`Совпадений: ${filteredTotal} • Активных: ${filteredActive}`);
     }else{
-      stats.textContent=`Всего: ${totalOrders} • Активных: ${totalActive}`;
+      showCrmToolbarStats(`Всего: ${totalOrders} • Активных: ${totalActive}`);
     }
   }
   updateSearchUI();
