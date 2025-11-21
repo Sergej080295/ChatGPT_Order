@@ -24,7 +24,7 @@
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
-  const CONNECTION_LOSS_REDIRECT_MS = 20000;
+  const CONNECTION_LOSS_REDIRECT_MS = 6000;
   let keepAliveIntervalMs = null;
   let idleLogoutThresholdMs = DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
   let keepAliveTimerId = null;
@@ -32,6 +32,7 @@
   let lastActivityAt = Date.now();
   let sessionExpired = false;
   let connectionLossTimerId = null;
+  let connectionLossReason = null;
 
   const resolveKeepAliveInterval = () => {
     const candidates = [
@@ -73,27 +74,45 @@
     lastActivityAt = Date.now();
   };
 
-  const clearConnectionLossRedirect = () => {
+  const clearConnectionLossRedirect = (force = false) => {
+    if (connectionLossReason === 'server-restart' && !force) {
+      return;
+    }
     if (connectionLossTimerId) {
       clearTimeout(connectionLossTimerId);
       connectionLossTimerId = null;
     }
+    connectionLossReason = null;
   };
 
   const armConnectionLossRedirect = (origin = 'connection-lost') => {
     if (sessionExpired) return;
     if (connectionLossTimerId) return;
+    connectionLossReason = origin;
     connectionLossTimerId = setTimeout(() => {
       connectionLossTimerId = null;
       handleSessionExpired(origin);
     }, CONNECTION_LOSS_REDIRECT_MS);
   };
 
+  const sessionExpiredMessage = (origin) => {
+    if (origin === 'server-restart' || origin === 'sse' || origin === 'state-load') {
+      return 'Сервер был перезапущен или временно недоступен. Выполните вход повторно.';
+    }
+    if (origin === 'keepalive') {
+      return 'Сеанс завершён. Выполните вход повторно.';
+    }
+    if (origin === 'idle-timeout') {
+      return 'Сессия завершена из-за длительного простоя. Выполните вход повторно.';
+    }
+    return 'Сессия истекла. Выполните вход повторно.';
+  };
+
   const handleSessionExpired = (origin) => {
     if (sessionExpired) {
       return;
     }
-    clearConnectionLossRedirect();
+    clearConnectionLossRedirect(true);
     sessionExpired = true;
     if (refreshTimerId) {
       clearInterval(refreshTimerId);
@@ -108,11 +127,11 @@
       catch (_err) { /* ignore */ }
       source = null;
     }
-    const reason = origin ? ` (источник: ${origin})` : '';
+    const reason = sessionExpiredMessage(origin || '');
     try {
       showToast({
         title: 'CRM',
-        message: `Сессия истекла${reason}. Выполните вход повторно.`,
+        message: reason,
         tone: 'warn',
         autoClose: 6000
       });
@@ -149,7 +168,7 @@
         clearConnectionLossRedirect();
         return await res.json().catch(() => null);
       } catch (_err) {
-        armConnectionLossRedirect('keepalive');
+        armConnectionLossRedirect('server-restart');
         return null;
       } finally {
         keepAlivePromise = null;
@@ -341,7 +360,7 @@
       }
     };
     source.onerror = () => {
-      armConnectionLossRedirect('sse');
+      armConnectionLossRedirect('server-restart');
       if (source) {
         try { source.close(); } catch (err) { /* ignore */ }
       }
@@ -373,7 +392,7 @@
       }
       return text;
     } catch (err) {
-      armConnectionLossRedirect('state-load');
+      armConnectionLossRedirect('server-restart');
       throw err;
     }
   };
@@ -3805,18 +3824,11 @@
     color: color-mix(in srgb, var(--pc-danger) 85%, #3d0500);
   }
 
-  .order-eye-btn {
-    background: none;
-    border: none;
+  .crm-linklike {
     cursor: pointer;
-    font-size: 18px;
-    line-height: 1;
+    color: var(--pc-link, #2563eb);
   }
 
-  .order-eye-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
 
   .orders-overview-totals {
     margin: 4px 0 0;
@@ -5581,7 +5593,6 @@
               <col style="width:52px">
               <col style="width:48px">
               <col style="width:44px">
-              <col style="width:44px">
               <col style="width:260px">
               <col style="width:96px">
               <col style="width:120px">
@@ -5597,7 +5608,6 @@
             <thead>
               <tr>
                 <th>№</th>
-                <th>👁</th>
                 <th title="Маршрут заказа">⇆</th>
                 <th title="Закрепить распределение заказа">📎</th>
                 <th>Заказ</th>
@@ -5616,7 +5626,7 @@
             <tbody></tbody>
             <tfoot>
               <tr>
-                <td colspan="6" class="crm-stage-total-label">Итого:</td>
+                <td colspan="5" class="crm-stage-total-label">Итого:</td>
                 <td id="crmStageTotalHours">0 ч</td>
                 <td id="crmStageTotalRest">0 ч</td>
                 <td colspan="7"></td>
@@ -6165,6 +6175,26 @@
     <div class="crm-order-mini__actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmOrderReadinessClose">Закрыть</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="crmLateReasonDlg" class="pc-modal pc-modal--sm" aria-label="Причина просрочки">
+  <div class="dlg-head">
+    <strong>Этап завершён с просрочкой</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmLateReasonClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <p class="pc-muted">Укажите причину просрочки или отметьте выполнение вчера.</p>
+    <label class="pc-field">
+      <span class="pc-field__label">Причина</span>
+      <textarea id="crmLateReasonInput" rows="3" placeholder="Например: ожидали заготовки"></textarea>
+    </label>
+    <div class="pc-alert pc-alert--warn" id="crmLateReasonError" hidden></div>
+  </div>
+  <div class="dlg-footer">
+    <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel">Отмена</button>
+    <button class="pc-btn" type="button" id="crmLateReasonSave">Сохранить</button>
+    <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday">Выполнено вчера</button>
   </div>
 </dialog>
 
@@ -9055,6 +9085,13 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmJournalDetailContent=$('#crmJournalDetailContent'),
       crmJournalDetailClose=$('#crmJournalDetailClose'),
       crmJournalDetailCloseIcon=$('#crmJournalDetailCloseIcon'),
+      crmLateReasonDlg=$('#crmLateReasonDlg'),
+      crmLateReasonInput=$('#crmLateReasonInput'),
+      crmLateReasonError=$('#crmLateReasonError'),
+      crmLateReasonSave=$('#crmLateReasonSave'),
+      crmLateReasonCancel=$('#crmLateReasonCancel'),
+      crmLateReasonClose=$('#crmLateReasonClose'),
+      crmLateReasonYesterday=$('#crmLateReasonYesterday'),
       crmAdminNavBtn=$('#crmAdminNavBtn'),
       crmSettingsNavBtn=$('#crmSettingsNavBtn'),
       crmAdminDlg=$('#crmAdminDlg'),
@@ -11819,9 +11856,15 @@ function renderCrmStageGantt(rows, schedule){
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach(row=>{
+    const orderId=row.orderId||row.order?.id||'';
     const label=document.createElement('div');
     label.className='crm-stage-gantt-left-row';
     label.textContent=`${row.displayIndex}. ${row.orderTitle||'Заказ'}`;
+    if(orderId && crmCanViewOrderDetails()){
+      label.classList.add('crm-linklike');
+      label.title='Открыть карточку заказа';
+      label.addEventListener('dblclick',()=>openOrder(orderId));
+    }
     fragmentLeft.appendChild(label);
     const rowEl=document.createElement('div');
     rowEl.className='crm-stage-gantt-row';
@@ -12361,6 +12404,11 @@ function renderCrmRouteDetailed(dataset, days){
     label.className='crm-route-label';
     label.textContent=`${index+1}. ${order.title||'Заказ'}`;
     label.title=label.textContent;
+    const orderId=order?.order?.id||order.orderId||order.id||'';
+    if(orderId && crmCanViewOrderDetails()){
+      label.classList.add('crm-linklike');
+      label.addEventListener('dblclick',()=>openOrder(orderId));
+    }
     leftFragment.appendChild(label);
     const orderRow=createCrmRouteRow(days);
     bodyFragment.appendChild(orderRow);
@@ -12472,6 +12520,11 @@ function renderCrmRouteCompact(dataset, days){
     label.className='crm-route-label';
     label.textContent=`${index+1}. ${order.title||'Заказ'}`;
     label.title=label.textContent;
+    const orderId=order?.order?.id||order.orderId||order.id||'';
+    if(orderId && crmCanViewOrderDetails()){
+      label.classList.add('crm-linklike');
+      label.addEventListener('dblclick',()=>openOrder(orderId));
+    }
     leftFragment.appendChild(label);
     const row=createCrmRouteRow(days);
     const stageInstances=Array.isArray(order.stageInstances)?order.stageInstances:[];
@@ -14330,7 +14383,7 @@ function renderOrdersTable(){
   if(!rows.length){
     const tr=document.createElement('tr');
     const td=document.createElement('td');
-    td.colSpan=14;
+    td.colSpan=13;
     td.className='orders-overview-empty';
     td.textContent='Нет заказов для отображения';
     tr.appendChild(td);
@@ -14349,7 +14402,6 @@ function renderOrdersTable(){
     const title=buildCrmOrderTitle(entry.order);
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
-      <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
       <td>${renderOrderRouteCell(entry.order)}</td>
       <td>${escapeHtml(title)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.proc)}</td>
@@ -14363,18 +14415,6 @@ function renderOrdersTable(){
       <td>${renderIndicatorCell(entry.snapshot.indicator.pack)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.ship)}</td>
     `;
-    const btn=tr.querySelector('.order-eye-btn');
-    if(btn){
-      const canView=crmCanViewOrderDetails();
-      if(entry.order?.id && canView){
-        btn.addEventListener('click',()=>openOrder(entry.order.id));
-      }else{
-        btn.disabled=true;
-        if(!canView){
-          btn.title='Недостаточно прав для просмотра заказа.';
-        }
-      }
-    }
     const routeBtn=tr.querySelector('.crm-order-route-btn');
     if(routeBtn){
       if(entry.order){
@@ -14610,7 +14650,6 @@ function renderCrmStageTable(){
     const pinModeAttr=pinned?` data-mode="${pinManual?'manual':'auto'}"`:'';
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
-      <td><button class="order-eye-btn" type="button" title="Открыть заказ">👁</button></td>
       <td><button class="crm-stage-route-mini" type="button" title="Маршрут заказа">⇆</button></td>
       <td><button class="${pinClasses.join(' ')}" type="button" title="${escapeHtml(pinTitle)}" ${pinDisabledAttr}${pinModeAttr}>📎</button></td>
       <td>${titleMarkup}</td>
@@ -14625,18 +14664,6 @@ function renderCrmStageTable(){
       <td><input type="checkbox" class="crm-stage-done-toggle" ${doneChecked} ${doneDisabled}></td>
       <td><button class="crm-stage-delete" type="button" title="Удалить из передела" ${deleteDisabled}>×</button></td>
     `;
-    const btn=tr.querySelector('.order-eye-btn');
-    if(btn){
-      const canView=crmCanViewOrderDetails();
-      if(entry.order?.id && canView){
-        btn.addEventListener('click',evt=>{evt.stopPropagation();openOrder(entry.order.id);});
-      }else{
-        btn.disabled=true;
-        if(!canView){
-          btn.title='Недостаточно прав для просмотра заказа.';
-        }
-      }
-    }
     const routeBtn=tr.querySelector('.crm-stage-route-mini');
     if(routeBtn){
       if(entry.order){
@@ -16479,25 +16506,25 @@ function maybePromptStageOptimization(entries, context={}){
   }).catch(err=>console.error(err));
 }
 
-function handleOrderDoneChange(){
+async function handleOrderDoneChange(){
   if(!orderDone || !stagesTableBody) return;
   const markDone=orderDone.checked;
   let allAccepted=true;
-  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+  for(const tr of stagesTableBody.querySelectorAll('tr')){
     const done=tr.querySelector('[data-k="done"]');
     if(!done) return;
     const prog=tr.querySelector('[data-k="progress"]');
     const prevProgress=prog?prog.value:'';
     if(markDone && !done.checked){
       done.checked=true;
-      if(!handleStageDoneToggle(tr, done, { prevProgress })){
+      if(!await handleStageDoneToggle(tr, done, { prevProgress })){
         allAccepted=false;
       }
     }else if(!markDone && done.checked){
       done.checked=false;
-      handleStageDoneToggle(tr, done, { prevProgress });
+      await handleStageDoneToggle(tr, done, { prevProgress });
     }
-  });
+  }
   if(markDone && !allAccepted){
     orderDone.checked=false;
   }
@@ -16810,23 +16837,68 @@ function getStageRowDueDate(tr){
   return date;
 }
 
-function requestStageDelayReason(initialReason){
-  let current=typeof initialReason==='string'?initialReason.trim():'';
-  while(true){
-    const input=window.prompt('Этап завершён с просрочкой. Укажите причину:', current);
-    if(input===null){
-      return null;
-    }
-    const trimmed=String(input).trim();
-    if(trimmed){
-      return trimmed;
-    }
-    window.alert('Необходимо указать причину просрочки, чтобы завершить этап.');
-    current='';
-  }
+function resetLateReasonDialog(errorText){
+  if(!crmLateReasonInput || !crmLateReasonError) return;
+  crmLateReasonInput.value='';
+  crmLateReasonError.textContent=errorText||'';
+  crmLateReasonError.hidden=!errorText;
 }
 
-function processStageCompletionChange(tr, isDone){
+function requestStageDelayReason(initialReason, diffDays){
+  if(!crmLateReasonDlg){
+    return Promise.resolve(null);
+  }
+  resetLateReasonDialog('');
+  crmLateReasonInput.value=(initialReason||'').trim();
+  const allowYesterday=diffDays<=1;
+  if(crmLateReasonYesterday){
+    crmLateReasonYesterday.disabled=false;
+    crmLateReasonYesterday.dataset.allowYesterday=allowYesterday?'1':'0';
+    crmLateReasonYesterday.title=allowYesterday
+      ? 'Отметить выполнение вчера'
+      : 'Доступно, если отставание не превышает 1 день';
+  }
+  return new Promise(resolve=>{
+    const finalize=(result)=>{
+      if(crmLateReasonDlg.open){
+        crmLateReasonDlg.close();
+      }
+      crmLateReasonDlg.removeEventListener('close', onClose);
+      if(crmLateReasonSave) crmLateReasonSave.removeEventListener('click', onSave);
+      if(crmLateReasonCancel) crmLateReasonCancel.removeEventListener('click', onCancel);
+      if(crmLateReasonClose) crmLateReasonClose.removeEventListener('click', onCancel);
+      if(crmLateReasonYesterday) crmLateReasonYesterday.removeEventListener('click', onYesterday);
+      resolve(result);
+    };
+    const onClose=()=>finalize({ action:'cancel' });
+    const onCancel=()=>finalize({ action:'cancel' });
+    const onSave=()=>{
+      const value=(crmLateReasonInput?.value||'').trim();
+      if(!value){
+        resetLateReasonDialog('Укажите причину просрочки.');
+        if(crmLateReasonInput) crmLateReasonInput.focus();
+        return;
+      }
+      finalize({ action:'reason', reason:value });
+    };
+    const onYesterday=()=>{
+      if(!allowYesterday){
+        resetLateReasonDialog('Отметка «Выполнено вчера» доступна, если задержка не больше 1 дня.');
+        return;
+      }
+      finalize({ action:'yesterday' });
+    };
+    if(crmLateReasonSave) crmLateReasonSave.addEventListener('click', onSave);
+    if(crmLateReasonCancel) crmLateReasonCancel.addEventListener('click', onCancel);
+    if(crmLateReasonClose) crmLateReasonClose.addEventListener('click', onCancel);
+    if(crmLateReasonYesterday) crmLateReasonYesterday.addEventListener('click', onYesterday);
+    crmLateReasonDlg.addEventListener('close', onClose, { once:true });
+    crmLateReasonDlg.showModal();
+    setTimeout(()=>{ if(crmLateReasonInput) crmLateReasonInput.focus(); }, 50);
+  });
+}
+
+async function processStageCompletionChange(tr, isDone){
   if(!tr) return true;
   if(!isDone){
     tr.dataset.doneAt='';
@@ -16836,16 +16908,27 @@ function processStageCompletionChange(tr, isDone){
     return true;
   }
   const now=new Date();
-  const doneAtIso=now.toISOString();
+  let doneAt=new Date(now);
   const dueDate=getStageRowDueDate(tr);
   let completedLate=false;
   let reason='';
   if(dueDate && now.getTime()>dueDate.getTime()){
+    const diffDays=Math.ceil((now-dueDate)/86400000);
     completedLate=true;
-    reason=requestStageDelayReason(tr.dataset?.delayReason||'');
-    if(reason===null){
+    const decision=await requestStageDelayReason(tr.dataset?.delayReason||'', diffDays);
+    if(!decision || decision.action==='cancel'){
       return false;
     }
+    if(decision.action==='yesterday'){
+      doneAt=new Date(now.getTime()-86400000);
+      reason='Выполнено вчера';
+    }else if(decision.reason){
+      reason=decision.reason;
+    }
+  }
+  const doneAtIso=doneAt.toISOString();
+  if(dueDate && doneAt.getTime()<=dueDate.getTime()){
+    completedLate=false;
   }
   tr.dataset.doneAt=doneAtIso;
   tr.dataset.completedLate=completedLate?'true':'false';
@@ -16858,7 +16941,7 @@ function processStageCompletionChange(tr, isDone){
   return true;
 }
 
-function handleStageDoneToggle(tr, doneEl, options={}){
+async function handleStageDoneToggle(tr, doneEl, options={}){
   if(!tr||!doneEl) return true;
   const progEl=tr.querySelector('[data-k="progress"]');
   const isBoolOnly=!progEl;
@@ -16867,7 +16950,7 @@ function handleStageDoneToggle(tr, doneEl, options={}){
     if(!isBoolOnly && progEl){
       progEl.value=100;
     }
-    const accepted=processStageCompletionChange(tr,true);
+    const accepted=await processStageCompletionChange(tr,true);
     if(!accepted){
       doneEl.checked=false;
       if(!isBoolOnly && progEl){
@@ -16876,7 +16959,7 @@ function handleStageDoneToggle(tr, doneEl, options={}){
       return false;
     }
   }else{
-    const accepted=processStageCompletionChange(tr,false);
+    const accepted=await processStageCompletionChange(tr,false);
     if(!accepted){
       doneEl.checked=true;
       return false;
@@ -17043,8 +17126,8 @@ function appendStageRow(st){
   const progEl=tr.querySelector('[data-k="progress"]');
   const doneEl=tr.querySelector('[data-k="done"]');
   if(doneEl){
-    doneEl.addEventListener('change',()=>{
-      handleStageDoneToggle(tr, doneEl, { prevProgress:progEl?progEl.value:'' });
+    doneEl.addEventListener('change',async ()=>{
+      await handleStageDoneToggle(tr, doneEl, { prevProgress:progEl?progEl.value:'' });
     });
   }
   if(progEl && !isBoolOnly){
@@ -17057,7 +17140,7 @@ function appendStageRow(st){
       if(doneEl){
         if(v>=100 && !doneEl.checked){
           doneEl.checked=true;
-          if(!handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue })){
+          if(!await handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue })){
             e.target.value=prevValue;
             syncAutoProgress();
             updateStageRowExpectation(tr);
@@ -17067,7 +17150,7 @@ function appendStageRow(st){
         }
         if(v<100 && doneEl.checked){
           doneEl.checked=false;
-          handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue });
+          await handleStageDoneToggle(tr, doneEl, { prevProgress:prevValue });
           return;
         }
       }
