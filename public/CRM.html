@@ -646,6 +646,10 @@
     if (xhr.status >= 200 && xhr.status < 300 && xhr.responseText) {
       try {
         const data = JSON.parse(xhr.responseText);
+        if (!data || !data.user) {
+          window.location.href = '/login';
+          return;
+        }
         window.__CRM_AUTH__ = data || {};
       } catch (_err) {
         window.__CRM_AUTH__ = {};
