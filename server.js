@@ -5503,13 +5503,25 @@ function normalizeExtraTimeSettings(snapshot, override = null) {
   }
 }
 
-function validateSnapshotStructure(snapshot) {
+function validateSnapshotStructure(snapshot, { autoFix = false } = {}) {
   const missing = [];
-  if (!Array.isArray(snapshot?.t)) missing.push('tasks');
-  if (!Array.isArray(snapshot?.done)) missing.push('done');
-  if (!Array.isArray(snapshot?.trash)) missing.push('trash');
-  if (!Array.isArray(snapshot?.orders)) missing.push('orders');
-  return { ok: missing.length === 0, missing };
+  const target = isPlainObject(snapshot) ? snapshot : {};
+
+  const ensureArray = (key, label) => {
+    if (!Array.isArray(target[key])) {
+      missing.push(label);
+      if (autoFix) {
+        target[key] = [];
+      }
+    }
+  };
+
+  ensureArray('t', 'tasks');
+  ensureArray('done', 'done');
+  ensureArray('trash', 'trash');
+  ensureArray('orders', 'orders');
+
+  return { ok: missing.length === 0 || autoFix, missing };
 }
 
 function normalizeSnapshotCollections(snapshot) {
@@ -6561,11 +6573,9 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       return;
     }
 
-    const structure = validateSnapshotStructure(snapshot);
-    if (!structure.ok) {
+    const structure = validateSnapshotStructure(snapshot, { autoFix: true });
+    if (structure.missing.length) {
       logSaveEvent('warn', 'snapshot missing required sections', { requestId, missing: structure.missing });
-      res.status(422).json({ error: 'Unprocessable snapshot', missing: structure.missing });
-      return;
     }
 
     const normalizedMeta = normalizeRequestMeta(requestMeta);
