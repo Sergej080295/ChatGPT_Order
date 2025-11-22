@@ -19,6 +19,7 @@
   let refreshTimerId = null;
   let refreshPromise = null;
   let lastRefreshAt = 0;
+  let lastAppliedStateSnapshot = null;
 
   const MIN_KEEPALIVE_INTERVAL_MS = 15000;
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
@@ -20578,6 +20579,12 @@ function applyPlannerRemotePayload(payload, options={}){
   if(!payload||!payload.state) return;
   try{
     const prevHash=payload?.prevHash||currentHash;
+    const stateText=typeof payload?.state==='string'?payload.state:String(payload?.state||'');
+    if(stateText){
+      if(prevHash && lastAppliedStateSnapshot && stateText===lastAppliedStateSnapshot){
+        return;
+      }
+    }
     const fingerprint=resolvePayloadFingerprint(payload);
     if(fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
       return;
@@ -20600,6 +20607,9 @@ function applyPlannerRemotePayload(payload, options={}){
           : 'Данные обновлены из планировщика';
         showToast({title:'CRM',message,tone:'warn'});
       }
+    }
+    if(stateText){
+      lastAppliedStateSnapshot=stateText;
     }
   }catch(err){ console.warn('CRM remote update parse failed',err); }
 }
