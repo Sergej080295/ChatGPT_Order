@@ -34,6 +34,7 @@
   let connectionLossTimerId = null;
   let connectionLossReason = null;
   let orderDialogOpen = false;
+  let crmDialogLocalChanges = false;
   let deferredRemotePayload = null;
 
   const resolveKeepAliveInterval = () => {
@@ -4640,13 +4641,11 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-primary) 40%, transparent);
   }
 
+  body.crm-hints-enabled [data-hint-key]::before,
   body.crm-hints-enabled [data-hint-key]::after {
-    content: attr(data-hint-content);
     position: absolute;
-    top: 100%;
     left: 50%;
     transform: translateX(-50%);
-    margin-top: 6px;
     padding: 6px 10px;
     border-radius: var(--pc-radius-sm);
     background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
@@ -4660,12 +4659,28 @@
     opacity: 0;
     visibility: hidden;
     transition: opacity var(--pc-transition-short), visibility var(--pc-transition-short);
-    max-width: 320px;
+    max-width: 360px;
     text-align: center;
     z-index: 2;
   }
 
-  body.crm-hints-enabled [data-hint-key].crm-hint-visible::after {
+  body.crm-hints-enabled [data-hint-key]::before {
+    content: attr(data-hint-summary);
+    top: 100%;
+    margin-top: 6px;
+  }
+
+  body.crm-hints-enabled [data-hint-key].crm-hint-summary-visible::before {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  body.crm-hints-enabled [data-hint-key]::after {
+    content: attr(data-hint-details);
+    top: calc(100% + 30px);
+  }
+
+  body.crm-hints-enabled [data-hint-key].crm-hint-details-visible::after {
     opacity: 1;
     visibility: visible;
   }
@@ -5009,6 +5024,11 @@
     max-width: 1400px;
   }
 
+  #orderDlg .dlg-head strong {
+    white-space: normal;
+    line-height: 1.35;
+  }
+
   .dlg-footer {
     padding: var(--pc-spacing-md) var(--pc-spacing-lg);
     border-top: 1px solid var(--pc-border);
@@ -5062,10 +5082,10 @@
 
   .gridHead {
     display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
+    grid-template-columns: 1.4fr 1.4fr 1fr 0.9fr;
     column-gap: var(--pc-spacing-md);
-    row-gap: var(--pc-spacing-sm);
-    align-items: flex-start;
+    row-gap: var(--pc-spacing-xs);
+    align-items: flex-end;
   }
 
   .gridHead > div {
@@ -5075,34 +5095,14 @@
     min-width: 0;
   }
 
-  .gridHead .orderNo {
-    grid-column: 1 / span 4;
-    grid-row: 1;
-  }
+  .gridHead .orderNo { grid-column: 1; grid-row: 1; }
+  .gridHead .customer { grid-column: 2; grid-row: 1; }
+  .gridHead .service { grid-column: 3; grid-row: 1; }
+  .gridHead .progressField { grid-column: 4; grid-row: 1; }
 
-  .gridHead .customer {
-    grid-column: 5 / span 8;
-    grid-row: 1;
-  }
-
-  .gridHead .service {
-    grid-column: 1 / span 4;
-    grid-row: 2;
-  }
-
-  .gridHead .progressField {
-    grid-column: 5 / span 4;
-    grid-row: 2;
-  }
-
-  .gridHead .start {
-    grid-column: 1 / span 6;
-    grid-row: 3;
-  }
-
+  .gridHead .start,
   .gridHead .end {
-    grid-column: 7 / span 6;
-    grid-row: 3;
+    display: none;
   }
 
   .gridHead input:not([type="checkbox"]) {
@@ -5235,24 +5235,24 @@
 
   #stagesTable th.col-progress,
   #stagesTable td.col-progress {
-    width: 156px;
+    width: 170px;
   }
 
   #stagesTable th.col-start,
   #stagesTable td.col-start,
   #stagesTable th.col-end,
   #stagesTable td.col-end {
-    width: 110px;
+    width: 98px;
   }
 
   #stagesTable th:nth-child(2),
   #stagesTable td:nth-child(2) {
-    width: 168px;
+    width: 150px;
   }
 
   #stagesTable th.col-rate,
   #stagesTable td.col-rate {
-    width: 184px;
+    width: 220px;
   }
 
   #stagesTable input:not([type="checkbox"]),
@@ -5589,13 +5589,13 @@
           <span class="crm-toolbar__badge" id="crmTrashBadge" hidden>0</span>
         </button>
         <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button" data-hint-key="hint-new-order" data-hint-label="Создать новый заказ">+ Заказ</button>
-        <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON">
+        <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON" data-hint-key="hint-export">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 4v10m0 0 4-4m-4 4-4-4" />
             <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M5 18h14" />
           </svg>
         </button>
-        <button id="importBtn" class="pc-icon-btn" type="button" title="Импорт JSON" aria-label="Импорт JSON">
+        <button id="importBtn" class="pc-icon-btn" type="button" title="Импорт JSON" aria-label="Импорт JSON" data-hint-key="hint-import">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 20V10m0 0-4 4m4-4 4 4" />
             <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M5 6h14" />
@@ -5887,6 +5887,26 @@
   </div>
 </dialog>
 
+<dialog id="crmStageAdvanceDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong id="crmStageAdvanceTitle">Перевод заказа</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageAdvanceClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <p class="crm-modal-hint" id="crmStageAdvanceMessage">Перевести заказ в следующий статус?</p>
+    <label class="crm-field">
+      <span class="crm-field__label">Целевой статус</span>
+      <select class="pc-select" id="crmStageAdvanceSelect"></select>
+      <span class="crm-field__hint">Выберите колонку CRM, куда должен перейти заказ после завершения передела.</span>
+    </label>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageAdvanceCancel">Оставить как есть</button>
+    <button type="button" class="pc-btn pc-btn--ghost" id="crmStageAdvanceNext">Следующий статус</button>
+    <button type="button" class="pc-btn pc-btn--primary" id="crmStageAdvanceApply">Применить</button>
+  </div>
+</dialog>
+
 
 <dialog id="crmOptimizeDlg" class="pc-modal pc-modal--md">
   <div class="dlg-head">
@@ -5976,11 +5996,11 @@
     <div class="section-card surface form-footer">
       <div class="status-field">
         <label for="statusSel">Состояние</label>
-        <select name="status" id="statusSel"></select>
+        <select name="status" id="statusSel" data-hint-key="hint-status-select"></select>
       </div>
       <div class="actions">
         <button type="button" class="pc-btn pc-btn--danger" id="deleteOrderBtn" style="display:none">Удалить</button>
-        <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
+        <button type="submit" class="pc-btn pc-btn--primary" data-hint-key="hint-save-order" data-hint-label="Сохранить изменения заказа">Сохранить</button>
       </div>
     </div>
     <input type="hidden" name="id" />
@@ -6525,11 +6545,12 @@ const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
-const CRM_LANE_SUM_PERIODS=['day','month','quarter','year','custom'];
+const CRM_LANE_SUM_PERIODS=['day','week','month','quarter','year','custom'];
 const CRM_LANE_SUM_SCOPES=['range','all'];
 const CRM_DEFAULT_LANE_SUM_PERIOD='month';
 const CRM_DEFAULT_LANE_SUM_SCOPE='range';
-const CRM_DEFAULT_ACTION_HINT_DELAY_MS=600;
+const CRM_DEFAULT_ACTION_HINT_SUMMARY_DELAY_MS=150;
+const CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS=600;
 const CRM_ACTION_HINT_SUMMARY={
   'hint-reserve':'Открыть бронь слотов передела',
   'hint-new-order':'Создать новый заказ',
@@ -6538,24 +6559,37 @@ const CRM_ACTION_HINT_SUMMARY={
   'hint-add-stage':'Добавить новый передел',
   'hint-preset-stages':'Заполнить базовыми переделами',
   'hint-all-stages':'Показать все переделы',
-  'hint-lane-sum':'Переключить режим суммы в колонке'
+  'hint-lane-sum':'Переключить режим суммы в колонке',
+  'hint-save-order':'Сохранить заказ',
+  'hint-import':'Импортировать заказы из файла',
+  'hint-export':'Выгрузить текущие данные',
+  'hint-refresh':'Принудительно обновить данные',
+  'hint-route':'Посмотреть маршрут заказа',
+  'hint-status-select':'Выбрать состояние заказа'
 };
 const CRM_ACTION_HINT_DETAILS={
-  'hint-reserve':'Открывает управление бронью: удерживайте доступные слоты передела для выбранного заказа.',
-  'hint-new-order':'Создайте новый заказ: заполните номер, клиента и распределите переделы по датам.',
-  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням. Использует связь с предыдущим переделом и рабочие дни.',
-  'hint-clear-dates':'Сбрасывает даты всех переделов заказа, чтобы пересчитать их заново.',
+  'hint-reserve':'Открывает управление бронью: удерживайте доступные слоты передела для выбранного заказа без изменения расписания других заказов.',
+  'hint-new-order':'Создайте новый заказ: заполните номер, клиента и распределите переделы по датам. Название формируется автоматически из номера и клиента.',
+  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням. Учитывает связь с предыдущим переделом, ручные даты не переписываются.',
+  'hint-clear-dates':'Сбрасывает даты всех переделов заказа, чтобы пересчитать их заново. Часы и прогресс не трогаются.',
   'hint-add-stage':'Добавляет строку передела в маршрут текущего заказа.',
   'hint-preset-stages':'Заполняет маршрут базовым набором переделов.',
   'hint-all-stages':'Открывает полный список переделов для выбора.',
-  'hint-lane-sum':'Меняет способ подсчёта суммы в колонке: по выбранному периоду или по всем заказам.'
+  'hint-lane-sum':'Меняет способ подсчёта суммы в колонке: по выбранному периоду или по всем заказам.',
+  'hint-save-order':'Сохраняет заказ и синхронизирует изменения со всеми пользователями.',
+  'hint-import':'Загружает данные из JSON. При частичных данных пустые разделы создаются автоматически.',
+  'hint-export':'Скачивает актуальный снапшот CRM.',
+  'hint-refresh':'Принудительно запрашивает свежие данные без перезагрузки страницы.',
+  'hint-route':'Открывает маршрут заказа с пиктограммами переделов.',
+  'hint-status-select':'Выберите колонку CRM, в которую попадёт заказ после сохранения.'
 };
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
   showLateTips:true,
   showActionHints:true,
-  actionHintDelayMs:CRM_DEFAULT_ACTION_HINT_DELAY_MS,
+  actionHintSummaryDelayMs:CRM_DEFAULT_ACTION_HINT_SUMMARY_DELAY_MS,
+  actionHintDetailsDelayMs:CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumFrom:'',
   laneSumTo:'',
@@ -7259,9 +7293,10 @@ function normalizeLaneSumDate(value){
   return iso||'';
 }
 
-function normalizeActionHintDelayMs(value){
+function normalizeActionHintDelayMs(value, fallback){
   const num=Number(value);
-  if(!Number.isFinite(num) || num<0) return CRM_DEFAULT_ACTION_HINT_DELAY_MS;
+  const base=Number.isFinite(fallback)&&fallback>=0?fallback:CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS;
+  if(!Number.isFinite(num) || num<0) return base;
   return Math.min(5000, Math.round(num));
 }
 
@@ -7272,8 +7307,13 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
     if(typeof raw.showActionHints==='boolean') result.showActionHints=raw.showActionHints;
-    if(Object.prototype.hasOwnProperty.call(raw,'actionHintDelayMs')){
-      result.actionHintDelayMs=normalizeActionHintDelayMs(raw.actionHintDelayMs);
+    if(Object.prototype.hasOwnProperty.call(raw,'actionHintSummaryDelayMs')){
+      result.actionHintSummaryDelayMs=normalizeActionHintDelayMs(raw.actionHintSummaryDelayMs, CRM_DEFAULT_ACTION_HINT_SUMMARY_DELAY_MS);
+    }
+    if(Object.prototype.hasOwnProperty.call(raw,'actionHintDetailsDelayMs')){
+      result.actionHintDetailsDelayMs=normalizeActionHintDelayMs(raw.actionHintDetailsDelayMs, CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS);
+    }else if(Object.prototype.hasOwnProperty.call(raw,'actionHintDelayMs')){
+      result.actionHintDetailsDelayMs=normalizeActionHintDelayMs(raw.actionHintDelayMs, CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS);
     }
     const intervalKeys=[
       'autoRefreshSeconds',
@@ -7459,9 +7499,14 @@ function getCrmRouteHorizonDays(){
   return normalized;
 }
 
-function getActionHintDelayMs(){
+function getActionHintSummaryDelayMs(){
   const prefs=getCrmPreferences();
-  return normalizeActionHintDelayMs(prefs?.actionHintDelayMs);
+  return normalizeActionHintDelayMs(prefs?.actionHintSummaryDelayMs, CRM_DEFAULT_ACTION_HINT_SUMMARY_DELAY_MS);
+}
+
+function getActionHintDetailsDelayMs(){
+  const prefs=getCrmPreferences();
+  return normalizeActionHintDelayMs(prefs?.actionHintDetailsDelayMs, CRM_DEFAULT_ACTION_HINT_DETAILS_DELAY_MS);
 }
 
 function getCrmLaneSumRange(){
@@ -7473,6 +7518,13 @@ function getCrmLaneSumRange(){
     case 'day':{
       const from=new Date(today.getTime());
       const to=addDays(from,1);
+      return { from, to };
+    }
+    case 'week':{
+      const day=today.getDay();
+      const diff=(day===0?6:day-1); // Monday start
+      const from=new Date(today.getFullYear(), today.getMonth(), today.getDate()-diff);
+      const to=addDays(from,7);
       return { from, to };
     }
     case 'month':{
@@ -7530,7 +7582,7 @@ function setLaneSumScope(lane, scope){
 function orderMatchesLaneSumRange(order,{ from, to }){
   if(!from && !to) return true;
   const iso=coerceCalendarIso(order?.statusEnteredAt||order?.updatedAt||order?.createdAt||'');
-  if(!iso) return true;
+  if(!iso) return false;
   const date=new Date(`${iso}T00:00:00`);
   if(Number.isNaN(date.getTime())) return true;
   if(from && date<from) return false;
@@ -7566,33 +7618,42 @@ function areDetailedHintsEnabled(){
 }
 
 function hideActionHint(el){
-  const timer=actionHintTimers.get(el);
-  if(timer){
-    clearTimeout(timer);
+  const timerSet=actionHintTimers.get(el);
+  if(timerSet){
+    if(timerSet.summary){ clearTimeout(timerSet.summary); }
+    if(timerSet.details){ clearTimeout(timerSet.details); }
     actionHintTimers.delete(el);
   }
-  el?.classList.remove('crm-hint-visible');
+  el?.classList.remove('crm-hint-summary-visible');
+  el?.classList.remove('crm-hint-details-visible');
 }
 
 function scheduleActionHint(el){
   if(!el || !document.body.classList.contains('crm-hints-enabled')) return;
   if(!areDetailedHintsEnabled()) return;
   hideActionHint(el);
-  const delay=getActionHintDelayMs();
-  const timer=setTimeout(()=>{
-    el.classList.add('crm-hint-visible');
-  }, Math.max(0, delay));
-  actionHintTimers.set(el, timer);
+  const summaryDelay=Math.max(0, getActionHintSummaryDelayMs());
+  const detailsDelay=Math.max(summaryDelay+120, getActionHintDetailsDelayMs());
+  const timers={};
+  timers.summary=setTimeout(()=>{
+    el.classList.add('crm-hint-summary-visible');
+  }, summaryDelay);
+  timers.details=setTimeout(()=>{
+    el.classList.add('crm-hint-details-visible');
+  }, detailsDelay);
+  actionHintTimers.set(el, timers);
 }
 
 function bindActionHintElement(el){
   if(!el || el.dataset.hintBound) return;
   el.dataset.hintBound='1';
   const summary=resolveHintSummary(el);
-  if(summary && !el.getAttribute('title')){
-    el.setAttribute('title', summary);
+  if(el.hasAttribute('title')){
+    el.dataset.hintNativeTitle=el.getAttribute('title')||'';
+    el.removeAttribute('title');
   }
-  el.dataset.hintContent=resolveHintDetails(el);
+  el.dataset.hintSummary=summary;
+  el.dataset.hintDetails=resolveHintDetails(el);
   el.addEventListener('mouseenter',()=>scheduleActionHint(el));
   el.addEventListener('focus',()=>scheduleActionHint(el));
   ['mouseleave','blur','click'].forEach(ev=>{
@@ -7605,7 +7666,8 @@ function applyCrmActionHints(){
   const enabled=prefs?.showActionHints!==false;
   document.body.classList.toggle('crm-hints-enabled', enabled);
   document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
-    el.dataset.hintContent=resolveHintDetails(el);
+    el.dataset.hintSummary=resolveHintSummary(el);
+    el.dataset.hintDetails=resolveHintDetails(el);
     bindActionHintElement(el);
   });
   if(!enabled){
@@ -9424,6 +9486,14 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
       crmStageReserveApply=$('#crmStageReserveApply'),
+      crmStageAdvanceDlg=$('#crmStageAdvanceDlg'),
+      crmStageAdvanceTitle=$('#crmStageAdvanceTitle'),
+      crmStageAdvanceMessage=$('#crmStageAdvanceMessage'),
+      crmStageAdvanceSelect=$('#crmStageAdvanceSelect'),
+      crmStageAdvanceApply=$('#crmStageAdvanceApply'),
+      crmStageAdvanceNext=$('#crmStageAdvanceNext'),
+      crmStageAdvanceClose=$('#crmStageAdvanceClose'),
+      crmStageAdvanceCancel=$('#crmStageAdvanceCancel'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
       crmOptimizeForm=$('#crmOptimizeForm'),
       crmOptimizeList=$('#crmOptimizeList'),
@@ -14627,7 +14697,7 @@ function buildOrderRouteIcons(order){
 function renderOrderRouteCell(order){
   const disabled=!(order&&order.id);
   const title=disabled?'Маршрут доступен после сохранения заказа':'Маршрут заказа';
-  return `<button class="crm-stage-route-mini crm-order-route-btn" type="button" title="${escapeHtml(title)}" ${disabled?'disabled':''}>⇆</button>`;
+  return `<button class="crm-stage-route-mini crm-order-route-btn" type="button" title="${escapeHtml(title)}" data-hint-key="hint-route" ${disabled?'disabled':''}>⇆</button>`;
 }
 
 function renderProgressCell(info){
@@ -15316,6 +15386,66 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   renderCurrentView();
 }
 
+function resolveNextLane(order){
+  const b=currentBoard();
+  if(!b || !Array.isArray(b.lanes) || !b.lanes.length) return null;
+  const idx=b.lanes.indexOf(order?.status);
+  if(idx>=0 && idx<b.lanes.length-1){
+    return b.lanes[idx+1];
+  }
+  return null;
+}
+
+function promptOrderStatusAdvance(order, stageKey){
+  const b=currentBoard();
+  if(!order || !b || !Array.isArray(b.lanes) || !b.lanes.length) return Promise.resolve(null);
+  const nextLane=resolveNextLane(order);
+  if(!crmStageAdvanceDlg || !crmStageAdvanceSelect || !crmStageAdvanceApply || !crmStageAdvanceCancel || !crmStageAdvanceNext){
+    return Promise.resolve(nextLane);
+  }
+  crmStageAdvanceSelect.innerHTML='';
+  b.lanes.forEach(lane=>{
+    const opt=new Option(lane, lane);
+    if(lane===(nextLane||order.status)) opt.selected=true;
+    crmStageAdvanceSelect.appendChild(opt);
+  });
+  const orderLabel=composeOrderDisplayTitle(order.orderNo, order.customer, order.title);
+  if(crmStageAdvanceTitle){
+    crmStageAdvanceTitle.textContent='Перевод заказа';
+  }
+  if(crmStageAdvanceMessage){
+    const stageLabel=CRM_STAGE_LABELS[stageKey]||'передел';
+    crmStageAdvanceMessage.textContent=nextLane
+      ? `Передел «${stageLabel}» отмечен готовым. Перевести «${orderLabel}» в «${nextLane}» или выбрать другой статус?`
+      : `Передел «${stageLabel}» отмечен готовым. Выберите статус для заказа «${orderLabel}».`;
+  }
+  if(crmStageAdvanceNext){
+    crmStageAdvanceNext.textContent=nextLane?`Следующий: ${nextLane}`:'Использовать выбор';
+    crmStageAdvanceNext.disabled=!nextLane;
+  }
+  return new Promise(resolve=>{
+    const cleanup=()=>{
+      crmStageAdvanceDlg.close();
+    };
+    const applyChoice=(value)=>{
+      cleanup();
+      resolve(value||null);
+    };
+    const onApply=()=>applyChoice(crmStageAdvanceSelect.value);
+    const onNext=()=>applyChoice(nextLane||crmStageAdvanceSelect.value);
+    const onCancel=()=>applyChoice(null);
+    crmStageAdvanceApply.addEventListener('click', onApply, { once:true });
+    crmStageAdvanceNext.addEventListener('click', onNext, { once:true });
+    crmStageAdvanceCancel.addEventListener('click', onCancel, { once:true });
+    if(crmStageAdvanceClose){
+      crmStageAdvanceClose.addEventListener('click', onCancel, { once:true });
+    }
+    crmStageAdvanceDlg.addEventListener('cancel', evt=>{ evt.preventDefault(); onCancel(); }, { once:true });
+    try{crmStageAdvanceDlg.showModal();}
+    catch(_err){crmStageAdvanceDlg.open=true;}
+  });
+}
+
 function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   if(!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
@@ -15323,6 +15453,7 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
+  const advancePromise=checked?promptOrderStatusAdvance(order, stageKey):Promise.resolve(null);
   const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
     stage.done=true;
@@ -15337,6 +15468,16 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   commitCrmOrderJournal(previousSnapshot, order);
   save('Изменение готовности передела');
   renderCurrentView();
+  advancePromise.then(targetLane=>{
+    if(!targetLane || targetLane===order.status) return;
+    if(!currentBoard()?.lanes.includes(targetLane)) return;
+    const snapshot=snapshotOrderForJournal(order);
+    order.status=targetLane;
+    order.statusEnteredAt=new Date().toISOString();
+    commitCrmOrderJournal(snapshot, order);
+    save('Перевод заказа после завершения передела');
+    renderCurrentView();
+  });
 }
 
 function handleCrmStageDelete(orderId, stageId, stageKey){
@@ -16441,7 +16582,10 @@ function refreshOrderDialogTitle(){
   const composed=deriveEditingOrderTitle();
   const base=editingOrderId?'Редактировать заказ':'Новый заказ';
   if(dlgTitle){
-    dlgTitle.textContent=composed?`${base} (${composed})`:base;
+    const startLabel=(orderForm?.start?.value||'').trim();
+    const endLabel=(orderForm?.end?.value||'').trim();
+    const datesLabel=(startLabel||endLabel)?` — ${startLabel||'—'} / ${endLabel||'—'}`:'';
+    dlgTitle.textContent=composed?`${base} (${composed})${datesLabel}`:base;
   }
 }
 
@@ -17108,6 +17252,7 @@ function openOrder(id=null){
   editingOrderId=id||null;
   stageSourceMap=new Map();
   pendingStageDeletes=[];
+  crmDialogLocalChanges=false;
   if(id){
     const o=b.orders.find(x=>x.id===id);
     if(!o){
@@ -17160,12 +17305,13 @@ function openOrder(id=null){
 }
 function closeOrder(){orderDlg.close()}
 
-if(orderDlg){
-  orderDlg.addEventListener('close',()=>{
-    orderDialogOpen=false;
-    editingOrderId=null;
-    pendingStageDeletes=[];
-    stageSourceMap=new Map();
+  if(orderDlg){
+    orderDlg.addEventListener('close',()=>{
+      orderDialogOpen=false;
+      crmDialogLocalChanges=false;
+      editingOrderId=null;
+      pendingStageDeletes=[];
+      stageSourceMap=new Map();
     refreshOrderHistoryButton(null);
     orderCommentsDraft=[];
     renderOrderComments();
@@ -17841,7 +17987,7 @@ function applyOrderAutoCompletionState(){
   }
 }
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
-function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
+function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||'';refreshOrderDialogTitle();}
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
@@ -17849,6 +17995,7 @@ orderForm.addEventListener('submit',e=>{
     showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
     return;
   }
+  crmDialogLocalChanges=true;
   const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
   const invalidStage=stages.find(stage=>{
     const startIso=coerceCalendarIso(stage?.start||'');
@@ -18419,19 +18566,37 @@ function renderCrmPreferencesSettingsUI(){
   hintsDelayField.className='crm-field';
   const hintsDelayLabel=document.createElement('span');
   hintsDelayLabel.className='crm-field__label';
-  hintsDelayLabel.textContent='Задержка подсказки, мс';
+  hintsDelayLabel.textContent='Задержка краткой подсказки, мс';
   const hintsDelayInput=document.createElement('input');
   hintsDelayInput.type='number';
   hintsDelayInput.className='pc-input';
-  hintsDelayInput.name='prefActionHintDelayMs';
+  hintsDelayInput.name='prefActionHintSummaryDelayMs';
   hintsDelayInput.min='0';
   hintsDelayInput.step='50';
   hintsDelayInput.inputMode='numeric';
-  hintsDelayInput.value=String(getActionHintDelayMs());
+  hintsDelayInput.value=String(getActionHintSummaryDelayMs());
   const hintsDelayHint=document.createElement('span');
   hintsDelayHint.className='crm-field__hint';
-  hintsDelayHint.textContent='Через сколько миллисекунд после наведения появится подробная подсказка.';
+  hintsDelayHint.textContent='Через сколько миллисекунд появится краткая подсказка после наведения.';
   hintsDelayField.append(hintsDelayLabel, hintsDelayInput, hintsDelayHint);
+
+  const hintsDetailsDelayField=document.createElement('label');
+  hintsDetailsDelayField.className='crm-field';
+  const hintsDetailsDelayLabel=document.createElement('span');
+  hintsDetailsDelayLabel.className='crm-field__label';
+  hintsDetailsDelayLabel.textContent='Задержка подробной подсказки, мс';
+  const hintsDetailsDelayInput=document.createElement('input');
+  hintsDetailsDelayInput.type='number';
+  hintsDetailsDelayInput.className='pc-input';
+  hintsDetailsDelayInput.name='prefActionHintDetailsDelayMs';
+  hintsDetailsDelayInput.min='0';
+  hintsDetailsDelayInput.step='50';
+  hintsDetailsDelayInput.inputMode='numeric';
+  hintsDetailsDelayInput.value=String(getActionHintDetailsDelayMs());
+  const hintsDetailsDelayHint=document.createElement('span');
+  hintsDetailsDelayHint.className='crm-field__hint';
+  hintsDetailsDelayHint.textContent='Дополнительная задержка до показа развёрнутой подсказки. Длинные подсказки появляются ниже коротких и не перекрывают их.';
+  hintsDetailsDelayField.append(hintsDetailsDelayLabel, hintsDetailsDelayInput, hintsDetailsDelayHint);
 
   const horizonField=document.createElement('label');
   horizonField.className='crm-field';
@@ -18465,6 +18630,7 @@ function renderCrmPreferencesSettingsUI(){
   lanePeriodSelect.className='pc-select';
   const periodOptions=[
     { value:'day', label:'День' },
+    { value:'week', label:'Неделя' },
     { value:'month', label:'Месяц' },
     { value:'quarter', label:'Квартал' },
     { value:'year', label:'Год' },
@@ -18481,7 +18647,7 @@ function renderCrmPreferencesSettingsUI(){
   });
   const lanePeriodHint=document.createElement('span');
   lanePeriodHint.className='crm-field__hint';
-  lanePeriodHint.textContent='Суммы услуг в колонках считаются по дате попадания заказа в статус. «Месяц» — текущий календарный.';
+  lanePeriodHint.textContent='Суммы услуг в колонках считаются по дате попадания заказа в статус. День/неделя/месяц/квартал/год берутся в рамках текущего календарного периода.';
 
   const lanePeriodCustomWrap=document.createElement('div');
   lanePeriodCustomWrap.className='crm-settings-grid crm-settings-grid--two';
@@ -18541,7 +18707,7 @@ function renderCrmPreferencesSettingsUI(){
   linkGapHint.className='crm-field__hint';
   linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
   linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, hintsOption, hintsDelayField, lanePeriodField, horizonField, linkOption, linkGapField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, hintsOption, hintsDelayField, hintsDetailsDelayField, lanePeriodField, horizonField, linkOption, linkGapField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -19058,7 +19224,8 @@ boardForm.addEventListener('submit',e=>{
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     showActionHints:!!boardForm.prefShowActionHints?.checked,
-    actionHintDelayMs:boardForm.prefActionHintDelayMs?boardForm.prefActionHintDelayMs.value:'',
+    actionHintSummaryDelayMs:boardForm.prefActionHintSummaryDelayMs?boardForm.prefActionHintSummaryDelayMs.value:'',
+    actionHintDetailsDelayMs:boardForm.prefActionHintDetailsDelayMs?boardForm.prefActionHintDetailsDelayMs.value:'',
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     laneSumPeriod:boardForm.prefLaneSumPeriod?boardForm.prefLaneSumPeriod.value:'',
     laneSumFrom:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
@@ -20530,6 +20697,11 @@ function flushDeferredRemoteUpdate(){
   if(deferredRemotePayload){
     const payload=deferredRemotePayload;
     deferredRemotePayload=null;
+    if(crmDialogLocalChanges){
+      console.warn('CRM: пропущено отложенное обновление из-за локальных изменений в диалоге заказа');
+      crmDialogLocalChanges=false;
+      return;
+    }
     handleRemotePayload(payload);
   }
 }
