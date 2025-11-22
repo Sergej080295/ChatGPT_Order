@@ -4669,7 +4669,7 @@
   body.crm-hints-enabled [data-hint-key]::before {
     content: attr(data-hint-summary);
     top: 100%;
-    transform: translate(-50%, 8px);
+    transform: translate(-50%, 10px);
   }
 
   body.crm-hints-enabled [data-hint-key].crm-hint-summary-visible::before {
@@ -4680,7 +4680,7 @@
   body.crm-hints-enabled [data-hint-key]::after {
     content: attr(data-hint-details);
     top: 100%;
-    transform: translate(-50%, calc(100% + 12px));
+    transform: translate(-50%, calc(120% + 18px));
   }
 
   body.crm-hints-enabled [data-hint-key].crm-hint-details-visible::after {
@@ -5935,9 +5935,9 @@
   <div class="dlg-head">
     <strong id="dlgTitle">Редактировать заказ</strong>
     <div class="rowc">
-      <label class="rowc"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
-      <button class="pc-btn pc-btn--ghost" type="button" id="splitBtn" title="Разбить на подзаказ">➗ Подзаказ</button>
-      <button class="pc-btn pc-btn--ghost" type="button" id="orderHistoryBtn" title="История изменений" hidden>🕘 История</button>
+      <label class="rowc" data-hint-key="hint-order-done" data-hint-label="Заказ готов"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
+      <button class="pc-btn pc-btn--ghost" type="button" id="splitBtn" title="Разбить на подзаказ" data-hint-key="hint-split-order" data-hint-label="Подзаказ">➗ Подзаказ</button>
+      <button class="pc-btn pc-btn--ghost" type="button" id="orderHistoryBtn" title="История изменений" data-hint-key="hint-order-history" data-hint-label="История" hidden>🕘 История</button>
       <button class="pc-icon-btn" data-variant="ghost" type="button" onclick="closeOrder()" aria-label="Закрыть">✖</button>
     </div>
   </div>
@@ -5962,7 +5962,7 @@
 
           <div class="section-toolbar">
             <div class="left">
-              <label class="rowc"><input id="dateToday" type="checkbox" class="ready-switch" /> Даты=сегодня</label>
+              <label class="rowc" data-hint-key="hint-date-today" data-hint-label="Даты = сегодня"><input id="dateToday" type="checkbox" class="ready-switch" /> Даты=сегодня</label>
               <div class="crm-stage-date-tools">
                 <button type="button" class="pc-btn pc-btn--ghost" id="calcStageDatesBtn" title="Рассчитать сроки автоматически" data-hint-key="hint-calc-dates" data-hint-label="Авторасчёт дат переделов">🧮 Рассчитать даты</button>
                 <button type="button" class="pc-btn pc-btn--ghost" id="clearStageDatesBtn" title="Очистить даты переделов" data-hint-key="hint-clear-dates" data-hint-label="Очистить даты">🧽 Очистка дат</button>
@@ -5988,7 +5988,7 @@
           <div class="crm-comment-thread" id="orderCommentThread" data-empty="Нет комментариев"></div>
           <div class="crm-comment-composer">
             <textarea id="orderCommentInput" rows="2" placeholder="Напишите комментарий…"></textarea>
-            <button type="button" class="pc-btn pc-btn--primary" id="orderCommentSend">Отправить</button>
+            <button type="button" class="pc-btn pc-btn--primary" id="orderCommentSend" data-hint-key="hint-comment-send" data-hint-label="Отправить комментарий">Отправить</button>
           </div>
         </div>
         <input type="hidden" name="notes" id="orderNotesHidden" />
@@ -6332,8 +6332,8 @@
     <div class="pc-alert pc-alert--warn" id="crmLateReasonError" hidden></div>
   </div>
   <div class="dlg-footer">
-    <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel">Отмена</button>
-    <button class="pc-btn" type="button" id="crmLateReasonSave">Сохранить</button>
+    <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel" data-hint-key="hint-late-cancel" data-hint-label="Отмена просрочки">Отмена</button>
+    <button class="pc-btn" type="button" id="crmLateReasonSave" data-hint-key="hint-late-save" data-hint-label="Сохранить причину">Сохранить</button>
         <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday" data-hint-key="hint-late-yesterday" data-hint-label="Выполнено вчера">Выполнено вчера</button>
   </div>
 </dialog>
@@ -6563,6 +6563,13 @@ const CRM_ACTION_HINT_SUMMARY={
   'hint-all-stages':'Показать все переделы',
   'hint-lane-sum':'Переключить режим суммы в колонке',
   'hint-save-order':'Сохранить заказ',
+  'hint-order-done':'Статус готовности заказа',
+  'hint-split-order':'Создать подзаказ',
+  'hint-order-history':'История изменений заказа',
+  'hint-date-today':'Заполнить даты сегодняшним днём',
+  'hint-comment-send':'Отправить комментарий',
+  'hint-late-save':'Сохранить причину просрочки',
+  'hint-late-cancel':'Отменить отметку просрочки',
   'hint-import':'Импортировать заказы из файла',
   'hint-export':'Выгрузить текущие данные',
   'hint-refresh':'Принудительно обновить данные',
@@ -6580,6 +6587,13 @@ const CRM_ACTION_HINT_DETAILS={
   'hint-all-stages':'Открывает полный список переделов для выбора.',
   'hint-lane-sum':'Меняет способ подсчёта суммы в колонке: по выбранному периоду или по всем заказам.',
   'hint-save-order':'Сохраняет заказ и синхронизирует изменения со всеми пользователями. Ошибки валидации покажут, что нужно исправить.',
+  'hint-order-done':'Переключает готовность всего заказа. Когда все переделы завершены — статус заказа переключается автоматически.',
+  'hint-split-order':'Разбивает текущий заказ на подзаказ, копируя данные и позволяя изменить маршрут отдельно.',
+  'hint-order-history':'Открывает журнал изменений: комментарии, статусы, завершения переделов и время авторов.',
+  'hint-date-today':'Включите, чтобы новые даты автоматически ставились на сегодняшнее число при добавлении строк.',
+  'hint-comment-send':'Сохраняет комментарий с подписью автора и временем. В истории видно, кто и когда оставил запись.',
+  'hint-late-save':'Фиксирует причину просрочки и сохраняет отметку готовности передела.',
+  'hint-late-cancel':'Закрывает диалог без отметки готовности, если нужно вернуться и исправить данные.',
   'hint-import':'Загружает данные из JSON. При частичных данных пустые разделы создаются автоматически.',
   'hint-export':'Скачивает актуальный снапшот CRM.',
   'hint-refresh':'Принудительно запрашивает свежие данные без перезагрузки страницы.',
@@ -17528,6 +17542,7 @@ async function processStageCompletionChange(tr, isDone){
     tr.dataset.completedLate='false';
     delete tr.dataset.delayReason;
     updateStageSourceExtras(tr,{ doneAt:'', delayReason:'', completedLate:false });
+    crmDialogLocalChanges=true;
     return true;
   }
   const now=new Date();
@@ -17561,7 +17576,8 @@ async function processStageCompletionChange(tr, isDone){
   }else{
     delete tr.dataset.delayReason;
   }
-  updateStageSourceExtras(tr,{ doneAt:doneAtIso, delayReason:completedLate?reason:'', completedLate });
+  updateStageSourceExtras(tr,{ done:true, progress:100, doneAt:doneAtIso, delayReason:completedLate?reason:'', completedLate });
+  crmDialogLocalChanges=true;
   return true;
 }
 
