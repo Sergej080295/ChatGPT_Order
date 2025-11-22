@@ -7609,6 +7609,30 @@ function orderMatchesLaneSumRange(order,{ from, to }){
 }
 
 const actionHintTimers=new WeakMap();
+let actionHintObserver=null;
+
+function bindActionHintsInTree(root=document){
+  if(!root) return;
+  const targets=root.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary], [data-hint-label]');
+  targets.forEach(el=>{
+    el.dataset.hintSummary=resolveHintSummary(el);
+    el.dataset.hintDetails=resolveHintDetails(el);
+    bindActionHintElement(el);
+  });
+}
+
+function ensureActionHintObserver(){
+  if(actionHintObserver) return;
+  actionHintObserver=new MutationObserver(mutations=>{
+    mutations.forEach(mutation=>{
+      mutation.addedNodes.forEach(node=>{
+        if(!(node instanceof Element)) return;
+        bindActionHintsInTree(node);
+      });
+    });
+  });
+  actionHintObserver.observe(document.body,{ childList:true, subtree:true });
+}
 
 function resolveHintSummary(el){
   if(!el) return '';
@@ -7671,12 +7695,12 @@ function scheduleActionHint(el){
 
 function bindActionHintElement(el){
   if(!el || el.dataset.hintBound) return;
-  el.dataset.hintBound='1';
   const summary=resolveHintSummary(el);
   const details=resolveHintDetails(el);
   if(!summary && !details){
     return;
   }
+  el.dataset.hintBound='1';
   if(el.hasAttribute('title')){
     el.dataset.hintNativeTitle=el.getAttribute('title')||'';
     el.removeAttribute('title');
@@ -7695,16 +7719,13 @@ function applyCrmActionHints(){
   const detailsEnabled=prefs?.showActionHints!==false;
   document.body.classList.add('crm-hints-enabled');
   document.body.classList.toggle('crm-hints-details', detailsEnabled);
-  document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
-    el.dataset.hintSummary=resolveHintSummary(el);
-    el.dataset.hintDetails=resolveHintDetails(el);
-    bindActionHintElement(el);
-  });
+  bindActionHintsInTree(document);
   if(!detailsEnabled){
-    document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
+    document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary], [data-hint-label]').forEach(el=>{
       el.classList.remove('crm-hint-details-visible');
     });
   }
+  ensureActionHintObserver();
 }
 
 let crmAppliedAutoRefreshMs=null;
@@ -15702,6 +15723,7 @@ function renderCurrentView(){
     renderCards();
     updateCrmAuxButtons();
   }
+  applyCrmActionHints();
 }
 
 function ensureLaneRegistry(lanes,boardId){
@@ -17508,6 +17530,17 @@ function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReaso
   crmDialogLocalChanges=true;
 }
 
+function computeStageDelay(tr){
+  const dueDate=getStageRowDueDate(tr);
+  if(!dueDate){
+    return { isLate:false, diffDays:0, dueDate:null };
+  }
+  const now=new Date();
+  const late=now.getTime()>dueDate.getTime();
+  const diffDays=late?Math.ceil((now.getTime()-dueDate.getTime())/86400000):0;
+  return { isLate:late, diffDays, dueDate };
+}
+
 function requestStageDelayReason(initialReason, diffDays){
   if(!crmLateReasonDlg){
     return Promise.resolve(null);
@@ -17562,41 +17595,49 @@ function requestStageDelayReason(initialReason, diffDays){
   });
 }
 
+async function resolveStageCompletion(tr){
+  const { isLate, diffDays, dueDate }=computeStageDelay(tr);
+  const now=new Date();
+  let doneAt=new Date(now);
+  let completedLate=isLate;
+  let reason='';
+  if(isLate){
+    const decision=await requestStageDelayReason(tr.dataset?.delayReason||'', diffDays);
+    if(!decision || decision.action==='cancel'){
+      return null;
+    }
+    if(decision.action==='yesterday'){
+      doneAt.setDate(doneAt.getDate()-1);
+      completedLate=true;
+      reason='Выполнено вчера';
+    }else if(decision.reason){
+      completedLate=true;
+      reason=decision.reason;
+    }
+  }
+  const doneAtIso=doneAt.toISOString();
+  if(!isLate && dueDate && doneAt.getTime()<=dueDate.getTime()){
+    completedLate=false;
+    reason='';
+  }
+  return { doneAt:doneAtIso, completedLate, delayReason:completedLate?reason:'' };
+}
+
 async function processStageCompletionChange(tr, isDone){
   if(!tr) return true;
   if(!isDone){
     tr.dataset.doneAt='';
     tr.dataset.completedLate='false';
     delete tr.dataset.delayReason;
-    updateStageSourceExtras(tr,{ doneAt:'', delayReason:'', completedLate:false });
+    updateStageSourceExtras(tr,{ done:false, doneAt:'', delayReason:'', completedLate:false });
     crmDialogLocalChanges=true;
     return true;
   }
-  const now=new Date();
-  let doneAt=new Date(now);
-  const dueDate=getStageRowDueDate(tr);
-  const wasLate=!!(dueDate && now.getTime()>dueDate.getTime());
-  let completedLate=wasLate;
-  let reason='';
-  if(wasLate){
-    const diffDays=Math.ceil((now-dueDate)/86400000);
-    const decision=await requestStageDelayReason(tr.dataset?.delayReason||'', diffDays);
-    if(!decision || decision.action==='cancel'){
-      return false;
-    }
-    if(decision.action==='yesterday'){
-      doneAt=new Date(now.getTime()-86400000);
-      reason='Выполнено вчера';
-      completedLate=true;
-    }else if(decision.reason){
-      reason=decision.reason;
-    }
+  const completion=await resolveStageCompletion(tr);
+  if(!completion){
+    return false;
   }
-  const doneAtIso=doneAt.toISOString();
-  if(!wasLate && dueDate && doneAt.getTime()<=dueDate.getTime()){
-    completedLate=false;
-  }
-  applyStageCompletionExtras(tr,{ doneAt:doneAtIso, completedLate, delayReason:completedLate?reason:'' });
+  applyStageCompletionExtras(tr, completion);
   return true;
 }
 
