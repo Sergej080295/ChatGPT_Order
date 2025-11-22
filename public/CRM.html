@@ -4614,6 +4614,29 @@
     display: none;
   }
 
+  body.crm-hints-enabled [data-hint-key] {
+    position: relative;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-primary) 55%, transparent);
+  }
+
+  body.crm-hints-enabled [data-hint-key]::after {
+    content: attr(data-hint-label);
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 4px;
+    padding: 4px 8px;
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--pc-primary) 35%, var(--pc-border));
+    color: var(--pc-text);
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 2;
+  }
+
   .card {
     background: var(--pc-surface);
     border: 1px solid var(--pc-border);
@@ -5503,7 +5526,7 @@
           </label>
           <div class="crm-toolbar__stage-buttons">
             <button id="crmStageExceptionsBtn" class="pc-btn pc-btn--secondary" type="button">Исключения</button>
-            <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button">Бронь</button>
+            <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button" data-hint-key="hint-reserve" data-hint-label="Управление бронью">Бронь</button>
             <button id="crmStageOptimizeBtn" class="pc-btn pc-btn--primary" type="button" title="Оптимизировать очередь передела">Оптимизировать очередь</button>
           </div>
         </div>
@@ -5524,7 +5547,7 @@
           </svg>
           <span class="crm-toolbar__badge" id="crmTrashBadge" hidden>0</span>
         </button>
-        <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button">+ Заказ</button>
+        <button id="newOrderBtn" class="pc-btn pc-btn--primary" type="button" data-hint-key="hint-new-order" data-hint-label="Создать новый заказ">+ Заказ</button>
         <button id="exportBtn" class="pc-icon-btn" type="button" title="Экспорт JSON" aria-label="Экспорт JSON">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M12 4v10m0 0 4-4m-4 4-4-4" />
@@ -5879,7 +5902,7 @@
             <div class="left">
               <label class="rowc"><input id="dateToday" type="checkbox" class="ready-switch" /> Даты=сегодня</label>
               <div class="crm-stage-date-tools">
-                <button type="button" class="pc-btn pc-btn--ghost" id="calcStageDatesBtn" title="Рассчитать сроки автоматически">🧮 Рассчитать даты</button>
+                <button type="button" class="pc-btn pc-btn--ghost" id="calcStageDatesBtn" title="Рассчитать сроки автоматически" data-hint-key="hint-calc-dates" data-hint-label="Авторасчёт дат переделов">🧮 Рассчитать даты</button>
                 <button type="button" class="pc-btn pc-btn--ghost" id="clearStageDatesBtn" title="Очистить даты переделов">🧽 Очистка дат</button>
               </div>
               <span class="note">Галочка «Готово» = 100% по переделу.</span>
@@ -6462,10 +6485,16 @@ const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
+const CRM_LANE_SUM_PERIODS=['day','month','quarter','year','custom'];
+const CRM_DEFAULT_LANE_SUM_PERIOD='month';
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
   showLateTips:true,
+  showActionHints:true,
+  laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
+  laneSumFrom:'',
+  laneSumTo:'',
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
   linkedStagesEnabled:true,
@@ -7143,12 +7172,25 @@ function normalizeStageLinkGapDays(value){
   return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
 }
 
+function normalizeLaneSumPeriod(value){
+  if(typeof value!=='string') return CRM_DEFAULT_LANE_SUM_PERIOD;
+  const normalized=value.trim().toLowerCase();
+  return CRM_LANE_SUM_PERIODS.includes(normalized)?normalized:CRM_DEFAULT_LANE_SUM_PERIOD;
+}
+
+function normalizeLaneSumDate(value){
+  if(!value) return '';
+  const iso=coerceCalendarIso(value);
+  return iso||'';
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
+    if(typeof raw.showActionHints==='boolean') result.showActionHints=raw.showActionHints;
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -7180,6 +7222,18 @@ function sanitizeCrmPreferences(raw){
       if(normalized!==null){
         result.linkedStageGapDays=normalized;
       }
+    }
+    if(Object.prototype.hasOwnProperty.call(raw,'laneSumPeriod')){
+      const normalized=normalizeLaneSumPeriod(raw.laneSumPeriod);
+      if(normalized) result.laneSumPeriod=normalized;
+    }
+    if(Object.prototype.hasOwnProperty.call(raw,'laneSumFrom')){
+      const normalized=normalizeLaneSumDate(raw.laneSumFrom);
+      result.laneSumFrom=normalized||'';
+    }
+    if(Object.prototype.hasOwnProperty.call(raw,'laneSumTo')){
+      const normalized=normalizeLaneSumDate(raw.laneSumTo);
+      result.laneSumTo=normalized||'';
     }
   }
   return result;
@@ -7310,6 +7364,61 @@ function getCrmRouteHorizonDays(){
   const normalized=normalizeRouteHorizonDays(prefs?.routeHorizonDays);
   if(normalized===null) return CRM_DEFAULT_ROUTE_HORIZON_DAYS;
   return normalized;
+}
+
+function getCrmLaneSumRange(){
+  const prefs=getCrmPreferences();
+  const mode=normalizeLaneSumPeriod(prefs?.laneSumPeriod);
+  const today=today0();
+  const makeDate=(iso)=>{const parsed=coerceCalendarIso(iso);return parsed?new Date(`${parsed}T00:00:00`):null;};
+  switch(mode){
+    case 'day':{
+      const from=new Date(today.getTime());
+      const to=addDays(from,1);
+      return { from, to };
+    }
+    case 'month':{
+      const from=new Date(today.getFullYear(), today.getMonth(), 1);
+      const to=new Date(today.getFullYear(), today.getMonth()+1, 1);
+      return { from, to };
+    }
+    case 'quarter':{
+      const quarter=Math.floor(today.getMonth()/3);
+      const from=new Date(today.getFullYear(), quarter*3, 1);
+      const to=new Date(today.getFullYear(), (quarter+1)*3, 1);
+      return { from, to };
+    }
+    case 'year':{
+      const from=new Date(today.getFullYear(),0,1);
+      const to=new Date(today.getFullYear()+1,0,1);
+      return { from, to };
+    }
+    case 'custom':{
+      const from=makeDate(prefs?.laneSumFrom||'');
+      const toStart=makeDate(prefs?.laneSumTo||'');
+      const to=toStart?addDays(toStart,1):null;
+      return { from:from||null, to:to||null };
+    }
+    default:
+      return { from:null, to:null };
+  }
+}
+
+function orderMatchesLaneSumRange(order,{ from, to }){
+  if(!from && !to) return true;
+  const iso=coerceCalendarIso(order?.statusEnteredAt||order?.updatedAt||order?.createdAt||'');
+  if(!iso) return true;
+  const date=new Date(`${iso}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return true;
+  if(from && date<from) return false;
+  if(to && date>=to) return false;
+  return true;
+}
+
+function applyCrmActionHints(){
+  const prefs=getCrmPreferences();
+  const enabled=prefs?.showActionHints!==false;
+  document.body.classList.toggle('crm-hints-enabled', enabled);
 }
 
 let crmAppliedAutoRefreshMs=null;
@@ -15333,6 +15442,20 @@ function normalizeStageProgress(value){
 
 function computeOrderDatesFromStages(o){const st=o.stages||[];const sd=st.map(x=>x.start).filter(Boolean).sort();const ed=st.map(x=>x.end).filter(Boolean).sort();o.start=sd[0]||'';o.end=ed[ed.length-1]||''}
 function stagesDoneCount(o){const s=o.stages||[];const d=s.filter(x=>{if(!x) return false;return x.done||normalizeStageProgress(x.progress)>=100;}).length;return[d,s.length]}
+
+function orderHasLateStage(order){
+  if(!order||!Array.isArray(order.stages)) return false;
+  const today=today0().getTime();
+  return order.stages.some(stage=>{
+    if(!stage||stage.done) return false;
+    if(stage.completedLate) return true;
+    const endIso=coerceCalendarIso(stage.end||stage.endDate||'');
+    if(!endIso) return false;
+    const endDate=new Date(`${endIso}T00:00:00`);
+    if(Number.isNaN(endDate.getTime())) return false;
+    return endDate.getTime()<today;
+  });
+}
 function stageRequiresHours(stage){const nm=normalizeStageName(stage?.name||'');return !!nm&&stageNameHasHours(nm);}
 function collectStageIssues(stages){const seen=new Set();const result=[];(stages||[]).forEach(st=>{const label=(st?.name||'Передел').trim()||'Передел';if(!(st?.start)){result.push(`${label}: нет даты начала`);}if(!(st?.end)){result.push(`${label}: нет даты окончания`);}if(stageRequiresHours(st)){const raw=st?.value;const normalized=raw==null?'':String(raw).trim();if(!normalized){result.push(`${label}: нет часов`);}}});const unique=[];for(const item of result){if(!seen.has(item)){seen.add(item);unique.push(item);}}const tooltip=unique.length>3?unique.slice(0,3).join('\n')+'\n…':unique.join('\n');return{hasIssues:unique.length>0,messages:unique,tooltip};}
 
@@ -15415,6 +15538,7 @@ function renderCards(){
   const b=currentBoard();
   if(!b)return;
   const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const laneRange=getCrmLaneSumRange();
   const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
   const totalOrders=b.orders.length;
   let filteredTotal=0;
@@ -15437,6 +15561,9 @@ function renderCards(){
     if(!orderMatchesSearch(o)){
       return;
     }
+    if(!o.statusEnteredAt){
+      o.statusEnteredAt=o.updatedAt||o.createdAt||new Date().toISOString();
+    }
     map[lane].push(o);
     filteredTotal++;
     if(!doneLane || lane!==doneLane){
@@ -15448,7 +15575,8 @@ function renderCards(){
     const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
     if(col){
-      const sumValue=arr.reduce((acc,o)=>{
+      const filteredForSum=arr.filter(order=>orderMatchesLaneSumRange(order,laneRange));
+      const sumValue=filteredForSum.reduce((acc,o)=>{
         const raw=o?.serviceTotal;
         if(raw===''||raw==null) return acc;
         let numeric=raw;
@@ -15487,11 +15615,12 @@ function renderCards(){
       }
       const [doneCnt,totalCnt]=stagesDoneCount(o);
       const chips=document.createElement('div');chips.className='chips';
+      const hasLateStage=orderHasLateStage(o);
       (o.stages||[]).forEach(st=>{if(st.value!==''&&st.value!==undefined&&st.value!==null){chips.appendChild(chip(`${escapeHtml(st.name)}: ${escapeHtml(st.value)}`))}});
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,'warn'))}
+      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,hasLateStage?'danger':'warn'))}
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
         <div class="row">
@@ -15613,6 +15742,7 @@ function moveOrderToLane(orderId,targetLane,beforeId){
   const originalLane=order.status;
   const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
   list.splice(fromIndex,1);
+  const laneChanged=order.status!==targetLane;
   order.status=targetLane;
   let insertIndex=list.length;
   if(beforeId){
@@ -15645,6 +15775,9 @@ function moveOrderToLane(orderId,targetLane,beforeId){
     }
   }
   const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  if(laneChanged){
+    order.statusEnteredAt=new Date().toISOString();
+  }
   if(changed){
     commitCrmOrderJournal(previousSnapshot, order);
   }
@@ -17486,8 +17619,15 @@ orderForm.addEventListener('submit',e=>{
     notes:commentSummary,status:orderForm.status.value,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     comments,
-    createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
+    createdAt:exist?.createdAt||new Date().toISOString(),statusEnteredAt:exist?.statusEnteredAt||new Date().toISOString(),
+    partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
     parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
+  const statusChanged=exist?exist.status!==obj.status:true;
+  if(!statusChanged && exist?.statusEnteredAt){
+    obj.statusEnteredAt=exist.statusEnteredAt;
+  }else if(statusChanged){
+    obj.statusEnteredAt=new Date().toISOString();
+  }
   if(obj.done)obj.progress=100;
   if(exist){
     Object.assign(exist,obj);
@@ -18002,6 +18142,17 @@ function renderCrmPreferencesSettingsUI(){
   refreshHint.className='crm-field__hint';
   refreshHint.textContent=`Минимум ${CRM_MIN_AUTO_REFRESH_SECONDS} с. Укажите 0, чтобы отключить автообновление.`;
   refreshField.append(refreshLabel, refreshInput, refreshHint);
+
+  const hintsOption=document.createElement('label');
+  hintsOption.className='crm-settings-checkbox';
+  const hintsCheckbox=document.createElement('input');
+  hintsCheckbox.type='checkbox';
+  hintsCheckbox.name='prefShowActionHints';
+  hintsCheckbox.checked=prefs.showActionHints!==false;
+  const hintsText=document.createElement('span');
+  hintsText.textContent='Подсказки на важных кнопках';
+  hintsOption.append(hintsCheckbox, hintsText);
+
   const horizonField=document.createElement('label');
   horizonField.className='crm-field';
   const horizonLabel=document.createElement('span');
@@ -18023,6 +18174,66 @@ function renderCrmPreferencesSettingsUI(){
   horizonHint.className='crm-field__hint';
   horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
   horizonField.append(horizonLabel, horizonInput, horizonHint);
+
+  const lanePeriodField=document.createElement('label');
+  lanePeriodField.className='crm-field';
+  const lanePeriodLabel=document.createElement('span');
+  lanePeriodLabel.className='crm-field__label';
+  lanePeriodLabel.textContent='Период сумм в колонках';
+  const lanePeriodSelect=document.createElement('select');
+  lanePeriodSelect.name='prefLaneSumPeriod';
+  lanePeriodSelect.className='pc-select';
+  const periodOptions=[
+    { value:'day', label:'День' },
+    { value:'month', label:'Месяц' },
+    { value:'quarter', label:'Квартал' },
+    { value:'year', label:'Год' },
+    { value:'custom', label:'Произвольно' }
+  ];
+  periodOptions.forEach(opt=>{
+    const option=document.createElement('option');
+    option.value=opt.value;
+    option.textContent=opt.label;
+    if(opt.value===prefs.laneSumPeriod){
+      option.selected=true;
+    }
+    lanePeriodSelect.appendChild(option);
+  });
+  const lanePeriodHint=document.createElement('span');
+  lanePeriodHint.className='crm-field__hint';
+  lanePeriodHint.textContent='Суммы услуг в колонках считаются по дате попадания заказа в статус.';
+
+  const lanePeriodCustomWrap=document.createElement('div');
+  lanePeriodCustomWrap.className='crm-settings-grid crm-settings-grid--two';
+  const laneFrom=document.createElement('label');
+  laneFrom.className='crm-field';
+  const laneFromLabel=document.createElement('span');
+  laneFromLabel.className='crm-field__label';
+  laneFromLabel.textContent='Начало периода';
+  const laneFromInput=document.createElement('input');
+  laneFromInput.type='date';
+  laneFromInput.name='prefLaneSumFrom';
+  laneFromInput.className='pc-input';
+  laneFromInput.value=prefs.laneSumFrom||'';
+  laneFrom.append(laneFromLabel, laneFromInput);
+  const laneTo=document.createElement('label');
+  laneTo.className='crm-field';
+  const laneToLabel=document.createElement('span');
+  laneToLabel.className='crm-field__label';
+  laneToLabel.textContent='Конец периода';
+  const laneToInput=document.createElement('input');
+  laneToInput.type='date';
+  laneToInput.name='prefLaneSumTo';
+  laneToInput.className='pc-input';
+  laneToInput.value=prefs.laneSumTo||'';
+  laneTo.append(laneToLabel, laneToInput);
+  lanePeriodCustomWrap.append(laneFrom, laneTo);
+  const updateCustomVisibility=()=>{
+    lanePeriodCustomWrap.style.display=lanePeriodSelect.value==='custom'?'grid':'none';
+  };
+  lanePeriodSelect.addEventListener('change',updateCustomVisibility);
+  updateCustomVisibility();
+  lanePeriodField.append(lanePeriodLabel, lanePeriodSelect, lanePeriodHint, lanePeriodCustomWrap);
   const linkOption=document.createElement('label');
   linkOption.className='crm-settings-checkbox';
   const linkCheckbox=document.createElement('input');
@@ -18050,7 +18261,7 @@ function renderCrmPreferencesSettingsUI(){
   linkGapHint.className='crm-field__hint';
   linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
   linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, hintsOption, lanePeriodField, horizonField, linkOption, linkGapField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -18566,7 +18777,11 @@ boardForm.addEventListener('submit',e=>{
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
+    showActionHints:!!boardForm.prefShowActionHints?.checked,
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
+    laneSumPeriod:boardForm.prefLaneSumPeriod?boardForm.prefLaneSumPeriod.value:'',
+    laneSumFrom:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
+    laneSumTo:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
     linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
     linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:''
@@ -20086,6 +20301,7 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){
   updatePlannerAutoRefreshFromPreferences();
+  applyCrmActionHints();
   renderBoardSelect();
   renderColumns();
   renderCurrentView();
