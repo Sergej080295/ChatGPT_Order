@@ -4533,6 +4533,29 @@
     color: var(--pc-text);
   }
 
+  .lane-sum-toggle {
+    border: 1px solid var(--pc-border-strong);
+    background: var(--pc-surface-strong);
+    border-radius: var(--pc-radius-sm);
+    padding: 2px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--pc-text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .lane-sum-toggle[data-mode="all"] {
+    color: var(--pc-info);
+    border-color: color-mix(in srgb, var(--pc-info) 60%, var(--pc-border-strong));
+  }
+
+  .lane-sum-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-info) 70%, transparent);
+    outline-offset: 1px;
+  }
+
   .lane-count {
     padding: 2px 10px;
     border-radius: var(--pc-radius-pill);
@@ -5018,43 +5041,46 @@
     min-width: 0;
   }
 
-  .gridHead .title {
-    grid-column: 1 / span 8;
+  .gridHead .orderNo,
+  .gridHead .customer,
+  .gridHead .service,
+  .gridHead .progressField {
     grid-row: 1;
-  }
-
-  .gridHead .service {
-    grid-column: 9 / span 4;
-    grid-row: 1;
-  }
-
-  .gridHead .customer {
-    grid-column: 1 / span 6;
-    grid-row: 2;
   }
 
   .gridHead .orderNo {
+    grid-column: 1 / span 3;
+  }
+
+  .gridHead .customer {
+    grid-column: 4 / span 3;
+  }
+
+  .gridHead .service {
     grid-column: 7 / span 3;
-    grid-row: 2;
   }
 
   .gridHead .progressField {
     grid-column: 10 / span 3;
-    grid-row: 2;
-  }
-
-  .gridHead .start {
-    grid-column: 1 / span 6;
-    grid-row: 3;
-  }
-
-  .gridHead .end {
-    grid-column: 7 / span 6;
-    grid-row: 3;
   }
 
   .gridHead input:not([type="checkbox"]) {
     width: 100%;
+  }
+
+  .dlg-head__title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  #dlgTitleMeta {
+    display: block;
+    color: var(--pc-text-muted);
+    font-size: 13px;
+    line-height: 1.35;
+    word-break: break-word;
   }
 
   .progress-expected-cell {
@@ -5089,34 +5115,12 @@
       grid-row: 1;
     }
 
-    .gridHead .service {
-      grid-column: 1 / span 3;
-      grid-row: 2;
-    }
-
-    .gridHead .start {
-      grid-column: 4 / span 3;
-      grid-row: 2;
-    }
-
-    .gridHead .customer {
-      grid-column: 1 / span 3;
-      grid-row: 3;
-    }
-
-    .gridHead .orderNo {
-      grid-column: 4 / span 3;
-      grid-row: 3;
-    }
-
+    .gridHead .orderNo,
+    .gridHead .customer,
+    .gridHead .service,
     .gridHead .progressField {
-      grid-column: 1 / span 3;
-      grid-row: 4;
-    }
-
-    .gridHead .end {
-      grid-column: 4 / span 3;
-      grid-row: 4;
+      grid-column: 1 / span 6;
+      grid-row: auto;
     }
   }
 
@@ -5125,13 +5129,10 @@
       grid-template-columns: minmax(0, 1fr);
     }
 
-    .gridHead .title,
     .gridHead .service,
     .gridHead .customer,
     .gridHead .orderNo,
-    .gridHead .progressField,
-    .gridHead .start,
-    .gridHead .end {
+    .gridHead .progressField {
       grid-column: 1 / -1;
       grid-row: auto;
     }
@@ -5143,6 +5144,12 @@
 
   #orderForm details textarea {
     width: 100%;
+  }
+
+  .crm-status-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
   }
 
   .surface {
@@ -5888,7 +5895,10 @@
 <!-- Диалог заказа -->
 <dialog id="orderDlg" class="pc-modal">
   <div class="dlg-head">
-    <strong id="dlgTitle">Редактировать заказ</strong>
+    <div class="dlg-head__title">
+      <strong id="dlgTitle">Редактировать заказ</strong>
+      <span id="dlgTitleMeta"></span>
+    </div>
     <div class="rowc">
       <label class="rowc"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
       <button class="pc-btn pc-btn--ghost" type="button" id="splitBtn" title="Разбить на подзаказ">➗ Подзаказ</button>
@@ -5898,14 +5908,13 @@
   </div>
   <form id="orderForm" class="dlg-body" method="dialog">
     <div class="gridHead surface">
-      <div class="title"><label>Название заказа</label><input name="title" required /></div>
-      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
-      <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
-
-      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <input type="hidden" name="title" />
+      <input type="hidden" name="start" />
+      <input type="hidden" name="end" />
       <div class="orderNo"><label>№ заказа</label><input name="orderNo" required /></div>
+      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
       <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
-      <div class="end"><label>Конец (авто)</label><input name="end" type="date" disabled /></div>
     </div>
 
     <details class="section-card surface" open>
@@ -6505,6 +6514,7 @@ const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
+const CRM_LANE_SUM_MODES=new Set(['range','all']);
 const CRM_HINT_DEFAULTS=Object.freeze({ enabled:true, level1:true, level2:true, delayMs:500 });
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
@@ -6515,6 +6525,7 @@ const CRM_DEFAULT_PREFERENCES={
   linkedStagesEnabled:true,
   linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
+  laneSumModes:{},
   hints:CRM_HINT_DEFAULTS
 };
 const CRM_DEFAULT_START_VIEW='kanban';
@@ -7222,6 +7233,19 @@ function sanitizeLaneSumPeriod(raw){
   return result;
 }
 
+function sanitizeLaneSumModes(raw){
+  const result={};
+  if(raw && typeof raw==='object'){
+    Object.entries(raw).forEach(([lane,mode])=>{
+      const key=typeof lane==='string'?lane.trim():'';
+      const normalized=typeof mode==='string'?mode.trim().toLowerCase():'';
+      if(!key || !CRM_LANE_SUM_MODES.has(normalized)) return;
+      result[key]=normalized;
+    });
+  }
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -7230,6 +7254,7 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
     result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
+    result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -7363,6 +7388,28 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getLaneSumModeForLane(lane){
+  const prefs=getCrmPreferences();
+  const map=prefs?.laneSumModes||{};
+  const key=typeof lane==='string'?lane:'';
+  const normalized=typeof map[key]==='string'?map[key].trim().toLowerCase():'';
+  if(CRM_LANE_SUM_MODES.has(normalized)) return normalized;
+  return 'range';
+}
+
+function setLaneSumModeForLane(lane, mode){
+  const targetLane=typeof lane==='string'?lane.trim():'';
+  const normalized=typeof mode==='string'?mode.trim().toLowerCase():'';
+  if(!targetLane || !CRM_LANE_SUM_MODES.has(normalized)) return;
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  const map={ ...(prefs.laneSumModes||{}) };
+  map[targetLane]=normalized;
+  prefs.laneSumModes=map;
+  state.settings.preferences=prefs;
+  save('Переключение режима суммы колонки');
 }
 
 function isStageLinkEnabledByDefault(){
@@ -14884,7 +14931,7 @@ function renderCrmStageTable(){
       doneInput.addEventListener('click',evt=>evt.stopPropagation());
       if(!doneInput.disabled){
         doneInput.addEventListener('change',()=>{
-          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked);
+          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked, doneInput);
         });
       }
     }
@@ -15121,7 +15168,51 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   renderCurrentView();
 }
 
-function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
+function promptStageCompletionStatus(order){
+  return new Promise(resolve=>{
+    const b=currentBoard();
+    const lanes=Array.isArray(b?.lanes)?b.lanes:[];
+    const current=order?.status||'';
+    const currentIndex=lanes.indexOf(current);
+    const suggested=lanes[Math.min(lanes.length-1, Math.max(0,currentIndex+1))]||current||'';
+    const dialog=document.createElement('dialog');
+    dialog.className='pc-modal pc-modal--sm';
+    const options=lanes.length?lanes:current?[current]:[''];
+    dialog.innerHTML=`
+      <div class="dlg-head"><strong>Перемещение заказа</strong></div>
+      <form class="dlg-body crm-status-confirm" method="dialog">
+        <p>Передел отмечен готовым. Выберите целевое состояние заказа.</p>
+        <label class="crm-field">
+          <span class="crm-field__label">Состояние</span>
+          <select class="pc-select" name="statusChoice">
+            ${options.map(lane=>{
+              const value=escapeHtml(lane);
+              const selected=lane===suggested?'selected':'';
+              return `<option value="${value}" ${selected}>${value||'—'}</option>`;
+            }).join('')}
+          </select>
+        </label>
+      </form>
+      <div class="dlg-footer">
+        <button type="button" class="pc-btn pc-btn--secondary" data-act="cancel">Отмена</button>
+        <button type="button" class="pc-btn pc-btn--primary" data-act="apply">Перенести</button>
+      </div>`;
+    const cleanup=(value)=>{ dialog.close(); dialog.remove(); resolve(value); };
+    const handleCancel=()=>cleanup(null);
+    const handleApply=()=>{
+      const select=dialog.querySelector('select[name="statusChoice"]');
+      const value=select?select.value.trim():'';
+      cleanup(value||current||'');
+    };
+    dialog.addEventListener('cancel',evt=>{evt.preventDefault();handleCancel();});
+    dialog.querySelector('[data-act="cancel"]')?.addEventListener('click',handleCancel);
+    dialog.querySelector('[data-act="apply"]')?.addEventListener('click',handleApply);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+  });
+}
+
+async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sourceInput=null){
   if(!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
     return;
@@ -15130,8 +15221,17 @@ function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
+    const targetStatus=await promptStageCompletionStatus(order);
+    if(targetStatus===null){
+      if(sourceInput) sourceInput.checked=!!stage.done;
+      return;
+    }
     stage.done=true;
     stage.progress=100;
+    if(targetStatus && targetStatus!==order.status){
+      order.status=targetStatus;
+      order.statusEnteredAt=fmtDateISO(today0());
+    }
   }else{
     stage.done=false;
     const current=normalizeStageProgress(stage.progress??0);
@@ -15385,11 +15485,16 @@ function renderColumns(){
       const c=document.createElement('div');
       c.className='col';
       const laneLabel=escapeHtml(l);
+      const laneMode=getLaneSumModeForLane(l);
+      const laneModeTitle=laneMode==='all'
+        ?'Суммировать все заказы в колонке'
+        :'Сумма за период из настроек';
       c.innerHTML=`
         <header>
           <h2>
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
+              <button class="lane-sum-toggle" type="button" data-lane="${laneLabel}" data-mode="${laneMode}" title="${laneModeTitle}">${laneMode==='all'?'∑ все':'∑ период'}</button>
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
@@ -15417,6 +15522,17 @@ function renderColumns(){
     if(!lane)return;
     btn.addEventListener('click',()=>increaseLaneLimit(lane));
     btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();increaseLaneLimit(lane);}});
+  });
+  $$('.lane-sum-toggle',columns).forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const lane=btn.dataset.lane;
+      if(!lane) return;
+      const current=getLaneSumModeForLane(lane);
+      const next=current==='all'?'range':'all';
+      setLaneSumModeForLane(lane, next);
+      renderColumns();
+      renderCards();
+    });
   });
   enableDnd();
 }
@@ -15517,6 +15633,13 @@ function orderMatchesSearch(order){
   return false;
 }
 
+function buildOrderDisplayName(orderNo, customer){
+  const parts=[orderNo, customer]
+    .map(v=>typeof v==='string'?v.trim():'')
+    .filter(Boolean);
+  return parts.length?parts.join(' '):'Заказ';
+}
+
 function resolveLaneSumRange(){
   const prefs=getCrmPreferences();
   const setting=sanitizeLaneSumPeriod(prefs?.laneSumPeriod);
@@ -15595,6 +15718,22 @@ function orderFitsLaneSumRange(order, range){
   return time>=range.fromTime && time<=range.toTime;
 }
 
+function normalizeServiceTotalValue(raw){
+  if(raw===''||raw===null||raw===undefined) return null;
+  if(typeof window._parseMoney==='function'){
+    const parsed=window._parseMoney(raw);
+    if(parsed!=='' && Number.isFinite(Number(parsed))){
+      return Number(parsed);
+    }
+  }
+  let numeric=raw;
+  if(typeof numeric==='string'){
+    numeric=numeric.replace(/[\s\u202f\u00a0₽]+/g,'').replace(',', '.');
+  }
+  numeric=Number(numeric);
+  return Number.isFinite(numeric)?numeric:null;
+}
+
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
@@ -15610,6 +15749,7 @@ function renderCards(){
   const todayTime=today0().getTime();
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
+    ensureOrderStatusEnteredAt(o);
     let lane=o.status;
     if(!Object.prototype.hasOwnProperty.call(map,lane)){
       lane=fallbackLane;
@@ -15634,24 +15774,22 @@ function renderCards(){
     const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
     if(col){
+      const laneMode=getLaneSumModeForLane(lane);
+      const applyRange=laneMode!=='all';
       const sumValue=arr.reduce((acc,o)=>{
-        if(!orderFitsLaneSumRange(o, laneSumRange)) return acc;
-        const raw=o?.serviceTotal;
-        if(raw===''||raw==null) return acc;
-        let numeric=raw;
-        if(typeof numeric==='string'){
-          numeric=Number(numeric.replace(/[\s\u202f\u00a0]+/g,'').replace(',', '.'));
-        }else{
-          numeric=Number(numeric);
-        }
-        return Number.isFinite(numeric)?acc+numeric:acc;
+        if(applyRange && !orderFitsLaneSumRange(o, laneSumRange)) return acc;
+        const numeric=normalizeServiceTotalValue(o?.serviceTotal);
+        return numeric===null?acc:acc+numeric;
       },0);
       const sumEl=col.querySelector('[data-lane-sum]');
       if(sumEl){
         const formatted=sumValue.toLocaleString('ru-RU');
         sumEl.textContent=`${formatted} ₽`;
-        sumEl.dataset.periodLabel=laneSumRange?.label||'';
-        sumEl.title=laneSumRange?.description?`Сумма за ${laneSumRange.label}: ${laneSumRange.description}`:'Сумма по всем заказам статуса';
+        sumEl.dataset.periodLabel=applyRange?(laneSumRange?.label||''):'';
+        sumEl.dataset.mode=laneMode;
+        sumEl.title=applyRange && laneSumRange?.description
+          ?`Сумма за ${laneSumRange.label}: ${laneSumRange.description}`
+          :'Сумма по всем заказам статуса';
       }
       const countEl=col.querySelector('[data-lane-count]');
       if(countEl) countEl.textContent=`(${arr.length} шт)`;
@@ -15896,8 +16034,17 @@ function showTooltipForOrder(o,anchorEl){
 function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
-const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
 let suppressAutoStatusUpdate=false;
+
+if(orderForm){
+  const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
+  const customerInput=orderForm.querySelector('input[name="customer"]');
+  [orderNoInput, customerInput].forEach(input=>{
+    if(!input) return;
+    input.addEventListener('input', updateOrderDialogMeta);
+  });
+}
 
 function sanitizeOrderComment(raw){
   if(!raw||typeof raw!=='object') return null;
@@ -16898,6 +17045,22 @@ function isOrderDialogActive(){
   return !!(orderDlg && orderDlg.open);
 }
 
+function updateOrderDialogMeta(){
+  if(!orderForm || !dlgTitleMeta) return;
+  const orderNo=(orderForm.orderNo?.value||'').trim();
+  const customer=(orderForm.customer?.value||'').trim();
+  const startValue=orderForm.start?.value||'';
+  const endValue=orderForm.end?.value||'';
+  const title=buildOrderDisplayName(orderNo, customer);
+  if(orderForm.title){
+    orderForm.title.value=title;
+  }
+  const datePart=(startValue||endValue)
+    ?` / ${(startValue||'—')} — ${(endValue||'—')}`
+    :'';
+  dlgTitleMeta.textContent=`(${title})${datePart}`;
+}
+
 function openOrder(id=null){
   const canView=crmCanViewOrderDetails();
   const canEdit=crmCanManageOrders();
@@ -16931,6 +17094,7 @@ function openOrder(id=null){
     suppressAutoStatusUpdate=true;
     fillOrderForm(o,b);
     suppressAutoStatusUpdate=false;
+    updateOrderDialogMeta();
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
     if(deleteOrderBtn){
       deleteOrderBtn.style.display=canEdit?'':'none';
@@ -16952,6 +17116,7 @@ function openOrder(id=null){
     orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES);
     window._editingOrigValues=null;
+    updateOrderDialogMeta();
     if(deleteOrderBtn){
       deleteOrderBtn.style.display='none';
       deleteOrderBtn.onclick=null;
@@ -16973,6 +17138,9 @@ if(orderDlg){
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
+    if(dlgTitleMeta){
+      dlgTitleMeta.textContent='';
+    }
     refreshOrderHistoryButton(null);
     orderCommentsDraft=[];
     renderOrderComments();
@@ -16998,8 +17166,10 @@ if(orderDlg){
 }
 
 function fillOrderForm(o,b){
-  orderForm.title.value=o.title||''; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
-  orderForm.serviceTotal.value=(o.serviceTotal??'')===''?'':Number(o.serviceTotal).toLocaleString('ru-RU');
+  const computedTitle=buildOrderDisplayName(o.orderNo||'', o.customer||'');
+  orderForm.title.value=computedTitle; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
+  const serviceTotalNumber=normalizeServiceTotalValue(o.serviceTotal);
+  orderForm.serviceTotal.value=serviceTotalNumber==null?'':serviceTotalNumber.toLocaleString('ru-RU');
   orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
   const fallbackDate=o.updatedAt||o.createdAt||'';
   const fallbackAuthor=o.updatedBy||o.manager||'';
@@ -17017,6 +17187,7 @@ function fillOrderForm(o,b){
   });
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
+  updateOrderDialogMeta();
 }
 
 function parseDateInputValue(value){
@@ -17659,7 +17830,14 @@ function applyOrderAutoCompletionState(){
   }
 }
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
-function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
+function syncAutoDates(){
+  const s=readStages();
+  const sd=s.map(x=>x.start).filter(Boolean).sort();
+  const ed=s.map(x=>x.end).filter(Boolean).sort();
+  orderForm.start.value=sd[0]||'';
+  orderForm.end.value=ed[ed.length-1]||'';
+  updateOrderDialogMeta();
+}
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
@@ -17699,7 +17877,9 @@ orderForm.addEventListener('submit',e=>{
   const statusEnteredAt=(previousStatus && previousStatus===nextStatus)
     ? (coerceCalendarIso(previousStatusEntered)||fmtDateISO(today0()))
     : fmtDateISO(today0());
-  const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
+  updateOrderDialogMeta();
+  const computedTitle=buildOrderDisplayName(orderForm.orderNo.value, orderForm.customer.value);
+  const obj={id,title:computedTitle,orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
     start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
     notes:commentSummary,status:nextStatus,statusEnteredAt,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
@@ -18893,6 +19073,7 @@ boardForm.addEventListener('submit',e=>{
       from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
       to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
     },
+    laneSumModes:state.settings?.preferences?.laneSumModes||{},
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
       level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
