@@ -5375,6 +5375,43 @@
     color: var(--pc-text-muted);
   }
 
+  .crm-hint-bubble {
+    position: fixed;
+    z-index: 9999;
+    background: var(--pc-surface);
+    color: var(--pc-text);
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    padding: 8px 12px;
+    box-shadow: var(--pc-shadow-surface);
+    display: none;
+    gap: 4px;
+    max-width: 360px;
+  }
+
+  .crm-hint-bubble.visible {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .crm-hint-bubble__line {
+    font-size: 12px;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+
+  .crm-hint-bubble__line--level1 {
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-hint-bubble__line--level2 {
+    color: var(--pc-text-muted);
+  }
+
+  .crm-hint-target {
+    position: relative;
+  }
+
   .toast-layer,
   .toast {
     display: none;
@@ -6466,6 +6503,9 @@ const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
+const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
+const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
+const CRM_HINT_DEFAULTS=Object.freeze({ enabled:true, level1:true, level2:true, delayMs:500 });
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
@@ -6473,7 +6513,9 @@ const CRM_DEFAULT_PREFERENCES={
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
   linkedStagesEnabled:true,
-  linkedStageGapDays:0
+  linkedStageGapDays:0,
+  laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
+  hints:CRM_HINT_DEFAULTS
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -7147,12 +7189,47 @@ function normalizeStageLinkGapDays(value){
   return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
 }
 
+function sanitizeCrmHintPreferences(raw){
+  const base=raw && typeof raw==='object'?raw:{};
+  const result={ ...CRM_HINT_DEFAULTS };
+  if(Object.prototype.hasOwnProperty.call(base,'enabled')){
+    result.enabled=base.enabled!==false;
+  }
+  if(Object.prototype.hasOwnProperty.call(base,'level1')){
+    result.level1=!!base.level1;
+  }
+  if(Object.prototype.hasOwnProperty.call(base,'level2')){
+    result.level2=!!base.level2;
+  }
+  const delay=Number(base.delayMs ?? base.delay);
+  if(Number.isFinite(delay) && delay>=0){
+    result.delayMs=Math.max(0, Math.min(15000, Math.round(delay)));
+  }
+  return result;
+}
+
+function sanitizeLaneSumPeriod(raw){
+  const base=raw && typeof raw==='object'?raw:{};
+  const result={ ...CRM_DEFAULT_LANE_SUM_PERIOD };
+  const mode=typeof base.mode==='string'?base.mode.trim().toLowerCase():'';
+  if(CRM_LANE_SUM_PERIOD_MODES.has(mode)){
+    result.mode=mode;
+  }
+  const from=coerceCalendarIso(base.from||base.start);
+  const to=coerceCalendarIso(base.to||base.end);
+  if(from) result.from=from;
+  if(to) result.to=to;
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
+    result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
+    result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -7363,6 +7440,21 @@ function addDays(date, amount){
   return base;
 }
 
+function ensureOrderStatusEnteredAt(order, fallback){
+  if(!order||typeof order!=='object') return '';
+  const candidates=[order.statusEnteredAt, order.statusDate, order.statusAt, fallback, order.createdAt, order.start];
+  for(const candidate of candidates){
+    const iso=coerceCalendarIso(candidate);
+    if(iso){
+      order.statusEnteredAt=iso;
+      return iso;
+    }
+  }
+  const nowIso=fmtDateISO(today0());
+  order.statusEnteredAt=nowIso;
+  return nowIso;
+}
+
 function fmtDateHuman(value){
   const date=normalizeDate(value||Date.now());
   if(!date) return '';
@@ -7560,6 +7652,7 @@ function ensureCrmStateShape(value){
         ensureStageIdentity(stage);
         return stage;
       });
+      ensureOrderStatusEnteredAt(order);
     });
     board.stageCalendars=sanitizeCrmStageCalendars(board.stageCalendars);
     board.planFreeze=sanitizeCrmPlanFreeze(board.planFreeze);
@@ -10047,6 +10140,12 @@ function stageEntryIsLate(stage,{ todayTime=today0().getTime() }={}){
     return false;
   }
   return dueDate.getTime()<todayTime;
+}
+
+function orderHasOverdueStage(order,{ todayTime=today0().getTime() }={}){
+  if(!order||typeof order!=='object') return false;
+  const stages=Array.isArray(order.stages)?order.stages:[];
+  return stages.some(stage=>stageEntryIsLate(stage,{ todayTime }));
 }
 
 function getOrderStartTimestamp(order){
@@ -15418,6 +15517,84 @@ function orderMatchesSearch(order){
   return false;
 }
 
+function resolveLaneSumRange(){
+  const prefs=getCrmPreferences();
+  const setting=sanitizeLaneSumPeriod(prefs?.laneSumPeriod);
+  const today=today0();
+  let start=null;
+  let end=today0();
+  let label='';
+  switch(setting.mode){
+    case 'day':
+      start=today;
+      label='день';
+      break;
+    case 'week':{
+      const base=new Date(today);
+      const weekDay=(base.getDay()+6)%7; // Monday as start
+      base.setDate(base.getDate()-weekDay);
+      start=base;
+      label='неделя';
+      break;
+    }
+    case 'month':
+      start=new Date(today.getFullYear(), today.getMonth(), 1);
+      label='месяц';
+      break;
+    case 'quarter':{
+      const quarter=Math.floor(today.getMonth()/3);
+      start=new Date(today.getFullYear(), quarter*3, 1);
+      label='квартал';
+      break;
+    }
+    case 'year':
+      start=new Date(today.getFullYear(), 0, 1);
+      label='год';
+      break;
+    case 'custom':{
+      const from=setting.from?new Date(`${setting.from}T00:00:00`):null;
+      const to=setting.to?new Date(`${setting.to}T00:00:00`):null;
+      if(from instanceof Date && !Number.isNaN(from.getTime())){
+        start=from;
+      }
+      if(to instanceof Date && !Number.isNaN(to.getTime())){
+        end=to;
+      }
+      if(!start && end){
+        start=new Date(end);
+      }
+      if(start && !end){
+        end=today0();
+      }
+      label='период';
+      break;
+    }
+    default:
+      start=null;
+  }
+  if(!(start instanceof Date) || Number.isNaN(start.getTime()) || !(end instanceof Date) || Number.isNaN(end.getTime())){
+    return null;
+  }
+  const toDate=new Date(end);
+  toDate.setHours(23,59,59,999);
+  return {
+    fromTime:start.getTime(),
+    toTime:toDate.getTime(),
+    label,
+    description:`${fmtDateHuman(start)} — ${fmtDateHuman(end)}`
+  };
+}
+
+function orderFitsLaneSumRange(order, range){
+  if(!range || !range.fromTime || !range.toTime) return true;
+  const iso=coerceCalendarIso(order?.statusEnteredAt);
+  if(!iso) return true;
+  const date=new Date(`${iso}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return true;
+  const time=date.getTime();
+  return time>=range.fromTime && time<=range.toTime;
+}
+
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
@@ -15429,6 +15606,8 @@ function renderCards(){
   let totalActive=0;
   const fallbackLane=b.lanes[0]??null;
   const canCompleteOrders=crmCanCompleteOrders();
+  const laneSumRange=resolveLaneSumRange();
+  const todayTime=today0().getTime();
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
     let lane=o.status;
@@ -15456,6 +15635,7 @@ function renderCards(){
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
     if(col){
       const sumValue=arr.reduce((acc,o)=>{
+        if(!orderFitsLaneSumRange(o, laneSumRange)) return acc;
         const raw=o?.serviceTotal;
         if(raw===''||raw==null) return acc;
         let numeric=raw;
@@ -15470,6 +15650,8 @@ function renderCards(){
       if(sumEl){
         const formatted=sumValue.toLocaleString('ru-RU');
         sumEl.textContent=`${formatted} ₽`;
+        sumEl.dataset.periodLabel=laneSumRange?.label||'';
+        sumEl.title=laneSumRange?.description?`Сумма за ${laneSumRange.label}: ${laneSumRange.description}`:'Сумма по всем заказам статуса';
       }
       const countEl=col.querySelector('[data-lane-count]');
       if(countEl) countEl.textContent=`(${arr.length} шт)`;
@@ -15487,6 +15669,7 @@ function renderCards(){
     }
     visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
+      const hasOverdueStage=orderHasOverdueStage(o,{ todayTime });
       let progress=calcAutoProgress(o.stages);
       const manualProgress=normalizeStageProgress(o.progress);
       if(o.progressManual===true || !Array.isArray(o.stages) || !o.stages.length){
@@ -15498,7 +15681,7 @@ function renderCards(){
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,'warn'))}
+      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,hasOverdueStage?'danger':'warn'))}
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
         <div class="row">
@@ -15621,6 +15804,10 @@ function moveOrderToLane(orderId,targetLane,beforeId){
   const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
   list.splice(fromIndex,1);
   order.status=targetLane;
+  const laneChanged=originalLane!==targetLane;
+  if(laneChanged){
+    order.statusEnteredAt=fmtDateISO(today0());
+  }
   let insertIndex=list.length;
   if(beforeId){
     const idx=list.findIndex(o=>o.id===beforeId);
@@ -15651,7 +15838,7 @@ function moveOrderToLane(orderId,targetLane,beforeId){
       seen++;
     }
   }
-  const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  const changed=laneChanged||originalLaneIndex!==finalLaneIndex;
   if(changed){
     commitCrmOrderJournal(previousSnapshot, order);
   }
@@ -15692,7 +15879,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);if(order.status!==l){order.statusEnteredAt=fmtDateISO(today0());}order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -17506,9 +17693,15 @@ orderForm.addEventListener('submit',e=>{
   }
   const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
   const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
+  const previousStatus=exist?.status||'';
+  const previousStatusEntered=exist?ensureOrderStatusEnteredAt(exist):'';
+  const nextStatus=orderForm.status.value;
+  const statusEnteredAt=(previousStatus && previousStatus===nextStatus)
+    ? (coerceCalendarIso(previousStatusEntered)||fmtDateISO(today0()))
+    : fmtDateISO(today0());
   const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
     start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
-    notes:commentSummary,status:orderForm.status.value,
+    notes:commentSummary,status:nextStatus,statusEnteredAt,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     comments,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
@@ -18075,7 +18268,107 @@ function renderCrmPreferencesSettingsUI(){
   linkGapHint.className='crm-field__hint';
   linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
   linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField);
+  const laneSumField=document.createElement('label');
+  laneSumField.className='crm-field';
+  const laneSumLabel=document.createElement('span');
+  laneSumLabel.className='crm-field__label';
+  laneSumLabel.textContent='Период суммы по колонкам';
+  const laneSumSelect=document.createElement('select');
+  laneSumSelect.className='pc-select';
+  laneSumSelect.name='prefLaneSumMode';
+  [
+    ['day','День'],
+    ['week','Неделя'],
+    ['month','Месяц'],
+    ['quarter','Квартал'],
+    ['year','Год'],
+    ['custom','Произвольный']
+  ].forEach(([value,text])=>laneSumSelect.appendChild(new Option(text,value)));
+  const laneSumFrom=document.createElement('input');
+  laneSumFrom.type='date';
+  laneSumFrom.className='pc-input';
+  laneSumFrom.name='prefLaneSumFrom';
+  laneSumFrom.value=prefs?.laneSumPeriod?.from||'';
+  const laneSumTo=document.createElement('input');
+  laneSumTo.type='date';
+  laneSumTo.className='pc-input';
+  laneSumTo.name='prefLaneSumTo';
+  laneSumTo.value=prefs?.laneSumPeriod?.to||'';
+  const laneSumHint=document.createElement('span');
+  laneSumHint.className='crm-field__hint';
+  laneSumHint.textContent='Используется дата попадания заказа в колонку. Периоды (кроме произвольного) считаются от начала текущего до сегодняшнего дня.';
+  laneSumSelect.value=CRM_LANE_SUM_PERIOD_MODES.has(prefs?.laneSumPeriod?.mode)?prefs.laneSumPeriod.mode:CRM_DEFAULT_LANE_SUM_PERIOD.mode;
+  const laneSumCustomWrap=document.createElement('div');
+  laneSumCustomWrap.className='crm-field__stack';
+  laneSumCustomWrap.append(laneSumFrom, laneSumTo);
+  const syncLaneSumControls=()=>{
+    const custom=laneSumSelect.value==='custom';
+    laneSumFrom.disabled=!custom;
+    laneSumTo.disabled=!custom;
+  };
+  laneSumSelect.addEventListener('change',syncLaneSumControls);
+  syncLaneSumControls();
+  laneSumField.append(laneSumLabel, laneSumSelect, laneSumCustomWrap, laneSumHint);
+
+  const hintsTitle=document.createElement('div');
+  hintsTitle.className='crm-field__label';
+  hintsTitle.textContent='Подсказки к важным кнопкам';
+  const hintsMaster=document.createElement('label');
+  hintsMaster.className='crm-settings-checkbox';
+  const hintsCheckbox=document.createElement('input');
+  hintsCheckbox.type='checkbox';
+  hintsCheckbox.name='prefHintsEnabled';
+  hintsCheckbox.checked=prefs?.hints?.enabled!==false;
+  const hintsText=document.createElement('span');
+  hintsText.textContent='Включить подсказки';
+  hintsMaster.append(hintsCheckbox, hintsText);
+  const hintLevel1=document.createElement('label');
+  hintLevel1.className='crm-settings-checkbox';
+  const hintLevel1Checkbox=document.createElement('input');
+  hintLevel1Checkbox.type='checkbox';
+  hintLevel1Checkbox.name='prefHintLevel1';
+  hintLevel1Checkbox.checked=prefs?.hints?.level1!==false;
+  const hintLevel1Text=document.createElement('span');
+  hintLevel1Text.textContent='1-й уровень: что делает кнопка';
+  hintLevel1.append(hintLevel1Checkbox, hintLevel1Text);
+  const hintLevel2=document.createElement('label');
+  hintLevel2.className='crm-settings-checkbox';
+  const hintLevel2Checkbox=document.createElement('input');
+  hintLevel2Checkbox.type='checkbox';
+  hintLevel2Checkbox.name='prefHintLevel2';
+  hintLevel2Checkbox.checked=prefs?.hints?.level2!==false;
+  const hintLevel2Text=document.createElement('span');
+  hintLevel2Text.textContent='2-й уровень: алгоритм и нюансы';
+  hintLevel2.append(hintLevel2Checkbox, hintLevel2Text);
+  const hintDelayField=document.createElement('label');
+  hintDelayField.className='crm-field';
+  const hintDelayLabel=document.createElement('span');
+  hintDelayLabel.className='crm-field__label';
+  hintDelayLabel.textContent='Задержка перед показом, мс';
+  const hintDelayInput=document.createElement('input');
+  hintDelayInput.type='number';
+  hintDelayInput.className='pc-input';
+  hintDelayInput.name='prefHintDelayMs';
+  hintDelayInput.min='0';
+  hintDelayInput.step='50';
+  hintDelayInput.placeholder=String(CRM_HINT_DEFAULTS.delayMs);
+  if(Number.isFinite(prefs?.hints?.delayMs)){
+    hintDelayInput.value=String(Math.max(0, Math.round(prefs.hints.delayMs)));
+  }
+  const hintDelayHint=document.createElement('span');
+  hintDelayHint.className='crm-field__hint';
+  hintDelayHint.textContent='0 — без задержки. Подсказки появляются при наведении или фокусе.';
+  hintDelayField.append(hintDelayLabel, hintDelayInput, hintDelayHint);
+  const syncHintControls=()=>{
+    const enabled=hintsCheckbox.checked;
+    hintLevel1Checkbox.disabled=!enabled;
+    hintLevel2Checkbox.disabled=!enabled;
+    hintDelayInput.disabled=!enabled;
+  };
+  hintsCheckbox.addEventListener('change',syncHintControls);
+  syncHintControls();
+
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -18594,7 +18887,18 @@ boardForm.addEventListener('submit',e=>{
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
     linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
-    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:''
+    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
+    laneSumPeriod:{
+      mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
+      from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
+      to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
+    },
+    hints:{
+      enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
+      level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
+      level2:boardForm.prefHintLevel2?boardForm.prefHintLevel2.checked:true,
+      delayMs:boardForm.prefHintDelayMs?boardForm.prefHintDelayMs.value:''
+    }
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
@@ -20114,6 +20418,98 @@ window.addEventListener('beforeunload',()=>{
   }
 });
 
+const CRM_HINT_TARGETS=[
+  { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
+  { selector:'#newOrderBtn', level1:'Создать заказ', level2:'Открывает карточку нового заказа. Номер и клиент будут основой названия.' },
+  { selector:'#crmStageReserveBtn', level1:'Бронь', level2:'Управляет резервом часов и исключениями для выбранного передела.' }
+];
+let crmHintBubble=null;
+let crmHintTimer=null;
+
+function ensureCrmHintBubble(){
+  if(!crmHintBubble){
+    crmHintBubble=document.createElement('div');
+    crmHintBubble.className='crm-hint-bubble';
+    document.body.appendChild(crmHintBubble);
+  }
+  return crmHintBubble;
+}
+
+function hideCrmHint(){
+  if(crmHintTimer){
+    clearTimeout(crmHintTimer);
+    crmHintTimer=null;
+  }
+  if(crmHintBubble){
+    crmHintBubble.classList.remove('visible');
+    crmHintBubble.innerHTML='';
+  }
+}
+
+function showCrmHint(target, config){
+  if(!target) return;
+  const prefs=sanitizeCrmHintPreferences(getCrmPreferences()?.hints);
+  if(!prefs.enabled || (!prefs.level1 && !prefs.level2)) return;
+  const bubble=ensureCrmHintBubble();
+  bubble.innerHTML='';
+  if(prefs.level1 && config.level1){
+    const line=document.createElement('div');
+    line.className='crm-hint-bubble__line crm-hint-bubble__line--level1';
+    line.textContent=config.level1;
+    bubble.appendChild(line);
+  }
+  if(prefs.level2 && config.level2){
+    const line=document.createElement('div');
+    line.className='crm-hint-bubble__line crm-hint-bubble__line--level2';
+    line.textContent=config.level2;
+    bubble.appendChild(line);
+  }
+  if(!bubble.childElementCount){
+    return;
+  }
+  const rect=target.getBoundingClientRect();
+  const top=Math.max(8, rect.bottom + 8 + window.scrollY);
+  const centerX=rect.left + rect.width/2 + window.scrollX;
+  bubble.style.top=`${top}px`;
+  bubble.classList.add('visible');
+  const left=Math.max(8, Math.round(centerX - bubble.offsetWidth/2));
+  bubble.style.left=`${left}px`;
+}
+
+function scheduleCrmHint(target, config){
+  hideCrmHint();
+  const prefs=sanitizeCrmHintPreferences(getCrmPreferences()?.hints);
+  if(!prefs.enabled || (!prefs.level1 && !prefs.level2)) return;
+  const delay=Math.max(0, Number(prefs.delayMs)||0);
+  crmHintTimer=setTimeout(()=>{
+    crmHintTimer=null;
+    showCrmHint(target, config);
+  }, delay);
+}
+
+function attachCrmHintTarget(target, config){
+  if(!target || target.dataset.hintBound==='1') return;
+  target.dataset.hintBound='1';
+  target.classList.add('crm-hint-target');
+  const enter=()=>scheduleCrmHint(target, config);
+  const leave=()=>hideCrmHint();
+  target.addEventListener('mouseenter', enter);
+  target.addEventListener('focus', enter);
+  target.addEventListener('mouseleave', leave);
+  target.addEventListener('blur', leave);
+}
+
+function setupCrmHintTargets(){
+  CRM_HINT_TARGETS.forEach(cfg=>{
+    const el=document.querySelector(cfg.selector);
+    if(el){
+      attachCrmHintTarget(el, cfg);
+    }
+  });
+  document.addEventListener('scroll', hideCrmHint, true);
+  window.addEventListener('resize', hideCrmHint);
+}
+
 /* Ripple на кнопках */
 document.addEventListener('click',e=>{
   const btn=e.target.closest('button'); if(btn){const rect=btn.getBoundingClientRect();const span=document.createElement('span');span.className='ripple';const size=Math.max(rect.width,rect.height);span.style.width=span.style.height=size+'px';const x=e.clientX-rect.left-size/2;const y=e.clientY-rect.top-size/2;span.style.left=x+'px';span.style.top=y+'px';btn.appendChild(span);span.addEventListener('animationend',()=>span.remove(),{once:true})}
@@ -20627,6 +21023,7 @@ window.addEventListener('resize',()=>{
   syncCrmGanttLayout();
   syncCrmRouteHeaders();
 });
+setupCrmHintTargets();
 renderAll();
 
 updateCrmUserMenu();
