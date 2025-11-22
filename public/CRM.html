@@ -2711,6 +2711,18 @@
     gap: var(--pc-spacing-sm);
   }
 
+  .crm-stage-route-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .crm-stage-route-actions .pc-switch {
+    margin: 0;
+  }
+
   .crm-stage-gantt-header h3,
   .crm-stage-route-header h3,
   .crm-stage-overdue h3,
@@ -5146,12 +5158,17 @@
   #stagesTable td.col-start,
   #stagesTable th.col-end,
   #stagesTable td.col-end {
-    width: 136px;
+    width: 122px;
+  }
+
+  #stagesTable th:nth-child(2),
+  #stagesTable td:nth-child(2) {
+    width: 188px;
   }
 
   #stagesTable th.col-rate,
   #stagesTable td.col-rate {
-    width: 120px;
+    width: 152px;
   }
 
   #stagesTable input:not([type="checkbox"]),
@@ -5252,6 +5269,10 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
+  }
+
+  .stage-hours-cell input[type="number"] {
+    min-width: 84px;
   }
 
   .crm-stage-auto {
@@ -5684,9 +5705,15 @@
       <section class="crm-stage-route-card">
         <div class="crm-stage-route-header">
           <h3>Общий маршрут заказов</h3>
-          <div class="crm-route-toggle" role="tablist">
-            <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
-            <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
+          <div class="crm-stage-route-actions">
+            <label class="pc-switch pc-switch--sm" title="Скрыть прошедшие даты">
+              <input type="checkbox" id="crmRouteTodayToggle" checked />
+              <span>С сегодняшнего дня</span>
+            </label>
+            <div class="crm-route-toggle" role="tablist">
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
+            </div>
           </div>
         </div>
         <div class="crm-stage-route" id="crmStageRoute">
@@ -6301,6 +6328,8 @@ const CRM_SESSION_VIEW_KEY='planecore_crm_session_view_v1';
 const CRM_SESSION_VIEW_FALLBACKS=['mini_crm_session_view_v1'];
 const CRM_SESSION_STAGE_KEY='planecore_crm_session_stage_v1';
 const CRM_SESSION_STAGE_FALLBACKS=['mini_crm_session_stage_v1'];
+const CRM_ROUTE_FROM_TODAY_KEY='planecore_crm_route_today_v1';
+const CRM_ROUTE_FROM_TODAY_FALLBACKS=['mini_crm_route_today_v1'];
 const CRM_ALIAS_STORAGE_KEY='planecore_crm_user_alias_v1';
 const CRM_ALIAS_STORAGE_FALLBACKS=['mini_crm_user_alias_v1'];
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -6404,6 +6433,7 @@ const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
+const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
@@ -9043,6 +9073,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteBodyCompact=$('#crmStageRouteBodyCompact'),
       crmStageRouteSummary=$('#crmStageRouteSummary'),
       crmStageRouteEmpty=$('#crmStageRouteEmpty'),
+      crmRouteTodayToggle=$('#crmRouteTodayToggle'),
       crmStageTotalHours=$('#crmStageTotalHours'),
       crmStageTotalRest=$('#crmStageTotalRest'),
       crmStageOverdueSection=$('#crmStageOverdue'),
@@ -9353,6 +9384,12 @@ persistCrmSessionStage(initialStageViewKey);
 let currentCrmTrashFilter='all';
 let crmStageRouteMode='detailed';
 let crmRouteDayFilter='all';
+let crmRouteFromToday=CRM_ROUTE_FROM_TODAY_DEFAULT;
+try{
+  const stored=readStorageValue(CRM_ROUTE_FROM_TODAY_KEY, CRM_ROUTE_FROM_TODAY_FALLBACKS);
+  if(stored==='0'){ crmRouteFromToday=false; }
+  else if(stored==='1'){ crmRouteFromToday=true; }
+}catch(_err){/* ignore */}
 
 function stageIconForKey(stageKey){
   const key=typeof stageKey==='string'?stageKey.trim():'';
@@ -12876,14 +12913,23 @@ function updateCrmRouteStageVisibility(stageKey, isVisible){
     if(wasHidden) return;
     crmRouteHiddenStages.add(stageKey);
   }
-  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter);
+  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
 }
 
-function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter){
+function applyCrmRouteFromToday(days, enabled){
+  const list=Array.isArray(days)?days:[];
+  if(!enabled) return list;
+  const todayIso=fmtDateISO(today0());
+  const filtered=list.filter(day=>day && day.iso && day.iso>=todayIso);
+  return filtered.length?filtered:list;
+}
+
+function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, fromToday){
   if(!crmStageRouteWrap) return;
   const dataset=buildCrmRouteDataset(rows, filterMode,{ ignoreSearch:true });
   const normalizedDayFilter=CRM_ROUTE_DAY_FILTERS.has(dayFilter)?dayFilter:'all';
-  const visibleDays=filterCrmRouteDays(dataset.days, dataset.dayUsage, normalizedDayFilter);
+  const baseDays=filterCrmRouteDays(dataset.days, dataset.dayUsage, normalizedDayFilter);
+  const visibleDays=applyCrmRouteFromToday(baseDays, fromToday!==false);
   if(crmStageRouteLegend){
     crmStageRouteLegend.innerHTML='';
     CRM_STAGE_SEQUENCE.forEach(stage=>{
@@ -13235,7 +13281,7 @@ function renderCrmStageViews(schedule, rows, stageKey, filterMode){
     stageKey:key,
     filter
   };
-  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter);
+  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
   notifyCrmStageScheduleErrors(schedule||null);
   flushCrmPlanFreezeDirty();
   applyCrmStageSelectionHighlight();
@@ -20055,9 +20101,23 @@ document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
     document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(other=>{
       other.setAttribute('aria-pressed', other===btn?'true':'false');
     });
-    renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter);
+    renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
   });
 });
+if(crmRouteTodayToggle){
+  crmRouteTodayToggle.checked=crmRouteFromToday;
+  const persistRouteToday=enabled=>{
+    try{
+      localStorage.setItem(CRM_ROUTE_FROM_TODAY_KEY, enabled?'1':'0');
+      removeLegacyStorage(CRM_ROUTE_FROM_TODAY_KEY, CRM_ROUTE_FROM_TODAY_FALLBACKS);
+    }catch(_err){/* ignore */}
+  };
+  crmRouteTodayToggle.addEventListener('change',()=>{
+    crmRouteFromToday=!!crmRouteTodayToggle.checked;
+    persistRouteToday(crmRouteFromToday);
+    renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
+  });
+}
 if(crmOrdersFilter){
   crmOrdersFilter.addEventListener('change',()=>{
     if(currentCrmView==='orders'){
