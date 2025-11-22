@@ -9233,6 +9233,7 @@ let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
 let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
+let crmPendingRemoteDirty=false;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -16793,8 +16794,18 @@ if(orderDlg){
       const deferredPayload=crmPendingRemotePayload;
       crmPendingRemotePayload=null;
       const wasNotified=crmPendingRemoteNotified;
+      const skipDeferred=crmPendingRemoteDirty;
       crmPendingRemoteNotified=false;
-      applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
+      crmPendingRemoteDirty=false;
+      if(skipDeferred){
+        showToast({
+          title:'CRM',
+          message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
+          tone:'info'
+        });
+      }else{
+        applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
+      }
     }
   });
 }
@@ -19746,6 +19757,9 @@ function showToast({title='CRM',message='',tone='info',autoClose=4000}={}){
 
 function queueSync(summary){
   crmPendingSummary=summary||'Изменения CRM';
+  if(crmPendingRemotePayload){
+    crmPendingRemoteDirty=true;
+  }
   if(crmSyncTimer) clearTimeout(crmSyncTimer);
   crmSyncTimer=setTimeout(pushCrmToServer,450);
 }
@@ -20067,6 +20081,7 @@ function applyPlannerRemotePayload(payload, options={}){
 
 function deferPlannerRemotePayload(payload){
   crmPendingRemotePayload=payload;
+  crmPendingRemoteDirty=false;
   if(crmPendingRemoteNotified) return;
   crmPendingRemoteNotified=true;
   showToast({
