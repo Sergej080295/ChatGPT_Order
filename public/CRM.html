@@ -4524,6 +4524,27 @@
     color: var(--pc-text-muted);
   }
 
+  .lane-sum-toggle {
+    inline-size: 28px;
+    block-size: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--pc-radius-sm);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 60%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 80%, transparent);
+    color: var(--pc-text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background var(--pc-transition-short), border-color var(--pc-transition-short);
+  }
+
+  .lane-sum-toggle:hover,
+  .lane-sum-toggle:focus-visible {
+    border-color: color-mix(in srgb, var(--pc-primary) 50%, var(--pc-border));
+    background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+  }
+
   .lane-sum {
     font-weight: var(--pc-font-weight-semibold);
     color: var(--pc-text);
@@ -4978,14 +4999,14 @@
   .dlg-body {
     padding: var(--pc-spacing-lg);
     display: grid;
-    gap: var(--pc-spacing-md);
+    gap: var(--pc-spacing-sm);
     max-height: 72vh;
     overflow: auto;
   }
 
   #orderDlg.pc-modal {
-    width: 92vw;
-    max-width: 1280px;
+    width: 98vw;
+    max-width: 1400px;
   }
 
   .dlg-footer {
@@ -4998,7 +5019,7 @@
 
   #orderForm {
     display: grid;
-    gap: var(--pc-spacing-md);
+    gap: var(--pc-spacing-sm);
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   }
 
@@ -5042,15 +5063,15 @@
   .gridHead {
     display: grid;
     grid-template-columns: repeat(12, minmax(0, 1fr));
-    column-gap: var(--pc-spacing-lg);
-    row-gap: var(--pc-spacing-md);
+    column-gap: var(--pc-spacing-md);
+    row-gap: var(--pc-spacing-sm);
     align-items: flex-start;
   }
 
   .gridHead > div {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
   }
 
@@ -5197,7 +5218,7 @@
     color: var(--pc-text-muted);
     font-size: 12px;
     font-weight: var(--pc-font-weight-semibold);
-    padding: 10px 12px;
+    padding: 8px 10px;
     text-align: left;
   }
 
@@ -5207,31 +5228,31 @@
   }
 
   #stagesTable tbody td {
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-top: 1px solid var(--pc-border);
     vertical-align: middle;
   }
 
   #stagesTable th.col-progress,
   #stagesTable td.col-progress {
-    width: 140px;
+    width: 156px;
   }
 
   #stagesTable th.col-start,
   #stagesTable td.col-start,
   #stagesTable th.col-end,
   #stagesTable td.col-end {
-    width: 122px;
+    width: 110px;
   }
 
   #stagesTable th:nth-child(2),
   #stagesTable td:nth-child(2) {
-    width: 188px;
+    width: 168px;
   }
 
   #stagesTable th.col-rate,
   #stagesTable td.col-rate {
-    width: 152px;
+    width: 184px;
   }
 
   #stagesTable input:not([type="checkbox"]),
@@ -5243,6 +5264,14 @@
     background: var(--pc-surface);
     color: var(--pc-text);
     font: inherit;
+  }
+
+  .stage-hours-cell {
+    gap: 6px;
+  }
+
+  .stage-hours-cell input[data-k="value"] {
+    min-width: 120px;
   }
 
   #stagesTable td.chk {
@@ -5914,14 +5943,14 @@
               <label class="rowc"><input id="dateToday" type="checkbox" class="ready-switch" /> Даты=сегодня</label>
               <div class="crm-stage-date-tools">
                 <button type="button" class="pc-btn pc-btn--ghost" id="calcStageDatesBtn" title="Рассчитать сроки автоматически" data-hint-key="hint-calc-dates" data-hint-label="Авторасчёт дат переделов">🧮 Рассчитать даты</button>
-                <button type="button" class="pc-btn pc-btn--ghost" id="clearStageDatesBtn" title="Очистить даты переделов">🧽 Очистка дат</button>
+                <button type="button" class="pc-btn pc-btn--ghost" id="clearStageDatesBtn" title="Очистить даты переделов" data-hint-key="hint-clear-dates" data-hint-label="Очистить даты">🧽 Очистка дат</button>
               </div>
               <span class="note">Галочка «Готово» = 100% по переделу.</span>
             </div>
             <div class="right">
-              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Shift — выбрать из списка">+ Передел</button>
-              <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost">🔁 Базовые</button>
-              <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost">📋 Все</button>
+              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Shift — выбрать из списка" data-hint-key="hint-add-stage" data-hint-label="Добавить передел">+ Передел</button>
+              <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost" data-hint-key="hint-preset-stages" data-hint-label="Заполнить базовыми">🔁 Базовые</button>
+              <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost" data-hint-key="hint-all-stages" data-hint-label="Показать все переделы">📋 Все</button>
             </div>
           </div>
         </div>
@@ -6497,12 +6526,29 @@ const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIODS=['day','month','quarter','year','custom'];
+const CRM_LANE_SUM_SCOPES=['range','all'];
 const CRM_DEFAULT_LANE_SUM_PERIOD='month';
+const CRM_DEFAULT_LANE_SUM_SCOPE='range';
 const CRM_DEFAULT_ACTION_HINT_DELAY_MS=600;
-const CRM_ACTION_HINT_CONTENT={
+const CRM_ACTION_HINT_SUMMARY={
+  'hint-reserve':'Открыть бронь слотов передела',
+  'hint-new-order':'Создать новый заказ',
+  'hint-calc-dates':'Автоматически рассчитать даты',
+  'hint-clear-dates':'Очистить даты переделов',
+  'hint-add-stage':'Добавить новый передел',
+  'hint-preset-stages':'Заполнить базовыми переделами',
+  'hint-all-stages':'Показать все переделы',
+  'hint-lane-sum':'Переключить режим суммы в колонке'
+};
+const CRM_ACTION_HINT_DETAILS={
   'hint-reserve':'Открывает управление бронью: удерживайте доступные слоты передела для выбранного заказа.',
   'hint-new-order':'Создайте новый заказ: заполните номер, клиента и распределите переделы по датам.',
-  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням.'
+  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням. Использует связь с предыдущим переделом и рабочие дни.',
+  'hint-clear-dates':'Сбрасывает даты всех переделов заказа, чтобы пересчитать их заново.',
+  'hint-add-stage':'Добавляет строку передела в маршрут текущего заказа.',
+  'hint-preset-stages':'Заполняет маршрут базовым набором переделов.',
+  'hint-all-stages':'Открывает полный список переделов для выбора.',
+  'hint-lane-sum':'Меняет способ подсчёта суммы в колонке: по выбранному периоду или по всем заказам.'
 };
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
@@ -6513,6 +6559,7 @@ const CRM_DEFAULT_PREFERENCES={
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumFrom:'',
   laneSumTo:'',
+  laneSumModeByLane:{},
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
   linkedStagesEnabled:true,
@@ -7196,6 +7243,16 @@ function normalizeLaneSumPeriod(value){
   return CRM_LANE_SUM_PERIODS.includes(normalized)?normalized:CRM_DEFAULT_LANE_SUM_PERIOD;
 }
 
+function normalizeLaneKey(value){
+  return String(value??'').trim();
+}
+
+function normalizeLaneSumScope(value){
+  if(typeof value!=='string') return CRM_DEFAULT_LANE_SUM_SCOPE;
+  const normalized=value.trim().toLowerCase();
+  return CRM_LANE_SUM_SCOPES.includes(normalized)?normalized:CRM_DEFAULT_LANE_SUM_SCOPE;
+}
+
 function normalizeLaneSumDate(value){
   if(!value) return '';
   const iso=coerceCalendarIso(value);
@@ -7261,6 +7318,15 @@ function sanitizeCrmPreferences(raw){
     if(Object.prototype.hasOwnProperty.call(raw,'laneSumTo')){
       const normalized=normalizeLaneSumDate(raw.laneSumTo);
       result.laneSumTo=normalized||'';
+    }
+    if(raw.laneSumModeByLane && typeof raw.laneSumModeByLane==='object'){
+      const map={};
+      Object.entries(raw.laneSumModeByLane).forEach(([lane,mode])=>{
+        const key=normalizeLaneKey(lane);
+        if(!key) return;
+        map[key]=normalizeLaneSumScope(mode);
+      });
+      result.laneSumModeByLane=map;
     }
   }
   return result;
@@ -7436,6 +7502,31 @@ function getCrmLaneSumRange(){
   }
 }
 
+function getLaneSumScope(lane){
+  const prefs=getCrmPreferences();
+  const map=prefs?.laneSumModeByLane;
+  const key=normalizeLaneKey(lane);
+  if(map && Object.prototype.hasOwnProperty.call(map,key)){
+    return normalizeLaneSumScope(map[key]);
+  }
+  return CRM_DEFAULT_LANE_SUM_SCOPE;
+}
+
+function setLaneSumScope(lane, scope){
+  const key=normalizeLaneKey(lane);
+  if(!key) return;
+  const normalized=normalizeLaneSumScope(scope);
+  if(!state.settings) state.settings={};
+  if(!state.settings.preferences || typeof state.settings.preferences!=='object'){
+    state.settings.preferences={ ...CRM_DEFAULT_PREFERENCES };
+  }
+  const current=state.settings.preferences.laneSumModeByLane && typeof state.settings.preferences.laneSumModeByLane==='object'
+    ? { ...state.settings.preferences.laneSumModeByLane }
+    : {};
+  current[key]=normalized;
+  state.settings.preferences.laneSumModeByLane=current;
+}
+
 function orderMatchesLaneSumRange(order,{ from, to }){
   if(!from && !to) return true;
   const iso=coerceCalendarIso(order?.statusEnteredAt||order?.updatedAt||order?.createdAt||'');
@@ -7449,13 +7540,29 @@ function orderMatchesLaneSumRange(order,{ from, to }){
 
 const actionHintTimers=new WeakMap();
 
-function resolveHintContent(el){
+function resolveHintSummary(el){
   if(!el) return '';
   const key=(el.dataset?.hintKey||'').trim();
-  if(key && CRM_ACTION_HINT_CONTENT[key]) return CRM_ACTION_HINT_CONTENT[key];
+  if(key && CRM_ACTION_HINT_SUMMARY[key]) return CRM_ACTION_HINT_SUMMARY[key];
+  if(el.dataset?.hintSummary) return el.dataset.hintSummary;
   if(el.dataset?.hintLabel) return el.dataset.hintLabel;
   if(el.getAttribute('title')) return el.getAttribute('title');
   return '';
+}
+
+function resolveHintDetails(el){
+  if(!el) return '';
+  const key=(el.dataset?.hintKey||'').trim();
+  if(key && CRM_ACTION_HINT_DETAILS[key]) return CRM_ACTION_HINT_DETAILS[key];
+  if(el.dataset?.hintDetails) return el.dataset.hintDetails;
+  const summary=resolveHintSummary(el);
+  if(summary) return summary;
+  return '';
+}
+
+function areDetailedHintsEnabled(){
+  const prefs=getCrmPreferences();
+  return prefs?.showActionHints!==false;
 }
 
 function hideActionHint(el){
@@ -7469,6 +7576,7 @@ function hideActionHint(el){
 
 function scheduleActionHint(el){
   if(!el || !document.body.classList.contains('crm-hints-enabled')) return;
+  if(!areDetailedHintsEnabled()) return;
   hideActionHint(el);
   const delay=getActionHintDelayMs();
   const timer=setTimeout(()=>{
@@ -7480,7 +7588,11 @@ function scheduleActionHint(el){
 function bindActionHintElement(el){
   if(!el || el.dataset.hintBound) return;
   el.dataset.hintBound='1';
-  el.dataset.hintContent=resolveHintContent(el);
+  const summary=resolveHintSummary(el);
+  if(summary && !el.getAttribute('title')){
+    el.setAttribute('title', summary);
+  }
+  el.dataset.hintContent=resolveHintDetails(el);
   el.addEventListener('mouseenter',()=>scheduleActionHint(el));
   el.addEventListener('focus',()=>scheduleActionHint(el));
   ['mouseleave','blur','click'].forEach(ev=>{
@@ -7492,9 +7604,12 @@ function applyCrmActionHints(){
   const prefs=getCrmPreferences();
   const enabled=prefs?.showActionHints!==false;
   document.body.classList.toggle('crm-hints-enabled', enabled);
-  document.querySelectorAll('[data-hint-key]').forEach(bindActionHintElement);
+  document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
+    el.dataset.hintContent=resolveHintDetails(el);
+    bindActionHintElement(el);
+  });
   if(!enabled){
-    document.querySelectorAll('[data-hint-key]').forEach(hideActionHint);
+    document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(hideActionHint);
   }
 }
 
@@ -15445,6 +15560,21 @@ function laneLimit(lane){
   return laneVisibleCount.get(lane);
 }
 
+function updateLaneSumToggleAppearance(btn, mode){
+  if(!btn) return;
+  const scope=normalizeLaneSumScope(mode);
+  const isAll=scope==='all';
+  const label=isAll?'Сумма всех заказов в колонке':'Сумма по выбранному периоду';
+  btn.dataset.mode=scope;
+  btn.textContent=isAll?'∞':'📅';
+  btn.title=label;
+  btn.setAttribute('aria-label', label);
+  btn.dataset.hintSummary=label;
+  btn.dataset.hintDetails=isAll
+    ? 'Показывает сумму услуг всех заказов в колонке, без учёта периода.'
+    : 'Считает сумму услуг только за выбранный период из настроек.';
+}
+
 function renderBoardSelect(){
   if(!boardSelect) return;
   boardSelect.innerHTML='';
@@ -15470,6 +15600,7 @@ function renderColumns(){
           <h2>
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
+              <button type="button" class="lane-sum-toggle" data-lane="${laneLabel}" data-hint-key="hint-lane-sum" data-hint-label="Переключить сумму" title="Режим суммы в колонке"></button>
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
@@ -15489,6 +15620,11 @@ function renderColumns(){
     const more=c.querySelector('.col-more');
     const laneAlert=header?.querySelector('[data-lane-alert]');
     if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
+    const modeBtn=header?.querySelector('.lane-sum-toggle');
+    if(modeBtn){
+      const mode=getLaneSumScope(l);
+      updateLaneSumToggleAppearance(modeBtn, mode);
+    }
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
   });
@@ -15497,6 +15633,19 @@ function renderColumns(){
     if(!lane)return;
     btn.addEventListener('click',()=>increaseLaneLimit(lane));
     btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();increaseLaneLimit(lane);}});
+  });
+  $$('.lane-sum-toggle', columns).forEach(btn=>{
+    const lane=btn.dataset.lane;
+    if(!lane) return;
+    btn.addEventListener('click',()=>{
+      const current=getLaneSumScope(lane);
+      const next=current==='all'?'range':'all';
+      setLaneSumScope(lane,next);
+      updateLaneSumToggleAppearance(btn,next);
+      renderCards();
+      save('Изменение режима суммы по колонке', { skipAutoOptimize:true });
+      applyCrmActionHints();
+    });
   });
   enableDnd();
 }
@@ -15615,7 +15764,7 @@ function renderCards(){
   const b=currentBoard();
   if(!b)return;
   const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
-  const laneRange=getCrmLaneSumRange();
+  const laneRangeGlobal=getCrmLaneSumRange();
   const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
   const totalOrders=b.orders.length;
   let filteredTotal=0;
@@ -15652,7 +15801,9 @@ function renderCards(){
     const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
     if(col){
-      const filteredForSum=arr.filter(order=>orderMatchesLaneSumRange(order,laneRange));
+      const sumScope=getLaneSumScope(lane);
+      const laneRange=sumScope==='range'?laneRangeGlobal:{from:null,to:null};
+      const filteredForSum=sumScope==='range'?arr.filter(order=>orderMatchesLaneSumRange(order,laneRange)):arr;
       const sumValue=filteredForSum.reduce((acc,o)=>{
         const raw=o?.serviceTotal;
         if(raw===''||raw==null) return acc;
@@ -20431,10 +20582,10 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){
   updatePlannerAutoRefreshFromPreferences();
-  applyCrmActionHints();
   renderBoardSelect();
   renderColumns();
   renderCurrentView();
+  applyCrmActionHints();
   updateLaneHeightVar();
   updateCrmAuxButtons();
   recalcCrmMappingAlert();
