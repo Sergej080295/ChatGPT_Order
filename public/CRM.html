@@ -6895,12 +6895,12 @@ function loadStoredCrmSettings(){
   }
   cachedStoredCrmSettingsLoaded=true;
   try{
-    const raw=localStorage.getItem(SETTINGS_KEY);
+    const raw=readStorageValue(CRM_SETTINGS_STORAGE_KEY, CRM_SETTINGS_STORAGE_FALLBACKS);
     if(!raw){
       cachedStoredCrmSettings=null;
       return null;
     }
-    const parsed=JSON.parse(raw);
+    const parsed=typeof raw==='string'?JSON.parse(raw):raw;
     cachedStoredCrmSettings=sanitizeCrmSettings(parsed);
     return cachedStoredCrmSettings;
   }catch(err){
@@ -17138,7 +17138,7 @@ function appendStageRow(st){
     progEl.addEventListener('focus',()=>{
       progEl.dataset.prevValue=progEl.value||'';
     });
-    progEl.addEventListener('input',e=>{
+    progEl.addEventListener('input',async e=>{
       const v=Number(e.target.value||0);
       const prevValue=progEl.dataset.prevValue!==undefined?progEl.dataset.prevValue:progEl.value;
       if(doneEl){
