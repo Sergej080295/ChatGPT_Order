@@ -15211,7 +15211,7 @@ function renderCrmStageTable(){
   const { rows:allRows }=collectCrmStageRows(stageKey,{ ignoreSearch:true });
   crmStageTableBody.innerHTML='';
   const visibleRows=[];
-  const overdueEntries=[];
+  let overdueEntries=[];
   let activeCount=0;
   let doneCount=0;
   let totalBase=0;
@@ -15234,7 +15234,7 @@ function renderCrmStageTable(){
   }
   const schedule=buildCrmStageSchedule(stageKey, allRows);
   crmStageScheduleCache=schedule||null;
-  const todayStart=today0().getTime();
+  overdueEntries=collectOverdueEntriesForStage(allRows, schedule, stageKey);
   allRows.forEach(entry=>{
     const matchesSearch=!orderSearchNormalized || orderMatchesSearch(entry.order);
     const statusInfo=computeCrmStageStatus(entry, schedule);
@@ -15243,29 +15243,6 @@ function renderCrmStageTable(){
     entry.statusTitle=statusInfo.title;
     entry.isLate=statusInfo.className==='status-late';
     entry.lateDays=statusInfo.lateDays||0;
-    if(!entry.isLate && !entry.done && entry.endDate instanceof Date){
-      const dueTime=entry.endDate.getTime();
-      if(Number.isFinite(dueTime) && dueTime<todayStart){
-        const diffDays=Math.max(1, Math.ceil((todayStart-dueTime)/86400000));
-        entry.isLate=true;
-        entry.lateDays=diffDays;
-        entry.statusLabel=`+${diffDays}дн`;
-        entry.statusClass='status-late';
-        entry.statusTitle=`Просрочка ${diffDays} ${formatDayWord(diffDays)}`;
-      }
-    }
-    if(entry.isLate){
-      const advice=buildCrmLateAdvice(entry, schedule);
-      overdueEntries.push({
-        orderTitle:entry.orderTitle||'Заказ',
-        orderId:entry.order?.id||'',
-        stageKey:entry.stageKey,
-        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
-        scheduledEnd:statusInfo.scheduledEnd||null,
-        lateDays:entry.lateDays||statusInfo.lateDays||0,
-        tips:advice
-      });
-    }
     if(!crmStageRowMatchesFilter(activeFilter, entry)){
       return;
     }
@@ -15493,6 +15470,56 @@ function buildCrmLateAdvice(entry, schedule){
 }
 
 let crmOverdueEntriesCache=[];
+
+function collectOverdueEntriesForStage(rows, schedule, stageKey){
+  const overdueEntries=[];
+  const todayStart=today0().getTime();
+  (rows||[]).forEach(entry=>{
+    const statusInfo=computeCrmStageStatus(entry, schedule);
+    entry.statusLabel=statusInfo.label;
+    entry.statusClass=statusInfo.className;
+    entry.statusTitle=statusInfo.title;
+    entry.isLate=statusInfo.className==='status-late';
+    entry.lateDays=statusInfo.lateDays||0;
+    if(!entry.isLate && !entry.done && entry.endDate instanceof Date){
+      const dueTime=entry.endDate.getTime();
+      if(Number.isFinite(dueTime) && dueTime<todayStart){
+        const diffDays=Math.max(1, Math.ceil((todayStart-dueTime)/86400000));
+        entry.isLate=true;
+        entry.lateDays=diffDays;
+        entry.statusLabel=`+${diffDays}дн`;
+        entry.statusClass='status-late';
+        entry.statusTitle=`Просрочка ${diffDays} ${formatDayWord(diffDays)}`;
+      }
+    }
+    if(entry.isLate){
+      const advice=buildCrmLateAdvice(entry, schedule);
+      overdueEntries.push({
+        orderTitle:entry.orderTitle||'Заказ',
+        orderId:entry.order?.id||'',
+        stageKey:entry.stageKey||stageKey||'',
+        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
+        scheduledEnd:statusInfo.scheduledEnd||null,
+        lateDays:entry.lateDays||statusInfo.lateDays||0,
+        tips:advice
+      });
+    }
+  });
+  return overdueEntries;
+}
+
+function collectBoardOverdueEntries(){
+  const board=currentBoard();
+  if(!board) return [];
+  const combined=[];
+  CRM_STAGE_KEYS.forEach(stageKey=>{
+    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true });
+    if(!rows.length) return;
+    const schedule=buildCrmStageSchedule(stageKey, rows);
+    combined.push(...collectOverdueEntriesForStage(rows, schedule, stageKey));
+  });
+  return combined;
+}
 
 function syncOverdueButton(count){
   const value=Math.max(0, Number(count)||0);
@@ -15949,6 +15976,7 @@ function renderCurrentView(){
     renderCards();
     updateCrmAuxButtons();
   }
+  updateCrmOverdueEntries(collectBoardOverdueEntries());
   applyCrmActionHints();
 }
 
@@ -17777,6 +17805,28 @@ function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReaso
   crmDialogLocalChanges=true;
 }
 
+function rebuildStageCompletionExtrasFromDom(){
+  if(!(stagesTableBody instanceof HTMLElement)) return;
+  const next=new Map();
+  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+    const stageId=tr.dataset.stageId||generateStageId();
+    tr.dataset.stageId=stageId;
+    const doneInput=tr.querySelector('[data-k="done"]');
+    const isDone=!!doneInput?.checked;
+    const doneAt=tr.dataset.doneAt||'';
+    const delayReason=tr.dataset.delayReason||'';
+    const completedLate=tr.dataset.completedLate==='true';
+    if(isDone || doneAt || delayReason || completedLate){
+      next.set(stageId,{
+        doneAt:doneAt||'',
+        delayReason:delayReason||'',
+        completedLate:completedLate||false
+      });
+    }
+  });
+  stageCompletionExtras=next;
+}
+
 function computeStageDelay(tr){
   const dueDate=getStageRowDueDate(tr);
   if(!dueDate){
@@ -18380,7 +18430,7 @@ function applyOrderAutoCompletionState(){
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||'';refreshOrderDialogTitle();}
 
-orderForm.addEventListener('submit',e=>{
+  orderForm.addEventListener('submit',e=>{
   e.preventDefault();
   try {
     const b=currentBoard();
@@ -18389,6 +18439,7 @@ orderForm.addEventListener('submit',e=>{
       return;
     }
     crmDialogLocalChanges=true;
+    rebuildStageCompletionExtrasFromDom();
     const id=orderForm.id.value||safeRandomUUID();
     const exist=b.orders.find(x=>x.id===id);
     const previousSnapshot=exist?deepClone(exist):null;
