@@ -1730,6 +1730,26 @@
     display: none;
   }
 
+  .crm-settings-group summary::before,
+  #orderForm details.section-card > summary::before {
+    content: '▸';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    color: var(--pc-text-muted);
+    flex-shrink: 0;
+    transition: transform 120ms ease;
+  }
+
+  .crm-settings-group[open] summary::before,
+  #orderForm details.section-card[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
   .crm-settings-group[open] summary {
     margin-bottom: var(--pc-spacing-sm);
   }
@@ -1737,6 +1757,18 @@
   .crm-settings-group .crm-settings-fields {
     display: grid;
     gap: var(--pc-spacing-md);
+  }
+
+  #orderForm details.section-card > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  #orderForm details.section-card > summary::-webkit-details-marker {
+    display: none;
   }
 
   .crm-modal-section {
@@ -9199,6 +9231,8 @@ let stageSourceMap=new Map();
 let pendingStageDeletes=[];
 let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
+let crmPendingRemotePayload=null;
+let crmPendingRemoteNotified=false;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -16672,6 +16706,10 @@ function setOrderFormReadOnly(readOnly){
   }
 }
 
+function isOrderDialogActive(){
+  return !!(orderDlg && orderDlg.open);
+}
+
 function openOrder(id=null){
   const canView=crmCanViewOrderDetails();
   const canEdit=crmCanManageOrders();
@@ -16751,6 +16789,13 @@ if(orderDlg){
     orderCommentsDraft=[];
     renderOrderComments();
     resetOrderCommentInputs();
+    if(crmPendingRemotePayload){
+      const deferredPayload=crmPendingRemotePayload;
+      crmPendingRemotePayload=null;
+      const wasNotified=crmPendingRemoteNotified;
+      crmPendingRemoteNotified=false;
+      applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
+    }
   });
 }
 
@@ -19998,24 +20043,48 @@ function applyRemoteCrm(crm){
   restoreCrmScrollSnapshot(uiSnapshot);
 }
 
+function applyPlannerRemotePayload(payload, options={}){
+  if(!payload||!payload.state) return;
+  try{
+    const parsed=JSON.parse(payload.state);
+    syncCrmNotificationsMutedFromPlanner(parsed);
+    currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
+    applyCrmWriteAccess();
+    setCrmDataSource(CRM_DATA_SOURCE.remote);
+    if(parsed&&parsed.crm){
+      applyRemoteCrm(parsed.crm);
+      const reason=payload?.reason||'';
+      const shouldToast=!options.silent && (!reason || reason==='sse');
+      if(shouldToast){
+        const message=options.deferredApplied
+          ? 'Получено обновление данных, применили после закрытия окна заказа.'
+          : 'Данные обновлены из планировщика';
+        showToast({title:'CRM',message,tone:'warn'});
+      }
+    }
+  }catch(err){ console.warn('CRM remote update parse failed',err); }
+}
+
+function deferPlannerRemotePayload(payload){
+  crmPendingRemotePayload=payload;
+  if(crmPendingRemoteNotified) return;
+  crmPendingRemoteNotified=true;
+  showToast({
+    title:'CRM',
+    message:'Получено новое обновление. Оно будет применено после завершения редактирования заказа.',
+    tone:'info'
+  });
+}
+
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
     if(!payload||!payload.state) return;
-    try{
-      const parsed=JSON.parse(payload.state);
-      syncCrmNotificationsMutedFromPlanner(parsed);
-      currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
-      applyCrmWriteAccess();
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-      if(parsed&&parsed.crm){
-        applyRemoteCrm(parsed.crm);
-        const shouldToast=!payload||!payload.reason||payload.reason==='sse';
-        if(shouldToast){
-          showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
-        }
-      }
-    }catch(err){ console.warn('CRM remote update parse failed',err); }
+    if(isOrderDialogActive()){
+      deferPlannerRemotePayload(payload);
+      return;
+    }
+    applyPlannerRemotePayload(payload);
   });
 }
 
