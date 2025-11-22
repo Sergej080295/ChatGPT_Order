@@ -4646,28 +4646,30 @@
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
-    padding: 6px 10px;
+    padding: 8px 12px;
     border-radius: var(--pc-radius-sm);
     background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
     border: 1px solid color-mix(in srgb, var(--pc-primary) 35%, var(--pc-border));
     color: var(--pc-text);
     font-size: 11px;
-    line-height: 1.35;
-    white-space: nowrap;
+    line-height: 1.4;
+    white-space: pre-line;
+    text-align: left;
+    min-width: 220px;
+    max-width: 420px;
+    width: max-content;
     box-shadow: 0 6px 18px rgba(15, 17, 21, 0.12);
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
     transition: opacity var(--pc-transition-short), visibility var(--pc-transition-short);
-    max-width: 360px;
-    text-align: center;
-    z-index: 2;
+    z-index: 6;
   }
 
   body.crm-hints-enabled [data-hint-key]::before {
     content: attr(data-hint-summary);
     top: 100%;
-    margin-top: 6px;
+    transform: translate(-50%, 8px);
   }
 
   body.crm-hints-enabled [data-hint-key].crm-hint-summary-visible::before {
@@ -4677,7 +4679,8 @@
 
   body.crm-hints-enabled [data-hint-key]::after {
     content: attr(data-hint-details);
-    top: calc(100% + 30px);
+    top: 100%;
+    transform: translate(-50%, calc(100% + 12px));
   }
 
   body.crm-hints-enabled [data-hint-key].crm-hint-details-visible::after {
@@ -6331,7 +6334,7 @@
   <div class="dlg-footer">
     <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel">Отмена</button>
     <button class="pc-btn" type="button" id="crmLateReasonSave">Сохранить</button>
-    <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday">Выполнено вчера</button>
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday" data-hint-key="hint-late-yesterday" data-hint-label="Выполнено вчера">Выполнено вчера</button>
   </div>
 </dialog>
 
@@ -6564,23 +6567,25 @@ const CRM_ACTION_HINT_SUMMARY={
   'hint-export':'Выгрузить текущие данные',
   'hint-refresh':'Принудительно обновить данные',
   'hint-route':'Посмотреть маршрут заказа',
-  'hint-status-select':'Выбрать состояние заказа'
+  'hint-status-select':'Выбрать состояние заказа',
+  'hint-late-yesterday':'Отметить просрочку как выполненную вчера'
 };
 const CRM_ACTION_HINT_DETAILS={
   'hint-reserve':'Открывает управление бронью: удерживайте доступные слоты передела для выбранного заказа без изменения расписания других заказов.',
-  'hint-new-order':'Создайте новый заказ: заполните номер, клиента и распределите переделы по датам. Название формируется автоматически из номера и клиента.',
-  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням. Учитывает связь с предыдущим переделом, ручные даты не переписываются.',
-  'hint-clear-dates':'Сбрасывает даты всех переделов заказа, чтобы пересчитать их заново. Часы и прогресс не трогаются.',
+  'hint-new-order':'Создайте новый заказ: заполните номер и клиента, переделы можно расставить позже. Название формируется автоматически из номера и клиента.',
+  'hint-calc-dates':'Заполняет только пустые даты переделов: ищет свободные рабочие слоты, учитывает связь с предыдущим этапом и не трогает вручную заданные даты.\nРучные даты остаются неизменными.',
+  'hint-clear-dates':'Сбрасывает даты всех переделов заказа, чтобы пересчитать их заново. Часы, прогресс и связки с предыдущими этапами не изменяются.',
   'hint-add-stage':'Добавляет строку передела в маршрут текущего заказа.',
   'hint-preset-stages':'Заполняет маршрут базовым набором переделов.',
   'hint-all-stages':'Открывает полный список переделов для выбора.',
   'hint-lane-sum':'Меняет способ подсчёта суммы в колонке: по выбранному периоду или по всем заказам.',
-  'hint-save-order':'Сохраняет заказ и синхронизирует изменения со всеми пользователями.',
+  'hint-save-order':'Сохраняет заказ и синхронизирует изменения со всеми пользователями. Ошибки валидации покажут, что нужно исправить.',
   'hint-import':'Загружает данные из JSON. При частичных данных пустые разделы создаются автоматически.',
   'hint-export':'Скачивает актуальный снапшот CRM.',
   'hint-refresh':'Принудительно запрашивает свежие данные без перезагрузки страницы.',
   'hint-route':'Открывает маршрут заказа с пиктограммами переделов.',
-  'hint-status-select':'Выберите колонку CRM, в которую попадёт заказ после сохранения.'
+  'hint-status-select':'Выберите колонку CRM, в которую попадёт заказ после сохранения.',
+  'hint-late-yesterday':'Помечает просроченный передел как выполненный вчера: дата завершения сдвигается на один день назад и фиксируется в истории заказа.\nИспользуйте, когда отметку забыли поставить в срок и опоздание не превышает суток.'
 };
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
@@ -17988,71 +17993,84 @@ function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages
 function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||'';refreshOrderDialogTitle();}
 
 orderForm.addEventListener('submit',e=>{
-  e.preventDefault(); const b=currentBoard();
-  if(!crmCanManageOrders()){
-    showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
-    return;
-  }
-  crmDialogLocalChanges=true;
-  const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
-  const invalidStage=stages.find(stage=>{
-    const startIso=coerceCalendarIso(stage?.start||'');
-    const endIso=coerceCalendarIso(stage?.end||'');
-    if(!startIso || !endIso) return false;
-    const startDate=new Date(`${startIso}T00:00:00`);
-    const endDate=new Date(`${endIso}T00:00:00`);
-    if(Number.isNaN(startDate.getTime())||Number.isNaN(endDate.getTime())) return false;
-    return endDate.getTime()<startDate.getTime();
-  });
-  if(invalidStage){
-    alert(`Дата окончания передела «${invalidStage.name||'Передел'}» не может быть раньше даты начала.`);
-    return;
-  }
-  const comments=orderCommentsDraft.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
-  const commentSummary=comments.length?comments[comments.length-1].text:'';
-  const previousCommentsRaw=Array.isArray(previousSnapshot?.comments)?previousSnapshot.comments:[];
-  const previousCommentsSanitized=previousCommentsRaw.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
-  const commentDiff=diffOrderComments(previousCommentsSanitized, comments);
-  const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
-  let removedStages=[];
-  if(editingOrderId){
-    removedStages=pendingStageDeletes.filter(entry=>entry&&entry.stageId&&!currentStageIds.has(entry.stageId));
-  }
-  const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
-  const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
-  const composedTitle=deriveEditingOrderTitle();
-  const obj={id,title:composedTitle,orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
-    start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
-    notes:commentSummary,status:orderForm.status.value,
-    serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
-    comments,
-    createdAt:exist?.createdAt||new Date().toISOString(),statusEnteredAt:exist?.statusEnteredAt||new Date().toISOString(),
-    partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
-    parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
-  const statusChanged=exist?exist.status!==obj.status:true;
-  if(!statusChanged && exist?.statusEnteredAt){
-    obj.statusEnteredAt=exist.statusEnteredAt;
-  }else if(statusChanged){
-    obj.statusEnteredAt=new Date().toISOString();
-  }
-  if(obj.done)obj.progress=100;
-  if(exist){
-    Object.assign(exist,obj);
-    commitCrmOrderJournal(previousSnapshot, exist);
-  }else{
-    b.orders.push(obj);
-    recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(obj) });
-  }
-  recordOrderCommentJournalEntries(exist||obj,commentDiff);
-  if(removedStages.length){
-    const targetOrder=exist||obj;
-    removedStages.forEach(entry=>{
-      pushStageToTrash(targetOrder, entry.stage, b, entry.position);
+  e.preventDefault();
+  try {
+    const b=currentBoard();
+    if(!crmCanManageOrders()){
+      showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
+      return;
+    }
+    crmDialogLocalChanges=true;
+    const id=orderForm.id.value||safeRandomUUID();
+    const exist=b.orders.find(x=>x.id===id);
+    const previousSnapshot=exist?deepClone(exist):null;
+    const stages=readStages();
+    const invalidStage=stages.find(stage=>{
+      const startIso=coerceCalendarIso(stage?.start||'');
+      const endIso=coerceCalendarIso(stage?.end||'');
+      if(!startIso || !endIso) return false;
+      const startDate=new Date(`${startIso}T00:00:00`);
+      const endDate=new Date(`${endIso}T00:00:00`);
+      if(Number.isNaN(startDate.getTime())||Number.isNaN(endDate.getTime())) return false;
+      return endDate.getTime()<startDate.getTime();
     });
+    if(invalidStage){
+      alert(`Дата окончания передела «${invalidStage.name||'Передел'}» не может быть раньше даты начала.`);
+      return;
+    }
+    const comments=orderCommentsDraft.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
+    const commentSummary=comments.length?comments[comments.length-1].text:'';
+    const previousCommentsRaw=Array.isArray(previousSnapshot?.comments)?previousSnapshot.comments:[];
+    const previousCommentsSanitized=previousCommentsRaw.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
+    const commentDiff=diffOrderComments(previousCommentsSanitized, comments);
+    const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
+    let removedStages=[];
+    if(editingOrderId){
+      removedStages=pendingStageDeletes.filter(entry=>entry&&entry.stageId&&!currentStageIds.has(entry.stageId));
+    }
+    const sd=stages.map(x=>x.start).filter(Boolean).sort();
+    const ed=stages.map(x=>x.end).filter(Boolean).sort();
+    const startAuto=sd[0]||'';
+    const endAuto=ed[ed.length-1]||'';
+    const composedTitle=deriveEditingOrderTitle();
+    const obj={id,title:composedTitle,orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
+      start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
+      notes:commentSummary,status:orderForm.status.value,
+      serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
+      comments,
+      createdAt:exist?.createdAt||new Date().toISOString(),statusEnteredAt:exist?.statusEnteredAt||new Date().toISOString(),
+      partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
+      parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
+    const statusChanged=exist?exist.status!==obj.status:true;
+    if(!statusChanged && exist?.statusEnteredAt){
+      obj.statusEnteredAt=exist.statusEnteredAt;
+    }else if(statusChanged){
+      obj.statusEnteredAt=new Date().toISOString();
+    }
+    if(obj.done)obj.progress=100;
+    if(exist){
+      Object.assign(exist,obj);
+      commitCrmOrderJournal(previousSnapshot, exist);
+    }else{
+      b.orders.push(obj);
+      recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderCreated,{ order:deepClone(obj) });
+    }
+    recordOrderCommentJournalEntries(exist||obj,commentDiff);
+    if(removedStages.length){
+      const targetOrder=exist||obj;
+      removedStages.forEach(entry=>{
+        pushStageToTrash(targetOrder, entry.stage, b, entry.position);
+      });
+    }
+    pendingStageDeletes=[];
+    stageSourceMap=new Map();
+    save(exist?'Обновление заказа':'Создание заказа');
+    renderCurrentView();
+    orderDlg.close();
+  } catch(err){
+    console.error('order save failed', err);
+    showToast({ title:'PlaneCore', message:`Не удалось сохранить заказ: ${err?.message||err}`, tone:'danger' });
   }
-  pendingStageDeletes=[];
-  stageSourceMap=new Map();
-  save(exist?'Обновление заказа':'Создание заказа'); renderCurrentView(); orderDlg.close();
 });
 
 /* Настройки доски */
