@@ -262,6 +262,15 @@
     return stripped || null;
   };
 
+  const resolvePayloadFingerprint = (payload) => {
+    if (!payload || typeof payload !== 'object') return { hash: null, etag: null };
+    const etag = typeof payload.etag === 'string' ? payload.etag : null;
+    const hash = parseEtagHash(etag)
+      || (payload.hash != null ? String(payload.hash).trim() : null)
+      || null;
+    return { hash: hash || null, etag };
+  };
+
   const updateFingerprint = ({ etag, hash }) => {
     let applied = false;
     if (etag && typeof etag === 'string') {
@@ -20565,6 +20574,14 @@ function applyRemoteCrm(crm){
 function applyPlannerRemotePayload(payload, options={}){
   if(!payload||!payload.state) return;
   try{
+    const prevHash=currentHash;
+    const fingerprint=resolvePayloadFingerprint(payload);
+    if(fingerprint.hash||fingerprint.etag){
+      updateFingerprint(fingerprint);
+    }
+    if(fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
+      return;
+    }
     const parsed=JSON.parse(payload.state);
     syncCrmNotificationsMutedFromPlanner(parsed);
     currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
