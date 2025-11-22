@@ -15254,6 +15254,18 @@ function renderCrmStageTable(){
         entry.statusTitle=`Просрочка ${diffDays} ${formatDayWord(diffDays)}`;
       }
     }
+    if(entry.isLate){
+      const advice=buildCrmLateAdvice(entry, schedule);
+      overdueEntries.push({
+        orderTitle:entry.orderTitle||'Заказ',
+        orderId:entry.order?.id||'',
+        stageKey:entry.stageKey,
+        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
+        scheduledEnd:statusInfo.scheduledEnd||null,
+        lateDays:entry.lateDays||statusInfo.lateDays||0,
+        tips:advice
+      });
+    }
     if(!crmStageRowMatchesFilter(activeFilter, entry)){
       return;
     }
@@ -15281,18 +15293,6 @@ function renderCrmStageTable(){
       totalBase+=entry.baseHours;
       totalExtra+=entry.extraHours;
       totalRest+=entry.restHours||0;
-    }
-    if(entry.isLate){
-      const advice=buildCrmLateAdvice(entry, schedule);
-      overdueEntries.push({
-        orderTitle:entry.orderTitle||'Заказ',
-        orderId:entry.order?.id||'',
-        stageKey:entry.stageKey,
-        plannedEnd:statusInfo.plannedEnd||entry.endDate||null,
-        scheduledEnd:statusInfo.scheduledEnd||null,
-        lateDays:entry.lateDays||statusInfo.lateDays||0,
-        tips:advice
-      });
     }
     const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
@@ -18304,6 +18304,31 @@ function applyStageExtrasToList(stages){
   return stages;
 }
 
+function mergeStageCompletionExtrasForSave(stages){
+  if(!Array.isArray(stages)) return stages||[];
+  if(!(stageCompletionExtras instanceof Map) || !stageCompletionExtras.size){
+    return stages;
+  }
+  return stages.map(stage=>{
+    if(!stage || typeof stage!=='object') return stage;
+    const merged={ ...stage };
+    const stageId=ensureStageIdentity(merged, merged.crmStageId||merged.id||'');
+    merged.crmStageId=stageId;
+    if(!merged.id) merged.id=stageId;
+    const extras=stageCompletionExtras.get(stageId);
+    if(extras && typeof extras==='object'){
+      if(extras.doneAt!==undefined) merged.doneAt=extras.doneAt;
+      if(extras.delayReason!==undefined) merged.delayReason=extras.delayReason;
+      if(extras.completedLate!==undefined) merged.completedLate=!!extras.completedLate;
+      merged.done=true;
+      if(merged.progress===undefined || Number(merged.progress)<100){
+        merged.progress=100;
+      }
+    }
+    return merged;
+  });
+}
+
 function enforceStageCompletionIntegrity(stages){
   if(!Array.isArray(stages)) return stages||[];
   const extrasMap=stageCompletionExtras instanceof Map?stageCompletionExtras:null;
@@ -18367,7 +18392,7 @@ orderForm.addEventListener('submit',e=>{
     const id=orderForm.id.value||safeRandomUUID();
     const exist=b.orders.find(x=>x.id===id);
     const previousSnapshot=exist?deepClone(exist):null;
-    const stages=readStages();
+    const stages=mergeStageCompletionExtrasForSave(readStages());
     const invalidStage=stages.find(stage=>{
       const startIso=coerceCalendarIso(stage?.start||'');
       const endIso=coerceCalendarIso(stage?.end||'');
