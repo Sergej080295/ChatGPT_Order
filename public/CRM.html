@@ -33,6 +33,8 @@
   let sessionExpired = false;
   let connectionLossTimerId = null;
   let connectionLossReason = null;
+  let orderDialogOpen = false;
+  let deferredRemotePayload = null;
 
   const resolveKeepAliveInterval = () => {
     const candidates = [
@@ -250,6 +252,7 @@
     } catch (_err) {
       /* ignore */
     }
+    if (orderDialogOpen) return true;
     return false;
   };
 
@@ -929,9 +932,21 @@
     transition: background var(--pc-transition-short), color var(--pc-transition-short);
   }
 
+  #orderCommentSection > summary::after {
+    content: '\25BA';
+    font-size: 0.85rem;
+    color: var(--pc-text-subtle);
+    transition: transform var(--pc-transition-short), color var(--pc-transition-short);
+  }
+
   #orderCommentSection[open] > summary {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
+  }
+
+  #orderCommentSection[open] > summary::after {
+    transform: rotate(90deg);
+    color: var(--pc-text-strong);
   }
 
   #orderCommentSection[data-has-comments="true"] > summary {
@@ -1726,12 +1741,25 @@
     gap: var(--pc-spacing-sm);
   }
 
+  .crm-settings-group summary::after {
+    content: '\25BA';
+    font-size: 0.85rem;
+    color: var(--pc-text-subtle);
+    transition: transform var(--pc-transition-short), color var(--pc-transition-short);
+  }
+
   .crm-settings-group summary::-webkit-details-marker {
     display: none;
   }
 
   .crm-settings-group[open] summary {
     margin-bottom: var(--pc-spacing-sm);
+    color: var(--pc-text-strong);
+  }
+
+  .crm-settings-group[open] summary::after {
+    transform: rotate(90deg);
+    color: var(--pc-text-strong);
   }
 
   .crm-settings-group .crm-settings-fields {
@@ -16738,12 +16766,14 @@ function openOrder(id=null){
   }
   setOrderFormReadOnly(!canEdit);
   refreshOrderHistoryButton(editingOrderId);
+  orderDialogOpen=true;
   orderDlg.showModal();
 }
 function closeOrder(){orderDlg.close()}
 
 if(orderDlg){
   orderDlg.addEventListener('close',()=>{
+    orderDialogOpen=false;
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
@@ -16751,6 +16781,7 @@ if(orderDlg){
     orderCommentsDraft=[];
     renderOrderComments();
     resetOrderCommentInputs();
+    flushDeferredRemoteUpdate();
   });
 }
 
@@ -19998,24 +20029,41 @@ function applyRemoteCrm(crm){
   restoreCrmScrollSnapshot(uiSnapshot);
 }
 
+function flushDeferredRemoteUpdate(){
+  if(orderDialogOpen) return;
+  if(deferredRemotePayload){
+    const payload=deferredRemotePayload;
+    deferredRemotePayload=null;
+    handleRemotePayload(payload);
+  }
+}
+
+function handleRemotePayload(payload){
+  if(!payload||!payload.state) return;
+  try{
+    const parsed=JSON.parse(payload.state);
+    syncCrmNotificationsMutedFromPlanner(parsed);
+    currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
+    applyCrmWriteAccess();
+    setCrmDataSource(CRM_DATA_SOURCE.remote);
+    if(parsed&&parsed.crm){
+      applyRemoteCrm(parsed.crm);
+      const shouldToast=!payload||!payload.reason||payload.reason==='sse';
+      if(shouldToast){
+        showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
+      }
+    }
+  }catch(err){ console.warn('CRM remote update parse failed',err); }
+}
+
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload||!payload.state) return;
-    try{
-      const parsed=JSON.parse(payload.state);
-      syncCrmNotificationsMutedFromPlanner(parsed);
-      currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
-      applyCrmWriteAccess();
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-      if(parsed&&parsed.crm){
-        applyRemoteCrm(parsed.crm);
-        const shouldToast=!payload||!payload.reason||payload.reason==='sse';
-        if(shouldToast){
-          showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
-        }
-      }
-    }catch(err){ console.warn('CRM remote update parse failed',err); }
+    if(orderDialogOpen){
+      deferredRemotePayload=payload;
+      return;
+    }
+    handleRemotePayload(payload);
   });
 }
 
