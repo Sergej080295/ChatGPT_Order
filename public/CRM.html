@@ -3331,13 +3331,46 @@
     text-align: center;
   }
 
-  .crm-overdue-dialog__body {
+  .crm-overdue-panel {
+    position: fixed;
+    top: 56px;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 90vw);
+    background: var(--pc-surface);
+    border-left: 1px solid var(--pc-border);
+    box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+    transform: translateX(100%);
+    transition: transform 160ms ease, opacity 160ms ease;
+    opacity: 0;
+    z-index: 30;
+  }
+
+  .crm-overdue-panel.is-open {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  .crm-overdue-panel__head {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-height: 70vh;
-    overflow: auto;
-    padding: 8px 4px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--pc-border);
+  }
+
+  .crm-overdue-panel__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+  }
+
+  .crm-overdue-panel__body {
+    padding: 12px 14px 20px;
+    height: calc(100% - 57px);
+    overflow-y: auto;
   }
 
   .crm-overdue-list {
@@ -3382,6 +3415,13 @@
     display: flex;
     gap: 6px;
     justify-content: flex-end;
+  }
+
+  .crm-overdue-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.25);
+    z-index: 25;
   }
 
   .crm-route-modal {
@@ -5904,18 +5944,19 @@
   </div>
 </dialog>
 
-<dialog id="crmOverdueDlg" class="pc-modal pc-modal--md" aria-label="Просроченные переделы">
-  <div class="dlg-head">
-    <strong>Просроченные переделы</strong>
+<div id="crmOverdueBackdrop" class="crm-overdue-backdrop" hidden></div>
+<aside id="crmOverduePanel" class="crm-overdue-panel" aria-label="Просроченные переделы" hidden>
+  <div class="crm-overdue-panel__head">
+    <div class="crm-overdue-panel__title">
+      <strong>Просроченные переделы</strong>
+      <span class="pc-badge" id="crmOverduePanelCount" hidden>0</span>
+    </div>
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOverdueClose" aria-label="Закрыть">✖</button>
   </div>
-  <div class="crm-overdue-dialog__body">
+  <div class="crm-overdue-panel__body">
     <div id="crmOverdueList" class="crm-overdue-list"></div>
   </div>
-  <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmOverdueCloseFooter">Закрыть</button>
-  </div>
-</dialog>
+</aside>
 
 <dialog id="crmStageExceptionsDlg" class="pc-modal pc-modal--md">
   <div class="dlg-head">
@@ -9645,10 +9686,11 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageTotalRest=$('#crmStageTotalRest'),
       crmOverdueOpen=$('#crmOverdueOpen'),
       crmOverdueBadge=$('#crmOverdueBadge'),
-      crmOverdueDlg=$('#crmOverdueDlg'),
+      crmOverduePanel=$('#crmOverduePanel'),
+      crmOverdueBackdrop=$('#crmOverdueBackdrop'),
+      crmOverduePanelCount=$('#crmOverduePanelCount'),
       crmOverdueList=$('#crmOverdueList'),
       crmOverdueClose=$('#crmOverdueClose'),
-      crmOverdueCloseFooter=$('#crmOverdueCloseFooter'),
       crmUnaccountedBtn=$('#crmUnaccountedBtn'),
       crmTrashBtn=$('#crmTrashBtn'),
       crmTrashBadge=$('#crmTrashBadge'),
@@ -15458,13 +15500,17 @@ function syncOverdueButton(count){
     crmOverdueBadge.textContent=String(value);
     crmOverdueBadge.hidden=value<=0;
   }
+  if(crmOverduePanelCount){
+    crmOverduePanelCount.textContent=String(value);
+    crmOverduePanelCount.hidden=value<=0;
+  }
   if(crmOverdueOpen){
     crmOverdueOpen.disabled=value<=0;
     crmOverdueOpen.title=value>0?`Просроченных переделов: ${value}`:'Просроченных переделов нет';
   }
 }
 
-function renderCrmOverdueDialog(){
+function renderCrmOverduePanel(){
   if(!crmOverdueList) return;
   crmOverdueList.innerHTML='';
   const showTips=shouldShowCrmLateTips();
@@ -15517,9 +15563,7 @@ function renderCrmOverdueDialog(){
     openBtn.addEventListener('click',()=>{
       if(entry.orderId){
         openOrder(entry.orderId);
-        if(crmOverdueDlg?.open){
-          crmOverdueDlg.close();
-        }
+        setCrmOverduePanelOpen(false);
       }
     });
     actions.appendChild(openBtn);
@@ -15537,20 +15581,31 @@ function renderCrmOverdueDialog(){
     fragment.appendChild(item);
   });
   crmOverdueList.appendChild(fragment);
+  if(crmOverduePanelCount){
+    crmOverduePanelCount.textContent=String(list.length);
+    crmOverduePanelCount.hidden=list.length<=0;
+  }
 }
 
 function updateCrmOverdueEntries(entries){
   crmOverdueEntriesCache=Array.isArray(entries)?entries.filter(Boolean):[];
   syncOverdueButton(crmOverdueEntriesCache.length);
-  if(crmOverdueDlg?.open){
-    renderCrmOverdueDialog();
+  renderCrmOverduePanel();
+}
+
+function setCrmOverduePanelOpen(open){
+  if(!crmOverduePanel) return;
+  const isOpen=!!open;
+  crmOverduePanel.hidden=!isOpen;
+  crmOverduePanel.classList.toggle('is-open', isOpen);
+  if(crmOverdueBackdrop){
+    crmOverdueBackdrop.hidden=!isOpen;
   }
 }
 
 function openCrmOverdueDialog(){
-  if(!crmOverdueDlg) return;
-  renderCrmOverdueDialog();
-  crmOverdueDlg.showModal();
+  renderCrmOverduePanel();
+  setCrmOverduePanelOpen(true);
 }
 
 function findCrmStageContext(orderId, stageId, stageKey){
@@ -18249,12 +18304,37 @@ function applyStageExtrasToList(stages){
   return stages;
 }
 
+function enforceStageCompletionIntegrity(stages){
+  if(!Array.isArray(stages)) return stages||[];
+  const extrasMap=stageCompletionExtras instanceof Map?stageCompletionExtras:null;
+  return stages.map(stage=>{
+    const normalized={ ...stage };
+    const stageId=ensureStageIdentity(normalized, normalized.crmStageId||normalized.id||'');
+    normalized.crmStageId=stageId;
+    if(!normalized.id) normalized.id=stageId;
+    const extras=extrasMap?.get(stageId);
+    if(extras){
+      if(extras.doneAt!==undefined) normalized.doneAt=extras.doneAt;
+      if(extras.delayReason!==undefined) normalized.delayReason=extras.delayReason;
+      if(extras.completedLate!==undefined) normalized.completedLate=!!extras.completedLate;
+      normalized.done=true;
+      if(normalized.progress===undefined || Number(normalized.progress)<100){
+        normalized.progress=100;
+      }
+    }
+    if((normalized.doneAt && !normalized.done) || normalized.completedLate){
+      normalized.done=true;
+    }
+    return normalized;
+  });
+}
+
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
   const stages=rows
     .map(tr=>mergeStageDraftWithSource(readStageRow(tr)))
     .filter(Boolean);
-  return applyStageExtrasToList(stages);
+  return applyStageExtrasToList(enforceStageCompletionIntegrity(stages));
 }
 
 function calcAutoProgress(stages){
@@ -18270,32 +18350,6 @@ function applyOrderAutoCompletionState(){
   const allComplete=stages.every(stage=>stageEntryIsDone(stage));
   if(orderDone){
     orderDone.checked=allComplete;
-  }
-  if(suppressAutoStatusUpdate){
-    return;
-  }
-  if(!statusSel) return;
-  if(!allComplete) return;
-  const shippingEntry=stages.find(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
-    return key==='ship';
-  });
-  const overdue=shippingEntry?stageEntryIsLate(shippingEntry):false;
-  const options=Array.from(statusSel.options||[]);
-  const findOption=label=>{
-    if(!label) return null;
-    const normalized=label.trim().toLowerCase();
-    return options.find(opt=>{
-      const text=(opt.textContent||'').trim().toLowerCase();
-      const value=String(opt.value||'').trim().toLowerCase();
-      return text===normalized||value===normalized;
-    })||null;
-  };
-  const targetLate=findOption('Отгружено с просроком')||findOption('Отгружено с просрочкой');
-  const targetDone=findOption('Отгружено');
-  const desired=overdue?(targetLate||targetDone):(targetDone||targetLate);
-  if(desired && statusSel.value!==desired.value){
-    statusSel.value=desired.value;
   }
 }
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
@@ -21192,16 +21246,10 @@ if(crmOverdueOpen){
   crmOverdueOpen.addEventListener('click',()=>openCrmOverdueDialog());
 }
 if(crmOverdueClose){
-  crmOverdueClose.addEventListener('click',()=>crmOverdueDlg?.close());
+  crmOverdueClose.addEventListener('click',()=>setCrmOverduePanelOpen(false));
 }
-if(crmOverdueCloseFooter){
-  crmOverdueCloseFooter.addEventListener('click',()=>crmOverdueDlg?.close());
-}
-if(crmOverdueDlg){
-  crmOverdueDlg.addEventListener('cancel',evt=>{
-    evt.preventDefault();
-    crmOverdueDlg.close();
-  });
+if(crmOverdueBackdrop){
+  crmOverdueBackdrop.addEventListener('click',()=>setCrmOverduePanelOpen(false));
 }
 
 if(crmStageExceptionsBtn){
