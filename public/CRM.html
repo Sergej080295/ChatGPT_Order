@@ -20580,13 +20580,9 @@ function applyPlannerRemotePayload(payload, options={}){
   try{
     const prevHash=payload?.prevHash||currentHash;
     const stateText=typeof payload?.state==='string'?payload.state:String(payload?.state||'');
-    if(stateText){
-      if(prevHash && lastAppliedStateSnapshot && stateText===lastAppliedStateSnapshot){
-        return;
-      }
-    }
     const fingerprint=resolvePayloadFingerprint(payload);
-    if(fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
+    const snapshotMatches=!!stateText && lastAppliedStateSnapshot===stateText;
+    if(snapshotMatches && fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
       return;
     }
     if(fingerprint.hash||fingerprint.etag){
