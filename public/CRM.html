@@ -15217,7 +15217,7 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
     showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
     return;
   }
-  const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
+  const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
@@ -15236,6 +15236,12 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
     stage.done=false;
     const current=normalizeStageProgress(stage.progress??0);
     stage.progress=current>=100?0:current;
+  }
+  if(Array.isArray(order.stages) && stageIndex>=0){
+    order.stages[stageIndex]=stage;
+  }
+  if(board && Array.isArray(board.orders) && orderIndex>=0){
+    board.orders[orderIndex]=order;
   }
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
