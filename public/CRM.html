@@ -4616,25 +4616,37 @@
 
   body.crm-hints-enabled [data-hint-key] {
     position: relative;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-primary) 55%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-primary) 40%, transparent);
   }
 
   body.crm-hints-enabled [data-hint-key]::after {
-    content: attr(data-hint-label);
+    content: attr(data-hint-content);
     position: absolute;
     top: 100%;
     left: 50%;
     transform: translateX(-50%);
-    margin-top: 4px;
-    padding: 4px 8px;
+    margin-top: 6px;
+    padding: 6px 10px;
     border-radius: var(--pc-radius-sm);
-    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
     border: 1px solid color-mix(in srgb, var(--pc-primary) 35%, var(--pc-border));
     color: var(--pc-text);
     font-size: 11px;
+    line-height: 1.35;
     white-space: nowrap;
+    box-shadow: 0 6px 18px rgba(15, 17, 21, 0.12);
     pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--pc-transition-short), visibility var(--pc-transition-short);
+    max-width: 320px;
+    text-align: center;
     z-index: 2;
+  }
+
+  body.crm-hints-enabled [data-hint-key].crm-hint-visible::after {
+    opacity: 1;
+    visibility: visible;
   }
 
   .card {
@@ -4971,6 +4983,11 @@
     overflow: auto;
   }
 
+  #orderDlg.pc-modal {
+    width: 92vw;
+    max-width: 1280px;
+  }
+
   .dlg-footer {
     padding: var(--pc-spacing-md) var(--pc-spacing-lg);
     border-top: 1px solid var(--pc-border);
@@ -5037,28 +5054,23 @@
     min-width: 0;
   }
 
-  .gridHead .title {
-    grid-column: 1 / span 8;
-    grid-row: 1;
-  }
-
-  .gridHead .service {
-    grid-column: 9 / span 4;
+  .gridHead .orderNo {
+    grid-column: 1 / span 4;
     grid-row: 1;
   }
 
   .gridHead .customer {
-    grid-column: 1 / span 6;
-    grid-row: 2;
+    grid-column: 5 / span 8;
+    grid-row: 1;
   }
 
-  .gridHead .orderNo {
-    grid-column: 7 / span 3;
+  .gridHead .service {
+    grid-column: 1 / span 4;
     grid-row: 2;
   }
 
   .gridHead .progressField {
-    grid-column: 10 / span 3;
+    grid-column: 5 / span 4;
     grid-row: 2;
   }
 
@@ -5879,14 +5891,13 @@
     </div>
   </div>
   <form id="orderForm" class="dlg-body" method="dialog">
+    <input type="hidden" name="title" />
     <div class="gridHead surface">
-      <div class="title"><label>Название заказа</label><input name="title" required /></div>
-      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
-      <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
-
-      <div class="customer"><label>Клиент</label><input name="customer" /></div>
       <div class="orderNo"><label>№ заказа</label><input name="orderNo" required /></div>
+      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
       <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
+      <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
       <div class="end"><label>Конец (авто)</label><input name="end" type="date" disabled /></div>
     </div>
 
@@ -6487,11 +6498,18 @@ const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIODS=['day','month','quarter','year','custom'];
 const CRM_DEFAULT_LANE_SUM_PERIOD='month';
+const CRM_DEFAULT_ACTION_HINT_DELAY_MS=600;
+const CRM_ACTION_HINT_CONTENT={
+  'hint-reserve':'Открывает управление бронью: удерживайте доступные слоты передела для выбранного заказа.',
+  'hint-new-order':'Создайте новый заказ: заполните номер, клиента и распределите переделы по датам.',
+  'hint-calc-dates':'Автоматически распределяет даты переделов по свободным слотам и рабочим дням.'
+};
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
   showLateTips:true,
   showActionHints:true,
+  actionHintDelayMs:CRM_DEFAULT_ACTION_HINT_DELAY_MS,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumFrom:'',
   laneSumTo:'',
@@ -7184,6 +7202,12 @@ function normalizeLaneSumDate(value){
   return iso||'';
 }
 
+function normalizeActionHintDelayMs(value){
+  const num=Number(value);
+  if(!Number.isFinite(num) || num<0) return CRM_DEFAULT_ACTION_HINT_DELAY_MS;
+  return Math.min(5000, Math.round(num));
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -7191,6 +7215,9 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
     if(typeof raw.showActionHints==='boolean') result.showActionHints=raw.showActionHints;
+    if(Object.prototype.hasOwnProperty.call(raw,'actionHintDelayMs')){
+      result.actionHintDelayMs=normalizeActionHintDelayMs(raw.actionHintDelayMs);
+    }
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -7366,6 +7393,11 @@ function getCrmRouteHorizonDays(){
   return normalized;
 }
 
+function getActionHintDelayMs(){
+  const prefs=getCrmPreferences();
+  return normalizeActionHintDelayMs(prefs?.actionHintDelayMs);
+}
+
 function getCrmLaneSumRange(){
   const prefs=getCrmPreferences();
   const mode=normalizeLaneSumPeriod(prefs?.laneSumPeriod);
@@ -7415,10 +7447,55 @@ function orderMatchesLaneSumRange(order,{ from, to }){
   return true;
 }
 
+const actionHintTimers=new WeakMap();
+
+function resolveHintContent(el){
+  if(!el) return '';
+  const key=(el.dataset?.hintKey||'').trim();
+  if(key && CRM_ACTION_HINT_CONTENT[key]) return CRM_ACTION_HINT_CONTENT[key];
+  if(el.dataset?.hintLabel) return el.dataset.hintLabel;
+  if(el.getAttribute('title')) return el.getAttribute('title');
+  return '';
+}
+
+function hideActionHint(el){
+  const timer=actionHintTimers.get(el);
+  if(timer){
+    clearTimeout(timer);
+    actionHintTimers.delete(el);
+  }
+  el?.classList.remove('crm-hint-visible');
+}
+
+function scheduleActionHint(el){
+  if(!el || !document.body.classList.contains('crm-hints-enabled')) return;
+  hideActionHint(el);
+  const delay=getActionHintDelayMs();
+  const timer=setTimeout(()=>{
+    el.classList.add('crm-hint-visible');
+  }, Math.max(0, delay));
+  actionHintTimers.set(el, timer);
+}
+
+function bindActionHintElement(el){
+  if(!el || el.dataset.hintBound) return;
+  el.dataset.hintBound='1';
+  el.dataset.hintContent=resolveHintContent(el);
+  el.addEventListener('mouseenter',()=>scheduleActionHint(el));
+  el.addEventListener('focus',()=>scheduleActionHint(el));
+  ['mouseleave','blur','click'].forEach(ev=>{
+    el.addEventListener(ev,()=>hideActionHint(el));
+  });
+}
+
 function applyCrmActionHints(){
   const prefs=getCrmPreferences();
   const enabled=prefs?.showActionHints!==false;
   document.body.classList.toggle('crm-hints-enabled', enabled);
+  document.querySelectorAll('[data-hint-key]').forEach(bindActionHintElement);
+  if(!enabled){
+    document.querySelectorAll('[data-hint-key]').forEach(hideActionHint);
+  }
 }
 
 let crmAppliedAutoRefreshMs=null;
@@ -16164,6 +16241,13 @@ function recordOrderCommentJournalEntries(order,diff){
 orderDone=$('#orderDone');
 applyCrmWriteAccess();
 
+['orderNo','customer'].forEach(key=>{
+  const input=orderForm?.[key];
+  if(input){
+    ['input','change'].forEach(eventName=>input.addEventListener(eventName,refreshOrderDialogTitle));
+  }
+});
+
 function handleDateTodayChange(){
   if(!dateTodayChk || !dateTodayChk.checked) return;
   if(!stagesTableBody) return;
@@ -16184,13 +16268,30 @@ function handleDateTodayChange(){
   updateAllStageExpectations();
 }
 
+function composeOrderDisplayTitle(orderNo,customer,fallback=''){
+  const parts=[orderNo,customer].map(v=>(v||'').toString().trim()).filter(Boolean);
+  if(parts.length) return parts.join(' ');
+  const fb=(fallback||'').toString().trim();
+  return fb||'Заказ';
+}
+
 function deriveEditingOrderTitle(){
   const orderNo=(orderForm?.orderNo?.value||'').trim();
-  const title=(orderForm?.title?.value||'').trim();
-  if(orderNo && title){
-    return `${orderNo} — ${title}`;
+  const customer=(orderForm?.customer?.value||'').trim();
+  const fallback=(orderForm?.title?.dataset?.fallbackTitle||orderForm?.title?.value||'').trim();
+  const composed=composeOrderDisplayTitle(orderNo, customer, fallback);
+  if(orderForm?.title){
+    orderForm.title.value=composed;
   }
-  return title || orderNo || 'Заказ';
+  return composed;
+}
+
+function refreshOrderDialogTitle(){
+  const composed=deriveEditingOrderTitle();
+  const base=editingOrderId?'Редактировать заказ':'Новый заказ';
+  if(dlgTitle){
+    dlgTitle.textContent=composed?`${base} (${composed})`:base;
+  }
 }
 
 function applyStageAutoDatesToRow(tr,startIso,endIso){
@@ -16857,7 +16958,6 @@ function openOrder(id=null){
   stageSourceMap=new Map();
   pendingStageDeletes=[];
   if(id){
-    dlgTitle.textContent='Редактировать заказ';
     const o=b.orders.find(x=>x.id===id);
     if(!o){
       alert('Заказ не найден');
@@ -16877,13 +16977,17 @@ function openOrder(id=null){
         orderDlg.close();
       };
     }
+    refreshOrderDialogTitle();
   }else{
     editingOrderId=null;
-    dlgTitle.textContent='Новый заказ';
     orderForm.reset();
     orderForm.status.value=b.lanes[0];
     orderForm.id.value='';
     orderForm.progress.value=0;
+    if(orderForm?.title){
+      orderForm.title.dataset.fallbackTitle='';
+      orderForm.title.value='';
+    }
     orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES);
     window._editingOrigValues=null;
@@ -16896,6 +17000,7 @@ function openOrder(id=null){
     collapseOrderCommentSection();
     resetOrderCommentInputs();
     if(orderNotesHidden){ orderNotesHidden.value=''; }
+    refreshOrderDialogTitle();
   }
   setOrderFormReadOnly(!canEdit);
   refreshOrderHistoryButton(editingOrderId);
@@ -16919,7 +17024,11 @@ if(orderDlg){
 }
 
 function fillOrderForm(o,b){
-  orderForm.title.value=o.title||''; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
+  const fallbackTitle=o.title||'';
+  if(orderForm?.title){
+    orderForm.title.dataset.fallbackTitle=fallbackTitle;
+  }
+  orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
   orderForm.serviceTotal.value=(o.serviceTotal??'')===''?'':Number(o.serviceTotal).toLocaleString('ru-RU');
   orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
   const fallbackDate=o.updatedAt||o.createdAt||'';
@@ -16938,6 +17047,7 @@ function fillOrderForm(o,b){
   });
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
+  refreshOrderDialogTitle();
 }
 
 function parseDateInputValue(value){
@@ -17614,7 +17724,8 @@ orderForm.addEventListener('submit',e=>{
   }
   const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
   const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
-  const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
+  const composedTitle=deriveEditingOrderTitle();
+  const obj={id,title:composedTitle,orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
     start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
     notes:commentSummary,status:orderForm.status.value,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
@@ -18153,6 +18264,24 @@ function renderCrmPreferencesSettingsUI(){
   hintsText.textContent='Подсказки на важных кнопках';
   hintsOption.append(hintsCheckbox, hintsText);
 
+  const hintsDelayField=document.createElement('label');
+  hintsDelayField.className='crm-field';
+  const hintsDelayLabel=document.createElement('span');
+  hintsDelayLabel.className='crm-field__label';
+  hintsDelayLabel.textContent='Задержка подсказки, мс';
+  const hintsDelayInput=document.createElement('input');
+  hintsDelayInput.type='number';
+  hintsDelayInput.className='pc-input';
+  hintsDelayInput.name='prefActionHintDelayMs';
+  hintsDelayInput.min='0';
+  hintsDelayInput.step='50';
+  hintsDelayInput.inputMode='numeric';
+  hintsDelayInput.value=String(getActionHintDelayMs());
+  const hintsDelayHint=document.createElement('span');
+  hintsDelayHint.className='crm-field__hint';
+  hintsDelayHint.textContent='Через сколько миллисекунд после наведения появится подробная подсказка.';
+  hintsDelayField.append(hintsDelayLabel, hintsDelayInput, hintsDelayHint);
+
   const horizonField=document.createElement('label');
   horizonField.className='crm-field';
   const horizonLabel=document.createElement('span');
@@ -18201,7 +18330,7 @@ function renderCrmPreferencesSettingsUI(){
   });
   const lanePeriodHint=document.createElement('span');
   lanePeriodHint.className='crm-field__hint';
-  lanePeriodHint.textContent='Суммы услуг в колонках считаются по дате попадания заказа в статус.';
+  lanePeriodHint.textContent='Суммы услуг в колонках считаются по дате попадания заказа в статус. «Месяц» — текущий календарный.';
 
   const lanePeriodCustomWrap=document.createElement('div');
   lanePeriodCustomWrap.className='crm-settings-grid crm-settings-grid--two';
@@ -18261,7 +18390,7 @@ function renderCrmPreferencesSettingsUI(){
   linkGapHint.className='crm-field__hint';
   linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
   linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, hintsOption, lanePeriodField, horizonField, linkOption, linkGapField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, hintsOption, hintsDelayField, lanePeriodField, horizonField, linkOption, linkGapField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -18778,6 +18907,7 @@ boardForm.addEventListener('submit',e=>{
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     showActionHints:!!boardForm.prefShowActionHints?.checked,
+    actionHintDelayMs:boardForm.prefActionHintDelayMs?boardForm.prefActionHintDelayMs.value:'',
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     laneSumPeriod:boardForm.prefLaneSumPeriod?boardForm.prefLaneSumPeriod.value:'',
     laneSumFrom:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
@@ -18871,7 +19001,7 @@ function openSplitDialog(){
     tr.innerHTML=`<td>${escapeHtml(st.name)}</td><td>${pctCell}</td><td>${valueCell}</td>`;
     splitStagesTbody.appendChild(tr);
   });
-  const defTitle=(orderForm.title.value.trim()||'Заказ')+' — часть'; splitForm.titlePart.value=defTitle; splitForm.suffix.value='-1'; splitForm.partPct.value=50;
+  const defTitle=(deriveEditingOrderTitle()||'Заказ')+' — часть'; splitForm.titlePart.value=defTitle; splitForm.suffix.value='-1'; splitForm.partPct.value=50;
   splitDlg.showModal();
 }
 splitForm.addEventListener('submit',e=>{
