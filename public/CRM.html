@@ -516,6 +516,7 @@
       return refreshPromise;
     }
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
+    const previousFingerprint = { hash: currentHash, etag: currentEtag };
     refreshPromise = (async () => {
       try {
         const meta = await loadState({ withMeta: true });
@@ -529,6 +530,8 @@
           payload.state = meta.state;
           if (meta.etag) payload.etag = meta.etag;
           if (meta.hash) payload.hash = meta.hash;
+          if (previousFingerprint.hash) payload.prevHash = previousFingerprint.hash;
+          if (previousFingerprint.etag) payload.prevEtag = previousFingerprint.etag;
           notify(payload);
           return payload;
         }
@@ -20574,13 +20577,13 @@ function applyRemoteCrm(crm){
 function applyPlannerRemotePayload(payload, options={}){
   if(!payload||!payload.state) return;
   try{
-    const prevHash=currentHash;
+    const prevHash=payload?.prevHash||currentHash;
     const fingerprint=resolvePayloadFingerprint(payload);
-    if(fingerprint.hash||fingerprint.etag){
-      updateFingerprint(fingerprint);
-    }
     if(fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
       return;
+    }
+    if(fingerprint.hash||fingerprint.etag){
+      updateFingerprint(fingerprint);
     }
     const parsed=JSON.parse(payload.state);
     syncCrmNotificationsMutedFromPlanner(parsed);
