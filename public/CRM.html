@@ -5247,12 +5247,12 @@
 
   #stagesTable th:nth-child(2),
   #stagesTable td:nth-child(2) {
-    width: 150px;
+    width: 190px;
   }
 
   #stagesTable th.col-rate,
   #stagesTable td.col-rate {
-    width: 220px;
+    width: 170px;
   }
 
   #stagesTable input:not([type="checkbox"]),
@@ -5289,7 +5289,7 @@
     display: inline-flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 4px;
+    gap: 2px;
   }
 
   .crm-stage-reorder button {
@@ -5297,8 +5297,8 @@
     border: 1px solid color-mix(in srgb, var(--pc-border) 60%, var(--pc-text-muted));
     background: color-mix(in srgb, var(--pc-surface) 90%, var(--pc-border));
     color: var(--pc-text-muted);
-    width: 32px;
-    height: 28px;
+    width: 26px;
+    height: 24px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5902,7 +5902,6 @@
   </div>
   <div class="dlg-footer">
     <button type="button" class="pc-btn pc-btn--secondary" id="crmStageAdvanceCancel">Оставить как есть</button>
-    <button type="button" class="pc-btn pc-btn--ghost" id="crmStageAdvanceNext">Следующий статус</button>
     <button type="button" class="pc-btn pc-btn--primary" id="crmStageAdvanceApply">Применить</button>
   </div>
 </dialog>
@@ -7630,17 +7629,19 @@ function hideActionHint(el){
 
 function scheduleActionHint(el){
   if(!el || !document.body.classList.contains('crm-hints-enabled')) return;
-  if(!areDetailedHintsEnabled()) return;
   hideActionHint(el);
   const summaryDelay=Math.max(0, getActionHintSummaryDelayMs());
   const detailsDelay=Math.max(summaryDelay+120, getActionHintDetailsDelayMs());
+  const detailsAllowed=areDetailedHintsEnabled();
   const timers={};
   timers.summary=setTimeout(()=>{
     el.classList.add('crm-hint-summary-visible');
   }, summaryDelay);
-  timers.details=setTimeout(()=>{
-    el.classList.add('crm-hint-details-visible');
-  }, detailsDelay);
+  if(detailsAllowed){
+    timers.details=setTimeout(()=>{
+      el.classList.add('crm-hint-details-visible');
+    }, detailsDelay);
+  }
   actionHintTimers.set(el, timers);
 }
 
@@ -7663,15 +7664,18 @@ function bindActionHintElement(el){
 
 function applyCrmActionHints(){
   const prefs=getCrmPreferences();
-  const enabled=prefs?.showActionHints!==false;
-  document.body.classList.toggle('crm-hints-enabled', enabled);
+  const detailsEnabled=prefs?.showActionHints!==false;
+  document.body.classList.add('crm-hints-enabled');
+  document.body.classList.toggle('crm-hints-details', detailsEnabled);
   document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
     el.dataset.hintSummary=resolveHintSummary(el);
     el.dataset.hintDetails=resolveHintDetails(el);
     bindActionHintElement(el);
   });
-  if(!enabled){
-    document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(hideActionHint);
+  if(!detailsEnabled){
+    document.querySelectorAll('[data-hint-key], [data-hint-details], [data-hint-summary]').forEach(el=>{
+      el.classList.remove('crm-hint-details-visible');
+    });
   }
 }
 
@@ -9491,7 +9495,6 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageAdvanceMessage=$('#crmStageAdvanceMessage'),
       crmStageAdvanceSelect=$('#crmStageAdvanceSelect'),
       crmStageAdvanceApply=$('#crmStageAdvanceApply'),
-      crmStageAdvanceNext=$('#crmStageAdvanceNext'),
       crmStageAdvanceClose=$('#crmStageAdvanceClose'),
       crmStageAdvanceCancel=$('#crmStageAdvanceCancel'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
@@ -15400,7 +15403,7 @@ function promptOrderStatusAdvance(order, stageKey){
   const b=currentBoard();
   if(!order || !b || !Array.isArray(b.lanes) || !b.lanes.length) return Promise.resolve(null);
   const nextLane=resolveNextLane(order);
-  if(!crmStageAdvanceDlg || !crmStageAdvanceSelect || !crmStageAdvanceApply || !crmStageAdvanceCancel || !crmStageAdvanceNext){
+  if(!crmStageAdvanceDlg || !crmStageAdvanceSelect || !crmStageAdvanceApply || !crmStageAdvanceCancel){
     return Promise.resolve(nextLane);
   }
   crmStageAdvanceSelect.innerHTML='';
@@ -15419,10 +15422,6 @@ function promptOrderStatusAdvance(order, stageKey){
       ? `Передел «${stageLabel}» отмечен готовым. Перевести «${orderLabel}» в «${nextLane}» или выбрать другой статус?`
       : `Передел «${stageLabel}» отмечен готовым. Выберите статус для заказа «${orderLabel}».`;
   }
-  if(crmStageAdvanceNext){
-    crmStageAdvanceNext.textContent=nextLane?`Следующий: ${nextLane}`:'Использовать выбор';
-    crmStageAdvanceNext.disabled=!nextLane;
-  }
   return new Promise(resolve=>{
     const cleanup=()=>{
       crmStageAdvanceDlg.close();
@@ -15432,10 +15431,8 @@ function promptOrderStatusAdvance(order, stageKey){
       resolve(value||null);
     };
     const onApply=()=>applyChoice(crmStageAdvanceSelect.value);
-    const onNext=()=>applyChoice(nextLane||crmStageAdvanceSelect.value);
     const onCancel=()=>applyChoice(null);
     crmStageAdvanceApply.addEventListener('click', onApply, { once:true });
-    crmStageAdvanceNext.addEventListener('click', onNext, { once:true });
     crmStageAdvanceCancel.addEventListener('click', onCancel, { once:true });
     if(crmStageAdvanceClose){
       crmStageAdvanceClose.addEventListener('click', onCancel, { once:true });
@@ -17531,11 +17528,11 @@ async function processStageCompletionChange(tr, isDone){
   const now=new Date();
   let doneAt=new Date(now);
   const dueDate=getStageRowDueDate(tr);
-  let completedLate=false;
+  const wasLate=!!(dueDate && now.getTime()>dueDate.getTime());
+  let completedLate=wasLate;
   let reason='';
-  if(dueDate && now.getTime()>dueDate.getTime()){
+  if(wasLate){
     const diffDays=Math.ceil((now-dueDate)/86400000);
-    completedLate=true;
     const decision=await requestStageDelayReason(tr.dataset?.delayReason||'', diffDays);
     if(!decision || decision.action==='cancel'){
       return false;
@@ -17543,12 +17540,13 @@ async function processStageCompletionChange(tr, isDone){
     if(decision.action==='yesterday'){
       doneAt=new Date(now.getTime()-86400000);
       reason='Выполнено вчера';
+      completedLate=true;
     }else if(decision.reason){
       reason=decision.reason;
     }
   }
   const doneAtIso=doneAt.toISOString();
-  if(dueDate && doneAt.getTime()<=dueDate.getTime()){
+  if(!wasLate && dueDate && doneAt.getTime()<=dueDate.getTime()){
     completedLate=false;
   }
   tr.dataset.doneAt=doneAtIso;
