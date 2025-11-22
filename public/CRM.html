@@ -4688,6 +4688,42 @@
     visibility: visible;
   }
 
+  .crm-hint-bubble {
+    position: fixed;
+    z-index: 9999;
+    max-width: 320px;
+    min-width: 180px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+    line-height: 1.45;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+
+  .crm-hint-bubble.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .crm-hint-bubble__summary {
+    font-weight: 600;
+    display: block;
+    margin-bottom: 4px;
+    white-space: normal;
+  }
+
+  .crm-hint-bubble__details {
+    display: block;
+    white-space: pre-wrap;
+    opacity: 0.9;
+  }
+
   .card {
     background: var(--pc-surface);
     border: 1px solid var(--pc-border);
@@ -7610,6 +7646,23 @@ function orderMatchesLaneSumRange(order,{ from, to }){
 
 const actionHintTimers=new WeakMap();
 let actionHintObserver=null;
+let actionHintBubble=null;
+let actionHintBubbleSummary=null;
+let actionHintBubbleDetails=null;
+let actionHintActiveEl=null;
+
+function ensureActionHintBubble(){
+  if(actionHintBubble) return;
+  actionHintBubble=document.createElement('div');
+  actionHintBubble.className='crm-hint-bubble';
+  actionHintBubbleSummary=document.createElement('span');
+  actionHintBubbleSummary.className='crm-hint-bubble__summary';
+  actionHintBubbleDetails=document.createElement('span');
+  actionHintBubbleDetails.className='crm-hint-bubble__details';
+  actionHintBubble.appendChild(actionHintBubbleSummary);
+  actionHintBubble.appendChild(actionHintBubbleDetails);
+  document.body.appendChild(actionHintBubble);
+}
 
 function bindActionHintsInTree(root=document){
   if(!root) return;
@@ -7634,12 +7687,34 @@ function ensureActionHintObserver(){
   actionHintObserver.observe(document.body,{ childList:true, subtree:true });
 }
 
+function positionActionHintBubble(el){
+  if(!actionHintBubble || !el) return;
+  const rect=el.getBoundingClientRect();
+  const bubbleRect=actionHintBubble.getBoundingClientRect();
+  const spacing=10;
+  let top=rect.bottom+spacing;
+  let left=rect.left;
+  if(left + bubbleRect.width > window.innerWidth - 12){
+    left=window.innerWidth - bubbleRect.width - 12;
+  }
+  if(left < 12){
+    left=12;
+  }
+  if(top + bubbleRect.height > window.innerHeight - 12){
+    top=Math.max(12, rect.top - bubbleRect.height - spacing);
+  }
+  actionHintBubble.style.top=`${top + window.scrollY}px`;
+  actionHintBubble.style.left=`${left + window.scrollX}px`;
+}
+
 function resolveHintSummary(el){
   if(!el) return '';
   const key=(el.dataset?.hintKey||'').trim();
   if(key && CRM_ACTION_HINT_SUMMARY[key]) return CRM_ACTION_HINT_SUMMARY[key];
   if(el.dataset?.hintSummary) return el.dataset.hintSummary;
   if(el.dataset?.hintLabel) return el.dataset.hintLabel;
+  const text=(el.textContent||'').trim();
+  if(text) return text;
   if(el.getAttribute('title')) return el.getAttribute('title');
   return '';
 }
@@ -7668,6 +7743,10 @@ function hideActionHint(el){
   }
   el?.classList.remove('crm-hint-summary-visible');
   el?.classList.remove('crm-hint-details-visible');
+  if(actionHintActiveEl===el && actionHintBubble){
+    actionHintActiveEl=null;
+    actionHintBubble.classList.remove('visible');
+  }
 }
 
 function scheduleActionHint(el){
@@ -7684,10 +7763,22 @@ function scheduleActionHint(el){
   const timers={};
   timers.summary=setTimeout(()=>{
     el.classList.add('crm-hint-summary-visible');
+    ensureActionHintBubble();
+    actionHintActiveEl=el;
+    actionHintBubbleSummary.textContent=summaryText||'';
+    actionHintBubbleDetails.textContent='';
+    actionHintBubble.classList.add('visible');
+    positionActionHintBubble(el);
   }, summaryDelay);
   if(detailsAllowed){
     timers.details=setTimeout(()=>{
       el.classList.add('crm-hint-details-visible');
+      ensureActionHintBubble();
+      actionHintActiveEl=el;
+      actionHintBubbleSummary.textContent=summaryText||'';
+      actionHintBubbleDetails.textContent=detailsText||'';
+      actionHintBubble.classList.add('visible');
+      positionActionHintBubble(el);
     }, detailsDelay);
   }
   actionHintTimers.set(el, timers);
@@ -7726,7 +7817,16 @@ function applyCrmActionHints(){
     });
   }
   ensureActionHintObserver();
+  ensureActionHintBubble();
 }
+
+['scroll','resize'].forEach(ev=>{
+  window.addEventListener(ev,()=>{
+    if(actionHintBubble){
+      actionHintBubble.classList.remove('visible');
+    }
+  });
+});
 
 let crmAppliedAutoRefreshMs=null;
 
@@ -9647,6 +9747,7 @@ let draggingId=null;
 let editingOrderId=null;
 let orderCommentsDraft=[];
 let stageSourceMap=new Map();
+let stageCompletionExtras=new Map();
 let pendingStageDeletes=[];
 let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
@@ -17298,6 +17399,7 @@ function openOrder(id=null){
   stagesTableBody.innerHTML='';
   editingOrderId=id||null;
   stageSourceMap=new Map();
+  stageCompletionExtras=new Map();
   pendingStageDeletes=[];
   crmDialogLocalChanges=false;
   if(id){
@@ -17354,11 +17456,12 @@ function closeOrder(){orderDlg.close()}
 
   if(orderDlg){
     orderDlg.addEventListener('close',()=>{
-      orderDialogOpen=false;
-      crmDialogLocalChanges=false;
-      editingOrderId=null;
-      pendingStageDeletes=[];
-      stageSourceMap=new Map();
+    orderDialogOpen=false;
+    crmDialogLocalChanges=false;
+    editingOrderId=null;
+    pendingStageDeletes=[];
+    stageSourceMap=new Map();
+    stageCompletionExtras=new Map();
     refreshOrderHistoryButton(null);
     orderCommentsDraft=[];
     renderOrderComments();
@@ -17386,6 +17489,15 @@ function fillOrderForm(o,b){
     const stageId=ensureStageIdentity(st);
     if(editingOrderId){
       stageSourceMap.set(stageId, deepClone(st));
+      if(stageCompletionExtras instanceof Map){
+        const extras={};
+        if(st.doneAt) extras.doneAt=st.doneAt;
+        if(st.delayReason) extras.delayReason=st.delayReason;
+        if(typeof st.completedLate==='boolean') extras.completedLate=st.completedLate;
+        if(Object.keys(extras).length){
+          stageCompletionExtras.set(stageId, extras);
+        }
+      }
     }
     appendStageRow(st);
   });
@@ -17493,6 +17605,10 @@ function updateStageSourceExtras(tr, extras){
   if(!stageId) return;
   const current=stageSourceMap.get(stageId)||{};
   stageSourceMap.set(stageId,{ ...current, ...extras });
+  if(stageCompletionExtras instanceof Map){
+    const stored=stageCompletionExtras.get(stageId)||{};
+    stageCompletionExtras.set(stageId,{ ...stored, ...extras });
+  }
 }
 
 function getStageRowDueDate(tr){
@@ -17629,6 +17745,9 @@ async function processStageCompletionChange(tr, isDone){
     tr.dataset.doneAt='';
     tr.dataset.completedLate='false';
     delete tr.dataset.delayReason;
+    if(stageCompletionExtras instanceof Map && tr.dataset.stageId){
+      stageCompletionExtras.delete(tr.dataset.stageId);
+    }
     updateStageSourceExtras(tr,{ done:false, doneAt:'', delayReason:'', completedLate:false });
     crmDialogLocalChanges=true;
     return true;
@@ -17795,6 +17914,9 @@ function appendStageRow(st){
     if(editingOrderId && stageKey && stageSourceMap instanceof Map && stageSourceMap.has(stageKey)){
       const snapshot=readStageRow(tr) || stageSourceMap.get(stageKey);
       stageSourceMap.delete(stageKey);
+      if(stageCompletionExtras instanceof Map){
+        stageCompletionExtras.delete(stageKey);
+      }
       const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
       const position=rows.indexOf(tr);
       if(snapshot){
@@ -17938,7 +18060,7 @@ function readStageRow(tr){
   const boolOnly=BOOL_STAGE_NAMES.has(normalizedName);
   const done=!!doneInput?.checked;
   const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progressInput?.value||0)));
-  return {
+  const base={
     name:rawName||'Передел',
     done,
     progress,
@@ -17953,6 +18075,15 @@ function readStageRow(tr){
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
   };
+  if(stageCompletionExtras instanceof Map && stageCompletionExtras.has(stageId)){
+    const extras=stageCompletionExtras.get(stageId);
+    ['doneAt','delayReason','completedLate'].forEach(key=>{
+      if(extras[key]!==undefined){
+        base[key]=extras[key];
+      }
+    });
+  }
+  return base;
 }
 
 function mergeStageDraftWithSource(stage){
