@@ -5179,7 +5179,7 @@
 
   #stagesTable thead th.col-reorder {
     text-align: center;
-    width: 56px;
+    width: 44px;
   }
 
   #stagesTable tbody td {
@@ -5227,16 +5227,16 @@
   }
 
   #stagesTable td.reorder {
-    width: 56px;
+    width: 44px;
     text-align: center;
-    padding: 6px 8px;
+    padding: 4px 6px;
   }
 
   .crm-stage-reorder {
     display: inline-flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 4px;
+    gap: 2px;
   }
 
   .crm-stage-reorder button {
@@ -5244,13 +5244,14 @@
     border: 1px solid color-mix(in srgb, var(--pc-border) 60%, var(--pc-text-muted));
     background: color-mix(in srgb, var(--pc-surface) 90%, var(--pc-border));
     color: var(--pc-text-muted);
-    width: 32px;
-    height: 28px;
+    width: 26px;
+    height: 24px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     transition: background var(--pc-transition-short), color var(--pc-transition-short), border-color var(--pc-transition-short);
+    font-size: 12px;
   }
 
   .crm-stage-reorder button:hover:not(:disabled),
@@ -15115,19 +15116,32 @@ function renderCrmStageOverdue(entries){
 function findCrmStageContext(orderId, stageId, stageKey){
   const board=currentBoard();
   const orders=board?.orders||[];
+  const normalizedStageId=stageId?String(stageId):'';
   let orderIndex=-1;
   if(orderId){
-    orderIndex=orders.findIndex(o=>o&&String(o.id||'')===String(orderId));
+    const normalizedOrderId=String(orderId);
+    orderIndex=orders.findIndex(o=>o&&String(o.id||'')===normalizedOrderId);
+  }
+  if(orderIndex<0 && normalizedStageId){
+    orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>ensureStageIdentity(st)===normalizedStageId));
   }
   if(orderIndex<0 && typeof stageKey==='string'){
     orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>resolveCrmStageKey(st?.name)===stageKey));
   }
-  const order=orderIndex>=0?orders[orderIndex]:null;
+  let order=orderIndex>=0?orders[orderIndex]:null;
+  if(!order && normalizedStageId){
+    const cached=crmStageRowsCache.find(row=>row?.stageId===normalizedStageId||row?.identity===normalizedStageId);
+    if(cached?.order){
+      order=cached.order;
+      const idxByRef=orders.indexOf(order);
+      if(idxByRef>=0) orderIndex=idxByRef;
+    }
+  }
   const stages=Array.isArray(order?.stages)?order.stages:[];
   let stageIndex=-1;
   let stage=null;
-  if(stageId){
-    stageIndex=stages.findIndex(st=>ensureStageIdentity(st)===stageId);
+  if(normalizedStageId){
+    stageIndex=stages.findIndex(st=>ensureStageIdentity(st)===normalizedStageId);
   }
   if(stageIndex<0 && typeof stageKey==='string'){
     stageIndex=stages.findIndex(st=>resolveCrmStageKey(st?.name)===stageKey);
@@ -20607,6 +20621,12 @@ window.addEventListener('beforeunload',()=>{
 
 const CRM_HINT_TARGETS=[
   { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
+  { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
+  { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт строку передела. Shift открывает выбор из списка шаблонов.' },
+  { selector:'#presetStagesBtn', level1:'Базовые переделы', level2:'Добавляет преднастроенный набор шагов в заказ.' },
+  { selector:'#allStagesBtn', level1:'Все переделы', level2:'Открывает полный справочник переделов для вставки в заказ.' },
+  { selector:'#splitBtn', level1:'Подзаказ', level2:'Разбивает текущий заказ на отдельный подзаказ без потери истории.' },
+  { selector:'#orderHistoryBtn', level1:'История', level2:'Показывает журнал изменений по заказу с деталями полей и дат.' },
   { selector:'#newOrderBtn', level1:'Создать заказ', level2:'Открывает карточку нового заказа. Номер и клиент будут основой названия.' },
   { selector:'#crmStageReserveBtn', level1:'Бронь', level2:'Управляет резервом часов и исключениями для выбранного передела.' }
 ];
