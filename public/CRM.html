@@ -18148,11 +18148,35 @@ function showStagePicker(anchor){
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
 
+function applyStageExtrasToList(stages){
+  if(!Array.isArray(stages)||!stages.length) return stages||[];
+  if(!(stageCompletionExtras instanceof Map)||!stageCompletionExtras.size) return stages;
+  const byId=new Map();
+  stages.forEach(stage=>{
+    if(!stage||typeof stage!=='object') return;
+    const key=stage.crmStageId||stage.id||'';
+    if(key) byId.set(key, stage);
+  });
+  stageCompletionExtras.forEach((extras, stageId)=>{
+    const target=byId.get(stageId);
+    if(!target||!extras||typeof extras!=='object') return;
+    if(extras.doneAt) target.doneAt=extras.doneAt;
+    if(extras.delayReason!==undefined) target.delayReason=extras.delayReason;
+    if(extras.completedLate!==undefined) target.completedLate=!!extras.completedLate;
+    target.done=true;
+    if(target.progress===undefined||Number(target.progress)<100){
+      target.progress=100;
+    }
+  });
+  return stages;
+}
+
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
-  return rows
+  const stages=rows
     .map(tr=>mergeStageDraftWithSource(readStageRow(tr)))
     .filter(Boolean);
+  return applyStageExtrasToList(stages);
 }
 
 function calcAutoProgress(stages){
