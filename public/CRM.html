@@ -4638,7 +4638,6 @@
 
   body.crm-hints-enabled [data-hint-key] {
     position: relative;
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-primary) 40%, transparent);
   }
 
   body.crm-hints-enabled [data-hint-key]::before,
@@ -4654,16 +4653,17 @@
     font-size: 11px;
     line-height: 1.4;
     white-space: pre-line;
+    word-break: break-word;
     text-align: left;
     min-width: 220px;
-    max-width: 420px;
+    max-width: 480px;
     width: max-content;
     box-shadow: 0 6px 18px rgba(15, 17, 21, 0.12);
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
     transition: opacity var(--pc-transition-short), visibility var(--pc-transition-short);
-    z-index: 6;
+    z-index: 32;
   }
 
   body.crm-hints-enabled [data-hint-key]::before {
@@ -7648,6 +7648,11 @@ function hideActionHint(el){
 
 function scheduleActionHint(el){
   if(!el || !document.body.classList.contains('crm-hints-enabled')) return;
+  const summaryText=el.dataset?.hintSummary||resolveHintSummary(el);
+  const detailsText=el.dataset?.hintDetails||resolveHintDetails(el);
+  if(!summaryText && !detailsText){
+    return;
+  }
   hideActionHint(el);
   const summaryDelay=Math.max(0, getActionHintSummaryDelayMs());
   const detailsDelay=Math.max(summaryDelay+120, getActionHintDetailsDelayMs());
@@ -7668,12 +7673,16 @@ function bindActionHintElement(el){
   if(!el || el.dataset.hintBound) return;
   el.dataset.hintBound='1';
   const summary=resolveHintSummary(el);
+  const details=resolveHintDetails(el);
+  if(!summary && !details){
+    return;
+  }
   if(el.hasAttribute('title')){
     el.dataset.hintNativeTitle=el.getAttribute('title')||'';
     el.removeAttribute('title');
   }
   el.dataset.hintSummary=summary;
-  el.dataset.hintDetails=resolveHintDetails(el);
+  el.dataset.hintDetails=details;
   el.addEventListener('mouseenter',()=>scheduleActionHint(el));
   el.addEventListener('focus',()=>scheduleActionHint(el));
   ['mouseleave','blur','click'].forEach(ev=>{
@@ -17481,6 +17490,24 @@ function resetLateReasonDialog(errorText){
   crmLateReasonError.hidden=!errorText;
 }
 
+function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReason='' }){
+  if(!tr) return;
+  const doneAtIso=doneAt?new Date(doneAt).toISOString():'';
+  if(doneAtIso){
+    tr.dataset.doneAt=doneAtIso;
+  }else{
+    delete tr.dataset.doneAt;
+  }
+  tr.dataset.completedLate=completedLate?'true':'false';
+  if(completedLate && delayReason){
+    tr.dataset.delayReason=delayReason;
+  }else{
+    delete tr.dataset.delayReason;
+  }
+  updateStageSourceExtras(tr,{ done:true, progress:100, doneAt:doneAtIso, delayReason:completedLate?delayReason:'', completedLate });
+  crmDialogLocalChanges=true;
+}
+
 function requestStageDelayReason(initialReason, diffDays){
   if(!crmLateReasonDlg){
     return Promise.resolve(null);
@@ -17569,15 +17596,7 @@ async function processStageCompletionChange(tr, isDone){
   if(!wasLate && dueDate && doneAt.getTime()<=dueDate.getTime()){
     completedLate=false;
   }
-  tr.dataset.doneAt=doneAtIso;
-  tr.dataset.completedLate=completedLate?'true':'false';
-  if(completedLate){
-    tr.dataset.delayReason=reason;
-  }else{
-    delete tr.dataset.delayReason;
-  }
-  updateStageSourceExtras(tr,{ done:true, progress:100, doneAt:doneAtIso, delayReason:completedLate?reason:'', completedLate });
-  crmDialogLocalChanges=true;
+  applyStageCompletionExtras(tr,{ doneAt:doneAtIso, completedLate, delayReason:completedLate?reason:'' });
   return true;
 }
 
