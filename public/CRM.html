@@ -2515,14 +2515,6 @@
     background: var(--pc-danger);
   }
 
-  .crm-stage-side {
-    display: flex;
-    flex-direction: column;
-    gap: var(--pc-spacing-md);
-    flex: 1 1 280px;
-    min-width: 260px;
-  }
-
   .crm-stage-detail-card {
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
@@ -2720,8 +2712,7 @@
   }
 
   .crm-stage-gantt-card,
-  .crm-stage-route-card,
-  .crm-stage-overdue {
+  .crm-stage-route-card {
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     background: var(--pc-surface);
@@ -2754,21 +2745,10 @@
 
   .crm-stage-gantt-header h3,
   .crm-stage-route-header h3,
-  .crm-stage-overdue h3,
   .crm-stage-detail-card h3 {
     margin: 0;
     font-size: 15px;
     font-weight: var(--pc-font-weight-semibold);
-  }
-
-  .crm-stage-overdue--active {
-    border-color: color-mix(in srgb, var(--pc-danger) 40%, var(--pc-border));
-    box-shadow: 0 18px 32px -18px color-mix(in srgb, var(--pc-danger) 55%, transparent);
-    background: color-mix(in srgb, var(--pc-danger) 6%, var(--pc-surface));
-  }
-
-  .crm-stage-overdue--active h3 {
-    color: var(--pc-danger);
   }
 
   .crm-stage-gantt-controls label {
@@ -3338,38 +3318,70 @@
   .crm-route-stage--pack { background: #8b5e3c; }
   .crm-route-stage--ship { background: #8b5cf6; }
 
-  .crm-stage-overdue__list {
-    font-size: 13px;
-    color: var(--pc-text);
-    display: grid;
+  .crm-overdue-trigger {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
+    margin-left: auto;
+    margin-right: 0;
   }
 
-  .crm-stage-overdue__item {
-    padding: 6px 8px;
-    border-radius: var(--pc-radius-sm);
-    background: color-mix(in srgb, var(--pc-border) 18%, transparent);
+  .crm-overdue-trigger .pc-badge {
+    min-width: 20px;
+    text-align: center;
+  }
+
+  .crm-overdue-dialog__body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 10px;
+    max-height: 70vh;
+    overflow: auto;
+    padding: 8px 4px;
   }
 
-  .crm-stage-overdue__item strong {
+  .crm-overdue-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .crm-overdue-empty {
+    text-align: center;
+    color: var(--pc-text-muted);
     font-size: 13px;
   }
 
-  .crm-stage-overdue__meta {
-    font-size: 12px;
+  .crm-overdue-item {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 80%, transparent);
+    border-radius: var(--pc-radius-sm);
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+    align-items: start;
+  }
+
+  .crm-overdue-item h4 {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+
+  .crm-overdue-item__meta {
+    grid-column: 1 / -1;
     color: var(--pc-text-muted);
+    font-size: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
-  .crm-stage-overdue__item--clickable {
-    cursor: pointer;
-    transition: background var(--pc-transition-short, 0.15s ease);
-  }
-
-  .crm-stage-overdue__item--clickable:hover {
-    background: color-mix(in srgb, var(--pc-primary) 18%, transparent);
+  .crm-overdue-item__actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
   }
 
   .crm-route-modal {
@@ -5791,6 +5803,10 @@
           <span><i class="crm-stage-chip crm-stage-chip--ok"></i> В срок</span>
           <span><i class="crm-stage-chip crm-stage-chip--warning"></i> Раньше срока</span>
           <span><i class="crm-stage-chip crm-stage-chip--late"></i> Просрочено</span>
+          <button type="button" class="pc-btn pc-btn--ghost pc-btn--sm crm-overdue-trigger" id="crmOverdueOpen">
+            Просрочки
+            <span class="pc-badge" id="crmOverdueBadge" hidden>0</span>
+          </button>
         </div>
         <section class="crm-stage-detail-card">
           <h3>Подетально</h3>
@@ -5798,12 +5814,6 @@
           <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
         </section>
       </section>
-      <aside class="crm-stage-side">
-        <section class="crm-stage-overdue" id="crmStageOverdue">
-          <h3>⚠️ Сорваны сроки</h3>
-          <div id="crmStageOverdueList" class="crm-stage-overdue__list">Нет просроченных заказов</div>
-        </section>
-      </aside>
     </div>
     <div class="crm-stage-secondary">
       <section class="crm-stage-gantt-card">
@@ -5891,6 +5901,19 @@
     <div class="crm-route-modal__footer">
       <button type="button" class="pc-btn pc-btn--ghost crm-route-modal__close" id="crmStageRouteDlgClose">Закрыть</button>
     </div>
+  </div>
+</dialog>
+
+<dialog id="crmOverdueDlg" class="pc-modal pc-modal--md" aria-label="Просроченные переделы">
+  <div class="dlg-head">
+    <strong>Просроченные переделы</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmOverdueClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="crm-overdue-dialog__body">
+    <div id="crmOverdueList" class="crm-overdue-list"></div>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmOverdueCloseFooter">Закрыть</button>
   </div>
 </dialog>
 
@@ -9620,8 +9643,12 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmRouteTodayToggle=$('#crmRouteTodayToggle'),
       crmStageTotalHours=$('#crmStageTotalHours'),
       crmStageTotalRest=$('#crmStageTotalRest'),
-      crmStageOverdueSection=$('#crmStageOverdue'),
-      crmStageOverdueList=$('#crmStageOverdueList'),
+      crmOverdueOpen=$('#crmOverdueOpen'),
+      crmOverdueBadge=$('#crmOverdueBadge'),
+      crmOverdueDlg=$('#crmOverdueDlg'),
+      crmOverdueList=$('#crmOverdueList'),
+      crmOverdueClose=$('#crmOverdueClose'),
+      crmOverdueCloseFooter=$('#crmOverdueCloseFooter'),
       crmUnaccountedBtn=$('#crmUnaccountedBtn'),
       crmTrashBtn=$('#crmTrashBtn'),
       crmTrashBadge=$('#crmTrashBadge'),
@@ -9915,6 +9942,7 @@ let crmStageSelectMenu=null;
 let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
+syncOverdueButton(0);
 
 if(crmStageSelect){
   decorateStageSelectOptions();
@@ -15156,7 +15184,7 @@ function renderCrmStageTable(){
     crmStageRowsCache=visibleRows;
     crmStageScheduleCache=null;
     updateCrmStageTotals({ baseHours:0, extraHours:0, totalHours:0, restHours:0 });
-    renderCrmStageOverdue(overdueEntries);
+    updateCrmOverdueEntries(overdueEntries);
     renderCrmStageViews(null, visibleRows, stageKey, activeFilter);
     updateSearchUI();
     updateCrmAuxButtons();
@@ -15353,7 +15381,7 @@ function renderCrmStageTable(){
   };
   hideCrmToolbarStats();
   updateCrmStageTotals(totals);
-  renderCrmStageOverdue(overdueEntries);
+  updateCrmOverdueEntries(overdueEntries);
   renderCrmStageViews(schedule, visibleRows, stageKey, activeFilter);
   updateSearchUI();
   updateCrmAuxButtons();
@@ -15422,65 +15450,107 @@ function buildCrmLateAdvice(entry, schedule){
   });
 }
 
-function renderCrmStageOverdue(entries){
-  if(!crmStageOverdueList) return;
-  crmStageOverdueList.innerHTML='';
-  const list=Array.isArray(entries)?entries.filter(Boolean):[];
-  const showTips=shouldShowCrmLateTips();
-  if(crmStageOverdueSection){
-    crmStageOverdueSection.classList.toggle('crm-stage-overdue--active', list.length>0);
+let crmOverdueEntriesCache=[];
+
+function syncOverdueButton(count){
+  const value=Math.max(0, Number(count)||0);
+  if(crmOverdueBadge){
+    crmOverdueBadge.textContent=String(value);
+    crmOverdueBadge.hidden=value<=0;
   }
+  if(crmOverdueOpen){
+    crmOverdueOpen.disabled=value<=0;
+    crmOverdueOpen.title=value>0?`Просроченных переделов: ${value}`:'Просроченных переделов нет';
+  }
+}
+
+function renderCrmOverdueDialog(){
+  if(!crmOverdueList) return;
+  crmOverdueList.innerHTML='';
+  const showTips=shouldShowCrmLateTips();
+  const list=crmOverdueEntriesCache.slice().sort((a,b)=>{
+    const aDays=a?.lateDays||0;
+    const bDays=b?.lateDays||0;
+    if(bDays!==aDays) return bDays-aDays;
+    const aPlanned=a?.plannedEnd instanceof Date?a.plannedEnd.getTime():0;
+    const bPlanned=b?.plannedEnd instanceof Date?b.plannedEnd.getTime():0;
+    return aPlanned-bPlanned;
+  });
   if(!list.length){
-    crmStageOverdueList.textContent='Нет просроченных заказов';
+    const empty=document.createElement('div');
+    empty.className='crm-overdue-empty';
+    empty.textContent='Нет просроченных переделов';
+    crmOverdueList.appendChild(empty);
     return;
   }
   const fragment=document.createDocumentFragment();
-  list
-    .slice()
-    .sort((a,b)=>{
-      const aDays=a?.lateDays||0;
-      const bDays=b?.lateDays||0;
-      if(bDays!==aDays) return bDays-aDays;
-      const aPlanned=a?.plannedEnd instanceof Date?a.plannedEnd.getTime():0;
-      const bPlanned=b?.plannedEnd instanceof Date?b.plannedEnd.getTime():0;
-      return aPlanned-bPlanned;
-    })
-    .forEach(entry=>{
-      const item=document.createElement('div');
-      item.className='crm-stage-overdue__item';
+  list.forEach(entry=>{
+    const item=document.createElement('div');
+    item.className='crm-overdue-item';
+    const title=document.createElement('h4');
+    title.textContent=entry.orderTitle||'Заказ';
+    item.appendChild(title);
+    const meta=document.createElement('div');
+    meta.className='crm-overdue-item__meta';
+    const parts=[];
+    if(entry.stageKey){
+      parts.push(CRM_STAGE_LABELS[entry.stageKey]||'Передел');
+    }
+    const planned=entry.plannedEnd||entry.endDate||null;
+    if(planned){
+      parts.push(`Срок: ${formatStageDateLabel(planned)}`);
+    }
+    if(entry.scheduledEnd instanceof Date){
+      parts.push(`Распределено: ${formatStageDateLabel(entry.scheduledEnd)}`);
+    }
+    if(entry.lateDays){
+      parts.push(`Просрочка: ${entry.lateDays} дн`);
+    }
+    meta.textContent=parts.join(' • ');
+    item.appendChild(meta);
+    const actions=document.createElement('div');
+    actions.className='crm-overdue-item__actions';
+    const openBtn=document.createElement('button');
+    openBtn.type='button';
+    openBtn.className='pc-btn pc-btn--ghost pc-btn--sm';
+    openBtn.textContent='Открыть заказ';
+    openBtn.addEventListener('click',()=>{
       if(entry.orderId){
-        item.classList.add('crm-stage-overdue__item--clickable');
-        item.addEventListener('click',()=>openOrder(entry.orderId));
+        openOrder(entry.orderId);
+        if(crmOverdueDlg?.open){
+          crmOverdueDlg.close();
+        }
       }
-      const title=document.createElement('strong');
-      title.textContent=entry.orderTitle||'Заказ';
-      item.appendChild(title);
-      const meta=document.createElement('div');
-      meta.className='crm-stage-overdue__meta';
-      const parts=[];
-      if(entry.stageKey){
-        parts.push(CRM_STAGE_LABELS[entry.stageKey]||'Передел');
-      }
-      const planned=entry.plannedEnd||entry.endDate||null;
-      if(planned){
-        parts.push(`Срок: ${formatStageDateLabel(planned)}`);
-      }
-      if(entry.scheduledEnd instanceof Date){
-        parts.push(`Распределено: ${formatStageDateLabel(entry.scheduledEnd)}`);
-      }
-      if(entry.lateDays){
-        parts.push(`Просрочка: ${entry.lateDays} дн`);
-      }
-      meta.textContent=parts.join(' • ');
-      item.appendChild(meta);
-      if(showTips && Array.isArray(entry.tips) && entry.tips.length){
-        item.title=entry.tips.join('\n');
-      }else{
-        item.removeAttribute('title');
-      }
-      fragment.appendChild(item);
     });
-  crmStageOverdueList.appendChild(fragment);
+    actions.appendChild(openBtn);
+    if(showTips && Array.isArray(entry.tips) && entry.tips.length){
+      const tip=document.createElement('button');
+      tip.type='button';
+      tip.className='pc-btn pc-btn--ghost pc-btn--sm';
+      tip.textContent='Подсказки';
+      tip.addEventListener('click',()=>{
+        alert(entry.tips.join('\n'));
+      });
+      actions.appendChild(tip);
+    }
+    item.appendChild(actions);
+    fragment.appendChild(item);
+  });
+  crmOverdueList.appendChild(fragment);
+}
+
+function updateCrmOverdueEntries(entries){
+  crmOverdueEntriesCache=Array.isArray(entries)?entries.filter(Boolean):[];
+  syncOverdueButton(crmOverdueEntriesCache.length);
+  if(crmOverdueDlg?.open){
+    renderCrmOverdueDialog();
+  }
+}
+
+function openCrmOverdueDialog(){
+  if(!crmOverdueDlg) return;
+  renderCrmOverdueDialog();
+  crmOverdueDlg.showModal();
 }
 
 function findCrmStageContext(orderId, stageId, stageKey){
@@ -17630,6 +17700,8 @@ function resetLateReasonDialog(errorText){
 
 function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReason='' }){
   if(!tr) return;
+  const stageId=tr.dataset.stageId || generateStageId();
+  tr.dataset.stageId=stageId;
   const doneAtIso=doneAt?new Date(doneAt).toISOString():'';
   if(doneAtIso){
     tr.dataset.doneAt=doneAtIso;
@@ -17641,6 +17713,10 @@ function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReaso
     tr.dataset.delayReason=delayReason;
   }else{
     delete tr.dataset.delayReason;
+  }
+  if(stageCompletionExtras instanceof Map){
+    const prev=stageCompletionExtras.get(stageId)||{};
+    stageCompletionExtras.set(stageId,{ ...prev, doneAt:doneAtIso, delayReason:completedLate?delayReason:'', completedLate });
   }
   updateStageSourceExtras(tr,{ done:true, progress:100, doneAt:doneAtIso, delayReason:completedLate?delayReason:'', completedLate });
   crmDialogLocalChanges=true;
@@ -17741,12 +17817,14 @@ async function resolveStageCompletion(tr){
 
 async function processStageCompletionChange(tr, isDone){
   if(!tr) return true;
+  const stageId=tr.dataset.stageId||generateStageId();
+  tr.dataset.stageId=stageId;
   if(!isDone){
     tr.dataset.doneAt='';
     tr.dataset.completedLate='false';
     delete tr.dataset.delayReason;
-    if(stageCompletionExtras instanceof Map && tr.dataset.stageId){
-      stageCompletionExtras.delete(tr.dataset.stageId);
+    if(stageCompletionExtras instanceof Map && stageId){
+      stageCompletionExtras.delete(stageId);
     }
     updateStageSourceExtras(tr,{ done:false, doneAt:'', delayReason:'', completedLate:false });
     crmDialogLocalChanges=true;
@@ -21107,6 +21185,22 @@ if(crmStageRouteDialog){
   crmStageRouteDialog.addEventListener('cancel',evt=>{
     evt.preventDefault();
     closeCrmStageRouteMini();
+  });
+}
+
+if(crmOverdueOpen){
+  crmOverdueOpen.addEventListener('click',()=>openCrmOverdueDialog());
+}
+if(crmOverdueClose){
+  crmOverdueClose.addEventListener('click',()=>crmOverdueDlg?.close());
+}
+if(crmOverdueCloseFooter){
+  crmOverdueCloseFooter.addEventListener('click',()=>crmOverdueDlg?.close());
+}
+if(crmOverdueDlg){
+  crmOverdueDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    crmOverdueDlg.close();
   });
 }
 
