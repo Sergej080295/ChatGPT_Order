@@ -9778,6 +9778,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmUserMetaEl=$('#crmUserMeta'),
       crmUserLogoutBtn=$('#crmUserLogoutBtn');
 
+crmOverduePanelPinned=loadCrmOverduePreference();
+
 crmOrderHistoryDlg=$('#crmOrderHistoryDlg');
 crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
 crmOrderHistoryMeta=$('#crmOrderHistoryMeta');
@@ -15470,6 +15472,26 @@ function buildCrmLateAdvice(entry, schedule){
 }
 
 let crmOverdueEntriesCache=[];
+const CRM_OVERDUE_PREF_KEY='crm.overduePanelPinned';
+let crmOverduePanelPinned=true;
+
+function loadCrmOverduePreference(){
+  try{
+    const raw=localStorage.getItem(CRM_OVERDUE_PREF_KEY);
+    if(raw===null) return true;
+    return raw==='1';
+  }catch(_err){
+    return true;
+  }
+}
+
+function persistCrmOverduePreference(){
+  try{
+    localStorage.setItem(CRM_OVERDUE_PREF_KEY, crmOverduePanelPinned?'1':'0');
+  }catch(_err){
+    /* ignore */
+  }
+}
 
 function collectOverdueEntriesForStage(rows, schedule, stageKey){
   const overdueEntries=[];
@@ -15617,6 +15639,11 @@ function renderCrmOverduePanel(){
 function updateCrmOverdueEntries(entries){
   crmOverdueEntriesCache=Array.isArray(entries)?entries.filter(Boolean):[];
   syncOverdueButton(crmOverdueEntriesCache.length);
+  if(crmOverdueEntriesCache.length===0){
+    setCrmOverduePanelOpen(false);
+  } else if(crmOverduePanelPinned){
+    setCrmOverduePanelOpen(true);
+  }
   renderCrmOverduePanel();
 }
 
@@ -15625,6 +15652,11 @@ function setCrmOverduePanelOpen(open){
   const isOpen=!!open;
   crmOverduePanel.hidden=!isOpen;
   crmOverduePanel.classList.toggle('is-open', isOpen);
+  document.body.classList.toggle('crm-overdue-open', isOpen);
+  if(crmOverduePanelPinned!==isOpen){
+    crmOverduePanelPinned=isOpen;
+    persistCrmOverduePreference();
+  }
   if(crmOverdueBackdrop){
     crmOverdueBackdrop.hidden=!isOpen;
   }
@@ -17791,6 +17823,10 @@ function applyStageCompletionExtras(tr,{ doneAt, completedLate=false, delayReaso
   }else{
     delete tr.dataset.doneAt;
   }
+  const doneInput=tr.querySelector('[data-k="done"]');
+  if(doneInput && !doneInput.checked){
+    doneInput.checked=true;
+  }
   tr.dataset.completedLate=completedLate?'true':'false';
   if(completedLate && delayReason){
     tr.dataset.delayReason=delayReason;
@@ -18443,7 +18479,9 @@ function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(
     const id=orderForm.id.value||safeRandomUUID();
     const exist=b.orders.find(x=>x.id===id);
     const previousSnapshot=exist?deepClone(exist):null;
-    const stages=mergeStageCompletionExtrasForSave(readStages());
+    const stages=enforceStageCompletionIntegrity(
+      mergeStageCompletionExtrasForSave(readStages())
+    );
     const invalidStage=stages.find(stage=>{
       const startIso=coerceCalendarIso(stage?.start||'');
       const endIso=coerceCalendarIso(stage?.end||'');
