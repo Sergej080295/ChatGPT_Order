@@ -5204,14 +5204,21 @@ async function loadLatestSnapshot() {
   return { rev: 0, snapshot: empty, stateString, hash, meta: null };
 }
 
-async function getCachedSnapshot() {
-  if (cachedSnapshot) {
-    return cachedSnapshot;
-  }
+async function getCachedSnapshot({ forceReload = false } = {}) {
   const latest = await loadLatestSnapshot();
   if (latest) {
-    lastRevision = Math.max(lastRevision, latest.rev);
-    cachedSnapshot = latest;
+    const needsUpdate =
+      forceReload
+      || !cachedSnapshot
+      || Number(cachedSnapshot.rev || 0) !== Number(latest.rev || 0)
+      || (cachedSnapshot.hash || '') !== (latest.hash || '');
+    if (needsUpdate) {
+      cachedSnapshot = latest;
+    }
+    lastRevision = Math.max(lastRevision, latest.rev || 0);
+    return cachedSnapshot;
+  }
+  if (cachedSnapshot && !forceReload) {
     return cachedSnapshot;
   }
   const empty = buildEmptySnapshot();
