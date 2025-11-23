@@ -330,6 +330,27 @@
   };
 
   const reconnectDelay = 3000;
+  const deliverStatePayload = (payload, { silent } = {}) => {
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+    const shouldSilence = silent !== undefined ? silent : (payload.reason && payload.reason !== 'manual');
+    const directApplier = typeof window.applyPlannerPayloadWithGuards === 'function'
+      ? window.applyPlannerPayloadWithGuards
+      : null;
+    if (directApplier) {
+      payload.__appliedDirect = true;
+      try {
+        directApplier(payload, { forceApply: true, silent: shouldSilence });
+      } catch (err) {
+        payload.__appliedDirect = false;
+        console.warn('plannerRemote direct apply failed', err);
+      }
+    }
+    notify(payload);
+    return payload;
+  };
+
   const connect = () => {
     if (!('EventSource' in window)) return;
     if (source) {
@@ -557,7 +578,7 @@
           if (previousFingerprint.hash) payload.prevHash = previousFingerprint.hash;
           if (previousFingerprint.etag) payload.prevEtag = previousFingerprint.etag;
           if (Number.isFinite(previousRevision)) payload.prevRev = previousRevision;
-          notify(payload);
+          deliverStatePayload(payload, { silent: effectiveReason !== 'manual' });
           return payload;
         }
         return null;
@@ -20756,6 +20777,7 @@ function applyPendingSyncPayload(options={}){
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
+    if(payload && payload.__appliedDirect){ return; }
     if(!payload||!payload.state) return;
     if(hasPendingLocalChanges()){
       crmPendingSyncPayload=payload;
