@@ -5249,9 +5249,11 @@ function invalidateCache() {
 
 function broadcastRevision(event) {
   const payload = JSON.stringify({ type: 'revision', ...event });
+  const fallback = JSON.stringify({ type: 'state-refresh', reason: 'sse' });
   sseClients.forEach((client) => {
     try {
       client.write(`event: state-revision\ndata: ${payload}\n\n`);
+      client.write(`data: ${fallback}\n\n`);
     } catch (err) {
       console.warn('Failed to push SSE event', err);
     }

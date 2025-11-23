@@ -397,18 +397,24 @@
           const eventHash = typeof payload.hash === 'string' ? payload.hash.trim() : null;
           const eventEtag = typeof payload.etag === 'string' ? payload.etag : null;
           const payloadRev = Number.isFinite(Number(payload.rev)) ? Number(payload.rev) : null;
+          const allowAutoApply = !hasPendingLocalChanges() && (typeof isOrderDialogActive !== 'function' || !isOrderDialogActive());
+          const needsState = typeof payload.state !== 'string' || payload.state.trim() === '';
+          const hasNewerRevision = payloadRev !== null && (!Number.isFinite(lastAppliedRevision) || payloadRev > lastAppliedRevision);
+          const simpleRefresh = payload.type === 'state-refresh' || (!payloadRev && !eventHash && !eventEtag && needsState);
+
           if (eventHash || eventEtag) {
             updateFingerprint({ etag: eventEtag, hash: eventHash });
           }
-          const needsState = typeof payload.state !== 'string' || payload.state.trim() === '';
-          const hasNewerRevision = payloadRev !== null && (!Number.isFinite(lastAppliedRevision) || payloadRev > lastAppliedRevision);
-          const allowAutoApply = !hasPendingLocalChanges() && (typeof isOrderDialogActive !== 'function' || !isOrderDialogActive());
-          if (hasNewerRevision && !allowAutoApply) {
+
+          if (!allowAutoApply && hasNewerRevision) {
             notifyRemoteRevisionPending(payloadRev);
           }
-          const shouldRefresh = allowAutoApply && ((needsState && (!eventHash || eventHash !== prevHash)) || hasNewerRevision);
-          if (shouldRefresh) {
-            const result = await requestStateRefresh(payload.reason || 'sse', { ...payload, sinceRevision: lastAppliedRevision });
+
+          if (allowAutoApply && (simpleRefresh || hasNewerRevision || (needsState && (!eventHash || eventHash !== prevHash)))) {
+            const refreshPayload = simpleRefresh
+              ? undefined
+              : { ...payload, sinceRevision: lastAppliedRevision };
+            const result = await requestStateRefresh(simpleRefresh ? 'sse-test' : (payload.reason || 'sse'), refreshPayload);
             if (result) {
               return;
             }
@@ -458,7 +464,6 @@
       if (res.status === 304) {
         const revisionHeader = res.headers.get('X-Revision');
         const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
-        updateRevisionMarker(revision);
         if (options && (options.withMeta || options.returnMeta)) {
           return { state: null, etag: currentEtag, hash: currentHash, rev: revision, changed: false };
         }
@@ -477,7 +482,6 @@
       const revisionHeader = res.headers.get('X-Revision');
       const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
       updateFingerprint({ etag, hash: bodyInfo?.hash });
-      updateRevisionMarker(revision);
       if (options && (options.withMeta || options.returnMeta)) {
         return { state: text, etag: currentEtag, hash: currentHash, rev: revision, changed: true };
       }
