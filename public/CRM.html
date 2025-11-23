@@ -563,6 +563,7 @@
         return;
       }
       if (hasPendingLocalChanges()) {
+        requestStateRefresh('interval-pending');
         refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
@@ -9388,6 +9389,7 @@ let crmOrderHistoryCachedOrderId='';
 let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
+let crmPendingSyncPayload=null;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -20477,6 +20479,7 @@ async function pushCrmToServer(){
   }
 
   crmSyncInFlight=false;
+  applyPendingSyncPayload({ silent:true });
 }
 
 function captureCrmScrollSnapshot(){
@@ -20622,10 +20625,27 @@ function deferPlannerRemotePayload(payload){
   });
 }
 
+function applyPendingSyncPayload(options={}){
+  if(!crmPendingSyncPayload || hasPendingLocalChanges()) return;
+  const payload=crmPendingSyncPayload;
+  crmPendingSyncPayload=null;
+  if(isOrderDialogActive()){
+    deferPlannerRemotePayload(payload);
+    return;
+  }
+  const mergedOptions={ forceApply:true, ...options };
+  if(mergedOptions.silent==null) mergedOptions.silent=true;
+  applyPlannerRemotePayload(payload, mergedOptions);
+}
+
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
     if(!payload||!payload.state) return;
+    if(hasPendingLocalChanges()){
+      crmPendingSyncPayload=payload;
+      return;
+    }
     if(isOrderDialogActive()){
       deferPlannerRemotePayload(payload);
       return;
