@@ -6552,17 +6552,18 @@ async function applySnapshotToSql(client, snapshot) {
 
 app.get('/api/state', requireAuth('view'), async (req, res) => {
   try {
-    const snapshot = await getCachedSnapshot();
+    const snapshot = await getCachedSnapshot({ forceReload: true });
     const etag = computeEtag(snapshot.hash);
     if (etag) {
-      const headerHash = extractHashFromHeader(req.headers['if-none-match']);
-      if (headerHash && snapshot.hash && headerHash === snapshot.hash) {
-        res.status(304).end();
-        return;
-      }
       res.set('ETag', etag);
     }
-    res.set('Cache-Control', 'no-store');
+    if (Number.isFinite(snapshot.rev)) {
+      res.set('X-Revision', String(snapshot.rev));
+    }
+    if (snapshot.hash) {
+      res.set('X-Hash', snapshot.hash);
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.type('application/json').send(snapshot.stateString);
   } catch (err) {
     console.error('GET /api/state failed', err);
