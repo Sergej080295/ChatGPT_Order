@@ -381,7 +381,8 @@
     source.onopen = () => {
       clearConnectionLossRedirect();
     };
-    source.onmessage = async (event) => {
+
+    const handleSseMessage = async (event) => {
       if (!event?.data) {
         notify(null);
         return;
@@ -419,6 +420,11 @@
         notify(null);
       }
     };
+
+    source.onmessage = handleSseMessage;
+    if (typeof source.addEventListener === 'function') {
+      source.addEventListener('state-revision', handleSseMessage);
+    }
     source.onerror = () => {
       armConnectionLossRedirect('server-restart');
       if (source) {
