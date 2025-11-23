@@ -2909,6 +2909,21 @@ function parseIfMatchHeader(value) {
   return { any: false, hash: null };
 }
 
+function parseIfRevisionHeader(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const raw = Array.isArray(value) ? value.join(',') : String(value);
+  const tokens = raw.split(',').map((token) => token.trim()).filter(Boolean);
+  for (const token of tokens) {
+    const numeric = Number.parseInt(token, 10);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -5236,7 +5251,7 @@ function broadcastRevision(event) {
   const payload = JSON.stringify({ type: 'revision', ...event });
   sseClients.forEach((client) => {
     try {
-      client.write(`data: ${payload}\n\n`);
+      client.write(`event: state-revision\ndata: ${payload}\n\n`);
     } catch (err) {
       console.warn('Failed to push SSE event', err);
     }
@@ -5621,7 +5636,8 @@ async function persistSnapshotWithSql(options) {
     stateString = null,
     hash = null,
     meta = null,
-    channel = null
+    channel = null,
+    currentRev = null
   } = options || {};
 
   let parsedSnapshot = null;
@@ -5680,8 +5696,8 @@ async function persistSnapshotWithSql(options) {
     logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: hashBefore, provided: hash });
   }
 
-  await getLatestRevision();
-  const nextRev = lastRevision + 1;
+  const baseRev = Number.isFinite(Number(currentRev)) ? Number(currentRev) : await getLatestRevision();
+  const nextRev = baseRev + 1;
   const effectiveHash = hashBefore;
 
   const record = {
@@ -6552,6 +6568,9 @@ async function applySnapshotToSql(client, snapshot) {
 
 app.get('/api/state', requireAuth('view'), async (req, res) => {
   try {
+    const sinceRevisionRaw = req.query.sinceRevision;
+    const sinceRevision = Number.isFinite(Number(sinceRevisionRaw)) ? Number(sinceRevisionRaw) : null;
+
     const snapshot = await getCachedSnapshot({ forceReload: true });
     const etag = computeEtag(snapshot.hash);
     if (etag) {
@@ -6564,6 +6583,12 @@ app.get('/api/state', requireAuth('view'), async (req, res) => {
       res.set('X-Hash', snapshot.hash);
     }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+    if (sinceRevision !== null && Number.isFinite(snapshot.rev) && snapshot.rev <= sinceRevision) {
+      res.status(304).end();
+      return;
+    }
+
     res.type('application/json').send(snapshot.stateString);
   } catch (err) {
     console.error('GET /api/state failed', err);
@@ -6588,14 +6613,24 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
 
     const normalizedMeta = normalizeRequestMeta(requestMeta);
     const hash = computeSnapshotHash(stateString);
-    const current = await getCachedSnapshot();
+    const current = await getCachedSnapshot({ forceReload: true });
     const currentHash = current?.hash || null;
+    const currentRevision = Number.isFinite(Number(current?.rev)) ? Number(current.rev) : 0;
     const ifMatch = parseIfMatchHeader(req.headers['if-match']);
+    const ifRevisionHeader = parseIfRevisionHeader(
+      req.headers['if-match-revision']
+      || req.headers['x-if-revision']
+      || req.headers['if-revision']
+    );
     const baseHashFromMeta = normalizedMeta.concurrency.baseHash
       || normalizeWeakEtag(normalizedMeta.concurrency.baseEtag || null);
     const expectedHash = normalizedMeta.concurrency.forceOverwrite
       ? null
       : (baseHashFromMeta || (ifMatch.any ? null : ifMatch.hash));
+    const metaExpectedRevision = Number.isFinite(Number(normalizedMeta.concurrency?.baseRevision))
+      ? Number(normalizedMeta.concurrency.baseRevision)
+      : null;
+    const expectedRevision = metaExpectedRevision !== null ? metaExpectedRevision : ifRevisionHeader;
 
     await ensurePlannerSettingsSchema();
     const channel = classifyWriteChannel({
@@ -6610,6 +6645,21 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
     if (!isWriteChannelAllowed(writeMode, channel)) {
       logSaveEvent('warn', 'write rejected due to mode', { requestId, channel, writeMode });
       res.status(403).json({ error: 'Write mode restriction', channel, writeMode });
+      return;
+    }
+
+    if (expectedRevision !== null && expectedRevision !== currentRevision) {
+      const latestEtag = computeEtag(currentHash);
+      if (latestEtag) {
+        res.set('ETag', latestEtag);
+      }
+      res.set('Cache-Control', 'no-store');
+      res.status(409).json({
+        error: 'RevisionMismatch',
+        currentRev: currentRevision,
+        expectedRevision,
+        hash: currentHash || null
+      });
       return;
     }
 
@@ -6671,7 +6721,8 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       stateString,
       hash,
       meta: storedMeta,
-      channel
+      channel,
+      currentRev: currentRevision
     });
 
     const etag = computeEtag(latest.hash);
@@ -6729,7 +6780,7 @@ app.get('/api/events', requireAuth('view'), async (req, res) => {
       if (snapshot && snapshot.hash) {
         const etag = computeEtag(snapshot.hash);
         const payload = JSON.stringify({ type: 'revision', rev: snapshot.rev, hash: snapshot.hash, etag });
-        res.write(`data: ${payload}\n\n`);
+        res.write(`event: state-revision\ndata: ${payload}\n\n`);
       }
     } catch (err) {
       console.warn('Failed to send initial SSE payload', err);

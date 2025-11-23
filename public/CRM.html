@@ -21,6 +21,8 @@
   let lastRefreshAt = 0;
   let lastAppliedStateSnapshot = null;
   let lastAppliedRevision = 0;
+  let pendingRemoteRevision = null;
+  let remoteUpdateNotified = false;
   let autoSyncTimerId = null;
   let autoSyncInFlight = false;
   let autoSyncStartedAt = 0;
@@ -295,6 +297,25 @@
     }
   };
 
+  const updateRevisionMarker = (rev) => {
+    if (!Number.isFinite(rev)) return;
+    const numeric = Number(rev);
+    if (!Number.isFinite(lastAppliedRevision) || numeric > lastAppliedRevision) {
+      lastAppliedRevision = numeric;
+    }
+  };
+
+  const notifyRemoteRevisionPending = (rev) => {
+    pendingRemoteRevision = Number.isFinite(rev) ? Number(rev) : pendingRemoteRevision;
+    if (remoteUpdateNotified) return;
+    remoteUpdateNotified = true;
+    showToast({
+      title: 'CRM',
+      message: 'Появились новые данные. Нажмите «Обновить», чтобы применить изменения.',
+      tone: 'info'
+    });
+  };
+
   const extractBodyFingerprint = (text) => {
     if (!text || typeof text !== 'string') return null;
     const trimmed = text.trim();
@@ -374,13 +395,19 @@
           const prevHash = currentHash;
           const eventHash = typeof payload.hash === 'string' ? payload.hash.trim() : null;
           const eventEtag = typeof payload.etag === 'string' ? payload.etag : null;
+          const payloadRev = Number.isFinite(Number(payload.rev)) ? Number(payload.rev) : null;
           if (eventHash || eventEtag) {
             updateFingerprint({ etag: eventEtag, hash: eventHash });
           }
           const needsState = typeof payload.state !== 'string' || payload.state.trim() === '';
-          const shouldRefresh = needsState && (!eventHash || eventHash !== prevHash) && !hasPendingLocalChanges();
+          const hasNewerRevision = payloadRev !== null && (!Number.isFinite(lastAppliedRevision) || payloadRev > lastAppliedRevision);
+          const allowAutoApply = !hasPendingLocalChanges() && (typeof isOrderDialogActive !== 'function' || !isOrderDialogActive());
+          if (hasNewerRevision && !allowAutoApply) {
+            notifyRemoteRevisionPending(payloadRev);
+          }
+          const shouldRefresh = allowAutoApply && ((needsState && (!eventHash || eventHash !== prevHash)) || hasNewerRevision);
           if (shouldRefresh) {
-            const result = await requestStateRefresh(payload.reason || 'sse', payload);
+            const result = await requestStateRefresh(payload.reason || 'sse', { ...payload, sinceRevision: lastAppliedRevision });
             if (result) {
               return;
             }
@@ -404,7 +431,9 @@
 
   const loadState = async (options = {}) => {
     try {
-      const url = `${STATE_ENDPOINT}${STATE_ENDPOINT.includes('?') ? '&' : '?'}_=${Date.now()}`;
+      const sinceRevision = Number.isFinite(Number(options.sinceRevision)) ? Number(options.sinceRevision) : null;
+      const url = `${STATE_ENDPOINT}${STATE_ENDPOINT.includes('?') ? '&' : '?'}_=${Date.now()}`
+        + (sinceRevision !== null ? `&sinceRevision=${sinceRevision}` : '');
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
       const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1000, Math.floor(options.timeoutMs)) : REFRESH_TIMEOUT_MS;
       const timeoutId = controller ? setTimeout(() => controller.abort(new Error('STATE_FETCH_TIMEOUT')), timeoutMs) : null;
@@ -420,6 +449,15 @@
       });
       if (timeoutId) clearTimeout(timeoutId);
       clearConnectionLossRedirect();
+      if (res.status === 304) {
+        const revisionHeader = res.headers.get('X-Revision');
+        const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
+        updateRevisionMarker(revision);
+        if (options && (options.withMeta || options.returnMeta)) {
+          return { state: null, etag: currentEtag, hash: currentHash, rev: revision, changed: false };
+        }
+        return null;
+      }
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         if (res.status === 401) {
@@ -433,8 +471,9 @@
       const revisionHeader = res.headers.get('X-Revision');
       const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
       updateFingerprint({ etag, hash: bodyInfo?.hash });
+      updateRevisionMarker(revision);
       if (options && (options.withMeta || options.returnMeta)) {
-        return { state: text, etag: currentEtag, hash: currentHash, rev: revision };
+        return { state: text, etag: currentEtag, hash: currentHash, rev: revision, changed: true };
       }
       return text;
     } catch (err) {
@@ -477,6 +516,9 @@
         const providedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
         if (currentHash && !providedBaseHash) working.baseHash = currentHash;
         if (currentEtag && !providedBaseEtag) working.baseEtag = currentEtag;
+        if (Number.isFinite(lastAppliedRevision) && working.baseRevision == null) {
+          working.baseRevision = lastAppliedRevision;
+        }
         const normalizedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
         const normalizedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
         if (!ifMatchHeader) {
@@ -500,6 +542,9 @@
       const effectiveIfMatch = ifMatchHeader
         || (currentEtag ? currentEtag : currentHash ? `W/"${currentHash}"` : '*');
       headers['If-Match'] = effectiveIfMatch;
+      if (Number.isFinite(lastAppliedRevision)) {
+        headers['If-Match-Revision'] = String(lastAppliedRevision);
+      }
       const body = JSON.stringify({ state: stateString, meta: metaPayload });
       return { headers, body };
     };
@@ -560,11 +605,17 @@
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     const previousFingerprint = { hash: currentHash, etag: currentEtag };
     const previousRevision = lastAppliedRevision;
+    const sinceRevision = Number.isFinite(Number(basePayload?.sinceRevision))
+      ? Number(basePayload.sinceRevision)
+      : (Number.isFinite(previousRevision) ? previousRevision : null);
     refreshPromise = (async () => {
       try {
         refreshPromiseStartedAt = Date.now();
-        const meta = await loadState({ withMeta: true, timeoutMs: REFRESH_TIMEOUT_MS });
+        const meta = await loadState({ withMeta: true, timeoutMs: REFRESH_TIMEOUT_MS, sinceRevision });
         lastRefreshAt = Date.now();
+        if (meta && meta.changed === false) {
+          return null;
+        }
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
             ...(basePayload && typeof basePayload === 'object' ? basePayload : {})
@@ -607,6 +658,10 @@
     autoSyncTimerId = setTimeout(async () => {
       autoSyncTimerId = null;
       if (sessionExpired) return;
+      if (hasPendingLocalChanges()) {
+        scheduleAutoSyncLoop(autoRefreshIntervalMs);
+        return;
+      }
       if (autoSyncInFlight) {
         const stuckFor = autoSyncStartedAt ? Date.now() - autoSyncStartedAt : 0;
         if (stuckFor > Math.max(REFRESH_TIMEOUT_MS * 1.5, effectiveDelay * 2)) {
@@ -621,7 +676,7 @@
       autoSyncInFlight = true;
       autoSyncStartedAt = Date.now();
       try {
-        await requestStateRefresh('auto');
+        await requestStateRefresh('auto', { sinceRevision: lastAppliedRevision });
       } finally {
         autoSyncInFlight = false;
         autoSyncStartedAt = 0;
@@ -691,6 +746,9 @@
         updateFingerprint(payload);
       }
     },
+    applyRevision(rev) {
+      updateRevisionMarker(Number.isFinite(Number(rev)) ? Number(rev) : null);
+    },
     getFingerprint() {
       return { etag: currentEtag, hash: currentHash };
     },
@@ -751,6 +809,8 @@
     xhr.send(null);
     if (xhr.status >= 200 && xhr.status < 300) {
       const etag = xhr.getResponseHeader('ETag');
+      const revHeader = xhr.getResponseHeader('X-Revision');
+      const revValue = Number.isFinite(Number(revHeader)) ? Number(revHeader) : null;
       if (window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function') {
         window.plannerRemote.applyFingerprint({ etag });
       }
@@ -781,6 +841,12 @@
       }
       if (parsed && typeof parsed === 'object' && parsed.crm) {
         window.__CRM_INITIAL_STATE__ = parsed.crm;
+        if (revValue !== null) {
+          window.__CRM_INITIAL_REV__ = revValue;
+          if (window.plannerRemote && typeof window.plannerRemote.applyRevision === 'function') {
+            window.plannerRemote.applyRevision(revValue);
+          }
+        }
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.crm));
           LEGACY_KEYS.forEach(name=>{ if(name!==STORAGE_KEY){ try{localStorage.removeItem(name);}catch(_err){/* ignore */} }});
@@ -20712,6 +20778,8 @@ function resetCrmHardRefreshLoop(intervalMs){
 function applyPlannerRemotePayload(payload, options={}){
   if(!payload||!payload.state) return;
   try{
+    remoteUpdateNotified=false;
+    pendingRemoteRevision=null;
     const prevHash=payload?.prevHash||currentHash;
     const stateText=typeof payload?.state==='string'?payload.state:String(payload?.state||'');
     const payloadRev=Number.isFinite(Number(payload?.rev))?Number(payload.rev):null;
@@ -20744,7 +20812,11 @@ function applyPlannerRemotePayload(payload, options={}){
       lastAppliedStateSnapshot=stateText;
     }
     if(payloadRev!==null){
-      lastAppliedRevision=payloadRev;
+      updateRevisionMarker(payloadRev);
+      if(pendingRemoteRevision!==null && payloadRev>=pendingRemoteRevision){
+        pendingRemoteRevision=null;
+        remoteUpdateNotified=false;
+      }
     }
   }catch(err){ console.warn('CRM remote update parse failed',err); }
 }
