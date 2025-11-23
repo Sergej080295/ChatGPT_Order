@@ -20,6 +20,7 @@
   let refreshPromiseStartedAt = 0;
   let lastRefreshAt = 0;
   let lastAppliedStateSnapshot = null;
+  let lastAppliedRevision = 0;
   let autoSyncTimerId = null;
   let autoSyncInFlight = false;
   let autoSyncStartedAt = 0;
@@ -408,9 +409,11 @@
       const text = await res.text();
       const bodyInfo = extractBodyFingerprint(text);
       const etag = res.headers.get('ETag');
+      const revisionHeader = res.headers.get('X-Revision');
+      const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
       updateFingerprint({ etag, hash: bodyInfo?.hash });
       if (options && (options.withMeta || options.returnMeta)) {
-        return { state: text, etag: currentEtag, hash: currentHash };
+        return { state: text, etag: currentEtag, hash: currentHash, rev: revision };
       }
       return text;
     } catch (err) {
@@ -535,6 +538,7 @@
     }
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     const previousFingerprint = { hash: currentHash, etag: currentEtag };
+    const previousRevision = lastAppliedRevision;
     refreshPromise = (async () => {
       try {
         refreshPromiseStartedAt = Date.now();
@@ -549,8 +553,10 @@
           payload.state = meta.state;
           if (meta.etag) payload.etag = meta.etag;
           if (meta.hash) payload.hash = meta.hash;
+          if (Number.isFinite(meta.rev)) payload.rev = meta.rev;
           if (previousFingerprint.hash) payload.prevHash = previousFingerprint.hash;
           if (previousFingerprint.etag) payload.prevEtag = previousFingerprint.etag;
+          if (Number.isFinite(previousRevision)) payload.prevRev = previousRevision;
           notify(payload);
           return payload;
         }
@@ -20687,9 +20693,11 @@ function applyPlannerRemotePayload(payload, options={}){
   try{
     const prevHash=payload?.prevHash||currentHash;
     const stateText=typeof payload?.state==='string'?payload.state:String(payload?.state||'');
+    const payloadRev=Number.isFinite(Number(payload?.rev))?Number(payload.rev):null;
     const fingerprint=resolvePayloadFingerprint(payload);
     const snapshotMatches=!!stateText && lastAppliedStateSnapshot===stateText;
-    if(snapshotMatches && fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
+    const hasNewerRevision = payloadRev !== null && (!Number.isFinite(lastAppliedRevision) || payloadRev > lastAppliedRevision);
+    if(!hasNewerRevision && snapshotMatches && fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
       return;
     }
     if(fingerprint.hash||fingerprint.etag){
@@ -20700,11 +20708,11 @@ function applyPlannerRemotePayload(payload, options={}){
     currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
     applyCrmWriteAccess();
     setCrmDataSource(CRM_DATA_SOURCE.remote);
-    if(parsed&&parsed.crm){
-      applyRemoteCrm(parsed.crm);
-      const reason=payload?.reason||'';
-      const shouldToast=!options.silent && (!reason || reason==='sse');
-      if(shouldToast){
+      if(parsed&&parsed.crm){
+        applyRemoteCrm(parsed.crm);
+        const reason=payload?.reason||'';
+        const shouldToast=!options.silent && (!reason || reason==='sse');
+        if(shouldToast){
         const message=options.deferredApplied
           ? 'Получено обновление данных, применили после закрытия окна заказа.'
           : 'Данные обновлены из планировщика';
@@ -20713,6 +20721,9 @@ function applyPlannerRemotePayload(payload, options={}){
     }
     if(stateText){
       lastAppliedStateSnapshot=stateText;
+    }
+    if(payloadRev!==null){
+      lastAppliedRevision=payloadRev;
     }
   }catch(err){ console.warn('CRM remote update parse failed',err); }
 }
