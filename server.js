@@ -5247,13 +5247,11 @@ function invalidateCache() {
   cachedSnapshot = null;
 }
 
-function broadcastRevision(event) {
-  const payload = JSON.stringify({ type: 'revision', ...event });
-  const fallback = JSON.stringify({ type: 'state-refresh', reason: 'sse' });
+function broadcastPlanChanged(reason = 'update') {
+  const payload = JSON.stringify({ type: 'plan-changed', reason });
   sseClients.forEach((client) => {
     try {
-      client.write(`event: state-revision\ndata: ${payload}\n\n`);
-      client.write(`data: ${fallback}\n\n`);
+      client.write(`event: plan-changed\ndata: ${payload}\n\n`);
     } catch (err) {
       console.warn('Failed to push SSE event', err);
     }
@@ -6568,11 +6566,8 @@ async function applySnapshotToSql(client, snapshot) {
   return { tasks, done, trash, resolveOrderKey, orderIdMap };
 }
 
-app.get('/api/state', requireAuth('view'), async (req, res) => {
+app.get('/api/state', requireAuth('view'), async (_req, res) => {
   try {
-    const sinceRevisionRaw = req.query.sinceRevision;
-    const sinceRevision = Number.isFinite(Number(sinceRevisionRaw)) ? Number(sinceRevisionRaw) : null;
-
     const snapshot = await getCachedSnapshot({ forceReload: true });
     const etag = computeEtag(snapshot.hash);
     if (etag) {
@@ -6585,12 +6580,6 @@ app.get('/api/state', requireAuth('view'), async (req, res) => {
       res.set('X-Hash', snapshot.hash);
     }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
-
-    if (sinceRevision !== null && Number.isFinite(snapshot.rev) && snapshot.rev <= sinceRevision) {
-      res.status(304).end();
-      return;
-    }
-
     res.type('application/json').send(snapshot.stateString);
   } catch (err) {
     console.error('GET /api/state failed', err);
@@ -6735,7 +6724,7 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
 
     cachedSnapshot = latest;
 
-    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
+    broadcastPlanChanged('state-saved');
     const duration = Date.now() - startedAt;
     logSaveEvent('info', 'save completed', {
       requestId,
@@ -6775,21 +6764,6 @@ app.get('/api/events', requireAuth('view'), async (req, res) => {
   res.write('retry: 3000\n\n');
 
   sseClients.add(res);
-
-  const sendInitial = async () => {
-    try {
-      const snapshot = await getCachedSnapshot();
-      if (snapshot && snapshot.hash) {
-        const etag = computeEtag(snapshot.hash);
-        const payload = JSON.stringify({ type: 'revision', rev: snapshot.rev, hash: snapshot.hash, etag });
-        res.write(`event: state-revision\ndata: ${payload}\n\n`);
-      }
-    } catch (err) {
-      console.warn('Failed to send initial SSE payload', err);
-    }
-  };
-
-  sendInitial();
 
   req.on('close', () => {
     sseClients.delete(res);
