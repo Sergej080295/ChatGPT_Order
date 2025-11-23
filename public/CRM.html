@@ -20631,11 +20631,14 @@ function applyPlannerPayloadWithGuards(payload, options={}){
 async function forceCrmStatePull(reason='crm-hard-interval'){
   if(crmHardRefreshInFlight) return;
   crmHardRefreshInFlight=true;
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timeoutId=controller?setTimeout(()=>controller.abort(new Error('CRM_STATE_FETCH_TIMEOUT')),REFRESH_TIMEOUT_MS):null;
   try{
     const res=await fetch(`/api/state?_=${Date.now()}`,{
       headers:{ 'Accept':'application/json,text/plain','Cache-Control':'no-cache','Pragma':'no-cache' },
       cache:'no-store',
-      credentials:'same-origin'
+      credentials:'same-origin',
+      signal:controller?controller.signal:undefined
     });
     if(!res.ok){
       return;
@@ -20655,8 +20658,12 @@ async function forceCrmStatePull(reason='crm-hard-interval'){
       window.plannerRemote.applyFingerprint({ etag, hash });
     }
   }catch(err){
-    console.warn('crm hard refresh failed', err);
+    const aborted=err&&err.name==='AbortError';
+    if(!aborted){
+      console.warn('crm hard refresh failed', err);
+    }
   }finally{
+    if(timeoutId) clearTimeout(timeoutId);
     crmHardRefreshInFlight=false;
   }
 }
