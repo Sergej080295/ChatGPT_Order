@@ -18,6 +18,7 @@
   const DEFAULT_REFRESH_INTERVAL_MS = 5000;
   let refreshTimerId = null;
   let refreshPromise = null;
+  let refreshPromiseStartedAt = 0;
   let lastRefreshAt = 0;
   let lastAppliedStateSnapshot = null;
 
@@ -381,8 +382,14 @@
 
   const loadState = async (options = {}) => {
     try {
-      const res = await fetch(STATE_ENDPOINT, {
-        headers: { 'Accept': 'application/json,text/plain' },
+      const url = `${STATE_ENDPOINT}${STATE_ENDPOINT.includes('?') ? '&' : '?'}_=${Date.now()}`;
+      const res = await fetch(url, {
+        headers: {
+          'Accept': 'application/json,text/plain',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        },
+        cache: 'no-store',
         credentials: 'same-origin'
       });
       clearConnectionLossRedirect();
@@ -520,6 +527,7 @@
     const previousFingerprint = { hash: currentHash, etag: currentEtag };
     refreshPromise = (async () => {
       try {
+        refreshPromiseStartedAt = Date.now();
         const meta = await loadState({ withMeta: true });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
@@ -543,6 +551,7 @@
         return null;
       } finally {
         refreshPromise = null;
+        refreshPromiseStartedAt = 0;
       }
     })();
     return refreshPromise;
@@ -558,7 +567,13 @@
     }
     const tick = () => {
       refreshTimerId = null;
+      const now = Date.now();
+      if (refreshPromise && refreshPromiseStartedAt && now - refreshPromiseStartedAt > Math.max(autoRefreshIntervalMs * 2, 10000)) {
+        refreshPromise = null;
+        refreshPromiseStartedAt = 0;
+      }
       if (document.hidden) {
+        requestStateRefresh('interval-hidden');
         refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
@@ -567,7 +582,6 @@
         refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
-      const now = Date.now();
       if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
         requestStateRefresh('interval');
       }
