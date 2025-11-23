@@ -16,12 +16,12 @@
   let currentHash = null;
   const MIN_REFRESH_INTERVAL_MS = 1000;
   const DEFAULT_REFRESH_INTERVAL_MS = 5000;
-  let refreshTimerId = null;
-  let refreshIntervalId = null;
   let refreshPromise = null;
   let refreshPromiseStartedAt = 0;
   let lastRefreshAt = 0;
   let lastAppliedStateSnapshot = null;
+  let autoSyncTimerId = null;
+  let autoSyncInFlight = false;
 
   const MIN_KEEPALIVE_INTERVAL_MS = 15000;
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
@@ -117,14 +117,7 @@
     }
     clearConnectionLossRedirect(true);
     sessionExpired = true;
-    if (refreshTimerId) {
-      clearTimeout(refreshTimerId);
-      refreshTimerId = null;
-    }
-    if (refreshIntervalId) {
-      clearInterval(refreshIntervalId);
-      refreshIntervalId = null;
-    }
+    stopAutoSyncLoop();
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -562,49 +555,46 @@
     return refreshPromise;
   };
 
-  const scheduleAutoRefresh = () => {
-    if (refreshTimerId) {
-      clearTimeout(refreshTimerId);
-      refreshTimerId = null;
+  const stopAutoSyncLoop = () => {
+    if (autoSyncTimerId) {
+      clearTimeout(autoSyncTimerId);
+      autoSyncTimerId = null;
     }
-    if (refreshIntervalId) {
-      clearInterval(refreshIntervalId);
-      refreshIntervalId = null;
-    }
+  };
+
+  const scheduleAutoSyncLoop = (delayMs = autoRefreshIntervalMs) => {
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
+    const effectiveDelay = Math.max(MIN_REFRESH_INTERVAL_MS, Number.isFinite(delayMs) ? delayMs : autoRefreshIntervalMs);
+    autoSyncTimerId = setTimeout(async () => {
+      autoSyncTimerId = null;
+      if (sessionExpired) return;
+      if (autoSyncInFlight) {
+        scheduleAutoSyncLoop(autoRefreshIntervalMs);
+        return;
+      }
+      autoSyncInFlight = true;
+      try {
+        await requestStateRefresh('auto');
+      } finally {
+        autoSyncInFlight = false;
+        scheduleAutoSyncLoop(autoRefreshIntervalMs);
+      }
+    }, effectiveDelay);
+  };
+
+  const startAutoSyncLoop = () => {
+    stopAutoSyncLoop();
     if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
-    const tick = () => {
-      if (refreshTimerId) {
-        refreshTimerId = null;
-      }
-      const now = Date.now();
-      if (refreshPromise && refreshPromiseStartedAt && now - refreshPromiseStartedAt > Math.max(autoRefreshIntervalMs * 2, 10000)) {
-        refreshPromise = null;
-        refreshPromiseStartedAt = 0;
-      }
-      if (document.hidden) {
-        requestStateRefresh('interval-hidden');
-        return;
-      }
-      if (hasPendingLocalChanges()) {
-        requestStateRefresh('interval-pending');
-        return;
-      }
-      if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
-        requestStateRefresh('interval');
-      }
-    };
-    refreshTimerId = setTimeout(tick, Math.min(autoRefreshIntervalMs, 500));
-    refreshIntervalId = setInterval(tick, autoRefreshIntervalMs);
+    scheduleAutoSyncLoop(0);
   };
 
   const handleFocusRefresh = () => {
-    if (document.hidden) return;
-    if (hasPendingLocalChanges()) return;
+    if (sessionExpired) return;
     const now = Date.now();
     if (refreshPromise) return;
-    if (lastRefreshAt && now - lastRefreshAt < 5000) return;
+    if (lastRefreshAt && now - lastRefreshAt < 2000) return;
     requestStateRefresh('focus');
   };
 
@@ -630,7 +620,7 @@
   }
   document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
 
-  scheduleAutoRefresh();
+  startAutoSyncLoop();
   scheduleKeepAlive();
   requestSessionProbe('startup');
 
@@ -665,7 +655,7 @@
         return autoRefreshIntervalMs;
       }
       autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-      scheduleAutoRefresh();
+      startAutoSyncLoop();
       return autoRefreshIntervalMs;
     },
     getAutoRefreshInterval() {
