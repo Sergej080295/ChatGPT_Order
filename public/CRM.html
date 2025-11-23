@@ -7493,6 +7493,7 @@ function updatePlannerAutoRefreshFromPreferences(){
       delete document.documentElement.dataset.crmAutoRefresh;
     }
   }
+  resetCrmHardRefreshLoop(effective);
 }
 function cloneForTrash(value){
   try{return JSON.parse(JSON.stringify(value));}
@@ -19556,6 +19557,8 @@ let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
+let crmHardRefreshTimerId=null;
+let crmHardRefreshInFlight=false;
 
 function resolveCrmUserDisplay(){
   if(typeof crmCurrentUser?.displayName==='string'){
@@ -20590,6 +20593,66 @@ function applyRemoteCrm(crm){
   persistLocal();
   renderAll();
   restoreCrmScrollSnapshot(uiSnapshot);
+}
+
+function applyPlannerPayloadWithGuards(payload, options={}){
+  if(!payload||!payload.state) return;
+  if(hasPendingLocalChanges()){
+    crmPendingSyncPayload=payload;
+    return;
+  }
+  if(isOrderDialogActive()){
+    deferPlannerRemotePayload(payload);
+    return;
+  }
+  applyPlannerRemotePayload(payload, options);
+}
+
+async function forceCrmStatePull(reason='crm-hard-interval'){
+  if(crmHardRefreshInFlight) return;
+  crmHardRefreshInFlight=true;
+  try{
+    const res=await fetch(`/api/state?_=${Date.now()}`,{
+      headers:{ 'Accept':'application/json,text/plain','Cache-Control':'no-cache','Pragma':'no-cache' },
+      cache:'no-store',
+      credentials:'same-origin'
+    });
+    if(!res.ok){
+      return;
+    }
+    const text=await res.text();
+    if(!text){
+      return;
+    }
+    let parsed=null;
+    let hash=null;
+    try{ parsed=JSON.parse(text); } catch(_err){ parsed=null; }
+    if(parsed&&typeof parsed.hash==='string'){ hash=parsed.hash; }
+    const etag=res.headers.get('ETag');
+    const payload={ state:text, hash, etag, reason };
+    applyPlannerPayloadWithGuards(payload,{ forceApply:true, silent:true });
+    if(window.plannerRemote&&typeof window.plannerRemote.applyFingerprint==='function'){
+      window.plannerRemote.applyFingerprint({ etag, hash });
+    }
+  }catch(err){
+    console.warn('crm hard refresh failed', err);
+  }finally{
+    crmHardRefreshInFlight=false;
+  }
+}
+
+function resetCrmHardRefreshLoop(intervalMs){
+  if(crmHardRefreshTimerId){
+    clearInterval(crmHardRefreshTimerId);
+    crmHardRefreshTimerId=null;
+  }
+  const normalized=Number(intervalMs);
+  if(!Number.isFinite(normalized) || normalized<=0){
+    return;
+  }
+  const effective=Math.max(normalized, CRM_MIN_AUTO_REFRESH_SECONDS*1000);
+  crmHardRefreshTimerId=setInterval(()=>forceCrmStatePull('crm-hard-interval'), effective);
+  forceCrmStatePull('crm-hard-start');
 }
 
 function applyPlannerRemotePayload(payload, options={}){
