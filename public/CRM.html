@@ -22,8 +22,10 @@
   let lastAppliedStateSnapshot = null;
   let autoSyncTimerId = null;
   let autoSyncInFlight = false;
+  let autoSyncStartedAt = 0;
 
   const MIN_KEEPALIVE_INTERVAL_MS = 15000;
+  const REFRESH_TIMEOUT_MS = 20000;
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
@@ -381,6 +383,9 @@
   const loadState = async (options = {}) => {
     try {
       const url = `${STATE_ENDPOINT}${STATE_ENDPOINT.includes('?') ? '&' : '?'}_=${Date.now()}`;
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1000, Math.floor(options.timeoutMs)) : REFRESH_TIMEOUT_MS;
+      const timeoutId = controller ? setTimeout(() => controller.abort(new Error('STATE_FETCH_TIMEOUT')), timeoutMs) : null;
       const res = await fetch(url, {
         headers: {
           'Accept': 'application/json,text/plain',
@@ -388,8 +393,10 @@
           'Pragma': 'no-cache'
         },
         cache: 'no-store',
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: controller ? controller.signal : undefined
       });
+      if (timeoutId) clearTimeout(timeoutId);
       clearConnectionLossRedirect();
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
@@ -407,6 +414,11 @@
       }
       return text;
     } catch (err) {
+      const aborted = err && (err.name === 'AbortError' || err.message === 'STATE_FETCH_TIMEOUT');
+      if (aborted) {
+        console.warn('plannerRemote state load aborted/timeout');
+        return null;
+      }
       armConnectionLossRedirect('server-restart');
       throw err;
     }
@@ -526,7 +538,7 @@
     refreshPromise = (async () => {
       try {
         refreshPromiseStartedAt = Date.now();
-        const meta = await loadState({ withMeta: true });
+        const meta = await loadState({ withMeta: true, timeoutMs: REFRESH_TIMEOUT_MS });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
@@ -569,14 +581,23 @@
       autoSyncTimerId = null;
       if (sessionExpired) return;
       if (autoSyncInFlight) {
-        scheduleAutoSyncLoop(autoRefreshIntervalMs);
-        return;
+        const stuckFor = autoSyncStartedAt ? Date.now() - autoSyncStartedAt : 0;
+        if (stuckFor > Math.max(REFRESH_TIMEOUT_MS * 1.5, effectiveDelay * 2)) {
+          autoSyncInFlight = false;
+          refreshPromise = null;
+          refreshPromiseStartedAt = 0;
+        } else {
+          scheduleAutoSyncLoop(autoRefreshIntervalMs);
+          return;
+        }
       }
       autoSyncInFlight = true;
+      autoSyncStartedAt = Date.now();
       try {
         await requestStateRefresh('auto');
       } finally {
         autoSyncInFlight = false;
+        autoSyncStartedAt = 0;
         scheduleAutoSyncLoop(autoRefreshIntervalMs);
       }
     }, effectiveDelay);
