@@ -228,21 +228,7 @@
     return null;
   }
 
-  const resolveAutoRefreshInterval = () => {
-    const candidates = [
-      window.CRM_AUTO_REFRESH_MS,
-      window.PLANNER_AUTO_REFRESH_MS,
-      window.__CRM_AUTO_REFRESH_MS__,
-      document.documentElement?.dataset?.crmAutoRefresh
-    ];
-    for (const candidate of candidates) {
-      const parsed = parseIntervalInput(candidate);
-      if (parsed == null) continue;
-      if (parsed <= 0) return 0;
-      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-    }
-    return DEFAULT_REFRESH_INTERVAL_MS;
-  };
+  const resolveAutoRefreshInterval = () => DEFAULT_REFRESH_INTERVAL_MS;
 
   let autoRefreshIntervalMs = resolveAutoRefreshInterval();
 
@@ -716,10 +702,11 @@
     },
     setAutoRefreshInterval(value) {
       const parsed = parseIntervalInput(value);
-      if (parsed == null) {
-        return autoRefreshIntervalMs;
+      if (parsed == null || parsed <= 0) {
+        autoRefreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS;
+      } else {
+        autoRefreshIntervalMs = Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
       }
-      autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
       startAutoSyncLoop();
       return autoRefreshIntervalMs;
     },
@@ -7356,21 +7343,6 @@ function sanitizeCrmPreferences(raw){
     result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
-    const intervalKeys=[
-      'autoRefreshSeconds',
-      'autoRefreshIntervalSeconds',
-      'autoRefreshInterval',
-      'refreshIntervalSeconds',
-      'autoRefresh',
-      'refreshInterval'
-    ];
-    for(const key of intervalKeys){
-      if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
-      const normalized=normalizeAutoRefreshSeconds(raw[key]);
-      if(normalized===null) continue;
-      result.autoRefreshSeconds=normalized;
-      break;
-    }
     const horizonKeys=['routeHorizonDays','horizonDays','ganttHorizonDays','routeDaysAhead'];
     for(const key of horizonKeys){
       if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
@@ -7526,12 +7498,7 @@ function getCrmStageLinkGapDays(){
 }
 
 function getPreferredAutoRefreshIntervalMs(){
-  const prefs=getCrmPreferences();
-  const seconds=Number(prefs?.autoRefreshSeconds);
-  if(Number.isFinite(seconds) && seconds>0){
-    return Math.round(seconds*1000);
-  }
-  return 0;
+  return DEFAULT_REFRESH_INTERVAL_MS;
 }
 
 function getCrmRouteHorizonDays(){
@@ -7544,26 +7511,13 @@ function getCrmRouteHorizonDays(){
 let crmAppliedAutoRefreshMs=null;
 
 function updatePlannerAutoRefreshFromPreferences(){
-  const targetMs=getPreferredAutoRefreshIntervalMs();
-  let effective=targetMs;
-  const remote=window.plannerRemote;
-  if(remote && typeof remote.setAutoRefreshInterval==='function'){
-    if(!(crmAppliedAutoRefreshMs!==null && crmAppliedAutoRefreshMs===targetMs)){
-      const applied=remote.setAutoRefreshInterval(targetMs);
-      if(Number.isFinite(applied)){
-        effective=applied;
-      }
-    }else{
-      effective=crmAppliedAutoRefreshMs;
-    }
+  const effective=getPreferredAutoRefreshIntervalMs();
+  if(window.plannerRemote && typeof window.plannerRemote.setAutoRefreshInterval==='function'){
+    window.plannerRemote.setAutoRefreshInterval(effective);
   }
   crmAppliedAutoRefreshMs=effective;
   if(document && document.documentElement){
-    if(effective>0){
-      document.documentElement.dataset.crmAutoRefresh=String(effective);
-    }else{
-      delete document.documentElement.dataset.crmAutoRefresh;
-    }
+    document.documentElement.dataset.crmAutoRefresh=String(effective);
   }
   resetCrmHardRefreshLoop(effective);
 }
@@ -18498,30 +18452,6 @@ function renderCrmPreferencesSettingsUI(){
   const tipsText=document.createElement('span');
   tipsText.textContent='Показывать советы по просроченным заказам';
   tipsOption.append(tipsCheckbox, tipsText);
-  const refreshField=document.createElement('label');
-  refreshField.className='crm-field';
-  const refreshLabel=document.createElement('span');
-  refreshLabel.className='crm-field__label';
-  refreshLabel.textContent='Интервал автообновления, сек';
-  const refreshInput=document.createElement('input');
-  refreshInput.type='number';
-  refreshInput.className='pc-input';
-  refreshInput.name='prefAutoRefreshSeconds';
-  refreshInput.min='0';
-  refreshInput.step='1';
-  refreshInput.inputMode='numeric';
-  refreshInput.placeholder=String(CRM_DEFAULT_AUTO_REFRESH_SECONDS);
-  if(Number.isFinite(prefs.autoRefreshSeconds)){
-    if(prefs.autoRefreshSeconds>0){
-      refreshInput.value=String(Math.round(prefs.autoRefreshSeconds));
-    }else if(prefs.autoRefreshSeconds===0){
-      refreshInput.value='0';
-    }
-  }
-  const refreshHint=document.createElement('span');
-  refreshHint.className='crm-field__hint';
-  refreshHint.textContent=`Минимум ${CRM_MIN_AUTO_REFRESH_SECONDS} с. Укажите 0, чтобы отключить автообновление.`;
-  refreshField.append(refreshLabel, refreshInput, refreshHint);
   const horizonField=document.createElement('label');
   horizonField.className='crm-field';
   const horizonLabel=document.createElement('span');
@@ -18670,7 +18600,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, horizonField, linkOption, linkGapField, laneSumField, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -19186,7 +19116,6 @@ boardForm.addEventListener('submit',e=>{
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
-    autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
     linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
     linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
