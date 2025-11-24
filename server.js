@@ -2909,6 +2909,21 @@ function parseIfMatchHeader(value) {
   return { any: false, hash: null };
 }
 
+function parseIfRevisionHeader(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const raw = Array.isArray(value) ? value.join(',') : String(value);
+  const tokens = raw.split(',').map((token) => token.trim()).filter(Boolean);
+  for (const token of tokens) {
+    const numeric = Number.parseInt(token, 10);
+    if (Number.isFinite(numeric) && numeric >= 0) {
+      return numeric;
+    }
+  }
+  return null;
+}
+
 function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -5204,14 +5219,21 @@ async function loadLatestSnapshot() {
   return { rev: 0, snapshot: empty, stateString, hash, meta: null };
 }
 
-async function getCachedSnapshot() {
-  if (cachedSnapshot) {
-    return cachedSnapshot;
-  }
+async function getCachedSnapshot({ forceReload = false } = {}) {
   const latest = await loadLatestSnapshot();
   if (latest) {
-    lastRevision = Math.max(lastRevision, latest.rev);
-    cachedSnapshot = latest;
+    const needsUpdate =
+      forceReload
+      || !cachedSnapshot
+      || Number(cachedSnapshot.rev || 0) !== Number(latest.rev || 0)
+      || (cachedSnapshot.hash || '') !== (latest.hash || '');
+    if (needsUpdate) {
+      cachedSnapshot = latest;
+    }
+    lastRevision = Math.max(lastRevision, latest.rev || 0);
+    return cachedSnapshot;
+  }
+  if (cachedSnapshot && !forceReload) {
     return cachedSnapshot;
   }
   const empty = buildEmptySnapshot();
@@ -5225,11 +5247,11 @@ function invalidateCache() {
   cachedSnapshot = null;
 }
 
-function broadcastRevision(event) {
-  const payload = JSON.stringify({ type: 'revision', ...event });
+function broadcastPlanChanged(reason = 'update') {
+  const payload = JSON.stringify({ type: 'plan-changed', reason });
   sseClients.forEach((client) => {
     try {
-      client.write(`data: ${payload}\n\n`);
+      client.write(`event: plan-changed\ndata: ${payload}\n\n`);
     } catch (err) {
       console.warn('Failed to push SSE event', err);
     }
@@ -5614,7 +5636,8 @@ async function persistSnapshotWithSql(options) {
     stateString = null,
     hash = null,
     meta = null,
-    channel = null
+    channel = null,
+    currentRev = null
   } = options || {};
 
   let parsedSnapshot = null;
@@ -5673,8 +5696,8 @@ async function persistSnapshotWithSql(options) {
     logSaveEvent('warn', 'provided hash does not match normalized snapshot', { expected: hashBefore, provided: hash });
   }
 
-  await getLatestRevision();
-  const nextRev = lastRevision + 1;
+  const baseRev = Number.isFinite(Number(currentRev)) ? Number(currentRev) : await getLatestRevision();
+  const nextRev = baseRev + 1;
   const effectiveHash = hashBefore;
 
   const record = {
@@ -6543,19 +6566,20 @@ async function applySnapshotToSql(client, snapshot) {
   return { tasks, done, trash, resolveOrderKey, orderIdMap };
 }
 
-app.get('/api/state', requireAuth('view'), async (req, res) => {
+app.get('/api/state', requireAuth('view'), async (_req, res) => {
   try {
-    const snapshot = await getCachedSnapshot();
+    const snapshot = await getCachedSnapshot({ forceReload: true });
     const etag = computeEtag(snapshot.hash);
     if (etag) {
-      const headerHash = extractHashFromHeader(req.headers['if-none-match']);
-      if (headerHash && snapshot.hash && headerHash === snapshot.hash) {
-        res.status(304).end();
-        return;
-      }
       res.set('ETag', etag);
     }
-    res.set('Cache-Control', 'no-store');
+    if (Number.isFinite(snapshot.rev)) {
+      res.set('X-Revision', String(snapshot.rev));
+    }
+    if (snapshot.hash) {
+      res.set('X-Hash', snapshot.hash);
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.type('application/json').send(snapshot.stateString);
   } catch (err) {
     console.error('GET /api/state failed', err);
@@ -6580,14 +6604,24 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
 
     const normalizedMeta = normalizeRequestMeta(requestMeta);
     const hash = computeSnapshotHash(stateString);
-    const current = await getCachedSnapshot();
+    const current = await getCachedSnapshot({ forceReload: true });
     const currentHash = current?.hash || null;
+    const currentRevision = Number.isFinite(Number(current?.rev)) ? Number(current.rev) : 0;
     const ifMatch = parseIfMatchHeader(req.headers['if-match']);
+    const ifRevisionHeader = parseIfRevisionHeader(
+      req.headers['if-match-revision']
+      || req.headers['x-if-revision']
+      || req.headers['if-revision']
+    );
     const baseHashFromMeta = normalizedMeta.concurrency.baseHash
       || normalizeWeakEtag(normalizedMeta.concurrency.baseEtag || null);
     const expectedHash = normalizedMeta.concurrency.forceOverwrite
       ? null
       : (baseHashFromMeta || (ifMatch.any ? null : ifMatch.hash));
+    const metaExpectedRevision = Number.isFinite(Number(normalizedMeta.concurrency?.baseRevision))
+      ? Number(normalizedMeta.concurrency.baseRevision)
+      : null;
+    const expectedRevision = metaExpectedRevision !== null ? metaExpectedRevision : ifRevisionHeader;
 
     await ensurePlannerSettingsSchema();
     const channel = classifyWriteChannel({
@@ -6602,6 +6636,21 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
     if (!isWriteChannelAllowed(writeMode, channel)) {
       logSaveEvent('warn', 'write rejected due to mode', { requestId, channel, writeMode });
       res.status(403).json({ error: 'Write mode restriction', channel, writeMode });
+      return;
+    }
+
+    if (expectedRevision !== null && expectedRevision !== currentRevision) {
+      const latestEtag = computeEtag(currentHash);
+      if (latestEtag) {
+        res.set('ETag', latestEtag);
+      }
+      res.set('Cache-Control', 'no-store');
+      res.status(409).json({
+        error: 'RevisionMismatch',
+        currentRev: currentRevision,
+        expectedRevision,
+        hash: currentHash || null
+      });
       return;
     }
 
@@ -6663,7 +6712,8 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       stateString,
       hash,
       meta: storedMeta,
-      channel
+      channel,
+      currentRev: currentRevision
     });
 
     const etag = computeEtag(latest.hash);
@@ -6674,7 +6724,7 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
 
     cachedSnapshot = latest;
 
-    broadcastRevision({ rev: latest.rev, hash: latest.hash, etag });
+    broadcastPlanChanged('state-saved');
     const duration = Date.now() - startedAt;
     logSaveEvent('info', 'save completed', {
       requestId,
@@ -6714,21 +6764,6 @@ app.get('/api/events', requireAuth('view'), async (req, res) => {
   res.write('retry: 3000\n\n');
 
   sseClients.add(res);
-
-  const sendInitial = async () => {
-    try {
-      const snapshot = await getCachedSnapshot();
-      if (snapshot && snapshot.hash) {
-        const etag = computeEtag(snapshot.hash);
-        const payload = JSON.stringify({ type: 'revision', rev: snapshot.rev, hash: snapshot.hash, etag });
-        res.write(`data: ${payload}\n\n`);
-      }
-    } catch (err) {
-      console.warn('Failed to send initial SSE payload', err);
-    }
-  };
-
-  sendInitial();
 
   req.on('close', () => {
     sseClients.delete(res);

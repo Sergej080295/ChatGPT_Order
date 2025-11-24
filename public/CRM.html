@@ -7,6 +7,10 @@
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <script>
+const MIN_REFRESH_INTERVAL_MS = 1000;
+const DEFAULT_REFRESH_INTERVAL_MS = 5000;
+const FALLBACK_POLL_INTERVAL_MS = 30000;
+
 (() => {
   const STATE_ENDPOINT = '/api/state';
   const EVENTS_ENDPOINT = '/api/events';
@@ -14,13 +18,20 @@
   let source = null;
   let currentEtag = null;
   let currentHash = null;
-  const MIN_REFRESH_INTERVAL_MS = 1000;
-  const DEFAULT_REFRESH_INTERVAL_MS = 5000;
-  let refreshTimerId = null;
   let refreshPromise = null;
+  let refreshPromiseStartedAt = 0;
   let lastRefreshAt = 0;
+  let lastAppliedStateSnapshot = null;
+  let lastAppliedRevision = 0;
+  let pendingRemoteRevision = null;
+  let remoteUpdateNotified = false;
+  let autoSyncTimerId = null;
+  let autoSyncInFlight = false;
+  let autoSyncStartedAt = 0;
+  let fallbackPollTimerId = null;
 
   const MIN_KEEPALIVE_INTERVAL_MS = 15000;
+  const REFRESH_TIMEOUT_MS = 20000;
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
@@ -114,10 +125,7 @@
     }
     clearConnectionLossRedirect(true);
     sessionExpired = true;
-    if (refreshTimerId) {
-      clearInterval(refreshTimerId);
-      refreshTimerId = null;
-    }
+    stopAutoSyncLoop();
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -221,21 +229,7 @@
     return null;
   }
 
-  const resolveAutoRefreshInterval = () => {
-    const candidates = [
-      window.CRM_AUTO_REFRESH_MS,
-      window.PLANNER_AUTO_REFRESH_MS,
-      window.__CRM_AUTO_REFRESH_MS__,
-      document.documentElement?.dataset?.crmAutoRefresh
-    ];
-    for (const candidate of candidates) {
-      const parsed = parseIntervalInput(candidate);
-      if (parsed == null) continue;
-      if (parsed <= 0) return 0;
-      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-    }
-    return DEFAULT_REFRESH_INTERVAL_MS;
-  };
+  const resolveAutoRefreshInterval = () => DEFAULT_REFRESH_INTERVAL_MS;
 
   let autoRefreshIntervalMs = resolveAutoRefreshInterval();
 
@@ -262,6 +256,15 @@
     return stripped || null;
   };
 
+  const resolvePayloadFingerprint = (payload) => {
+    if (!payload || typeof payload !== 'object') return { hash: null, etag: null };
+    const etag = typeof payload.etag === 'string' ? payload.etag : null;
+    const hash = parseEtagHash(etag)
+      || (payload.hash != null ? String(payload.hash).trim() : null)
+      || null;
+    return { hash: hash || null, etag };
+  };
+
   const updateFingerprint = ({ etag, hash }) => {
     let applied = false;
     if (etag && typeof etag === 'string') {
@@ -281,6 +284,25 @@
         }
       }
     }
+  };
+
+  const updateRevisionMarker = (rev) => {
+    if (!Number.isFinite(rev)) return;
+    const numeric = Number(rev);
+    if (!Number.isFinite(lastAppliedRevision) || numeric > lastAppliedRevision) {
+      lastAppliedRevision = numeric;
+    }
+  };
+
+  const notifyRemoteRevisionPending = (rev) => {
+    pendingRemoteRevision = Number.isFinite(rev) ? Number(rev) : pendingRemoteRevision;
+    if (remoteUpdateNotified) return;
+    remoteUpdateNotified = true;
+    showToast({
+      title: 'CRM',
+      message: 'Появились новые данные. Нажмите «Обновить», чтобы применить изменения.',
+      tone: 'info'
+    });
   };
 
   const extractBodyFingerprint = (text) => {
@@ -318,6 +340,27 @@
   };
 
   const reconnectDelay = 3000;
+  const deliverStatePayload = (payload, { silent } = {}) => {
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+    const shouldSilence = silent !== undefined ? silent : (payload.reason && payload.reason !== 'manual');
+    const directApplier = typeof window.applyPlannerPayloadWithGuards === 'function'
+      ? window.applyPlannerPayloadWithGuards
+      : null;
+    if (directApplier) {
+      payload.__appliedDirect = true;
+      try {
+        directApplier(payload, { forceApply: true, silent: shouldSilence });
+      } catch (err) {
+        payload.__appliedDirect = false;
+        console.warn('plannerRemote direct apply failed', err);
+      }
+    }
+    notify(payload);
+    return payload;
+  };
+
   const connect = () => {
     if (!('EventSource' in window)) return;
     if (source) {
@@ -327,38 +370,15 @@
     source.onopen = () => {
       clearConnectionLossRedirect();
     };
-    source.onmessage = async (event) => {
-      if (!event?.data) {
-        notify(null);
-        return;
-      }
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload && typeof payload === 'object') {
-          if (!payload.reason) {
-            payload.reason = 'sse';
-          }
-          const prevHash = currentHash;
-          const eventHash = typeof payload.hash === 'string' ? payload.hash.trim() : null;
-          const eventEtag = typeof payload.etag === 'string' ? payload.etag : null;
-          if (eventHash || eventEtag) {
-            updateFingerprint({ etag: eventEtag, hash: eventHash });
-          }
-          const needsState = typeof payload.state !== 'string' || payload.state.trim() === '';
-          const shouldRefresh = needsState && (!eventHash || eventHash !== prevHash) && !hasPendingLocalChanges();
-          if (shouldRefresh) {
-            const result = await requestStateRefresh(payload.reason || 'sse', payload);
-            if (result) {
-              return;
-            }
-          }
-        }
-        notify(payload);
-      } catch (err) {
-        console.warn('plannerRemote event parse failed', err);
-        notify(null);
-      }
+
+    const triggerRefresh = () => {
+      requestStateRefresh('sse');
     };
+
+    source.onmessage = triggerRefresh;
+    if (typeof source.addEventListener === 'function') {
+      source.addEventListener('plan-changed', triggerRefresh);
+    }
     source.onerror = () => {
       armConnectionLossRedirect('server-restart');
       if (source) {
@@ -371,10 +391,21 @@
 
   const loadState = async (options = {}) => {
     try {
-      const res = await fetch(STATE_ENDPOINT, {
-        headers: { 'Accept': 'application/json,text/plain' },
-        credentials: 'same-origin'
+      const url = `${STATE_ENDPOINT}${STATE_ENDPOINT.includes('?') ? '&' : '?'}_=${Date.now()}`;
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(1000, Math.floor(options.timeoutMs)) : REFRESH_TIMEOUT_MS;
+      const timeoutId = controller ? setTimeout(() => controller.abort(new Error('STATE_FETCH_TIMEOUT')), timeoutMs) : null;
+      const res = await fetch(url, {
+        headers: {
+          'Accept': 'application/json,text/plain',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        },
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller ? controller.signal : undefined
       });
+      if (timeoutId) clearTimeout(timeoutId);
       clearConnectionLossRedirect();
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
@@ -386,12 +417,20 @@
       const text = await res.text();
       const bodyInfo = extractBodyFingerprint(text);
       const etag = res.headers.get('ETag');
+      const revisionHeader = res.headers.get('X-Revision');
+      const revision = Number.isFinite(Number(revisionHeader)) ? Number(revisionHeader) : null;
       updateFingerprint({ etag, hash: bodyInfo?.hash });
+      updateRevisionMarker(revision);
       if (options && (options.withMeta || options.returnMeta)) {
-        return { state: text, etag: currentEtag, hash: currentHash };
+        return { state: text, etag: currentEtag, hash: currentHash, rev: revision, changed: true };
       }
       return text;
     } catch (err) {
+      const aborted = err && (err.name === 'AbortError' || err.message === 'STATE_FETCH_TIMEOUT');
+      if (aborted) {
+        console.warn('plannerRemote state load aborted/timeout');
+        return null;
+      }
       armConnectionLossRedirect('server-restart');
       throw err;
     }
@@ -426,6 +465,9 @@
         const providedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
         if (currentHash && !providedBaseHash) working.baseHash = currentHash;
         if (currentEtag && !providedBaseEtag) working.baseEtag = currentEtag;
+        if (Number.isFinite(lastAppliedRevision) && working.baseRevision == null) {
+          working.baseRevision = lastAppliedRevision;
+        }
         const normalizedBaseEtag = working.baseEtag == null ? '' : String(working.baseEtag).trim();
         const normalizedBaseHash = working.baseHash == null ? '' : String(working.baseHash).trim();
         if (!ifMatchHeader) {
@@ -449,6 +491,9 @@
       const effectiveIfMatch = ifMatchHeader
         || (currentEtag ? currentEtag : currentHash ? `W/"${currentHash}"` : '*');
       headers['If-Match'] = effectiveIfMatch;
+      if (Number.isFinite(lastAppliedRevision)) {
+        headers['If-Match-Revision'] = String(lastAppliedRevision);
+      }
       const body = JSON.stringify({ state: stateString, meta: metaPayload });
       return { headers, body };
     };
@@ -509,7 +554,8 @@
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     refreshPromise = (async () => {
       try {
-        const meta = await loadState({ withMeta: true });
+        refreshPromiseStartedAt = Date.now();
+        const meta = await loadState({ withMeta: true, timeoutMs: REFRESH_TIMEOUT_MS });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
@@ -520,7 +566,8 @@
           payload.state = meta.state;
           if (meta.etag) payload.etag = meta.etag;
           if (meta.hash) payload.hash = meta.hash;
-          notify(payload);
+          if (Number.isFinite(meta.rev)) payload.rev = meta.rev;
+          deliverStatePayload(payload, { silent: effectiveReason !== 'manual' });
           return payload;
         }
         return null;
@@ -530,44 +577,72 @@
         return null;
       } finally {
         refreshPromise = null;
+        refreshPromiseStartedAt = 0;
       }
     })();
     return refreshPromise;
   };
 
-  const scheduleAutoRefresh = () => {
-    if (refreshTimerId) {
-      clearTimeout(refreshTimerId);
-      refreshTimerId = null;
+  const stopAutoSyncLoop = () => {
+    if (autoSyncTimerId) {
+      clearTimeout(autoSyncTimerId);
+      autoSyncTimerId = null;
     }
+  };
+
+  const scheduleAutoSyncLoop = (delayMs = autoRefreshIntervalMs) => {
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
+    const effectiveDelay = Math.max(MIN_REFRESH_INTERVAL_MS, Number.isFinite(delayMs) ? delayMs : autoRefreshIntervalMs);
+    autoSyncTimerId = setTimeout(async () => {
+      autoSyncTimerId = null;
+      if (sessionExpired) return;
+      if (autoSyncInFlight) {
+        const stuckFor = autoSyncStartedAt ? Date.now() - autoSyncStartedAt : 0;
+        if (stuckFor > Math.max(REFRESH_TIMEOUT_MS * 1.5, effectiveDelay * 2)) {
+          autoSyncInFlight = false;
+          refreshPromise = null;
+          refreshPromiseStartedAt = 0;
+        } else {
+          scheduleAutoSyncLoop(autoRefreshIntervalMs);
+          return;
+        }
+      }
+      autoSyncInFlight = true;
+      autoSyncStartedAt = Date.now();
+      try {
+        await requestStateRefresh('auto', { sinceRevision: lastAppliedRevision });
+      } finally {
+        autoSyncInFlight = false;
+        autoSyncStartedAt = 0;
+        scheduleAutoSyncLoop(autoRefreshIntervalMs);
+      }
+    }, effectiveDelay);
+  };
+
+  const startAutoSyncLoop = () => {
+    stopAutoSyncLoop();
     if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
-    const tick = () => {
-      refreshTimerId = null;
-      if (document.hidden) {
-        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-        return;
-      }
-      if (hasPendingLocalChanges()) {
-        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-        return;
-      }
-      const now = Date.now();
-      if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
-        requestStateRefresh('interval');
-      }
-      refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-    };
-    refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+    scheduleAutoSyncLoop(0);
+  };
+
+  const startFallbackPolling = () => {
+    if (fallbackPollTimerId) {
+      clearInterval(fallbackPollTimerId);
+      fallbackPollTimerId = null;
+    }
+    fallbackPollTimerId = setInterval(() => {
+      if (sessionExpired) return;
+      requestStateRefresh('fallback');
+    }, FALLBACK_POLL_INTERVAL_MS);
   };
 
   const handleFocusRefresh = () => {
-    if (document.hidden) return;
-    if (hasPendingLocalChanges()) return;
+    if (sessionExpired) return;
     const now = Date.now();
     if (refreshPromise) return;
-    if (lastRefreshAt && now - lastRefreshAt < 5000) return;
+    if (lastRefreshAt && now - lastRefreshAt < 2000) return;
     requestStateRefresh('focus');
   };
 
@@ -593,7 +668,8 @@
   }
   document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
 
-  scheduleAutoRefresh();
+  startAutoSyncLoop();
+  startFallbackPolling();
   scheduleKeepAlive();
   requestSessionProbe('startup');
 
@@ -616,6 +692,9 @@
         updateFingerprint(payload);
       }
     },
+    applyRevision(rev) {
+      updateRevisionMarker(Number.isFinite(Number(rev)) ? Number(rev) : null);
+    },
     getFingerprint() {
       return { etag: currentEtag, hash: currentHash };
     },
@@ -624,11 +703,12 @@
     },
     setAutoRefreshInterval(value) {
       const parsed = parseIntervalInput(value);
-      if (parsed == null) {
-        return autoRefreshIntervalMs;
+      if (parsed == null || parsed <= 0) {
+        autoRefreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS;
+      } else {
+        autoRefreshIntervalMs = Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
       }
-      autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-      scheduleAutoRefresh();
+      startAutoSyncLoop();
       return autoRefreshIntervalMs;
     },
     getAutoRefreshInterval() {
@@ -676,6 +756,8 @@
     xhr.send(null);
     if (xhr.status >= 200 && xhr.status < 300) {
       const etag = xhr.getResponseHeader('ETag');
+      const revHeader = xhr.getResponseHeader('X-Revision');
+      const revValue = Number.isFinite(Number(revHeader)) ? Number(revHeader) : null;
       if (window.plannerRemote && typeof window.plannerRemote.applyFingerprint === 'function') {
         window.plannerRemote.applyFingerprint({ etag });
       }
@@ -706,6 +788,12 @@
       }
       if (parsed && typeof parsed === 'object' && parsed.crm) {
         window.__CRM_INITIAL_STATE__ = parsed.crm;
+        if (revValue !== null) {
+          window.__CRM_INITIAL_REV__ = revValue;
+          if (window.plannerRemote && typeof window.plannerRemote.applyRevision === 'function') {
+            window.plannerRemote.applyRevision(revValue);
+          }
+        }
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.crm));
           LEGACY_KEYS.forEach(name=>{ if(name!==STORAGE_KEY){ try{localStorage.removeItem(name);}catch(_err){/* ignore */} }});
@@ -1730,6 +1818,26 @@
     display: none;
   }
 
+  .crm-settings-group summary::before,
+  #orderForm details.section-card > summary::before {
+    content: '▸';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    color: var(--pc-text-muted);
+    flex-shrink: 0;
+    transition: transform 120ms ease;
+  }
+
+  .crm-settings-group[open] summary::before,
+  #orderForm details.section-card[open] > summary::before {
+    transform: rotate(90deg);
+  }
+
   .crm-settings-group[open] summary {
     margin-bottom: var(--pc-spacing-sm);
   }
@@ -1737,6 +1845,18 @@
   .crm-settings-group .crm-settings-fields {
     display: grid;
     gap: var(--pc-spacing-md);
+  }
+
+  #orderForm details.section-card > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  #orderForm details.section-card > summary::-webkit-details-marker {
+    display: none;
   }
 
   .crm-modal-section {
@@ -4501,6 +4621,29 @@
     color: var(--pc-text);
   }
 
+  .lane-sum-toggle {
+    border: 1px solid var(--pc-border-strong);
+    background: var(--pc-surface-strong);
+    border-radius: var(--pc-radius-sm);
+    padding: 2px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--pc-text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .lane-sum-toggle[data-mode="all"] {
+    color: var(--pc-info);
+    border-color: color-mix(in srgb, var(--pc-info) 60%, var(--pc-border-strong));
+  }
+
+  .lane-sum-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-info) 70%, transparent);
+    outline-offset: 1px;
+  }
+
   .lane-count {
     padding: 2px 10px;
     border-radius: var(--pc-radius-pill);
@@ -4986,43 +5129,46 @@
     min-width: 0;
   }
 
-  .gridHead .title {
-    grid-column: 1 / span 8;
+  .gridHead .orderNo,
+  .gridHead .customer,
+  .gridHead .service,
+  .gridHead .progressField {
     grid-row: 1;
-  }
-
-  .gridHead .service {
-    grid-column: 9 / span 4;
-    grid-row: 1;
-  }
-
-  .gridHead .customer {
-    grid-column: 1 / span 6;
-    grid-row: 2;
   }
 
   .gridHead .orderNo {
+    grid-column: 1 / span 3;
+  }
+
+  .gridHead .customer {
+    grid-column: 4 / span 3;
+  }
+
+  .gridHead .service {
     grid-column: 7 / span 3;
-    grid-row: 2;
   }
 
   .gridHead .progressField {
     grid-column: 10 / span 3;
-    grid-row: 2;
-  }
-
-  .gridHead .start {
-    grid-column: 1 / span 6;
-    grid-row: 3;
-  }
-
-  .gridHead .end {
-    grid-column: 7 / span 6;
-    grid-row: 3;
   }
 
   .gridHead input:not([type="checkbox"]) {
     width: 100%;
+  }
+
+  .dlg-head__title {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  #dlgTitleMeta {
+    display: block;
+    color: var(--pc-text-muted);
+    font-size: 13px;
+    line-height: 1.35;
+    word-break: break-word;
   }
 
   .progress-expected-cell {
@@ -5057,34 +5203,12 @@
       grid-row: 1;
     }
 
-    .gridHead .service {
-      grid-column: 1 / span 3;
-      grid-row: 2;
-    }
-
-    .gridHead .start {
-      grid-column: 4 / span 3;
-      grid-row: 2;
-    }
-
-    .gridHead .customer {
-      grid-column: 1 / span 3;
-      grid-row: 3;
-    }
-
-    .gridHead .orderNo {
-      grid-column: 4 / span 3;
-      grid-row: 3;
-    }
-
+    .gridHead .orderNo,
+    .gridHead .customer,
+    .gridHead .service,
     .gridHead .progressField {
-      grid-column: 1 / span 3;
-      grid-row: 4;
-    }
-
-    .gridHead .end {
-      grid-column: 4 / span 3;
-      grid-row: 4;
+      grid-column: 1 / span 6;
+      grid-row: auto;
     }
   }
 
@@ -5093,13 +5217,10 @@
       grid-template-columns: minmax(0, 1fr);
     }
 
-    .gridHead .title,
     .gridHead .service,
     .gridHead .customer,
     .gridHead .orderNo,
-    .gridHead .progressField,
-    .gridHead .start,
-    .gridHead .end {
+    .gridHead .progressField {
       grid-column: 1 / -1;
       grid-row: auto;
     }
@@ -5111,6 +5232,12 @@
 
   #orderForm details textarea {
     width: 100%;
+  }
+
+  .crm-status-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
   }
 
   .surface {
@@ -5140,7 +5267,7 @@
 
   #stagesTable thead th.col-reorder {
     text-align: center;
-    width: 56px;
+    width: 44px;
   }
 
   #stagesTable tbody td {
@@ -5188,16 +5315,16 @@
   }
 
   #stagesTable td.reorder {
-    width: 56px;
+    width: 44px;
     text-align: center;
-    padding: 6px 8px;
+    padding: 4px 6px;
   }
 
   .crm-stage-reorder {
     display: inline-flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 4px;
+    gap: 2px;
   }
 
   .crm-stage-reorder button {
@@ -5205,13 +5332,14 @@
     border: 1px solid color-mix(in srgb, var(--pc-border) 60%, var(--pc-text-muted));
     background: color-mix(in srgb, var(--pc-surface) 90%, var(--pc-border));
     color: var(--pc-text-muted);
-    width: 32px;
-    height: 28px;
+    width: 26px;
+    height: 24px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     transition: background var(--pc-transition-short), color var(--pc-transition-short), border-color var(--pc-transition-short);
+    font-size: 12px;
   }
 
   .crm-stage-reorder button:hover:not(:disabled),
@@ -5341,6 +5469,43 @@
     margin: 0 0 6px 0;
     font-size: 12px;
     color: var(--pc-text-muted);
+  }
+
+  .crm-hint-bubble {
+    position: fixed;
+    z-index: 9999;
+    background: var(--pc-surface);
+    color: var(--pc-text);
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    padding: 8px 12px;
+    box-shadow: var(--pc-shadow-surface);
+    display: none;
+    gap: 4px;
+    max-width: 360px;
+  }
+
+  .crm-hint-bubble.visible {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .crm-hint-bubble__line {
+    font-size: 12px;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+
+  .crm-hint-bubble__line--level1 {
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-hint-bubble__line--level2 {
+    color: var(--pc-text-muted);
+  }
+
+  .crm-hint-target {
+    position: relative;
   }
 
   .toast-layer,
@@ -5819,7 +5984,10 @@
 <!-- Диалог заказа -->
 <dialog id="orderDlg" class="pc-modal">
   <div class="dlg-head">
-    <strong id="dlgTitle">Редактировать заказ</strong>
+    <div class="dlg-head__title">
+      <strong id="dlgTitle">Редактировать заказ</strong>
+      <span id="dlgTitleMeta"></span>
+    </div>
     <div class="rowc">
       <label class="rowc"><input id="orderDone" class="ready-switch" type="checkbox" /> Заказ готов</label>
       <button class="pc-btn pc-btn--ghost" type="button" id="splitBtn" title="Разбить на подзаказ">➗ Подзаказ</button>
@@ -5829,14 +5997,13 @@
   </div>
   <form id="orderForm" class="dlg-body" method="dialog">
     <div class="gridHead surface">
-      <div class="title"><label>Название заказа</label><input name="title" required /></div>
-      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
-      <div class="start"><label>Начало (авто)</label><input name="start" type="date" disabled /></div>
-
-      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <input type="hidden" name="title" />
+      <input type="hidden" name="start" />
+      <input type="hidden" name="end" />
       <div class="orderNo"><label>№ заказа</label><input name="orderNo" required /></div>
+      <div class="customer"><label>Клиент</label><input name="customer" /></div>
+      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
       <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
-      <div class="end"><label>Конец (авто)</label><input name="end" type="date" disabled /></div>
     </div>
 
     <details class="section-card surface" open>
@@ -6434,6 +6601,10 @@ const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
 const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
+const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
+const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
+const CRM_LANE_SUM_MODES=new Set(['range','all']);
+const CRM_HINT_DEFAULTS=Object.freeze({ enabled:true, level1:true, level2:true, delayMs:500 });
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
@@ -6441,7 +6612,10 @@ const CRM_DEFAULT_PREFERENCES={
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
   linkedStagesEnabled:true,
-  linkedStageGapDays:0
+  linkedStageGapDays:0,
+  laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
+  laneSumModes:{},
+  hints:CRM_HINT_DEFAULTS
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -7115,27 +7289,61 @@ function normalizeStageLinkGapDays(value){
   return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
 }
 
+function sanitizeCrmHintPreferences(raw){
+  const base=raw && typeof raw==='object'?raw:{};
+  const result={ ...CRM_HINT_DEFAULTS };
+  if(Object.prototype.hasOwnProperty.call(base,'enabled')){
+    result.enabled=base.enabled!==false;
+  }
+  if(Object.prototype.hasOwnProperty.call(base,'level1')){
+    result.level1=!!base.level1;
+  }
+  if(Object.prototype.hasOwnProperty.call(base,'level2')){
+    result.level2=!!base.level2;
+  }
+  const delay=Number(base.delayMs ?? base.delay);
+  if(Number.isFinite(delay) && delay>=0){
+    result.delayMs=Math.max(0, Math.min(15000, Math.round(delay)));
+  }
+  return result;
+}
+
+function sanitizeLaneSumPeriod(raw){
+  const base=raw && typeof raw==='object'?raw:{};
+  const result={ ...CRM_DEFAULT_LANE_SUM_PERIOD };
+  const mode=typeof base.mode==='string'?base.mode.trim().toLowerCase():'';
+  if(CRM_LANE_SUM_PERIOD_MODES.has(mode)){
+    result.mode=mode;
+  }
+  const from=coerceCalendarIso(base.from||base.start);
+  const to=coerceCalendarIso(base.to||base.end);
+  if(from) result.from=from;
+  if(to) result.to=to;
+  return result;
+}
+
+function sanitizeLaneSumModes(raw){
+  const result={};
+  if(raw && typeof raw==='object'){
+    Object.entries(raw).forEach(([lane,mode])=>{
+      const key=typeof lane==='string'?lane.trim():'';
+      const normalized=typeof mode==='string'?mode.trim().toLowerCase():'';
+      if(!key || !CRM_LANE_SUM_MODES.has(normalized)) return;
+      result[key]=normalized;
+    });
+  }
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
     if(typeof raw.autoOptimize==='boolean') result.autoOptimize=raw.autoOptimize;
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
-    const intervalKeys=[
-      'autoRefreshSeconds',
-      'autoRefreshIntervalSeconds',
-      'autoRefreshInterval',
-      'refreshIntervalSeconds',
-      'autoRefresh',
-      'refreshInterval'
-    ];
-    for(const key of intervalKeys){
-      if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
-      const normalized=normalizeAutoRefreshSeconds(raw[key]);
-      if(normalized===null) continue;
-      result.autoRefreshSeconds=normalized;
-      break;
-    }
+    result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
+    result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
+    result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
     const horizonKeys=['routeHorizonDays','horizonDays','ganttHorizonDays','routeDaysAhead'];
     for(const key of horizonKeys){
       if(!Object.prototype.hasOwnProperty.call(raw,key)) continue;
@@ -7256,6 +7464,28 @@ function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
 }
 
+function getLaneSumModeForLane(lane){
+  const prefs=getCrmPreferences();
+  const map=prefs?.laneSumModes||{};
+  const key=typeof lane==='string'?lane:'';
+  const normalized=typeof map[key]==='string'?map[key].trim().toLowerCase():'';
+  if(CRM_LANE_SUM_MODES.has(normalized)) return normalized;
+  return 'range';
+}
+
+function setLaneSumModeForLane(lane, mode){
+  const targetLane=typeof lane==='string'?lane.trim():'';
+  const normalized=typeof mode==='string'?mode.trim().toLowerCase():'';
+  if(!targetLane || !CRM_LANE_SUM_MODES.has(normalized)) return;
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  const map={ ...(prefs.laneSumModes||{}) };
+  map[targetLane]=normalized;
+  prefs.laneSumModes=map;
+  state.settings.preferences=prefs;
+  save('Переключение режима суммы колонки');
+}
+
 function isStageLinkEnabledByDefault(){
   const prefs=getCrmPreferences();
   if(!prefs) return true;
@@ -7269,12 +7499,7 @@ function getCrmStageLinkGapDays(){
 }
 
 function getPreferredAutoRefreshIntervalMs(){
-  const prefs=getCrmPreferences();
-  const seconds=Number(prefs?.autoRefreshSeconds);
-  if(Number.isFinite(seconds) && seconds>0){
-    return Math.round(seconds*1000);
-  }
-  return 0;
+  return DEFAULT_REFRESH_INTERVAL_MS;
 }
 
 function getCrmRouteHorizonDays(){
@@ -7287,27 +7512,15 @@ function getCrmRouteHorizonDays(){
 let crmAppliedAutoRefreshMs=null;
 
 function updatePlannerAutoRefreshFromPreferences(){
-  const targetMs=getPreferredAutoRefreshIntervalMs();
-  let effective=targetMs;
-  const remote=window.plannerRemote;
-  if(remote && typeof remote.setAutoRefreshInterval==='function'){
-    if(!(crmAppliedAutoRefreshMs!==null && crmAppliedAutoRefreshMs===targetMs)){
-      const applied=remote.setAutoRefreshInterval(targetMs);
-      if(Number.isFinite(applied)){
-        effective=applied;
-      }
-    }else{
-      effective=crmAppliedAutoRefreshMs;
-    }
+  const effective=getPreferredAutoRefreshIntervalMs();
+  if(window.plannerRemote && typeof window.plannerRemote.setAutoRefreshInterval==='function'){
+    window.plannerRemote.setAutoRefreshInterval(effective);
   }
   crmAppliedAutoRefreshMs=effective;
   if(document && document.documentElement){
-    if(effective>0){
-      document.documentElement.dataset.crmAutoRefresh=String(effective);
-    }else{
-      delete document.documentElement.dataset.crmAutoRefresh;
-    }
+    document.documentElement.dataset.crmAutoRefresh=String(effective);
   }
+  resetCrmHardRefreshLoop(effective);
 }
 function cloneForTrash(value){
   try{return JSON.parse(JSON.stringify(value));}
@@ -7329,6 +7542,21 @@ function addDays(date, amount){
   base.setHours(0,0,0,0);
   base.setDate(base.getDate()+Number(amount||0));
   return base;
+}
+
+function ensureOrderStatusEnteredAt(order, fallback){
+  if(!order||typeof order!=='object') return '';
+  const candidates=[order.statusEnteredAt, order.statusDate, order.statusAt, fallback, order.createdAt, order.start];
+  for(const candidate of candidates){
+    const iso=coerceCalendarIso(candidate);
+    if(iso){
+      order.statusEnteredAt=iso;
+      return iso;
+    }
+  }
+  const nowIso=fmtDateISO(today0());
+  order.statusEnteredAt=nowIso;
+  return nowIso;
 }
 
 function fmtDateHuman(value){
@@ -7528,6 +7756,7 @@ function ensureCrmStateShape(value){
         ensureStageIdentity(stage);
         return stage;
       });
+      ensureOrderStatusEnteredAt(order);
     });
     board.stageCalendars=sanitizeCrmStageCalendars(board.stageCalendars);
     board.planFreeze=sanitizeCrmPlanFreeze(board.planFreeze);
@@ -9199,6 +9428,10 @@ let stageSourceMap=new Map();
 let pendingStageDeletes=[];
 let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
+let crmPendingRemotePayload=null;
+let crmPendingRemoteNotified=false;
+let crmPendingRemoteDirty=false;
+let crmPendingSyncPayload=null;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -10012,6 +10245,12 @@ function stageEntryIsLate(stage,{ todayTime=today0().getTime() }={}){
     return false;
   }
   return dueDate.getTime()<todayTime;
+}
+
+function orderHasOverdueStage(order,{ todayTime=today0().getTime() }={}){
+  if(!order||typeof order!=='object') return false;
+  const stages=Array.isArray(order.stages)?order.stages:[];
+  return stages.some(stage=>stageEntryIsLate(stage,{ todayTime }));
 }
 
 function getOrderStartTimestamp(order){
@@ -14750,7 +14989,7 @@ function renderCrmStageTable(){
       doneInput.addEventListener('click',evt=>evt.stopPropagation());
       if(!doneInput.disabled){
         doneInput.addEventListener('change',()=>{
-          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked);
+          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked, doneInput);
         });
       }
     }
@@ -14934,19 +15173,32 @@ function renderCrmStageOverdue(entries){
 function findCrmStageContext(orderId, stageId, stageKey){
   const board=currentBoard();
   const orders=board?.orders||[];
+  const normalizedStageId=stageId?String(stageId):'';
   let orderIndex=-1;
   if(orderId){
-    orderIndex=orders.findIndex(o=>o&&String(o.id||'')===String(orderId));
+    const normalizedOrderId=String(orderId);
+    orderIndex=orders.findIndex(o=>o&&String(o.id||'')===normalizedOrderId);
+  }
+  if(orderIndex<0 && normalizedStageId){
+    orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>ensureStageIdentity(st)===normalizedStageId));
   }
   if(orderIndex<0 && typeof stageKey==='string'){
     orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>resolveCrmStageKey(st?.name)===stageKey));
   }
-  const order=orderIndex>=0?orders[orderIndex]:null;
+  let order=orderIndex>=0?orders[orderIndex]:null;
+  if(!order && normalizedStageId){
+    const cached=crmStageRowsCache.find(row=>row?.stageId===normalizedStageId||row?.identity===normalizedStageId);
+    if(cached?.order){
+      order=cached.order;
+      const idxByRef=orders.indexOf(order);
+      if(idxByRef>=0) orderIndex=idxByRef;
+    }
+  }
   const stages=Array.isArray(order?.stages)?order.stages:[];
   let stageIndex=-1;
   let stage=null;
-  if(stageId){
-    stageIndex=stages.findIndex(st=>ensureStageIdentity(st)===stageId);
+  if(normalizedStageId){
+    stageIndex=stages.findIndex(st=>ensureStageIdentity(st)===normalizedStageId);
   }
   if(stageIndex<0 && typeof stageKey==='string'){
     stageIndex=stages.findIndex(st=>resolveCrmStageKey(st?.name)===stageKey);
@@ -14987,21 +15239,80 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   renderCurrentView();
 }
 
-function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked){
+function promptStageCompletionStatus(order){
+  return new Promise(resolve=>{
+    const b=currentBoard();
+    const lanes=Array.isArray(b?.lanes)?b.lanes:[];
+    const current=order?.status||'';
+    const currentIndex=lanes.indexOf(current);
+    const suggested=lanes[Math.min(lanes.length-1, Math.max(0,currentIndex+1))]||current||'';
+    const dialog=document.createElement('dialog');
+    dialog.className='pc-modal pc-modal--sm';
+    const options=lanes.length?lanes:current?[current]:[''];
+    dialog.innerHTML=`
+      <div class="dlg-head"><strong>Перемещение заказа</strong></div>
+      <form class="dlg-body crm-status-confirm" method="dialog">
+        <p>Передел отмечен готовым. Выберите целевое состояние заказа.</p>
+        <label class="crm-field">
+          <span class="crm-field__label">Состояние</span>
+          <select class="pc-select" name="statusChoice">
+            ${options.map(lane=>{
+              const value=escapeHtml(lane);
+              const selected=lane===suggested?'selected':'';
+              return `<option value="${value}" ${selected}>${value||'—'}</option>`;
+            }).join('')}
+          </select>
+        </label>
+      </form>
+      <div class="dlg-footer">
+        <button type="button" class="pc-btn pc-btn--secondary" data-act="cancel">Отмена</button>
+        <button type="button" class="pc-btn pc-btn--primary" data-act="apply">Перенести</button>
+      </div>`;
+    const cleanup=(value)=>{ dialog.close(); dialog.remove(); resolve(value); };
+    const handleCancel=()=>cleanup(null);
+    const handleApply=()=>{
+      const select=dialog.querySelector('select[name="statusChoice"]');
+      const value=select?select.value.trim():'';
+      cleanup(value||current||'');
+    };
+    dialog.addEventListener('cancel',evt=>{evt.preventDefault();handleCancel();});
+    dialog.querySelector('[data-act="cancel"]')?.addEventListener('click',handleCancel);
+    dialog.querySelector('[data-act="apply"]')?.addEventListener('click',handleApply);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+  });
+}
+
+async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sourceInput=null){
   if(!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
     return;
   }
-  const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
+  const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
   if(checked){
+    const targetStatus=await promptStageCompletionStatus(order);
+    if(targetStatus===null){
+      if(sourceInput) sourceInput.checked=!!stage.done;
+      return;
+    }
     stage.done=true;
     stage.progress=100;
+    if(targetStatus && targetStatus!==order.status){
+      order.status=targetStatus;
+      order.statusEnteredAt=fmtDateISO(today0());
+    }
   }else{
     stage.done=false;
     const current=normalizeStageProgress(stage.progress??0);
     stage.progress=current>=100?0:current;
+  }
+  if(Array.isArray(order.stages) && stageIndex>=0){
+    order.stages[stageIndex]=stage;
+  }
+  if(board && Array.isArray(board.orders) && orderIndex>=0){
+    board.orders[orderIndex]=order;
   }
   updateOrderAfterStageChange(order);
   if(stageId) crmStageSelectionId=stageId;
@@ -15251,11 +15562,16 @@ function renderColumns(){
       const c=document.createElement('div');
       c.className='col';
       const laneLabel=escapeHtml(l);
+      const laneMode=getLaneSumModeForLane(l);
+      const laneModeTitle=laneMode==='all'
+        ?'Суммировать все заказы в колонке'
+        :'Сумма за период из настроек';
       c.innerHTML=`
         <header>
           <h2>
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
+              <button class="lane-sum-toggle" type="button" data-lane="${laneLabel}" data-mode="${laneMode}" title="${laneModeTitle}">${laneMode==='all'?'∑ все':'∑ период'}</button>
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
@@ -15283,6 +15599,17 @@ function renderColumns(){
     if(!lane)return;
     btn.addEventListener('click',()=>increaseLaneLimit(lane));
     btn.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();increaseLaneLimit(lane);}});
+  });
+  $$('.lane-sum-toggle',columns).forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const lane=btn.dataset.lane;
+      if(!lane) return;
+      const current=getLaneSumModeForLane(lane);
+      const next=current==='all'?'range':'all';
+      setLaneSumModeForLane(lane, next);
+      renderColumns();
+      renderCards();
+    });
   });
   enableDnd();
 }
@@ -15383,6 +15710,107 @@ function orderMatchesSearch(order){
   return false;
 }
 
+function buildOrderDisplayName(orderNo, customer){
+  const parts=[orderNo, customer]
+    .map(v=>typeof v==='string'?v.trim():'')
+    .filter(Boolean);
+  return parts.length?parts.join(' '):'Заказ';
+}
+
+function resolveLaneSumRange(){
+  const prefs=getCrmPreferences();
+  const setting=sanitizeLaneSumPeriod(prefs?.laneSumPeriod);
+  const today=today0();
+  let start=null;
+  let end=today0();
+  let label='';
+  switch(setting.mode){
+    case 'day':
+      start=today;
+      label='день';
+      break;
+    case 'week':{
+      const base=new Date(today);
+      const weekDay=(base.getDay()+6)%7; // Monday as start
+      base.setDate(base.getDate()-weekDay);
+      start=base;
+      label='неделя';
+      break;
+    }
+    case 'month':
+      start=new Date(today.getFullYear(), today.getMonth(), 1);
+      label='месяц';
+      break;
+    case 'quarter':{
+      const quarter=Math.floor(today.getMonth()/3);
+      start=new Date(today.getFullYear(), quarter*3, 1);
+      label='квартал';
+      break;
+    }
+    case 'year':
+      start=new Date(today.getFullYear(), 0, 1);
+      label='год';
+      break;
+    case 'custom':{
+      const from=setting.from?new Date(`${setting.from}T00:00:00`):null;
+      const to=setting.to?new Date(`${setting.to}T00:00:00`):null;
+      if(from instanceof Date && !Number.isNaN(from.getTime())){
+        start=from;
+      }
+      if(to instanceof Date && !Number.isNaN(to.getTime())){
+        end=to;
+      }
+      if(!start && end){
+        start=new Date(end);
+      }
+      if(start && !end){
+        end=today0();
+      }
+      label='период';
+      break;
+    }
+    default:
+      start=null;
+  }
+  if(!(start instanceof Date) || Number.isNaN(start.getTime()) || !(end instanceof Date) || Number.isNaN(end.getTime())){
+    return null;
+  }
+  const toDate=new Date(end);
+  toDate.setHours(23,59,59,999);
+  return {
+    fromTime:start.getTime(),
+    toTime:toDate.getTime(),
+    label,
+    description:`${fmtDateHuman(start)} — ${fmtDateHuman(end)}`
+  };
+}
+
+function orderFitsLaneSumRange(order, range){
+  if(!range || !range.fromTime || !range.toTime) return true;
+  const iso=coerceCalendarIso(order?.statusEnteredAt);
+  if(!iso) return true;
+  const date=new Date(`${iso}T00:00:00`);
+  if(Number.isNaN(date.getTime())) return true;
+  const time=date.getTime();
+  return time>=range.fromTime && time<=range.toTime;
+}
+
+function normalizeServiceTotalValue(raw){
+  if(raw===''||raw===null||raw===undefined) return null;
+  if(typeof window._parseMoney==='function'){
+    const parsed=window._parseMoney(raw);
+    if(parsed!=='' && Number.isFinite(Number(parsed))){
+      return Number(parsed);
+    }
+  }
+  let numeric=raw;
+  if(typeof numeric==='string'){
+    numeric=numeric.replace(/[\s\u202f\u00a0₽]+/g,'').replace(',', '.');
+  }
+  numeric=Number(numeric);
+  return Number.isFinite(numeric)?numeric:null;
+}
+
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
@@ -15394,8 +15822,11 @@ function renderCards(){
   let totalActive=0;
   const fallbackLane=b.lanes[0]??null;
   const canCompleteOrders=crmCanCompleteOrders();
+  const laneSumRange=resolveLaneSumRange();
+  const todayTime=today0().getTime();
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
+    ensureOrderStatusEnteredAt(o);
     let lane=o.status;
     if(!Object.prototype.hasOwnProperty.call(map,lane)){
       lane=fallbackLane;
@@ -15420,21 +15851,22 @@ function renderCards(){
     const col=$(`.col[data-lane="${CSS.escape(lane)}"]`,columns);
     const drop=$(`.drop[data-lane="${CSS.escape(lane)}"]`,columns);
     if(col){
+      const laneMode=getLaneSumModeForLane(lane);
+      const applyRange=laneMode!=='all';
       const sumValue=arr.reduce((acc,o)=>{
-        const raw=o?.serviceTotal;
-        if(raw===''||raw==null) return acc;
-        let numeric=raw;
-        if(typeof numeric==='string'){
-          numeric=Number(numeric.replace(/[\s\u202f\u00a0]+/g,'').replace(',', '.'));
-        }else{
-          numeric=Number(numeric);
-        }
-        return Number.isFinite(numeric)?acc+numeric:acc;
+        if(applyRange && !orderFitsLaneSumRange(o, laneSumRange)) return acc;
+        const numeric=normalizeServiceTotalValue(o?.serviceTotal);
+        return numeric===null?acc:acc+numeric;
       },0);
       const sumEl=col.querySelector('[data-lane-sum]');
       if(sumEl){
         const formatted=sumValue.toLocaleString('ru-RU');
         sumEl.textContent=`${formatted} ₽`;
+        sumEl.dataset.periodLabel=applyRange?(laneSumRange?.label||''):'';
+        sumEl.dataset.mode=laneMode;
+        sumEl.title=applyRange && laneSumRange?.description
+          ?`Сумма за ${laneSumRange.label}: ${laneSumRange.description}`
+          :'Сумма по всем заказам статуса';
       }
       const countEl=col.querySelector('[data-lane-count]');
       if(countEl) countEl.textContent=`(${arr.length} шт)`;
@@ -15452,6 +15884,7 @@ function renderCards(){
     }
     visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
+      const hasOverdueStage=orderHasOverdueStage(o,{ todayTime });
       let progress=calcAutoProgress(o.stages);
       const manualProgress=normalizeStageProgress(o.progress);
       if(o.progressManual===true || !Array.isArray(o.stages) || !o.stages.length){
@@ -15463,7 +15896,7 @@ function renderCards(){
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,'warn'))}
+      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,hasOverdueStage?'danger':'warn'))}
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
         <div class="row">
@@ -15586,6 +16019,10 @@ function moveOrderToLane(orderId,targetLane,beforeId){
   const originalLaneIndex=list.slice(0,fromIndex).filter(x=>x.status===originalLane).length;
   list.splice(fromIndex,1);
   order.status=targetLane;
+  const laneChanged=originalLane!==targetLane;
+  if(laneChanged){
+    order.statusEnteredAt=fmtDateISO(today0());
+  }
   let insertIndex=list.length;
   if(beforeId){
     const idx=list.findIndex(o=>o.id===beforeId);
@@ -15616,7 +16053,7 @@ function moveOrderToLane(orderId,targetLane,beforeId){
       seen++;
     }
   }
-  const changed=originalLane!==targetLane||originalLaneIndex!==finalLaneIndex;
+  const changed=laneChanged||originalLaneIndex!==finalLaneIndex;
   if(changed){
     commitCrmOrderJournal(previousSnapshot, order);
   }
@@ -15657,7 +16094,7 @@ function enableDnd(){
 let _popup;
 function showMoveMenu(rect,order){
   closePopup(); const b=currentBoard(); const p=document.createElement('div');p.className='popup';p.innerHTML=`<h4>Переместить в:</h4>`;
-  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
+  b.lanes.forEach(l=>{const it=document.createElement('div');it.className='item';it.textContent=l;it.onclick=()=>{if(confirm(`Переместить заказ в «${l}»?`)){const previousSnapshot=snapshotOrderForJournal(order);if(order.status!==l){order.statusEnteredAt=fmtDateISO(today0());}order.status=l;commitCrmOrderJournal(previousSnapshot, order);save('Перемещение заказа между статусами');renderCurrentView();closePopup()}};p.appendChild(it)});
   document.body.appendChild(p); const x=Math.min(window.innerWidth-220,rect.left); const y=Math.min(window.innerHeight-300,rect.bottom+6); p.style.left=x+'px'; p.style.top=y+'px'; _popup=p;
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
@@ -15674,8 +16111,17 @@ function showTooltipForOrder(o,anchorEl){
 function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
-const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
 let suppressAutoStatusUpdate=false;
+
+if(orderForm){
+  const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
+  const customerInput=orderForm.querySelector('input[name="customer"]');
+  [orderNoInput, customerInput].forEach(input=>{
+    if(!input) return;
+    input.addEventListener('input', updateOrderDialogMeta);
+  });
+}
 
 function sanitizeOrderComment(raw){
   if(!raw||typeof raw!=='object') return null;
@@ -16672,6 +17118,26 @@ function setOrderFormReadOnly(readOnly){
   }
 }
 
+function isOrderDialogActive(){
+  return !!(orderDlg && orderDlg.open);
+}
+
+function updateOrderDialogMeta(){
+  if(!orderForm || !dlgTitleMeta) return;
+  const orderNo=(orderForm.orderNo?.value||'').trim();
+  const customer=(orderForm.customer?.value||'').trim();
+  const startValue=orderForm.start?.value||'';
+  const endValue=orderForm.end?.value||'';
+  const title=buildOrderDisplayName(orderNo, customer);
+  if(orderForm.title){
+    orderForm.title.value=title;
+  }
+  const datePart=(startValue||endValue)
+    ?` / ${(startValue||'—')} — ${(endValue||'—')}`
+    :'';
+  dlgTitleMeta.textContent=`(${title})${datePart}`;
+}
+
 function openOrder(id=null){
   const canView=crmCanViewOrderDetails();
   const canEdit=crmCanManageOrders();
@@ -16705,6 +17171,7 @@ function openOrder(id=null){
     suppressAutoStatusUpdate=true;
     fillOrderForm(o,b);
     suppressAutoStatusUpdate=false;
+    updateOrderDialogMeta();
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
     if(deleteOrderBtn){
       deleteOrderBtn.style.display=canEdit?'':'none';
@@ -16726,6 +17193,7 @@ function openOrder(id=null){
     orderDone.checked=false;
     applyStagePreset(DEFAULT_STAGES);
     window._editingOrigValues=null;
+    updateOrderDialogMeta();
     if(deleteOrderBtn){
       deleteOrderBtn.style.display='none';
       deleteOrderBtn.onclick=null;
@@ -16747,16 +17215,38 @@ if(orderDlg){
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
+    if(dlgTitleMeta){
+      dlgTitleMeta.textContent='';
+    }
     refreshOrderHistoryButton(null);
     orderCommentsDraft=[];
     renderOrderComments();
     resetOrderCommentInputs();
+    if(crmPendingRemotePayload){
+      const deferredPayload=crmPendingRemotePayload;
+      crmPendingRemotePayload=null;
+      const wasNotified=crmPendingRemoteNotified;
+      const skipDeferred=crmPendingRemoteDirty;
+      crmPendingRemoteNotified=false;
+      crmPendingRemoteDirty=false;
+      if(skipDeferred){
+        showToast({
+          title:'CRM',
+          message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
+          tone:'info'
+        });
+      }else{
+        applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
+      }
+    }
   });
 }
 
 function fillOrderForm(o,b){
-  orderForm.title.value=o.title||''; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
-  orderForm.serviceTotal.value=(o.serviceTotal??'')===''?'':Number(o.serviceTotal).toLocaleString('ru-RU');
+  const computedTitle=buildOrderDisplayName(o.orderNo||'', o.customer||'');
+  orderForm.title.value=computedTitle; orderForm.orderNo.value=o.orderNo||''; orderForm.customer.value=o.customer||'';
+  const serviceTotalNumber=normalizeServiceTotalValue(o.serviceTotal);
+  orderForm.serviceTotal.value=serviceTotalNumber==null?'':serviceTotalNumber.toLocaleString('ru-RU');
   orderForm.status.value=o.status||b.lanes[0]; orderForm.id.value=o.id;
   const fallbackDate=o.updatedAt||o.createdAt||'';
   const fallbackAuthor=o.updatedBy||o.manager||'';
@@ -16774,6 +17264,7 @@ function fillOrderForm(o,b){
   });
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
+  updateOrderDialogMeta();
 }
 
 function parseDateInputValue(value){
@@ -17416,7 +17907,14 @@ function applyOrderAutoCompletionState(){
   }
 }
 function syncAutoProgress(){orderForm.progress.value=calcAutoProgress(readStages());updateAllStageExpectations();applyOrderAutoCompletionState()}
-function syncAutoDates(){const s=readStages();const sd=s.map(x=>x.start).filter(Boolean).sort();const ed=s.map(x=>x.end).filter(Boolean).sort();orderForm.start.value=sd[0]||'';orderForm.end.value=ed[ed.length-1]||''}
+function syncAutoDates(){
+  const s=readStages();
+  const sd=s.map(x=>x.start).filter(Boolean).sort();
+  const ed=s.map(x=>x.end).filter(Boolean).sort();
+  orderForm.start.value=sd[0]||'';
+  orderForm.end.value=ed[ed.length-1]||'';
+  updateOrderDialogMeta();
+}
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
@@ -17450,9 +17948,17 @@ orderForm.addEventListener('submit',e=>{
   }
   const sd=stages.map(x=>x.start).filter(Boolean).sort(); const ed=stages.map(x=>x.end).filter(Boolean).sort();
   const startAuto=sd[0]||''; const endAuto=ed[ed.length-1]||'';
-  const obj={id,title:orderForm.title.value.trim(),orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
+  const previousStatus=exist?.status||'';
+  const previousStatusEntered=exist?ensureOrderStatusEnteredAt(exist):'';
+  const nextStatus=orderForm.status.value;
+  const statusEnteredAt=(previousStatus && previousStatus===nextStatus)
+    ? (coerceCalendarIso(previousStatusEntered)||fmtDateISO(today0()))
+    : fmtDateISO(today0());
+  updateOrderDialogMeta();
+  const computedTitle=buildOrderDisplayName(orderForm.orderNo.value, orderForm.customer.value);
+  const obj={id,title:computedTitle,orderNo:orderForm.orderNo.value.trim(),customer:orderForm.customer.value.trim(),
     start:startAuto,end:endAuto,done:orderDone.checked,progress:calcAutoProgress(stages),progressManual:false,
-    notes:commentSummary,status:orderForm.status.value,
+    notes:commentSummary,status:nextStatus,statusEnteredAt,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     comments,
     createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
@@ -17947,30 +18453,6 @@ function renderCrmPreferencesSettingsUI(){
   const tipsText=document.createElement('span');
   tipsText.textContent='Показывать советы по просроченным заказам';
   tipsOption.append(tipsCheckbox, tipsText);
-  const refreshField=document.createElement('label');
-  refreshField.className='crm-field';
-  const refreshLabel=document.createElement('span');
-  refreshLabel.className='crm-field__label';
-  refreshLabel.textContent='Интервал автообновления, сек';
-  const refreshInput=document.createElement('input');
-  refreshInput.type='number';
-  refreshInput.className='pc-input';
-  refreshInput.name='prefAutoRefreshSeconds';
-  refreshInput.min='0';
-  refreshInput.step='1';
-  refreshInput.inputMode='numeric';
-  refreshInput.placeholder=String(CRM_DEFAULT_AUTO_REFRESH_SECONDS);
-  if(Number.isFinite(prefs.autoRefreshSeconds)){
-    if(prefs.autoRefreshSeconds>0){
-      refreshInput.value=String(Math.round(prefs.autoRefreshSeconds));
-    }else if(prefs.autoRefreshSeconds===0){
-      refreshInput.value='0';
-    }
-  }
-  const refreshHint=document.createElement('span');
-  refreshHint.className='crm-field__hint';
-  refreshHint.textContent=`Минимум ${CRM_MIN_AUTO_REFRESH_SECONDS} с. Укажите 0, чтобы отключить автообновление.`;
-  refreshField.append(refreshLabel, refreshInput, refreshHint);
   const horizonField=document.createElement('label');
   horizonField.className='crm-field';
   const horizonLabel=document.createElement('span');
@@ -18019,7 +18501,107 @@ function renderCrmPreferencesSettingsUI(){
   linkGapHint.className='crm-field__hint';
   linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
   linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField);
+  const laneSumField=document.createElement('label');
+  laneSumField.className='crm-field';
+  const laneSumLabel=document.createElement('span');
+  laneSumLabel.className='crm-field__label';
+  laneSumLabel.textContent='Период суммы по колонкам';
+  const laneSumSelect=document.createElement('select');
+  laneSumSelect.className='pc-select';
+  laneSumSelect.name='prefLaneSumMode';
+  [
+    ['day','День'],
+    ['week','Неделя'],
+    ['month','Месяц'],
+    ['quarter','Квартал'],
+    ['year','Год'],
+    ['custom','Произвольный']
+  ].forEach(([value,text])=>laneSumSelect.appendChild(new Option(text,value)));
+  const laneSumFrom=document.createElement('input');
+  laneSumFrom.type='date';
+  laneSumFrom.className='pc-input';
+  laneSumFrom.name='prefLaneSumFrom';
+  laneSumFrom.value=prefs?.laneSumPeriod?.from||'';
+  const laneSumTo=document.createElement('input');
+  laneSumTo.type='date';
+  laneSumTo.className='pc-input';
+  laneSumTo.name='prefLaneSumTo';
+  laneSumTo.value=prefs?.laneSumPeriod?.to||'';
+  const laneSumHint=document.createElement('span');
+  laneSumHint.className='crm-field__hint';
+  laneSumHint.textContent='Используется дата попадания заказа в колонку. Периоды (кроме произвольного) считаются от начала текущего до сегодняшнего дня.';
+  laneSumSelect.value=CRM_LANE_SUM_PERIOD_MODES.has(prefs?.laneSumPeriod?.mode)?prefs.laneSumPeriod.mode:CRM_DEFAULT_LANE_SUM_PERIOD.mode;
+  const laneSumCustomWrap=document.createElement('div');
+  laneSumCustomWrap.className='crm-field__stack';
+  laneSumCustomWrap.append(laneSumFrom, laneSumTo);
+  const syncLaneSumControls=()=>{
+    const custom=laneSumSelect.value==='custom';
+    laneSumFrom.disabled=!custom;
+    laneSumTo.disabled=!custom;
+  };
+  laneSumSelect.addEventListener('change',syncLaneSumControls);
+  syncLaneSumControls();
+  laneSumField.append(laneSumLabel, laneSumSelect, laneSumCustomWrap, laneSumHint);
+
+  const hintsTitle=document.createElement('div');
+  hintsTitle.className='crm-field__label';
+  hintsTitle.textContent='Подсказки к важным кнопкам';
+  const hintsMaster=document.createElement('label');
+  hintsMaster.className='crm-settings-checkbox';
+  const hintsCheckbox=document.createElement('input');
+  hintsCheckbox.type='checkbox';
+  hintsCheckbox.name='prefHintsEnabled';
+  hintsCheckbox.checked=prefs?.hints?.enabled!==false;
+  const hintsText=document.createElement('span');
+  hintsText.textContent='Включить подсказки';
+  hintsMaster.append(hintsCheckbox, hintsText);
+  const hintLevel1=document.createElement('label');
+  hintLevel1.className='crm-settings-checkbox';
+  const hintLevel1Checkbox=document.createElement('input');
+  hintLevel1Checkbox.type='checkbox';
+  hintLevel1Checkbox.name='prefHintLevel1';
+  hintLevel1Checkbox.checked=prefs?.hints?.level1!==false;
+  const hintLevel1Text=document.createElement('span');
+  hintLevel1Text.textContent='1-й уровень: что делает кнопка';
+  hintLevel1.append(hintLevel1Checkbox, hintLevel1Text);
+  const hintLevel2=document.createElement('label');
+  hintLevel2.className='crm-settings-checkbox';
+  const hintLevel2Checkbox=document.createElement('input');
+  hintLevel2Checkbox.type='checkbox';
+  hintLevel2Checkbox.name='prefHintLevel2';
+  hintLevel2Checkbox.checked=prefs?.hints?.level2!==false;
+  const hintLevel2Text=document.createElement('span');
+  hintLevel2Text.textContent='2-й уровень: алгоритм и нюансы';
+  hintLevel2.append(hintLevel2Checkbox, hintLevel2Text);
+  const hintDelayField=document.createElement('label');
+  hintDelayField.className='crm-field';
+  const hintDelayLabel=document.createElement('span');
+  hintDelayLabel.className='crm-field__label';
+  hintDelayLabel.textContent='Задержка перед показом, мс';
+  const hintDelayInput=document.createElement('input');
+  hintDelayInput.type='number';
+  hintDelayInput.className='pc-input';
+  hintDelayInput.name='prefHintDelayMs';
+  hintDelayInput.min='0';
+  hintDelayInput.step='50';
+  hintDelayInput.placeholder=String(CRM_HINT_DEFAULTS.delayMs);
+  if(Number.isFinite(prefs?.hints?.delayMs)){
+    hintDelayInput.value=String(Math.max(0, Math.round(prefs.hints.delayMs)));
+  }
+  const hintDelayHint=document.createElement('span');
+  hintDelayHint.className='crm-field__hint';
+  hintDelayHint.textContent='0 — без задержки. Подсказки появляются при наведении или фокусе.';
+  hintDelayField.append(hintDelayLabel, hintDelayInput, hintDelayHint);
+  const syncHintControls=()=>{
+    const enabled=hintsCheckbox.checked;
+    hintLevel1Checkbox.disabled=!enabled;
+    hintLevel2Checkbox.disabled=!enabled;
+    hintDelayInput.disabled=!enabled;
+  };
+  hintsCheckbox.addEventListener('change',syncHintControls);
+  syncHintControls();
+
+  control.append(autoOption, cascadeOption, tipsOption, horizonField, linkOption, linkGapField, laneSumField, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -18535,10 +19117,21 @@ boardForm.addEventListener('submit',e=>{
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
     showLateTips:!!boardForm.prefShowLateTips?.checked,
-    autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
     linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
-    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:''
+    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
+    laneSumPeriod:{
+      mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
+      from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
+      to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
+    },
+    laneSumModes:state.settings?.preferences?.laneSumModes||{},
+    hints:{
+      enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
+      level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
+      level2:boardForm.prefHintLevel2?boardForm.prefHintLevel2.checked:true,
+      delayMs:boardForm.prefHintDelayMs?boardForm.prefHintDelayMs.value:''
+    }
   });
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
@@ -18966,6 +19559,8 @@ let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
+let crmHardRefreshTimerId=null;
+let crmHardRefreshInFlight=false;
 
 function resolveCrmUserDisplay(){
   if(typeof crmCurrentUser?.displayName==='string'){
@@ -19701,6 +20296,9 @@ function showToast({title='CRM',message='',tone='info',autoClose=4000}={}){
 
 function queueSync(summary){
   crmPendingSummary=summary||'Изменения CRM';
+  if(crmPendingRemotePayload){
+    crmPendingRemoteDirty=true;
+  }
   if(crmSyncTimer) clearTimeout(crmSyncTimer);
   crmSyncTimer=setTimeout(pushCrmToServer,450);
 }
@@ -19900,6 +20498,7 @@ async function pushCrmToServer(){
   }
 
   crmSyncInFlight=false;
+  applyPendingSyncPayload({ silent:true });
 }
 
 function captureCrmScrollSnapshot(){
@@ -19998,24 +20597,150 @@ function applyRemoteCrm(crm){
   restoreCrmScrollSnapshot(uiSnapshot);
 }
 
+function applyPlannerPayloadWithGuards(payload, options={}){
+  if(!payload||!payload.state) return;
+  if(isOrderDialogActive()){
+    deferPlannerRemotePayload(payload);
+    return;
+  }
+  applyPlannerRemotePayload(payload, options);
+}
+
+async function forceCrmStatePull(reason='crm-hard-interval'){
+  if(crmHardRefreshInFlight) return;
+  crmHardRefreshInFlight=true;
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timeoutId=controller?setTimeout(()=>controller.abort(new Error('CRM_STATE_FETCH_TIMEOUT')),REFRESH_TIMEOUT_MS):null;
+  try{
+    const res=await fetch(`/api/state?_=${Date.now()}`,{
+      headers:{ 'Accept':'application/json,text/plain','Cache-Control':'no-cache','Pragma':'no-cache' },
+      cache:'no-store',
+      credentials:'same-origin',
+      signal:controller?controller.signal:undefined
+    });
+    if(!res.ok){
+      return;
+    }
+    const text=await res.text();
+    if(!text){
+      return;
+    }
+    let parsed=null;
+    let hash=null;
+    try{ parsed=JSON.parse(text); } catch(_err){ parsed=null; }
+    if(parsed&&typeof parsed.hash==='string'){ hash=parsed.hash; }
+    const etag=res.headers.get('ETag');
+    const payload={ state:text, hash, etag, reason };
+    applyPlannerPayloadWithGuards(payload,{ forceApply:true, silent:true });
+    if(window.plannerRemote&&typeof window.plannerRemote.applyFingerprint==='function'){
+      window.plannerRemote.applyFingerprint({ etag, hash });
+    }
+  }catch(err){
+    const aborted=err&&err.name==='AbortError';
+    if(!aborted){
+      console.warn('crm hard refresh failed', err);
+    }
+  }finally{
+    if(timeoutId) clearTimeout(timeoutId);
+    crmHardRefreshInFlight=false;
+  }
+}
+
+function resetCrmHardRefreshLoop(intervalMs){
+  if(crmHardRefreshTimerId){
+    clearInterval(crmHardRefreshTimerId);
+    crmHardRefreshTimerId=null;
+  }
+  const normalized=Number(intervalMs);
+  if(!Number.isFinite(normalized) || normalized<=0){
+    return;
+  }
+  const effective=Math.max(normalized, CRM_MIN_AUTO_REFRESH_SECONDS*1000);
+  crmHardRefreshTimerId=setInterval(()=>forceCrmStatePull('crm-hard-interval'), effective);
+  forceCrmStatePull('crm-hard-start');
+}
+
+function applyPlannerRemotePayload(payload, options={}){
+  if(!payload||!payload.state) return;
+  try{
+    remoteUpdateNotified=false;
+    pendingRemoteRevision=null;
+    const prevHash=payload?.prevHash||currentHash;
+    const stateText=typeof payload?.state==='string'?payload.state:String(payload?.state||'');
+    const payloadRev=Number.isFinite(Number(payload?.rev))?Number(payload.rev):null;
+    const fingerprint=resolvePayloadFingerprint(payload);
+    const snapshotMatches=!!stateText && lastAppliedStateSnapshot===stateText;
+    const hasNewerRevision = payloadRev !== null && (!Number.isFinite(lastAppliedRevision) || payloadRev > lastAppliedRevision);
+    if(!hasNewerRevision && snapshotMatches && fingerprint.hash && prevHash && fingerprint.hash===prevHash && options.forceApply!==true){
+      return;
+    }
+    if(fingerprint.hash||fingerprint.etag){
+      updateFingerprint(fingerprint);
+    }
+    const parsed=JSON.parse(payload.state);
+    syncCrmNotificationsMutedFromPlanner(parsed);
+    currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
+    applyCrmWriteAccess();
+    setCrmDataSource(CRM_DATA_SOURCE.remote);
+      if(parsed&&parsed.crm){
+        applyRemoteCrm(parsed.crm);
+        const reason=payload?.reason||'';
+        const shouldToast=!options.silent && (!reason || reason==='sse');
+        if(shouldToast){
+        const message=options.deferredApplied
+          ? 'Получено обновление данных, применили после закрытия окна заказа.'
+          : 'Данные обновлены из планировщика';
+        showToast({title:'CRM',message,tone:'warn'});
+      }
+    }
+    if(stateText){
+      lastAppliedStateSnapshot=stateText;
+    }
+    if(payloadRev!==null){
+      updateRevisionMarker(payloadRev);
+      if(pendingRemoteRevision!==null && payloadRev>=pendingRemoteRevision){
+        pendingRemoteRevision=null;
+        remoteUpdateNotified=false;
+      }
+    }
+  }catch(err){ console.warn('CRM remote update parse failed',err); }
+}
+
+function deferPlannerRemotePayload(payload){
+  crmPendingRemotePayload=payload;
+  crmPendingRemoteDirty=false;
+  if(crmPendingRemoteNotified) return;
+  crmPendingRemoteNotified=true;
+  showToast({
+    title:'CRM',
+    message:'Получено новое обновление. Оно будет применено после завершения редактирования заказа.',
+    tone:'info'
+  });
+}
+
+function applyPendingSyncPayload(options={}){
+  if(!crmPendingSyncPayload) return;
+  const payload=crmPendingSyncPayload;
+  crmPendingSyncPayload=null;
+  if(isOrderDialogActive()){
+    deferPlannerRemotePayload(payload);
+    return;
+  }
+  const mergedOptions={ forceApply:true, ...options };
+  if(mergedOptions.silent==null) mergedOptions.silent=true;
+  applyPlannerRemotePayload(payload, mergedOptions);
+}
+
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
+    if(payload && payload.__appliedDirect){ return; }
     if(!payload||!payload.state) return;
-    try{
-      const parsed=JSON.parse(payload.state);
-      syncCrmNotificationsMutedFromPlanner(parsed);
-      currentWriteMode = normalizeWriteMode(parsed?.meta?.settings?.admin?.writeMode);
-      applyCrmWriteAccess();
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-      if(parsed&&parsed.crm){
-        applyRemoteCrm(parsed.crm);
-        const shouldToast=!payload||!payload.reason||payload.reason==='sse';
-        if(shouldToast){
-          showToast({title:'CRM',message:'Данные обновлены из планировщика',tone:'warn'});
-        }
-      }
-    }catch(err){ console.warn('CRM remote update parse failed',err); }
+    if(isOrderDialogActive()){
+      deferPlannerRemotePayload(payload);
+      return;
+    }
+    applyPlannerRemotePayload(payload);
   });
 }
 
@@ -20029,6 +20754,104 @@ window.addEventListener('beforeunload',()=>{
     pushCrmToServer();
   }
 });
+
+const CRM_HINT_TARGETS=[
+  { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
+  { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
+  { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт строку передела. Shift открывает выбор из списка шаблонов.' },
+  { selector:'#presetStagesBtn', level1:'Базовые переделы', level2:'Добавляет преднастроенный набор шагов в заказ.' },
+  { selector:'#allStagesBtn', level1:'Все переделы', level2:'Открывает полный справочник переделов для вставки в заказ.' },
+  { selector:'#splitBtn', level1:'Подзаказ', level2:'Разбивает текущий заказ на отдельный подзаказ без потери истории.' },
+  { selector:'#orderHistoryBtn', level1:'История', level2:'Показывает журнал изменений по заказу с деталями полей и дат.' },
+  { selector:'#newOrderBtn', level1:'Создать заказ', level2:'Открывает карточку нового заказа. Номер и клиент будут основой названия.' },
+  { selector:'#crmStageReserveBtn', level1:'Бронь', level2:'Управляет резервом часов и исключениями для выбранного передела.' }
+];
+let crmHintBubble=null;
+let crmHintTimer=null;
+
+function ensureCrmHintBubble(){
+  if(!crmHintBubble){
+    crmHintBubble=document.createElement('div');
+    crmHintBubble.className='crm-hint-bubble';
+    document.body.appendChild(crmHintBubble);
+  }
+  return crmHintBubble;
+}
+
+function hideCrmHint(){
+  if(crmHintTimer){
+    clearTimeout(crmHintTimer);
+    crmHintTimer=null;
+  }
+  if(crmHintBubble){
+    crmHintBubble.classList.remove('visible');
+    crmHintBubble.innerHTML='';
+  }
+}
+
+function showCrmHint(target, config){
+  if(!target) return;
+  const prefs=sanitizeCrmHintPreferences(getCrmPreferences()?.hints);
+  if(!prefs.enabled || (!prefs.level1 && !prefs.level2)) return;
+  const bubble=ensureCrmHintBubble();
+  bubble.innerHTML='';
+  if(prefs.level1 && config.level1){
+    const line=document.createElement('div');
+    line.className='crm-hint-bubble__line crm-hint-bubble__line--level1';
+    line.textContent=config.level1;
+    bubble.appendChild(line);
+  }
+  if(prefs.level2 && config.level2){
+    const line=document.createElement('div');
+    line.className='crm-hint-bubble__line crm-hint-bubble__line--level2';
+    line.textContent=config.level2;
+    bubble.appendChild(line);
+  }
+  if(!bubble.childElementCount){
+    return;
+  }
+  const rect=target.getBoundingClientRect();
+  const top=Math.max(8, rect.bottom + 8 + window.scrollY);
+  const centerX=rect.left + rect.width/2 + window.scrollX;
+  bubble.style.top=`${top}px`;
+  bubble.classList.add('visible');
+  const left=Math.max(8, Math.round(centerX - bubble.offsetWidth/2));
+  bubble.style.left=`${left}px`;
+}
+
+function scheduleCrmHint(target, config){
+  hideCrmHint();
+  const prefs=sanitizeCrmHintPreferences(getCrmPreferences()?.hints);
+  if(!prefs.enabled || (!prefs.level1 && !prefs.level2)) return;
+  const delay=Math.max(0, Number(prefs.delayMs)||0);
+  crmHintTimer=setTimeout(()=>{
+    crmHintTimer=null;
+    showCrmHint(target, config);
+  }, delay);
+}
+
+function attachCrmHintTarget(target, config){
+  if(!target || target.dataset.hintBound==='1') return;
+  target.dataset.hintBound='1';
+  target.classList.add('crm-hint-target');
+  const enter=()=>scheduleCrmHint(target, config);
+  const leave=()=>hideCrmHint();
+  target.addEventListener('mouseenter', enter);
+  target.addEventListener('focus', enter);
+  target.addEventListener('mouseleave', leave);
+  target.addEventListener('blur', leave);
+}
+
+function setupCrmHintTargets(){
+  CRM_HINT_TARGETS.forEach(cfg=>{
+    const el=document.querySelector(cfg.selector);
+    if(el){
+      attachCrmHintTarget(el, cfg);
+    }
+  });
+  document.addEventListener('scroll', hideCrmHint, true);
+  window.addEventListener('resize', hideCrmHint);
+}
 
 /* Ripple на кнопках */
 document.addEventListener('click',e=>{
@@ -20543,6 +21366,7 @@ window.addEventListener('resize',()=>{
   syncCrmGanttLayout();
   syncCrmRouteHeaders();
 });
+setupCrmHintTargets();
 renderAll();
 
 updateCrmUserMenu();
