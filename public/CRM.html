@@ -24,7 +24,8 @@
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
-  const CONNECTION_LOSS_REDIRECT_MS = 6000;
+  const CONNECTION_LOSS_REDIRECT_MS = 60000;
+  const CONNECTION_LOSS_PROBE_INTERVAL_MS = 5000;
   let keepAliveIntervalMs = null;
   let idleLogoutThresholdMs = DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
   let keepAliveTimerId = null;
@@ -33,6 +34,8 @@
   let sessionExpired = false;
   let connectionLossTimerId = null;
   let connectionLossReason = null;
+  let connectionLossProbeTimerId = null;
+  let connectionLossStartedAt = null;
 
   const resolveKeepAliveInterval = () => {
     const candidates = [
@@ -82,17 +85,50 @@
       clearTimeout(connectionLossTimerId);
       connectionLossTimerId = null;
     }
+    if (connectionLossProbeTimerId) {
+      clearTimeout(connectionLossProbeTimerId);
+      connectionLossProbeTimerId = null;
+    }
     connectionLossReason = null;
+    connectionLossStartedAt = null;
+  };
+
+  const scheduleConnectionLossProbe = () => {
+    if (sessionExpired || connectionLossProbeTimerId) {
+      return;
+    }
+
+    const attemptProbe = async () => {
+      connectionLossProbeTimerId = null;
+      if (sessionExpired) return;
+
+      const probe = await requestSessionProbe('connection-loss');
+      if (probe) {
+        clearConnectionLossRedirect(true);
+        return;
+      }
+
+      const elapsed = connectionLossStartedAt ? Date.now() - connectionLossStartedAt : 0;
+      const remaining = Math.max(0, CONNECTION_LOSS_REDIRECT_MS - elapsed);
+      if (remaining <= 0) return;
+
+      const nextDelay = Math.max(1000, Math.min(CONNECTION_LOSS_PROBE_INTERVAL_MS, remaining));
+      connectionLossProbeTimerId = setTimeout(attemptProbe, nextDelay);
+    };
+
+    connectionLossProbeTimerId = setTimeout(attemptProbe, 0);
   };
 
   const armConnectionLossRedirect = (origin = 'connection-lost') => {
     if (sessionExpired) return;
     if (connectionLossTimerId) return;
     connectionLossReason = origin;
+    connectionLossStartedAt = Date.now();
     connectionLossTimerId = setTimeout(() => {
       connectionLossTimerId = null;
       handleSessionExpired(origin);
     }, CONNECTION_LOSS_REDIRECT_MS);
+    scheduleConnectionLossProbe();
   };
 
   const sessionExpiredMessage = (origin) => {
@@ -165,7 +201,7 @@
         if (!res.ok) {
           return null;
         }
-        clearConnectionLossRedirect();
+        clearConnectionLossRedirect(true);
         return await res.json().catch(() => null);
       } catch (_err) {
         armConnectionLossRedirect('server-restart');
@@ -325,7 +361,7 @@
     }
     source = new EventSource(EVENTS_ENDPOINT);
     source.onopen = () => {
-      clearConnectionLossRedirect();
+      clearConnectionLossRedirect(true);
     };
     source.onmessage = async (event) => {
       if (!event?.data) {
@@ -375,7 +411,7 @@
         headers: { 'Accept': 'application/json,text/plain' },
         credentials: 'same-origin'
       });
-      clearConnectionLossRedirect();
+      clearConnectionLossRedirect(true);
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         if (res.status === 401) {
