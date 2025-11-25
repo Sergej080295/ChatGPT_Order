@@ -2570,12 +2570,18 @@
     box-shadow: var(--pc-shadow-surface);
     display: grid;
     gap: var(--pc-spacing-sm);
+    min-width: 0;
   }
 
   .crm-stage-stack-wrap {
     display: flex;
     gap: 14px;
-    overflow: auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
     padding-bottom: 4px;
   }
 
@@ -13575,9 +13581,21 @@ function applyCrmCollapseStates(section){
 
 function setCrmSectionCollapsed(section, collapsed){
   if(!Object.prototype.hasOwnProperty.call(CRM_SECTION_COLLAPSE_DEFAULTS, section)) return;
-  crmCollapsedSections={ ...crmCollapsedSections, [section]:!!collapsed };
+  const prev=!!crmCollapsedSections[section];
+  const next=!!collapsed;
+  crmCollapsedSections={ ...crmCollapsedSections, [section]:next };
   persistSectionCollapsePrefs(crmCollapsedSections);
   applyCrmCollapseStates(section);
+  if(prev && !next){
+    if(section==='gantt'){
+      syncCrmGanttLayout();
+    }
+    if(section==='route'){
+      syncCrmRouteRowHeights(crmStageRouteLeft, crmStageRouteBody);
+      syncCrmRouteRowHeights(crmStageRouteLeftCompact, crmStageRouteBodyCompact);
+      syncCrmRouteHeaders();
+    }
+  }
 }
 
 function updateCrmAuxButtons(){
