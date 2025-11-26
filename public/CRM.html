@@ -580,6 +580,15 @@
   };
 
   let autoRefreshWatchdogId = null;
+  let autoRefreshDeferredReason = null;
+
+  const requestDeferredRefreshIfIdle = () => {
+    if (hasPendingLocalChanges()) return;
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
+    if (!autoRefreshDeferredReason) return;
+    autoRefreshDeferredReason = null;
+    requestStateRefresh('deferred-auto-refresh');
+  };
 
   const scheduleAutoRefresh = () => {
     if (refreshTimerId) {
@@ -597,6 +606,7 @@
         }
         processPendingRemoteUpdate({ silent:true });
         if (hasPendingLocalChanges()) {
+          autoRefreshDeferredReason = autoRefreshDeferredReason || 'local-changes';
           return;
         }
         const now = Date.now();
@@ -652,6 +662,7 @@
   const handleWindowFocus = () => {
     markUserActivity();
     requestSessionProbe('focus');
+    requestDeferredRefreshIfIdle();
     handleFocusRefresh();
   };
 
@@ -703,7 +714,8 @@
     },
     getAutoRefreshInterval() {
       return autoRefreshIntervalMs;
-    }
+    },
+    requestDeferredRefreshIfIdle: requestDeferredRefreshIfIdle
   };
 })();
 </script>
@@ -21202,6 +21214,9 @@ async function pushCrmToServer(){
   }finally{
     crmSyncInFlight=false;
     processPendingRemoteUpdate({ silent:true });
+    if(window.plannerRemote && typeof window.plannerRemote.requestDeferredRefreshIfIdle==='function'){
+      window.plannerRemote.requestDeferredRefreshIfIdle();
+    }
   }
 }
 
