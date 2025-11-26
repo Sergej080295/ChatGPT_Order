@@ -741,6 +741,9 @@
         }
       }
       if (parsed && typeof parsed === 'object' && parsed.crm) {
+        if(parsed.meta && parsed.meta.sharedCalendars){
+          window.__CRM_SHARED_STAGE_CALENDARS__ = parsed.meta.sharedCalendars;
+        }
         window.__CRM_INITIAL_STATE__ = parsed.crm;
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.crm));
@@ -4562,12 +4565,13 @@
     padding: var(--pc-spacing-md);
     border-bottom: 1px dashed var(--pc-border);
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: var(--pc-spacing-xs);
   }
 
   .col h2 {
     font-size: 14px;
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -5898,6 +5902,11 @@
       </section>
     </div>
   </div>
+  <div class="crm-lane-visibility" id="crmLaneVisibility" hidden>
+    <div class="crm-lane-visibility__label">Скрытые колонки:</div>
+    <div class="crm-lane-visibility__list" id="crmHiddenLaneList"></div>
+    <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" id="crmShowAllLanes" hidden>Показать все</button>
+  </div>
   <div class="pc-kanban crm-kanban" id="columns" data-animate="fade-in"></div>
 </main>
 
@@ -6595,6 +6604,7 @@ const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop',
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
+const CRM_DEFAULT_KEEP_FREE={ draw:0, laser:0, bend:0, weld:0, mech:0 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
@@ -6993,6 +7003,7 @@ function sanitizeCrmSettings(raw){
     minimum:sanitizeExtraMinimum(extraSource.minimum)
   };
   result.capacity=normalizeCapacityMap(base.capacity, CRM_DEFAULT_CAPACITY);
+  result.keepFree=normalizeKeepFreeMap(base.keepFree, CRM_DEFAULT_KEEP_FREE);
   result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
@@ -7051,6 +7062,7 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   };
 
   result.capacity={ ...fallback.capacity, ...preferred.capacity };
+  result.keepFree={ ...fallback.keepFree, ...preferred.keepFree };
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
   result.preferences={ ...fallback.preferences, ...preferred.preferences };
   result.startView=preferred.startView||fallback.startView;
@@ -7484,6 +7496,10 @@ function getCrmCapacitySettings(){
   return normalizeCapacityMap(state?.settings?.capacity, CRM_DEFAULT_CAPACITY);
 }
 
+function getCrmKeepFreeSettings(){
+  return normalizeKeepFreeMap(state?.settings?.keepFree, CRM_DEFAULT_KEEP_FREE);
+}
+
 function getCrmParallelSettings(){
   return normalizeParallelMap(state?.settings?.parallel, CRM_DEFAULT_PARALLEL);
 }
@@ -7495,6 +7511,16 @@ function getCrmStageCapacity(stageKey){
   if(Number.isFinite(num) && num>=0) return num;
   const fallback=CRM_DEFAULT_CAPACITY[stageKey];
   return Number.isFinite(fallback)?fallback:0;
+}
+
+function getCrmStageKeepFree(stageKey){
+  if(CRM_NOHOUR_STAGES.has(stageKey)) return 0;
+  const map=getCrmKeepFreeSettings();
+  const value=map?.[stageKey];
+  const num=Number(value);
+  if(Number.isFinite(num) && num>=0) return Math.max(0, Math.round(num*10)/10);
+  const fallback=CRM_DEFAULT_KEEP_FREE[stageKey];
+  return Number.isFinite(fallback)&&fallback>=0?Math.max(0,Math.round(fallback*10)/10):0;
 }
 
 function getCrmStageParallel(stageKey){
@@ -7554,6 +7580,49 @@ function getVisibleLanes(){
   });
   if(visible.length) return visible;
   return lanes.slice(0,1);
+}
+
+function setHiddenLanes(nextHidden){
+  const prefs=sanitizeCrmPreferences(state?.settings?.preferences);
+  const unique=[];
+  const seen=new Set();
+  (Array.isArray(nextHidden)?nextHidden:[]).forEach(value=>{
+    if(typeof value!=='string') return;
+    const normalized=value.trim();
+    if(!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    unique.push(normalized);
+  });
+  state.settings.preferences={ ...prefs, hiddenLanes:unique };
+  persistLocal();
+}
+
+function hideLane(lane){
+  if(!lane) return;
+  const hidden=new Set(getHiddenLanes());
+  if(hidden.has(lane)) return;
+  hidden.add(lane);
+  setHiddenLanes([...hidden]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
+}
+
+function showLane(lane){
+  if(!lane) return;
+  const hidden=new Set(getHiddenLanes());
+  if(!hidden.delete(lane)) return;
+  setHiddenLanes([...hidden]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
+}
+
+function showAllLanes(){
+  setHiddenLanes([]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
 }
 
 function setLaneSumModeForLane(lane, mode){
@@ -8106,6 +8175,23 @@ function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY){
   return result;
 }
 
+function normalizeKeepFreeMap(source, fallback=CRM_DEFAULT_KEEP_FREE){
+  const result={};
+  const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_KEEP_FREE;
+  CRM_STAGE_KEYS.forEach(stage=>{
+    if(CRM_NOHOUR_STAGES.has(stage)){
+      result[stage]=0;
+      return;
+    }
+    const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_KEEP_FREE[stage]);
+    const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>=0?Math.round(fallbackRaw*10)/10:0;
+    const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
+    const num=parseNumericValue(raw).number;
+    result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*10)/10:fallbackValue;
+  });
+  return result;
+}
+
 function normalizeParallelMap(source, fallback=CRM_DEFAULT_PARALLEL){
   const result={};
   const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_PARALLEL;
@@ -8281,6 +8367,10 @@ if(document.body){
 
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
 state=ensureCrmStateShape(state);
+if(window.__CRM_SHARED_STAGE_CALENDARS__){
+  applySharedStageCalendarsToBoards(window.__CRM_SHARED_STAGE_CALENDARS__);
+  window.__CRM_SHARED_STAGE_CALENDARS__=null;
+}
 const storedCrmSettings=loadStoredCrmSettings();
 if(storedCrmSettings){
   state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
@@ -8352,6 +8442,36 @@ function ensureCrmStageCalendars(target){
     target.stageCalendars=sanitizeCrmStageCalendars(target.stageCalendars);
   }
   return target.stageCalendars;
+}
+
+function snapshotSharedStageCalendars(boards){
+  const merged={};
+  CRM_STAGE_KEYS.forEach(stage=>{ merged[stage]={ exceptions:[], reserves:[] }; });
+  (Array.isArray(boards)?boards:[]).forEach(board=>{
+    const calendars=ensureCrmStageCalendars(board);
+    CRM_STAGE_KEYS.forEach(stage=>{
+      const entry=calendars?.[stage];
+      if(!entry) return;
+      const exceptions=Array.isArray(entry.exceptions)?entry.exceptions.slice():[];
+      const reserves=Array.isArray(entry.reserves)?entry.reserves.slice():[];
+      const hasData=exceptions.length>0||reserves.length>0;
+      if(hasData || !merged[stage].exceptions?.length && !merged[stage].reserves?.length){
+        merged[stage]={ exceptions, reserves };
+      }
+    });
+  });
+  return sanitizeCrmStageCalendars(merged);
+}
+
+function applySharedStageCalendarsToBoards(shared){
+  const sanitized=sanitizeCrmStageCalendars(shared||{});
+  if(!Array.isArray(state?.boards)) return;
+  state.boards.forEach(board=>{
+    const calendars=ensureCrmStageCalendars(board);
+    CRM_STAGE_KEYS.forEach(stage=>{
+      calendars[stage]=sanitized[stage]||{ exceptions:[], reserves:[] };
+    });
+  });
 }
 
 let crmPlanFreezeDirty=false;
@@ -9358,6 +9478,9 @@ function chip(html,extra){const s=document.createElement('span');s.className='ch
 const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       boardSelect=$('#boardSelect'),
       columns=$('#columns'),
+      crmLaneVisibility=$('#crmLaneVisibility'),
+      crmHiddenLaneList=$('#crmHiddenLaneList'),
+      crmShowAllLanes=$('#crmShowAllLanes'),
       stats=$('#stats'),
       crmOrdersViewEl=$('#crmOrdersView'),
       crmOrdersTableBody=$('#crmOrdersTable tbody'),
@@ -11046,6 +11169,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.capacity)!==JSON.stringify(nextSanitized.capacity)){
     sections.push('Константы вместимости');
   }
+  if(JSON.stringify(prevSanitized.keepFree)!==JSON.stringify(nextSanitized.keepFree)){
+    sections.push('Запас часов по сменам');
+  }
   if(JSON.stringify(prevSanitized.parallel)!==JSON.stringify(nextSanitized.parallel)){
     sections.push('Графики нечасовых переделов');
   }
@@ -11416,6 +11542,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
   }
   const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
   const baseCapacity=Math.max(isHourless?getCrmStageParallel(stageKey):getCrmStageCapacity(stageKey), isHourless?1:0.01);
+  const keepFree=Math.max(0, isHourless?0:getCrmStageKeepFree(stageKey));
   const calendar=getCrmStageCalendar(stageKey);
   const exceptionMap=calendar?.exceptions||new Map();
   const reserveMap=isHourless?new Map():(calendar?.reserves||new Map());
@@ -11564,14 +11691,16 @@ function buildCrmStageSchedule(stageKey, rows, options){
       const reserveWanted=!isHourless && working?(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0):0;
       const resLim=Math.min(reserveWanted, capDay);
       const pubCap=Math.max(0, capDay-resLim);
+      const pubRem=Math.max(0, pubCap-Math.max(0, keepFree));
       perDay.set(ds,{
         date:addDays(date,0),
         segments:[],
         meta:{
           capDay,
           pubCap,
+          keepFree,
           resLim,
-          pubRem:pubCap,
+          pubRem,
           resRem:resLim,
           pubUsed:0,
           resUsed:0,
@@ -11706,6 +11835,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
       day.meta.pubUsed=publicUsed;
       day.meta.resUsed=reserveUsed;
     }
+    day.meta.keepFree=keepFree;
     day.meta.freezeLocked=true;
     day.meta.freezeManual=record.manual===true;
     day.meta.freezeSource=record.manual?'manual':'auto';
@@ -15698,6 +15828,29 @@ function laneLimit(lane){
   return laneVisibleCount.get(lane);
 }
 
+function renderHiddenLaneBar(){
+  if(!crmLaneVisibility || !crmHiddenLaneList || !crmShowAllLanes) return;
+  const hidden=getHiddenLanes();
+  crmHiddenLaneList.innerHTML='';
+  if(!hidden.length){
+    crmLaneVisibility.hidden=true;
+    crmShowAllLanes.hidden=true;
+    return;
+  }
+  crmLaneVisibility.hidden=false;
+  hidden.forEach(lane=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='pc-btn pc-btn--ghost pc-btn--xs crm-lane-visibility__chip';
+    btn.textContent=lane;
+    btn.title='Показать колонку';
+    btn.addEventListener('click',()=>showLane(lane));
+    crmHiddenLaneList.appendChild(btn);
+  });
+  crmShowAllLanes.hidden=false;
+  crmShowAllLanes.onclick=()=>showAllLanes();
+}
+
 function renderBoardSelect(){
   if(!boardSelect) return;
   boardSelect.innerHTML='';
@@ -15725,6 +15878,9 @@ function renderColumns(){
         :'Сумма за период из настроек';
       c.innerHTML=`
         <header>
+          <button class="lane-visibility-toggle" type="button" aria-label="Скрыть колонку">
+            <span aria-hidden="true">▾</span>
+          </button>
           <h2>
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
@@ -15747,6 +15903,12 @@ function renderColumns(){
     const drop=c.querySelector('.drop');
     const more=c.querySelector('.col-more');
     const laneAlert=header?.querySelector('[data-lane-alert]');
+    const hideBtn=header?.querySelector('.lane-visibility-toggle');
+    if(hideBtn){
+      hideBtn.dataset.lane=l;
+      hideBtn.title=`Скрыть «${laneLabel}»`;
+      hideBtn.addEventListener('click',()=>hideLane(l));
+    }
     if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
@@ -15769,6 +15931,7 @@ function renderColumns(){
     });
   });
   enableDnd();
+  renderHiddenLaneBar();
 }
 
 function normalizeStageProgress(value){
@@ -18225,6 +18388,7 @@ function renderCrmCapacitySettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmCapacitySettings();
+  const keepFree=getCrmKeepFreeSettings();
   CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
@@ -18245,6 +18409,29 @@ function renderCrmCapacitySettingsUI(){
   hint.className='crm-settings-summary';
   hint.textContent='Часы в день по каждому переделу.';
   control.appendChild(hint);
+
+  const keepFreeRow=document.createElement('div');
+  keepFreeRow.className='crm-settings-matrix crm-settings-matrix--secondary';
+  const keepFreeTitle=document.createElement('div');
+  keepFreeTitle.className='crm-settings-summary';
+  keepFreeTitle.textContent='Минимальный свободный остаток в дне (часы)';
+  CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
+    const item=document.createElement('div');
+    item.className='crm-settings-matrix-row';
+    const title=document.createElement('label');
+    title.textContent=CRM_STAGE_LABELS[stage]||stage;
+    const input=document.createElement('input');
+    input.type='number';
+    input.min='0';
+    input.step='0.1';
+    input.dataset.crmSetting='keepfree';
+    input.dataset.crmStage=stage;
+    input.value=String(keepFree[stage]??0);
+    item.append(title, input);
+    keepFreeRow.appendChild(item);
+  });
+  control.appendChild(keepFreeTitle);
+  control.appendChild(keepFreeRow);
   row.appendChild(label);
   row.appendChild(control);
   crmCapacityContainer.appendChild(row);
@@ -19364,6 +19551,17 @@ boardForm.addEventListener('submit',e=>{
     }
   });
   state.settings.capacity=normalizeCapacityMap(capacityDraft, state.settings?.capacity||CRM_DEFAULT_CAPACITY);
+  const keepFreeInputs=[...boardForm.querySelectorAll('input[data-crm-setting="keepfree"]')];
+  const keepFreeDraft={};
+  keepFreeInputs.forEach(input=>{
+    const stage=input.dataset.crmStage;
+    if(!stage) return;
+    const value=parseNumericValue(input.value).number;
+    if(Number.isFinite(value)&&value>=0){
+      keepFreeDraft[stage]=Math.round(value*10)/10;
+    }
+  });
+  state.settings.keepFree=normalizeKeepFreeMap(keepFreeDraft, state.settings?.keepFree||CRM_DEFAULT_KEEP_FREE);
   const parallelInputs=[...boardForm.querySelectorAll('input[data-crm-setting="parallel"]')];
   const parallelDraft={};
   parallelInputs.forEach(input=>{
@@ -20656,6 +20854,7 @@ async function pushCrmToServer(){
     if(settingsRef && typeof settingsRef==='object'){
       settingsRef.plannerMode='crm';
     }
+    meta.sharedCalendars=snapshotSharedStageCalendars(snapshot.boards);
     const versions=meta.versions || (meta.versions={});
     versions.crm=(Number(versions.crm)||0)+1;
     meta.lastAuthors=meta.lastAuthors || {};
@@ -20847,11 +21046,14 @@ function restoreCrmScrollSnapshot(snapshot){
   runner(5);
 }
 
-function applyRemoteCrm(crm){
+function applyRemoteCrm(crm, sharedCalendars){
   if(!crm||typeof crm!=='object') return;
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  if(sharedCalendars){
+    applySharedStageCalendarsToBoards(sharedCalendars);
+  }
   const storedSettings=loadStoredCrmSettings();
   if(storedSettings){
     state.settings=mergeCrmSettings(state.settings, storedSettings);
@@ -20870,7 +21072,8 @@ function applyPlannerRemotePayload(payload, options={}){
     applyCrmWriteAccess();
     setCrmDataSource(CRM_DATA_SOURCE.remote);
     if(parsed&&parsed.crm){
-      applyRemoteCrm(parsed.crm);
+      const sharedCalendars=parsed?.meta?.sharedCalendars;
+      applyRemoteCrm(parsed.crm, sharedCalendars);
       const reason=payload?.reason||'';
       const shouldToast=!options.silent && (!reason || reason==='sse');
       if(shouldToast){
