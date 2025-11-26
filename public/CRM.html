@@ -266,22 +266,10 @@
   }
 
   const resolveAutoRefreshInterval = () => {
-    const candidates = [
-      window.CRM_AUTO_REFRESH_MS,
-      window.PLANNER_AUTO_REFRESH_MS,
-      window.__CRM_AUTO_REFRESH_MS__,
-      document.documentElement?.dataset?.crmAutoRefresh
-    ];
-    for (const candidate of candidates) {
-      const parsed = parseIntervalInput(candidate);
-      if (parsed == null) continue;
-      if (parsed <= 0) return 0;
-      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-    }
     return DEFAULT_REFRESH_INTERVAL_MS;
   };
 
-  let autoRefreshIntervalMs = resolveAutoRefreshInterval();
+  let autoRefreshIntervalMs = 5000;
 
   const hasPendingLocalChanges = () => {
     try {
@@ -580,44 +568,55 @@
   };
 
   let autoRefreshWatchdogId = null;
-  let autoRefreshDeferredReason = null;
+  let autoRefreshLoopTimerId = null;
+  let autoRefreshLoopRunning = false;
+  let autoRefreshLoopPending = false;
 
   const requestDeferredRefreshIfIdle = () => {
     if (hasPendingLocalChanges()) return;
-    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
-    if (!autoRefreshDeferredReason) return;
-    autoRefreshDeferredReason = null;
     requestStateRefresh('deferred-auto-refresh');
   };
 
-  const scheduleAutoRefresh = () => {
-    if (refreshTimerId) {
-      clearInterval(refreshTimerId);
-      refreshTimerId = null;
+  const scheduleNextAutoRefreshTick = (delayMs = autoRefreshIntervalMs) => {
+    if (autoRefreshLoopTimerId) {
+      clearTimeout(autoRefreshLoopTimerId);
+      autoRefreshLoopTimerId = null;
     }
-    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
+    if (!Number.isFinite(delayMs) || delayMs <= 0) {
+      delayMs = autoRefreshIntervalMs;
+    }
+    autoRefreshLoopTimerId = setTimeout(runAutoRefreshTick, delayMs);
+  };
+
+  async function runAutoRefreshTick(){
+    if (autoRefreshLoopRunning) {
+      autoRefreshLoopPending = true;
       return;
     }
-    const tick = () => {
-      try {
-        if (sessionExpired) return;
-        if (document.hidden) return;
-        processPendingRemoteUpdate({ silent:true });
-        if (hasPendingLocalChanges()) {
-          autoRefreshDeferredReason = autoRefreshDeferredReason || 'local-changes';
-          return;
-        }
-        const now = Date.now();
-        const overdue = lastRefreshAt && now - lastRefreshAt > autoRefreshIntervalMs * 2.5;
-        if (!refreshPromise && (!lastRefreshAt || overdue || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
-          requestStateRefresh('interval');
-        }
-      } catch (err) {
-        console.warn('plannerRemote auto-refresh tick failed', err);
+    autoRefreshLoopRunning = true;
+    try {
+      processPendingRemoteUpdate({ silent:true });
+      if (sessionExpired) return;
+      if (document.hidden) return;
+      if (hasPendingLocalChanges()) {
+        autoRefreshLoopPending = true;
+        return;
       }
-    };
-    refreshTimerId = setInterval(tick, autoRefreshIntervalMs);
-    setTimeout(tick, 0);
+      await requestStateRefresh('interval');
+      lastRefreshAt = Date.now();
+    } catch (err) {
+      console.warn('plannerRemote auto-refresh tick failed', err);
+    } finally {
+      autoRefreshLoopRunning = false;
+      const nextDelay = autoRefreshLoopPending ? Math.min(2000, autoRefreshIntervalMs) : autoRefreshIntervalMs;
+      autoRefreshLoopPending = false;
+      scheduleNextAutoRefreshTick(nextDelay);
+    }
+  }
+
+  const scheduleAutoRefresh = () => {
+    autoRefreshIntervalMs = 5000;
+    scheduleNextAutoRefreshTick(0);
     armAutoRefreshWatchdog();
   };
 
@@ -626,11 +625,10 @@
       clearInterval(autoRefreshWatchdogId);
       autoRefreshWatchdogId = null;
     }
-    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
-    const watchdogInterval = Math.max(10000, Math.min(60000, autoRefreshIntervalMs * 2));
+    const watchdogInterval = 10000;
     autoRefreshWatchdogId = setInterval(() => {
       const idleFor = lastRefreshAt ? Date.now() - lastRefreshAt : Infinity;
-      const timerMissing = !refreshTimerId && !refreshPromise;
+      const timerMissing = !autoRefreshLoopTimerId && !autoRefreshLoopRunning;
       const overdue = idleFor > Math.max(autoRefreshIntervalMs * 2.5, 15000);
       if (timerMissing || overdue) {
         scheduleAutoRefresh();
@@ -700,11 +698,7 @@
       return requestStateRefresh(reason || 'manual');
     },
     setAutoRefreshInterval(value) {
-      const parsed = parseIntervalInput(value);
-      if (parsed == null) {
-        return autoRefreshIntervalMs;
-      }
-      autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
+      autoRefreshIntervalMs = 5000;
       scheduleAutoRefresh();
       return autoRefreshIntervalMs;
     },
@@ -7700,14 +7694,6 @@ function getCrmStageLinkGapDays(){
 }
 
 function getPreferredAutoRefreshIntervalMs(){
-  const prefs=getCrmPreferences();
-  if(prefs && Object.prototype.hasOwnProperty.call(prefs,'autoRefreshSeconds')){
-    const seconds=Number(prefs.autoRefreshSeconds);
-    if(Number.isFinite(seconds)){
-      if(seconds<=0) return 0;
-      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.round(seconds*1000));
-    }
-  }
   return DEFAULT_REFRESH_INTERVAL_MS;
 }
 
@@ -7721,17 +7707,13 @@ function getCrmRouteHorizonDays(){
 let crmAppliedAutoRefreshMs=null;
 
 function updatePlannerAutoRefreshFromPreferences(){
-  const targetMs=getPreferredAutoRefreshIntervalMs();
-  let effective=targetMs;
+  const targetMs=DEFAULT_REFRESH_INTERVAL_MS;
+  let effective=DEFAULT_REFRESH_INTERVAL_MS;
   const remote=window.plannerRemote;
   if(remote && typeof remote.setAutoRefreshInterval==='function'){
-    if(!(crmAppliedAutoRefreshMs!==null && crmAppliedAutoRefreshMs===targetMs)){
-      const applied=remote.setAutoRefreshInterval(targetMs);
-      if(Number.isFinite(applied)){
-        effective=applied;
-      }
-    }else{
-      effective=crmAppliedAutoRefreshMs;
+    const applied=remote.setAutoRefreshInterval(targetMs);
+    if(Number.isFinite(applied)){
+      effective=applied;
     }
   }
   crmAppliedAutoRefreshMs=effective;
