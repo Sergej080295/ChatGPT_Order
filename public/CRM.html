@@ -20,6 +20,9 @@
   let currentHash = null;
   const MIN_REFRESH_INTERVAL_MS = window.MIN_REFRESH_INTERVAL_MS;
   const DEFAULT_REFRESH_INTERVAL_MS = window.DEFAULT_REFRESH_INTERVAL_MS;
+  const STATE_FETCH_TIMEOUT_MS = 12000;
+  const STATE_SAVE_TIMEOUT_MS = 15000;
+  const AUTO_REFRESH_HANG_MS = 20000;
   let refreshTimerId = null;
   let refreshPromise = null;
   let lastRefreshAt = 0;
@@ -185,6 +188,30 @@
     setTimeout(() => {
       window.location.href = '/login';
     }, SESSION_REDIRECT_DELAY_MS);
+  };
+
+  const createAbortableTimeout = (timeoutMs) => {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== 'function') {
+      return { signal: undefined, abort: () => {}, cancel: () => {} };
+    }
+    const controller = new AbortController();
+    let cancelled = false;
+    const timerId = setTimeout(() => {
+      cancelled = true;
+      controller.abort();
+    }, timeoutMs);
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      clearTimeout(timerId);
+    };
+    const abort = () => {
+      if (cancelled) return;
+      cancelled = true;
+      clearTimeout(timerId);
+      controller.abort();
+    };
+    return { signal: controller.signal, abort, cancel };
   };
 
   const requestSessionProbe = (reason = 'interval') => {
@@ -402,10 +429,14 @@
   };
 
   const loadState = async (options = {}) => {
+    const opts = options && typeof options === 'object' ? options : {};
+    const providedSignal = opts.signal;
+    const timeout = providedSignal ? { signal: providedSignal, cancel: () => {} } : createAbortableTimeout(STATE_FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(STATE_ENDPOINT, {
         headers: { 'Accept': 'application/json,text/plain' },
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: timeout.signal
       });
       clearConnectionLossRedirect(true);
       if (!res.ok) {
@@ -419,13 +450,22 @@
       const bodyInfo = extractBodyFingerprint(text);
       const etag = res.headers.get('ETag');
       updateFingerprint({ etag, hash: bodyInfo?.hash });
-      if (options && (options.withMeta || options.returnMeta)) {
+      if (opts && (opts.withMeta || opts.returnMeta)) {
         return { state: text, etag: currentEtag, hash: currentHash };
       }
       return text;
     } catch (err) {
+      if (err && err.name === 'AbortError') {
+        console.warn('plannerRemote state load aborted', err);
+        return null;
+      }
       armConnectionLossRedirect('server-restart');
       throw err;
+    }
+    finally {
+      if (timeout && typeof timeout.cancel === 'function') {
+        timeout.cancel();
+      }
     }
   };
 
@@ -487,11 +527,17 @@
 
     const attemptSave = async (attempt = 0) => {
       const { headers, body } = buildRequestPayload();
+      const timeout = createAbortableTimeout(STATE_SAVE_TIMEOUT_MS);
       const res = await fetch(STATE_ENDPOINT, {
         method: 'PUT',
         headers,
         body,
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: timeout.signal
+      }).finally(() => {
+        if (timeout && typeof timeout.cancel === 'function') {
+          timeout.cancel();
+        }
       });
       const text = await res.text().catch(() => '') || '';
       const trimmed = text.trim();
@@ -540,8 +586,11 @@
     }
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     refreshPromise = (async () => {
+      const refreshTimeout = createAbortableTimeout(STATE_FETCH_TIMEOUT_MS);
+      lastRefreshStartAt = Date.now();
+      refreshAbortHandle = refreshTimeout.abort;
       try {
-        const meta = await loadState({ withMeta: true });
+        const meta = await loadState({ withMeta: true, signal: refreshTimeout.signal });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
@@ -561,6 +610,11 @@
         armConnectionLossRedirect('state-refresh');
         return null;
       } finally {
+        lastRefreshStartAt = 0;
+        refreshAbortHandle = null;
+        if (refreshTimeout && typeof refreshTimeout.cancel === 'function') {
+          refreshTimeout.cancel();
+        }
         refreshPromise = null;
       }
     })();
@@ -571,6 +625,8 @@
   let autoRefreshLoopTimerId = null;
   let autoRefreshLoopRunning = false;
   let autoRefreshLoopPending = false;
+  let lastRefreshStartAt = 0;
+  let refreshAbortHandle = null;
 
   const requestDeferredRefreshIfIdle = () => {
     if (hasPendingLocalChanges()) return;
@@ -630,6 +686,17 @@
       const idleFor = lastRefreshAt ? Date.now() - lastRefreshAt : Infinity;
       const timerMissing = !autoRefreshLoopTimerId && !autoRefreshLoopRunning;
       const overdue = idleFor > Math.max(autoRefreshIntervalMs * 2.5, 15000);
+      const runningTooLong = autoRefreshLoopRunning && lastRefreshStartAt
+        && (Date.now() - lastRefreshStartAt > AUTO_REFRESH_HANG_MS);
+      if (runningTooLong) {
+        if (typeof refreshAbortHandle === 'function') {
+          refreshAbortHandle();
+        }
+        refreshPromise = null;
+        autoRefreshLoopRunning = false;
+        scheduleAutoRefresh();
+        return;
+      }
       if (timerMissing || overdue) {
         scheduleAutoRefresh();
       }
