@@ -9869,6 +9869,7 @@ let crmOrderHistoryCachedOrderId='';
 let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
+let crmPendingRemoteRequireRefresh=false;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -17756,23 +17757,7 @@ if(orderDlg){
     orderCommentsDraft=[];
     renderOrderComments();
     resetOrderCommentInputs();
-    if(crmPendingRemotePayload){
-      const deferredPayload=crmPendingRemotePayload;
-      crmPendingRemotePayload=null;
-      const wasNotified=crmPendingRemoteNotified;
-      const skipDeferred=crmPendingRemoteDirty;
-      crmPendingRemoteNotified=false;
-      crmPendingRemoteDirty=false;
-      if(skipDeferred){
-        showToast({
-          title:'CRM',
-          message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
-          tone:'info'
-        });
-      }else{
-        applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
-      }
-    }
+    processPendingRemoteUpdate();
   });
 }
 
@@ -21133,49 +21118,50 @@ async function pushCrmToServer(){
     }
   }
 
-    if(success){
-      rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
-      showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
-    }else if(lastError){
-      crmSuppressNext=false;
-      if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
-        console.error('CRM: load planner state failed',lastError.originalError||lastError);
-        showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
-        setCrmDataSource(CRM_DATA_SOURCE.local);
-      }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
-        const now=Date.now();
-        if(now - lastCrmWriteBlockedAt > 5000){
-          showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
-          lastCrmWriteBlockedAt = now;
-        }
-      }else if(lastError.code==='CRM_MERGE_CONFLICT'){
-        const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
-        const conflictLabel=conflicts.slice(0,3).map(item=>{
-          if(!item||typeof item!=='object') return '';
-          if(item.scope==='stageCalendars' && item.stage){
-            return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
-          }
-          if(item.boardId){
-            return `Доска ${item.boardId}`;
-          }
-          return '';
-        }).filter(Boolean).join(', ');
-        const message=conflictLabel
-          ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
-          : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
-        showToast({title:'CRM',message,tone:'error',autoClose:6000});
-      }else{
-        console.error('CRM sync failed',lastError);
-        const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
-        let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
-        if(lastError && lastError.name==='PlannerConflictError'){
-          message='Данные планировщика изменились. Обновите список и повторите попытку.';
-        }
-        showToast({title:'CRM',message,tone:'error',autoClose:5000});
+  if(success){
+    rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
+    showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+  }else if(lastError){
+    crmSuppressNext=false;
+    if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
+      console.error('CRM: load planner state failed',lastError.originalError||lastError);
+      showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+      setCrmDataSource(CRM_DATA_SOURCE.local);
+    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+      const now=Date.now();
+      if(now - lastCrmWriteBlockedAt > 5000){
+        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+        lastCrmWriteBlockedAt = now;
       }
+    }else if(lastError.code==='CRM_MERGE_CONFLICT'){
+      const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
+      const conflictLabel=conflicts.slice(0,3).map(item=>{
+        if(!item||typeof item!=='object') return '';
+        if(item.scope==='stageCalendars' && item.stage){
+          return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
+        }
+        if(item.boardId){
+          return `Доска ${item.boardId}`;
+        }
+        return '';
+      }).filter(Boolean).join(', ');
+      const message=conflictLabel
+        ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
+        : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
+      showToast({title:'CRM',message,tone:'error',autoClose:6000});
+    }else{
+      console.error('CRM sync failed',lastError);
+      const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
+      let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
+      if(lastError && lastError.name==='PlannerConflictError'){
+        message='Данные планировщика изменились. Обновите список и повторите попытку.';
+      }
+      showToast({title:'CRM',message,tone:'error',autoClose:5000});
     }
+  }
 
   crmSyncInFlight=false;
+  processPendingRemoteUpdate({ silent:true });
 }
 
 function captureCrmScrollSnapshot(){
@@ -21303,24 +21289,58 @@ function applyPlannerRemotePayload(payload, options={}){
   }catch(err){ console.warn('CRM remote update parse failed',err); }
 }
 
-function deferPlannerRemotePayload(payload){
+function deferPlannerRemotePayload(payload, options={}){
   crmPendingRemotePayload=payload;
   crmPendingRemoteDirty=false;
+  crmPendingRemoteRequireRefresh=!!options.requireRefresh;
   if(crmPendingRemoteNotified) return;
   crmPendingRemoteNotified=true;
   showToast({
     title:'CRM',
-    message:'Получено новое обновление. Оно будет применено после завершения редактирования заказа.',
+    message:'Получено новое обновление. Оно будет применено после завершения текущих правок.',
     tone:'info'
   });
+}
+
+function processPendingRemoteUpdate(options={}){
+  if(!crmPendingRemotePayload) return;
+  if(isOrderDialogActive() || hasPendingLocalChanges()){
+    return;
+  }
+  const deferredPayload=crmPendingRemotePayload;
+  const wasNotified=crmPendingRemoteNotified;
+  const skipDeferred=crmPendingRemoteDirty;
+  const needsRefresh=crmPendingRemoteRequireRefresh;
+  crmPendingRemotePayload=null;
+  crmPendingRemoteNotified=false;
+  crmPendingRemoteDirty=false;
+  crmPendingRemoteRequireRefresh=false;
+  if(skipDeferred){
+    showToast({
+      title:'CRM',
+      message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
+      tone:'info'
+    });
+    return;
+  }
+  if(needsRefresh && (!deferredPayload.state || !deferredPayload.state.trim())){
+    requestStateRefresh(deferredPayload.reason||'deferred', deferredPayload);
+    return;
+  }
+  applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:options.silent??wasNotified });
 }
 
 if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
   window.plannerRemote.onRemoteUpdate(payload=>{
     if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload||!payload.state) return;
-    if(isOrderDialogActive()){
-      deferPlannerRemotePayload(payload);
+    if(!payload) return;
+    const needsState=!payload.state || !payload.state.trim();
+    if(isOrderDialogActive() || hasPendingLocalChanges()){
+      deferPlannerRemotePayload(payload,{ requireRefresh:needsState });
+      return;
+    }
+    if(needsState){
+      requestStateRefresh(payload.reason||'sse', payload);
       return;
     }
     applyPlannerRemotePayload(payload);
