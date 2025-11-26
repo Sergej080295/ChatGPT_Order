@@ -2582,22 +2582,23 @@
     overflow-y: hidden;
     scrollbar-gutter: stable both-edges;
     padding: 0 2px 6px;
+    position: relative;
     contain: layout paint;
   }
 
   .crm-stage-stack-wrap {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(240px, max-content);
+    display: inline-flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
     gap: 12px;
     width: max-content;
     min-height: 0;
-    align-items: start;
+    padding-bottom: 2px;
   }
 
   .crm-stage-stack-col {
-    min-width: 240px;
-    max-width: 320px;
+    flex: 0 0 auto;
+    width: clamp(240px, 28vw, 320px);
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     padding: 8px;
@@ -5525,15 +5526,15 @@
     <span class="pc-logo-text">PlanCore</span>
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
-    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
-    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
-    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings">Настройки</button>
-    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false">
+    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" title="Открыть CRM">CRM</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" title="Перейти к заказам">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" title="Перейти к переделам">Переделы</button>
+    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" title="Открыть настройки">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" title="Открыть журнал">
       Журнал
       <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
     </button>
-    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden>Админ</button>
+    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden title="Раздел администрирования">Админ</button>
   </nav>
   <div class="pc-header__actions">
     <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
@@ -11514,8 +11515,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
           pubUsed:0,
           resUsed:0,
           excluded:Math.max(0, baseCapacity-capDay),
-          patternOff,
-          reserveExclusive:resLim>1e-6
+          patternOff
         }
       });
     }
@@ -11794,12 +11794,11 @@ function buildCrmStageSchedule(stageKey, rows, options){
         }
       }
       if(remain>1e-6){
-        const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
         const reserveAhead=task.useReserve?hasReserveAhead(addDays(dayCursor,1)):false;
         if(task.useReserve && reserveAhead){
           return progressed;
         }
-        if(publicAllowed && day.meta.pubRem>1e-6){
+        if(day.meta.pubRem>1e-6){
           const take=Math.min(remain, day.meta.pubRem);
           if(take>0){
             day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
@@ -11811,9 +11810,6 @@ function buildCrmStageSchedule(stageKey, rows, options){
             lastFailReason='';
             lastFailDate=null;
           }
-        }else if(!publicAllowed && day.meta.pubRem>1e-6){
-          lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
-          lastFailDate=addDays(dayCursor,0);
         }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
           lastFailReason=late
             ? 'Нет свободной ёмкости: проверьте исключения и ограничения календаря.'
