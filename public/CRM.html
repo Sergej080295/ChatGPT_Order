@@ -7660,11 +7660,14 @@ function getCrmStageLinkGapDays(){
 
 function getPreferredAutoRefreshIntervalMs(){
   const prefs=getCrmPreferences();
-  const seconds=Number(prefs?.autoRefreshSeconds);
-  if(Number.isFinite(seconds) && seconds>0){
-    return Math.round(seconds*1000);
+  if(prefs && Object.prototype.hasOwnProperty.call(prefs,'autoRefreshSeconds')){
+    const seconds=Number(prefs.autoRefreshSeconds);
+    if(Number.isFinite(seconds)){
+      if(seconds<=0) return 0;
+      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.round(seconds*1000));
+    }
   }
-  return 0;
+  return DEFAULT_REFRESH_INTERVAL_MS;
 }
 
 function getCrmRouteHorizonDays(){
