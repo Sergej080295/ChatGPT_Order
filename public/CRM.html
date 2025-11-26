@@ -2084,6 +2084,12 @@
     color: var(--pc-text);
   }
 
+  .crm-settings-checkbox-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-sm);
+  }
+
   .crm-chip-list {
     display: flex;
     flex-wrap: wrap;
@@ -5526,11 +5532,11 @@
     <span class="pc-logo-text">PlanCore</span>
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
-    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" title="Открыть CRM">CRM</button>
-    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" title="Перейти к заказам">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" title="Перейти к переделам">Переделы</button>
-    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" title="Открыть настройки">Настройки</button>
-    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" title="Открыть журнал">
+    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" title="Канбан CRM с колонками статусов">CRM</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" title="Общий список заказов">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" title="Переделы и расписание">Переделы</button>
+    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" title="Настройки доски и отображения">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" title="Журнал изменений CRM">
       Журнал
       <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
     </button>
@@ -6622,7 +6628,9 @@ const CRM_DEFAULT_PREFERENCES={
   linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
-  hints:CRM_HINT_DEFAULTS
+  hints:CRM_HINT_DEFAULTS,
+  autoHideEmptyLanes:false,
+  hiddenLanes:[]
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -7349,6 +7357,22 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
     result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
+    result.autoHideEmptyLanes=raw.autoHideEmptyLanes===true;
+    const hiddenLanes=[];
+    const appendHidden=value=>{
+      if(typeof value!=='string') return;
+      const normalized=value.trim();
+      if(!normalized) return;
+      if(hiddenLanes.includes(normalized)) return;
+      hiddenLanes.push(normalized);
+    };
+    if(Array.isArray(raw.hiddenLanes)){
+      raw.hiddenLanes.forEach(appendHidden);
+    }
+    if(typeof raw.hiddenLane==='string'){
+      appendHidden(raw.hiddenLane);
+    }
+    result.hiddenLanes=hiddenLanes;
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
     const intervalKeys=[
@@ -7493,6 +7517,43 @@ function getLaneSumModeForLane(lane){
   const normalized=typeof map[key]==='string'?map[key].trim().toLowerCase():'';
   if(CRM_LANE_SUM_MODES.has(normalized)) return normalized;
   return 'range';
+}
+
+function getHiddenLanes(){
+  const prefs=getCrmPreferences();
+  const list=Array.isArray(prefs?.hiddenLanes)?prefs.hiddenLanes:[];
+  const result=[];
+  const seen=new Set();
+  list.forEach(value=>{
+    if(typeof value!=='string') return;
+    const normalized=value.trim();
+    if(!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(normalized);
+  });
+  return result;
+}
+
+function getVisibleLanes(){
+  const b=currentBoard();
+  if(!b || !Array.isArray(b.lanes)) return [];
+  const lanes=b.lanes.filter(l=>typeof l==='string' && l.trim());
+  const hidden=new Set(getHiddenLanes());
+  const autoHide=!!getCrmPreferences()?.autoHideEmptyLanes;
+  const lanesWithOrders=new Set();
+  (b.orders||[]).forEach(o=>{
+    const lane=typeof o?.status==='string'?o.status.trim():'';
+    if(lane){
+      lanesWithOrders.add(lane);
+    }
+  });
+  const visible=lanes.filter(lane=>{
+    if(hidden.has(lane)) return false;
+    if(autoHide && !lanesWithOrders.has(lane)) return false;
+    return true;
+  });
+  if(visible.length) return visible;
+  return lanes.slice(0,1);
 }
 
 function setLaneSumModeForLane(lane, mode){
@@ -15652,8 +15713,9 @@ function renderColumns(){
   const b=currentBoard();
   columns.innerHTML='';
   if(!b){return;}
-  ensureLaneRegistry(b.lanes,b.id);
-    b.lanes.forEach(l=>{
+  const visibleLanes=getVisibleLanes();
+  ensureLaneRegistry(visibleLanes,b.id);
+  visibleLanes.forEach(l=>{
       const c=document.createElement('div');
       c.className='col';
       const laneLabel=escapeHtml(l);
@@ -15909,13 +15971,16 @@ function normalizeServiceTotalValue(raw){
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
-  const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const visibleLanes=getVisibleLanes();
+  const visibleLaneSet=new Set(visibleLanes);
+  const allLaneSet=new Set(Array.isArray(b.lanes)?b.lanes:[]);
+  const map=Object.fromEntries(visibleLanes.map(l=>[l,[]]));
   const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
   const totalOrders=b.orders.length;
   let filteredTotal=0;
   let filteredActive=0;
   let totalActive=0;
-  const fallbackLane=b.lanes[0]??null;
+  const fallbackLane=visibleLanes[0]??null;
   const canCompleteOrders=crmCanCompleteOrders();
   const laneSumRange=resolveLaneSumRange();
   const todayTime=today0().getTime();
@@ -15923,23 +15988,25 @@ function renderCards(){
     computeOrderDatesFromStages(o);
     ensureOrderStatusEnteredAt(o);
     let lane=o.status;
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      lane=fallbackLane;
-    }
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      return;
-    }
     if(!doneLane || lane!==doneLane){
       totalActive++;
     }
     if(!orderMatchesSearch(o)){
       return;
     }
-    map[lane].push(o);
     filteredTotal++;
     if(!doneLane || lane!==doneLane){
       filteredActive++;
     }
+    const laneKnown=allLaneSet.has(lane);
+    const laneVisible=visibleLaneSet.has(lane);
+    if(!laneVisible){
+      if(!laneKnown && fallbackLane){
+        map[fallbackLane].push(o);
+      }
+      return;
+    }
+    map[lane].push(o);
   });
 
   Object.entries(map).forEach(([lane,arr])=>{
@@ -15991,7 +16058,8 @@ function renderCards(){
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,hasOverdueStage?'danger':'warn'))}
+      const periodLabel=formatStagePeriod(o.start,o.end);
+      if(periodLabel && periodLabel!=='—'){chips.appendChild(chip(periodLabel,hasOverdueStage?'danger':'warn'))}
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
         <div class="row">
@@ -18721,6 +18789,58 @@ function renderCrmPreferencesSettingsUI(){
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
+
+  const laneRow=document.createElement('div');
+  laneRow.className='crm-settings-row crm-settings-row--stack';
+  const laneLabel=document.createElement('div');
+  laneLabel.className='crm-settings-label';
+  laneLabel.textContent='Отображение колонок';
+  const laneControl=document.createElement('div');
+  laneControl.className='crm-settings-control crm-settings-control--column';
+
+  const autoHideOption=document.createElement('label');
+  autoHideOption.className='crm-settings-checkbox';
+  const autoHideCheckbox=document.createElement('input');
+  autoHideCheckbox.type='checkbox';
+  autoHideCheckbox.name='prefAutoHideEmptyLanes';
+  autoHideCheckbox.checked=prefs.autoHideEmptyLanes===true;
+  const autoHideText=document.createElement('span');
+  autoHideText.textContent='Автоматически скрывать пустые колонки';
+  autoHideOption.append(autoHideCheckbox, autoHideText);
+
+  const manualList=document.createElement('div');
+  manualList.className='crm-settings-checkbox-list';
+  const lanes=currentBoard()?.lanes||[];
+  const hidden=new Set(getHiddenLanes());
+  if(lanes.length){
+    lanes.forEach(lane=>{
+      if(typeof lane!=='string' || !lane.trim()) return;
+      const option=document.createElement('label');
+      option.className='crm-settings-checkbox';
+      const cb=document.createElement('input');
+      cb.type='checkbox';
+      cb.name='prefHiddenLanes';
+      cb.value=lane;
+      cb.checked=hidden.has(lane);
+      const text=document.createElement('span');
+      text.textContent=`Скрыть «${lane}»`;
+      option.append(cb, text);
+      manualList.appendChild(option);
+    });
+  }else{
+    const empty=document.createElement('span');
+    empty.className='crm-field__hint';
+    empty.textContent='Нет колонок для настройки.';
+    manualList.appendChild(empty);
+  }
+
+  const lanesHint=document.createElement('span');
+  lanesHint.className='crm-field__hint';
+  lanesHint.textContent='Настройка скрытия колонок сохраняется для текущего пользователя.';
+
+  laneControl.append(autoHideOption, manualList, lanesHint);
+  laneRow.append(laneLabel, laneControl);
+  crmPreferencesContainer.appendChild(laneRow);
 }
 
 function renderCrmStartViewSettingsUI(){
@@ -19269,6 +19389,10 @@ boardForm.addEventListener('submit',e=>{
       to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
     },
     laneSumModes:state.settings?.preferences?.laneSumModes||{},
+    autoHideEmptyLanes:!!boardForm.prefAutoHideEmptyLanes?.checked,
+    hiddenLanes:[...boardForm.querySelectorAll('input[name="prefHiddenLanes"]:checked')]
+      .map(input=>input.value)
+      .filter(Boolean),
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
       level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
@@ -20795,6 +20919,12 @@ window.addEventListener('beforeunload',()=>{
 });
 
 const CRM_HINT_TARGETS=[
+  { selector:'#crmNavKanbanBtn', level1:'CRM', level2:'Канбан с колонками статусов и перетаскиванием карточек заказов.' },
+  { selector:'#crmOrdersTabBtn', level1:'Заказы', level2:'Табличный список заказов с поиском, фильтрами и экспортом.' },
+  { selector:'#crmStageTabBtn', level1:'Переделы', level2:'Подетальная раскладка заказов по переделам, маршрут и диаграмма Ганта.' },
+  { selector:'#crmSettingsNavBtn', level1:'Настройки', level2:'Параметры доски, отображение колонок, мощности и графики переделов.' },
+  { selector:'#crmJournalBtn', level1:'Журнал', level2:'История изменений заказов, расписаний и настроек CRM.' },
+  { selector:'#crmAdminNavBtn', level1:'Админ', level2:'Администрирование пользователей, ролей и глобальных параметров.' },
   { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
   { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
   { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт строку передела. Shift открывает выбор из списка шаблонов.' },
