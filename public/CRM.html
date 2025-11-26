@@ -7064,7 +7064,14 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   result.capacity={ ...fallback.capacity, ...preferred.capacity };
   result.keepFree={ ...fallback.keepFree, ...preferred.keepFree };
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
-  result.preferences={ ...fallback.preferences, ...preferred.preferences };
+  const mergedPreferences={ ...fallback.preferences, ...preferred.preferences };
+  if(Array.isArray(fallback.preferences?.hiddenLanes)){
+    mergedPreferences.hiddenLanes=fallback.preferences.hiddenLanes.slice();
+  }
+  if(Object.prototype.hasOwnProperty.call(fallback.preferences||{},'autoHideEmptyLanes')){
+    mergedPreferences.autoHideEmptyLanes=fallback.preferences.autoHideEmptyLanes===true;
+  }
+  result.preferences=mergedPreferences;
   result.startView=preferred.startView||fallback.startView;
 
   const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
@@ -18995,37 +19002,11 @@ function renderCrmPreferencesSettingsUI(){
   autoHideText.textContent='Автоматически скрывать пустые колонки';
   autoHideOption.append(autoHideCheckbox, autoHideText);
 
-  const manualList=document.createElement('div');
-  manualList.className='crm-settings-checkbox-list';
-  const lanes=currentBoard()?.lanes||[];
-  const hidden=new Set(getHiddenLanes());
-  if(lanes.length){
-    lanes.forEach(lane=>{
-      if(typeof lane!=='string' || !lane.trim()) return;
-      const option=document.createElement('label');
-      option.className='crm-settings-checkbox';
-      const cb=document.createElement('input');
-      cb.type='checkbox';
-      cb.name='prefHiddenLanes';
-      cb.value=lane;
-      cb.checked=hidden.has(lane);
-      const text=document.createElement('span');
-      text.textContent=`Скрыть «${lane}»`;
-      option.append(cb, text);
-      manualList.appendChild(option);
-    });
-  }else{
-    const empty=document.createElement('span');
-    empty.className='crm-field__hint';
-    empty.textContent='Нет колонок для настройки.';
-    manualList.appendChild(empty);
-  }
-
   const lanesHint=document.createElement('span');
   lanesHint.className='crm-field__hint';
-  lanesHint.textContent='Настройка скрытия колонок сохраняется для текущего пользователя.';
+  lanesHint.textContent='Ручное скрытие колонок теперь доступно прямо на доске (стрелка на заголовке колонки). Настройка сохраняется только для текущего пользователя.';
 
-  laneControl.append(autoHideOption, manualList, lanesHint);
+  laneControl.append(autoHideOption, lanesHint);
   laneRow.append(laneLabel, laneControl);
   crmPreferencesContainer.appendChild(laneRow);
 }
@@ -19588,9 +19569,7 @@ boardForm.addEventListener('submit',e=>{
     },
     laneSumModes:state.settings?.preferences?.laneSumModes||{},
     autoHideEmptyLanes:!!boardForm.prefAutoHideEmptyLanes?.checked,
-    hiddenLanes:[...boardForm.querySelectorAll('input[name="prefHiddenLanes"]:checked')]
-      .map(input=>input.value)
-      .filter(Boolean),
+    hiddenLanes:getHiddenLanes(),
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
       level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
@@ -21051,8 +21030,10 @@ function applyRemoteCrm(crm, sharedCalendars){
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
-  if(sharedCalendars){
-    applySharedStageCalendarsToBoards(sharedCalendars);
+  const unifiedCalendars=sharedCalendars||snapshotSharedStageCalendars(state.boards);
+  if(unifiedCalendars){
+    applySharedStageCalendarsToBoards(unifiedCalendars);
+    window.__CRM_SHARED_STAGE_CALENDARS__=unifiedCalendars;
   }
   const storedSettings=loadStoredCrmSettings();
   if(storedSettings){
