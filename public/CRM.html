@@ -585,6 +585,7 @@
         refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
+      processPendingRemoteUpdate({ silent:true });
       if (hasPendingLocalChanges()) {
         refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
@@ -21318,9 +21319,10 @@ function processPendingRemoteUpdate(options={}){
   if(skipDeferred){
     showToast({
       title:'CRM',
-      message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
+      message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Обновляем данные...',
       tone:'info'
     });
+    requestStateRefresh('missed-update', deferredPayload);
     return;
   }
   if(needsRefresh && (!deferredPayload.state || !deferredPayload.state.trim())){
