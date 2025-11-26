@@ -158,6 +158,10 @@
       clearInterval(refreshTimerId);
       refreshTimerId = null;
     }
+    if (autoRefreshWatchdogId) {
+      clearInterval(autoRefreshWatchdogId);
+      autoRefreshWatchdogId = null;
+    }
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -575,6 +579,8 @@
     return refreshPromise;
   };
 
+  let autoRefreshWatchdogId = null;
+
   const scheduleAutoRefresh = () => {
     if (refreshTimerId) {
       clearTimeout(refreshTimerId);
@@ -585,23 +591,46 @@
     }
     const tick = () => {
       refreshTimerId = null;
-      if (document.hidden) {
-        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-        return;
+      try {
+        if (document.hidden) {
+          return;
+        }
+        processPendingRemoteUpdate({ silent:true });
+        if (hasPendingLocalChanges()) {
+          return;
+        }
+        const now = Date.now();
+        if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
+          requestStateRefresh('interval');
+        }
+      } catch (err) {
+        console.warn('plannerRemote auto-refresh tick failed', err);
+      } finally {
+        if (!refreshTimerId && autoRefreshIntervalMs && autoRefreshIntervalMs > 0) {
+          refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+        }
       }
-      processPendingRemoteUpdate({ silent:true });
-      if (hasPendingLocalChanges()) {
-        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-        return;
-      }
-      const now = Date.now();
-      if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
-        requestStateRefresh('interval');
-      }
-      refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
     };
     refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+    armAutoRefreshWatchdog();
   };
+
+  function armAutoRefreshWatchdog(){
+    if (autoRefreshWatchdogId) {
+      clearInterval(autoRefreshWatchdogId);
+      autoRefreshWatchdogId = null;
+    }
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) return;
+    const watchdogInterval = Math.max(10000, Math.min(60000, autoRefreshIntervalMs * 2));
+    autoRefreshWatchdogId = setInterval(() => {
+      const idleFor = lastRefreshAt ? Date.now() - lastRefreshAt : Infinity;
+      const timerMissing = !refreshTimerId && !refreshPromise;
+      const overdue = idleFor > Math.max(autoRefreshIntervalMs * 2.5, 15000);
+      if (timerMissing || overdue) {
+        scheduleAutoRefresh();
+      }
+    }, watchdogInterval);
+  }
 
   const handleFocusRefresh = () => {
     if (document.hidden) return;
