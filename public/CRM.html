@@ -20995,210 +20995,214 @@ function buildCrmOrdersSummary(snapshot){
 async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
-  if(!crmWriteAccessEnabled()){
-    const now=Date.now();
-    if(now - lastCrmWriteBlockedAt > 5000){
-      showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
-      lastCrmWriteBlockedAt = now;
-    }
-    return;
-  }
   crmSyncInFlight=true;
-  if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
-    setCrmDataSource(CRM_DATA_SOURCE.local);
-    crmSyncInFlight=false;
-    return;
-  }
-  state=ensureCrmStateShape(state);
-  const localSnapshot=deepClone(state);
-  if(!localSnapshot){
-    crmSyncInFlight=false;
-    return;
-  }
+  try{
+    if(!crmWriteAccessEnabled()){
+      const now=Date.now();
+      if(now - lastCrmWriteBlockedAt > 5000){
+        showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
+        lastCrmWriteBlockedAt = now;
+      }
+      return;
+    }
+    if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
+      setCrmDataSource(CRM_DATA_SOURCE.local);
+      return;
+    }
+    state=ensureCrmStateShape(state);
+    const localSnapshot=deepClone(state);
+    if(!localSnapshot){
+      return;
+    }
     const summaryText = crmPendingSummary || 'Изменения CRM';
     let lastMergedCrm=null;
     let lastBaseHash=null;
     let lastBaseEtag=null;
 
-  const buildPlannerSyncPayload = async () => {
-    let plannerSnapshot=null;
-    let baseEtag=null;
-    let baseHash=null;
-    try{
-      const loaded=await window.plannerRemote.loadState({ withMeta:true });
-      let raw=loaded;
-        if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
-          raw=loaded.state;
-          if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
-          if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
-        }
-        lastBaseHash=baseHash;
-        lastBaseEtag=baseEtag;
-        plannerSnapshot=raw?JSON.parse(raw):{};
-        setCrmDataSource(CRM_DATA_SOURCE.remote);
+    const buildPlannerSyncPayload = async () => {
+      let plannerSnapshot=null;
+      let baseEtag=null;
+      let baseHash=null;
+      try{
+        const loaded=await window.plannerRemote.loadState({ withMeta:true });
+        let raw=loaded;
+          if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
+            raw=loaded.state;
+            if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
+            if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
+          }
+          lastBaseHash=baseHash;
+          lastBaseEtag=baseEtag;
+          plannerSnapshot=raw?JSON.parse(raw):{};
+          setCrmDataSource(CRM_DATA_SOURCE.remote);
+        }catch(err){
+        const loadError=new Error('CRM planner state load failed');
+        loadError.code='CRM_PLANNER_LOAD_FAILED';
+        loadError.originalError=err;
+        setCrmDataSource(CRM_DATA_SOURCE.local);
+        throw loadError;
+      }
+      if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
+      syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+      const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
+      currentWriteMode = adminWriteMode;
+      applyCrmWriteAccess();
+      if(adminWriteMode === DATA_WRITE_MODES.planner){
+        const err = new Error('Изменения разрешены только из Планировщика');
+        err.code = 'WRITE_MODE_FORBIDDEN';
+        throw err;
+      }
+      const baseSnapshot=getCrmBaselineSnapshot(plannerSnapshot.crm);
+      const mergeResult=mergeCrmSnapshotWithRemote({ base:baseSnapshot, local:localSnapshot, remote:plannerSnapshot.crm });
+      if(Array.isArray(mergeResult.conflicts) && mergeResult.conflicts.length){
+        const conflictError=new Error('Конфликт одновременных изменений CRM');
+        conflictError.code='CRM_MERGE_CONFLICT';
+        conflictError.conflicts=mergeResult.conflicts;
+        throw conflictError;
+      }
+      plannerSnapshot.crm=mergeResult.crm;
+      lastMergedCrm=mergeResult.crm;
+      const nowIso=new Date().toISOString();
+      plannerSnapshot.crm.updatedAt=nowIso;
+      const actorName=getCrmActorName();
+      const now=new Date(nowIso);
+      const nowLabel=now.toLocaleString();
+      const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
+      const settingsRef = (meta.settings && typeof meta.settings==='object') ? meta.settings : (meta.settings = {});
+      if(settingsRef && typeof settingsRef==='object'){
+        settingsRef.plannerMode='crm';
+      }
+      meta.sharedCalendars=snapshotSharedStageCalendars(plannerSnapshot.crm.boards);
+      const versions=meta.versions || (meta.versions={});
+      versions.crm=(Number(versions.crm)||0)+1;
+      meta.lastAuthors=meta.lastAuthors || {};
+      meta.lastAuthors.crm={ name:actorName, at:nowIso };
+      const summaryObj=buildCrmOrdersSummary(plannerSnapshot.crm);
+      meta.lastChange={
+        stage:'crm',
+        stages:['crm'],
+        summary:summaryText,
+        user:actorName,
+        source:'crm',
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      };
+      meta.ordersSummary=summaryObj;
+      const history=Array.isArray(meta.history)?meta.history.slice(-199):[];
+      history.push({
+        id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
+        stage:'crm',
+        user:actorName,
+        summary:summaryText,
+        source:'crm',
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      });
+      meta.history=history;
+
+      const metaPayload={
+        stage:'crm',
+        source:'crm',
+        summary:summaryText,
+        user:actorName,
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      };
+      if(baseHash) metaPayload.baseHash=baseHash;
+      if(baseEtag) metaPayload.baseEtag=baseEtag;
+      if(!metaPayload.ifMatch){
+        if(baseEtag) metaPayload.ifMatch=baseEtag;
+        else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
+      }
+      metaPayload.channel='crm';
+      return {
+        stateString:JSON.stringify(plannerSnapshot),
+        metaPayload
+      };
+    };
+
+    let attempt=0;
+    let success=false;
+    let lastError=null;
+    while(attempt<2 && !success){
+      attempt+=1;
+      let payload;
+      try{
+        payload=await buildPlannerSyncPayload();
       }catch(err){
-      const loadError=new Error('CRM planner state load failed');
-      loadError.code='CRM_PLANNER_LOAD_FAILED';
-      loadError.originalError=err;
-      setCrmDataSource(CRM_DATA_SOURCE.local);
-      throw loadError;
-    }
-    if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
-    syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
-    const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
-    currentWriteMode = adminWriteMode;
-    applyCrmWriteAccess();
-    if(adminWriteMode === DATA_WRITE_MODES.planner){
-      const err = new Error('Изменения разрешены только из Планировщика');
-      err.code = 'WRITE_MODE_FORBIDDEN';
-      throw err;
-    }
-    const baseSnapshot=getCrmBaselineSnapshot(plannerSnapshot.crm);
-    const mergeResult=mergeCrmSnapshotWithRemote({ base:baseSnapshot, local:localSnapshot, remote:plannerSnapshot.crm });
-    if(Array.isArray(mergeResult.conflicts) && mergeResult.conflicts.length){
-      const conflictError=new Error('Конфликт одновременных изменений CRM');
-      conflictError.code='CRM_MERGE_CONFLICT';
-      conflictError.conflicts=mergeResult.conflicts;
-      throw conflictError;
-    }
-    plannerSnapshot.crm=mergeResult.crm;
-    lastMergedCrm=mergeResult.crm;
-    const nowIso=new Date().toISOString();
-    plannerSnapshot.crm.updatedAt=nowIso;
-    const actorName=getCrmActorName();
-    const now=new Date(nowIso);
-    const nowLabel=now.toLocaleString();
-    const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
-    const settingsRef = (meta.settings && typeof meta.settings==='object') ? meta.settings : (meta.settings = {});
-    if(settingsRef && typeof settingsRef==='object'){
-      settingsRef.plannerMode='crm';
-    }
-    meta.sharedCalendars=snapshotSharedStageCalendars(plannerSnapshot.crm.boards);
-    const versions=meta.versions || (meta.versions={});
-    versions.crm=(Number(versions.crm)||0)+1;
-    meta.lastAuthors=meta.lastAuthors || {};
-    meta.lastAuthors.crm={ name:actorName, at:nowIso };
-    const summaryObj=buildCrmOrdersSummary(plannerSnapshot.crm);
-    meta.lastChange={
-      stage:'crm',
-      stages:['crm'],
-      summary:summaryText,
-      user:actorName,
-      source:'crm',
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    };
-    meta.ordersSummary=summaryObj;
-    const history=Array.isArray(meta.history)?meta.history.slice(-199):[];
-    history.push({
-      id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
-      stage:'crm',
-      user:actorName,
-      summary:summaryText,
-      source:'crm',
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    });
-    meta.history=history;
-
-    const metaPayload={
-      stage:'crm',
-      source:'crm',
-      summary:summaryText,
-      user:actorName,
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    };
-    if(baseHash) metaPayload.baseHash=baseHash;
-    if(baseEtag) metaPayload.baseEtag=baseEtag;
-    if(!metaPayload.ifMatch){
-      if(baseEtag) metaPayload.ifMatch=baseEtag;
-      else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
-    }
-    metaPayload.channel='crm';
-    return {
-      stateString:JSON.stringify(plannerSnapshot),
-      metaPayload
-    };
-  };
-
-  let attempt=0;
-  let success=false;
-  let lastError=null;
-  while(attempt<2 && !success){
-    attempt+=1;
-    let payload;
-    try{
-      payload=await buildPlannerSyncPayload();
-    }catch(err){
-      lastError=err;
-      break;
-    }
-    try{
-      crmSuppressNext=true;
-      await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-      success=true;
-    }catch(err){
-      crmSuppressNext=false;
-      lastError=err;
-      if(err && err.code==='WRITE_MODE_FORBIDDEN'){
+        lastError=err;
         break;
       }
-      if(err && err.name==='PlannerConflictError' && attempt<2){
-        continue;
+      try{
+        crmSuppressNext=true;
+        await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
+        setCrmDataSource(CRM_DATA_SOURCE.remote);
+        success=true;
+      }catch(err){
+        crmSuppressNext=false;
+        lastError=err;
+        if(err && err.code==='WRITE_MODE_FORBIDDEN'){
+          break;
+        }
+        if(err && err.name==='PlannerConflictError' && attempt<2){
+          continue;
+        }
+        break;
       }
-      break;
     }
-  }
 
-  if(success){
-    rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
-    showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
-  }else if(lastError){
+    if(success){
+      rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
+      showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    }else if(lastError){
+      crmSuppressNext=false;
+      if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
+        console.error('CRM: load planner state failed',lastError.originalError||lastError);
+        showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+        setCrmDataSource(CRM_DATA_SOURCE.local);
+      }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+        const now=Date.now();
+        if(now - lastCrmWriteBlockedAt > 5000){
+          showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+          lastCrmWriteBlockedAt = now;
+        }
+      }else if(lastError.code==='CRM_MERGE_CONFLICT'){
+        const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
+        const conflictLabel=conflicts.slice(0,3).map(item=>{
+          if(!item||typeof item!=='object') return '';
+          if(item.scope==='stageCalendars' && item.stage){
+            return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
+          }
+          if(item.boardId){
+            return `Доска ${item.boardId}`;
+          }
+          return '';
+        }).filter(Boolean).join(', ');
+        const message=conflictLabel
+          ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
+          : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
+        showToast({title:'CRM',message,tone:'error',autoClose:6000});
+      }else{
+        console.error('CRM sync failed',lastError);
+        const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
+        let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
+        if(lastError && lastError.name==='PlannerConflictError'){
+          message='Данные планировщика изменились. Обновите список и повторите попытку.';
+        }
+        showToast({title:'CRM',message,tone:'error',autoClose:5000});
+      }
+    }
+  }catch(err){
     crmSuppressNext=false;
-    if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
-      console.error('CRM: load planner state failed',lastError.originalError||lastError);
-      showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
-      setCrmDataSource(CRM_DATA_SOURCE.local);
-    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
-      const now=Date.now();
-      if(now - lastCrmWriteBlockedAt > 5000){
-        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
-        lastCrmWriteBlockedAt = now;
-      }
-    }else if(lastError.code==='CRM_MERGE_CONFLICT'){
-      const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
-      const conflictLabel=conflicts.slice(0,3).map(item=>{
-        if(!item||typeof item!=='object') return '';
-        if(item.scope==='stageCalendars' && item.stage){
-          return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
-        }
-        if(item.boardId){
-          return `Доска ${item.boardId}`;
-        }
-        return '';
-      }).filter(Boolean).join(', ');
-      const message=conflictLabel
-        ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
-        : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
-      showToast({title:'CRM',message,tone:'error',autoClose:6000});
-    }else{
-      console.error('CRM sync failed',lastError);
-      const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
-      let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
-      if(lastError && lastError.name==='PlannerConflictError'){
-        message='Данные планировщика изменились. Обновите список и повторите попытку.';
-      }
-      showToast({title:'CRM',message,tone:'error',autoClose:5000});
-    }
+    console.error('CRM sync crashed', err);
+    showToast({ title:'CRM', message:'Синхронизация CRM прервана. Обновите страницу и повторите.', tone:'error', autoClose:6000 });
+  }finally{
+    crmSyncInFlight=false;
+    processPendingRemoteUpdate({ silent:true });
   }
-
-  crmSyncInFlight=false;
-  processPendingRemoteUpdate({ silent:true });
 }
 
 function captureCrmScrollSnapshot(){
