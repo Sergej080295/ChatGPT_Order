@@ -592,36 +592,32 @@
 
   const scheduleAutoRefresh = () => {
     if (refreshTimerId) {
-      clearTimeout(refreshTimerId);
+      clearInterval(refreshTimerId);
       refreshTimerId = null;
     }
     if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
     const tick = () => {
-      refreshTimerId = null;
       try {
-        if (document.hidden) {
-          return;
-        }
+        if (sessionExpired) return;
+        if (document.hidden) return;
         processPendingRemoteUpdate({ silent:true });
         if (hasPendingLocalChanges()) {
           autoRefreshDeferredReason = autoRefreshDeferredReason || 'local-changes';
           return;
         }
         const now = Date.now();
-        if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
+        const overdue = lastRefreshAt && now - lastRefreshAt > autoRefreshIntervalMs * 2.5;
+        if (!refreshPromise && (!lastRefreshAt || overdue || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
           requestStateRefresh('interval');
         }
       } catch (err) {
         console.warn('plannerRemote auto-refresh tick failed', err);
-      } finally {
-        if (!refreshTimerId && autoRefreshIntervalMs && autoRefreshIntervalMs > 0) {
-          refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
-        }
       }
     };
-    refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+    refreshTimerId = setInterval(tick, autoRefreshIntervalMs);
+    setTimeout(tick, 0);
     armAutoRefreshWatchdog();
   };
 
