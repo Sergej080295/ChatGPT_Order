@@ -654,11 +654,10 @@
       processPendingRemoteUpdate({ silent:true });
       if (sessionExpired) return;
       if (document.hidden) return;
-      if (hasPendingLocalChanges()) {
+      const payload = await requestStateRefresh('interval');
+      if (!payload && hasPendingLocalChanges()) {
         autoRefreshLoopPending = true;
-        return;
       }
-      await requestStateRefresh('interval');
       lastRefreshAt = Date.now();
     } catch (err) {
       console.warn('plannerRemote auto-refresh tick failed', err);
