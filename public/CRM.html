@@ -8138,6 +8138,15 @@ const deepClone=value=>{
   }
 };
 
+const isDeepEqual=(a,b)=>{
+  if(a===b) return true;
+  try{
+    return JSON.stringify(a)===JSON.stringify(b);
+  }catch(_err){
+    return false;
+  }
+};
+
 function parseNumericValue(raw){
   if(raw===null||raw===undefined){
     return { number:0, hasValue:false };
@@ -8365,24 +8374,25 @@ const crmPermissions=(()=>{
   return { ...defaults, ...crmCurrentUser.permissions, stageAccess };
 })();
 const crmRoleLabels=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
-const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
-const crmAuthMode=CRM_AUTH_INFO.authMode||'local';
-const crmAllowGuest=!!CRM_AUTH_INFO.allowGuest;
-if(document.body){
-  document.body.dataset.crmRole=crmPrimaryRole||'';
-}
+  const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
+  const crmAuthMode=CRM_AUTH_INFO.authMode||'local';
+  const crmAllowGuest=!!CRM_AUTH_INFO.allowGuest;
+  if(document.body){
+    document.body.dataset.crmRole=crmPrimaryRole||'';
+  }
 
-let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
-state=ensureCrmStateShape(state);
-if(window.__CRM_SHARED_STAGE_CALENDARS__){
-  applySharedStageCalendarsToBoards(window.__CRM_SHARED_STAGE_CALENDARS__);
-  window.__CRM_SHARED_STAGE_CALENDARS__=null;
-}
-const storedCrmSettings=loadStoredCrmSettings();
-if(storedCrmSettings){
-  state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
-}
-persistLocal();
+  let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
+  state=ensureCrmStateShape(state);
+  if(window.__CRM_SHARED_STAGE_CALENDARS__){
+    applySharedStageCalendarsToBoards(window.__CRM_SHARED_STAGE_CALENDARS__);
+    window.__CRM_SHARED_STAGE_CALENDARS__=null;
+  }
+  const storedCrmSettings=loadStoredCrmSettings();
+  if(storedCrmSettings){
+    state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
+  }
+  let crmRemoteBaseline=null;
+  persistLocal();
 let crmCollapsedSections=loadSectionCollapsePrefs();
 function applyTrashRetention(){
   applyTrashRetentionToTarget(state);
@@ -8408,6 +8418,23 @@ function persistLocal(){
     removeLegacyStorage(CRM_STATE_STORAGE_KEY, CRM_STATE_STORAGE_FALLBACKS);
   }
   catch(err){console.warn('CRM local save failed',err);}
+}
+
+function rememberCrmBaseline(hash,snapshot){
+  try{
+    const baseSnapshot=snapshot&&typeof snapshot==='object'?snapshot:state;
+    const normalized=ensureCrmStateShape(deepClone(baseSnapshot));
+    crmRemoteBaseline={ hash:hash||null, snapshot:normalized };
+  }catch(err){
+    console.warn('CRM baseline capture failed',err);
+  }
+}
+
+function getCrmBaselineSnapshot(fallback){
+  if(crmRemoteBaseline && crmRemoteBaseline.snapshot && typeof crmRemoteBaseline.snapshot==='object'){
+    return ensureCrmStateShape(deepClone(crmRemoteBaseline.snapshot));
+  }
+  return ensureCrmStateShape(deepClone(fallback||state));
 }
 let crmAutoOptimizeGuard=false;
 
@@ -8479,6 +8506,183 @@ function applySharedStageCalendarsToBoards(shared){
       calendars[stage]=sanitized[stage]||{ exceptions:[], reserves:[] };
     });
   });
+}
+
+function buildCalendarMap(entries){
+  const map=new Map();
+  (Array.isArray(entries)?entries:[]).forEach(item=>{
+    const iso=Array.isArray(item)?item[0]:item?.[0];
+    const val=Array.isArray(item)?item[1]:item?.[1];
+    if(!iso) return;
+    map.set(String(iso), Number.isFinite(val)?val:null);
+  });
+  return map;
+}
+
+function diffCalendarMap(baseMap, nextMap){
+  const diff=new Map();
+  const keys=new Set([...baseMap.keys(), ...nextMap.keys()]);
+  keys.forEach(key=>{
+    const baseVal=baseMap.has(key)?baseMap.get(key):null;
+    const nextVal=nextMap.has(key)?nextMap.get(key):null;
+    const normalizedBase=Number.isFinite(baseVal)?baseVal:null;
+    const normalizedNext=Number.isFinite(nextVal)?nextVal:null;
+    if(normalizedBase!==normalizedNext){
+      diff.set(key, nextVal);
+    }
+  });
+  return diff;
+}
+
+function mapToCalendarEntries(map, allowZero){
+  const entries=Array.from(map.entries())
+    .filter(([iso])=>!!iso)
+    .map(([iso,value])=>[iso, value]);
+  return sanitizeCrmCalendarEntries(entries, allowZero);
+}
+
+function mergeCalendarEntries({ baseEntries=[], localEntries=[], remoteEntries=[], allowZero=false, stageKey='', kind='' }){
+  const baseMap=buildCalendarMap(sanitizeCrmCalendarEntries(baseEntries, allowZero));
+  const localMap=buildCalendarMap(sanitizeCrmCalendarEntries(localEntries, allowZero));
+  const remoteMap=buildCalendarMap(sanitizeCrmCalendarEntries(remoteEntries, allowZero));
+  const localDiff=diffCalendarMap(baseMap, localMap);
+  const remoteDiff=diffCalendarMap(baseMap, remoteMap);
+  const merged=new Map(remoteMap.entries());
+  const conflicts=[];
+
+  localDiff.forEach((value, iso)=>{
+    const remoteChanged=remoteDiff.has(iso);
+    const remoteValue=remoteMap.has(iso)?remoteMap.get(iso):null;
+    const normalizedLocal=Number.isFinite(value)?value:null;
+    const normalizedRemote=Number.isFinite(remoteValue)?remoteValue:null;
+    if(remoteChanged && normalizedLocal!==normalizedRemote){
+      conflicts.push({ stage:stageKey, kind, iso });
+      return;
+    }
+    if(value===null || value===undefined){
+      merged.delete(iso);
+    }else{
+      merged.set(iso, value);
+    }
+  });
+
+  return { entries: mapToCalendarEntries(merged, allowZero), conflicts };
+}
+
+function mergeStageCalendars(baseCalendars, localCalendars, remoteCalendars){
+  const merged={};
+  const conflicts=[];
+  const base=sanitizeCrmStageCalendars(baseCalendars||{});
+  const local=sanitizeCrmStageCalendars(localCalendars||{});
+  const remote=sanitizeCrmStageCalendars(remoteCalendars||{});
+
+  CRM_STAGE_KEYS.forEach(stage=>{
+    const localEntry=local[stage]||{ exceptions:[], reserves:[] };
+    const remoteEntry=remote[stage]||{ exceptions:[], reserves:[] };
+    const baseEntry=base[stage]||{ exceptions:[], reserves:[] };
+    const mergedExceptions=mergeCalendarEntries({
+      baseEntries:baseEntry.exceptions,
+      localEntries:localEntry.exceptions,
+      remoteEntries:remoteEntry.exceptions,
+      allowZero:true,
+      stageKey:stage,
+      kind:'exceptions'
+    });
+    const mergedReserves=mergeCalendarEntries({
+      baseEntries:baseEntry.reserves,
+      localEntries:localEntry.reserves,
+      remoteEntries:remoteEntry.reserves,
+      allowZero:false,
+      stageKey:stage,
+      kind:'reserves'
+    });
+    merged[stage]={
+      exceptions:mergedExceptions.entries,
+      reserves:mergedReserves.entries
+    };
+    conflicts.push(...mergedExceptions.conflicts, ...mergedReserves.conflicts);
+  });
+
+  return { calendars: merged, conflicts };
+}
+
+function stripBoardCalendars(board){
+  if(!board||typeof board!=='object') return null;
+  const clone=deepClone(board);
+  if(clone && typeof clone==='object'){
+    delete clone.stageCalendars;
+  }
+  return clone;
+}
+
+function mergeCrmSnapshotWithRemote({ base=null, local=null, remote=null }){
+  const baseState=ensureCrmStateShape(deepClone(base||{}));
+  const localState=ensureCrmStateShape(deepClone(local||{}));
+  const remoteState=ensureCrmStateShape(deepClone(remote||{}));
+  const merged=ensureCrmStateShape(deepClone(remoteState));
+  const conflicts=[];
+
+  if(localState.currentBoardId){
+    merged.currentBoardId=localState.currentBoardId;
+  }
+
+  const baseSettings=baseState.settings||{};
+  const localSettings=localState.settings||{};
+  const remoteSettings=remoteState.settings||{};
+  const settingsChangedLocal=!isDeepEqual(baseSettings, localSettings);
+  const settingsChangedRemote=!isDeepEqual(baseSettings, remoteSettings);
+  if(settingsChangedLocal && settingsChangedRemote && !isDeepEqual(localSettings, remoteSettings)){
+    conflicts.push({ scope:'settings' });
+  }else if(settingsChangedLocal){
+    merged.settings=deepClone(localSettings);
+  }
+
+  const baseBoards=new Map((Array.isArray(baseState.boards)?baseState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const localBoards=new Map((Array.isArray(localState.boards)?localState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const remoteBoards=new Map((Array.isArray(remoteState.boards)?remoteState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const boardIds=new Set();
+  [baseBoards, localBoards, remoteBoards].forEach(map=>{ map.forEach((_,key)=>{ if(key) boardIds.add(key); }); });
+  const remoteOrder=(Array.isArray(remoteState.boards)?remoteState.boards:[]).map(b=>b.id||b.code||b.name||'');
+
+  const mergedBoards=[];
+  boardIds.forEach(id=>{
+    const baseBoard=baseBoards.get(id)||null;
+    const localBoard=localBoards.get(id)||null;
+    const remoteBoard=remoteBoards.get(id)||null;
+    const initial=remoteBoard||localBoard||baseBoard;
+    if(!initial) return;
+    const target=deepClone(initial);
+    const calendarMerge=mergeStageCalendars(baseBoard?.stageCalendars, localBoard?.stageCalendars, target.stageCalendars);
+    target.stageCalendars=calendarMerge.calendars;
+    calendarMerge.conflicts.forEach(conf=>conflicts.push({ ...conf, scope:'stageCalendars', boardId:id }));
+
+    const baseSlim=stripBoardCalendars(baseBoard);
+    const localSlim=stripBoardCalendars(localBoard);
+    const remoteSlim=stripBoardCalendars(remoteBoard);
+    const localChanged=!isDeepEqual(baseSlim, localSlim);
+    const remoteChanged=!isDeepEqual(baseSlim, remoteSlim);
+    if(localChanged && remoteChanged && !isDeepEqual(localSlim, remoteSlim)){
+      conflicts.push({ scope:'board', boardId:id });
+    }else if(localChanged && localSlim){
+      Object.keys(localBoard||{}).forEach(key=>{
+        if(key==='stageCalendars') return;
+        target[key]=deepClone(localBoard[key]);
+      });
+    }
+
+    mergedBoards.push(target);
+  });
+
+  merged.boards=mergedBoards.sort((a,b)=>{
+    const aIdx=remoteOrder.indexOf(a.id||a.code||a.name||'');
+    const bIdx=remoteOrder.indexOf(b.id||b.code||b.name||'');
+    if(aIdx===-1 && bIdx===-1) return 0;
+    if(aIdx===-1) return 1;
+    if(bIdx===-1) return -1;
+    return aIdx-bIdx;
+  });
+
+  return { crm: merged, conflicts };
 }
 
 let crmPlanFreezeDirty=false;
@@ -20784,12 +20988,15 @@ async function pushCrmToServer(){
     return;
   }
   state=ensureCrmStateShape(state);
-  const snapshot=deepClone(state);
-  if(!snapshot){
+  const localSnapshot=deepClone(state);
+  if(!localSnapshot){
     crmSyncInFlight=false;
     return;
   }
-  const summaryText = crmPendingSummary || 'Изменения CRM';
+    const summaryText = crmPendingSummary || 'Изменения CRM';
+    let lastMergedCrm=null;
+    let lastBaseHash=null;
+    let lastBaseEtag=null;
 
   const buildPlannerSyncPayload = async () => {
     let plannerSnapshot=null;
@@ -20798,14 +21005,16 @@ async function pushCrmToServer(){
     try{
       const loaded=await window.plannerRemote.loadState({ withMeta:true });
       let raw=loaded;
-      if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
-        raw=loaded.state;
-        if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
-        if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
-      }
-      plannerSnapshot=raw?JSON.parse(raw):{};
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-    }catch(err){
+        if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
+          raw=loaded.state;
+          if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
+          if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
+        }
+        lastBaseHash=baseHash;
+        lastBaseEtag=baseEtag;
+        plannerSnapshot=raw?JSON.parse(raw):{};
+        setCrmDataSource(CRM_DATA_SOURCE.remote);
+      }catch(err){
       const loadError=new Error('CRM planner state load failed');
       loadError.code='CRM_PLANNER_LOAD_FAILED';
       loadError.originalError=err;
@@ -20822,7 +21031,16 @@ async function pushCrmToServer(){
       err.code = 'WRITE_MODE_FORBIDDEN';
       throw err;
     }
-    plannerSnapshot.crm=snapshot;
+    const baseSnapshot=getCrmBaselineSnapshot(plannerSnapshot.crm);
+    const mergeResult=mergeCrmSnapshotWithRemote({ base:baseSnapshot, local:localSnapshot, remote:plannerSnapshot.crm });
+    if(Array.isArray(mergeResult.conflicts) && mergeResult.conflicts.length){
+      const conflictError=new Error('Конфликт одновременных изменений CRM');
+      conflictError.code='CRM_MERGE_CONFLICT';
+      conflictError.conflicts=mergeResult.conflicts;
+      throw conflictError;
+    }
+    plannerSnapshot.crm=mergeResult.crm;
+    lastMergedCrm=mergeResult.crm;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
     const actorName=getCrmActorName();
@@ -20833,12 +21051,12 @@ async function pushCrmToServer(){
     if(settingsRef && typeof settingsRef==='object'){
       settingsRef.plannerMode='crm';
     }
-    meta.sharedCalendars=snapshotSharedStageCalendars(snapshot.boards);
+    meta.sharedCalendars=snapshotSharedStageCalendars(plannerSnapshot.crm.boards);
     const versions=meta.versions || (meta.versions={});
     versions.crm=(Number(versions.crm)||0)+1;
     meta.lastAuthors=meta.lastAuthors || {};
     meta.lastAuthors.crm={ name:actorName, at:nowIso };
-    const summaryObj=buildCrmOrdersSummary(snapshot);
+    const summaryObj=buildCrmOrdersSummary(plannerSnapshot.crm);
     meta.lastChange={
       stage:'crm',
       stages:['crm'],
@@ -20915,30 +21133,47 @@ async function pushCrmToServer(){
     }
   }
 
-  if(success){
-    showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
-  }else if(lastError){
-    crmSuppressNext=false;
-    if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
-      console.error('CRM: load planner state failed',lastError.originalError||lastError);
-      showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
-      setCrmDataSource(CRM_DATA_SOURCE.local);
-    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
-      const now=Date.now();
-      if(now - lastCrmWriteBlockedAt > 5000){
-        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
-        lastCrmWriteBlockedAt = now;
+    if(success){
+      rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
+      showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    }else if(lastError){
+      crmSuppressNext=false;
+      if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
+        console.error('CRM: load planner state failed',lastError.originalError||lastError);
+        showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+        setCrmDataSource(CRM_DATA_SOURCE.local);
+      }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+        const now=Date.now();
+        if(now - lastCrmWriteBlockedAt > 5000){
+          showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+          lastCrmWriteBlockedAt = now;
+        }
+      }else if(lastError.code==='CRM_MERGE_CONFLICT'){
+        const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
+        const conflictLabel=conflicts.slice(0,3).map(item=>{
+          if(!item||typeof item!=='object') return '';
+          if(item.scope==='stageCalendars' && item.stage){
+            return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
+          }
+          if(item.boardId){
+            return `Доска ${item.boardId}`;
+          }
+          return '';
+        }).filter(Boolean).join(', ');
+        const message=conflictLabel
+          ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
+          : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
+        showToast({title:'CRM',message,tone:'error',autoClose:6000});
+      }else{
+        console.error('CRM sync failed',lastError);
+        const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
+        let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
+        if(lastError && lastError.name==='PlannerConflictError'){
+          message='Данные планировщика изменились. Обновите список и повторите попытку.';
+        }
+        showToast({title:'CRM',message,tone:'error',autoClose:5000});
       }
-    }else{
-      console.error('CRM sync failed',lastError);
-      const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
-      let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
-      if(lastError && lastError.name==='PlannerConflictError'){
-        message='Данные планировщика изменились. Обновите список и повторите попытку.';
-      }
-      showToast({title:'CRM',message,tone:'error',autoClose:5000});
     }
-  }
 
   crmSyncInFlight=false;
 }
@@ -21041,6 +21276,7 @@ function applyRemoteCrm(crm, sharedCalendars){
   }
   persistLocal();
   renderAll();
+  rememberCrmBaseline(currentHash||null, state);
   restoreCrmScrollSnapshot(uiSnapshot);
 }
 
