@@ -165,6 +165,10 @@
       clearInterval(autoRefreshWatchdogId);
       autoRefreshWatchdogId = null;
     }
+    if (crmPendingRemoteFlushTimer) {
+      clearInterval(crmPendingRemoteFlushTimer);
+      crmPendingRemoteFlushTimer = null;
+    }
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -735,6 +739,7 @@
   document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
 
   scheduleAutoRefresh();
+  ensurePendingRemoteFlush();
   scheduleKeepAlive();
   requestSessionProbe('startup');
 
@@ -9963,6 +9968,7 @@ let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
 let crmPendingRemoteRequireRefresh=false;
+let crmPendingRemoteFlushTimer=null;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -21400,6 +21406,22 @@ function deferPlannerRemotePayload(payload, options={}){
     message:'Получено новое обновление. Оно будет применено после завершения текущих правок.',
     tone:'info'
   });
+  ensurePendingRemoteFlush();
+}
+
+function ensurePendingRemoteFlush(){
+  if(crmPendingRemoteFlushTimer) return;
+  crmPendingRemoteFlushTimer=setInterval(()=>{
+    if(!crmPendingRemotePayload) return;
+    if(isOrderDialogActive() || hasPendingLocalChanges()) return;
+    processPendingRemoteUpdate({ silent:true });
+  },1500);
+}
+
+function stopPendingRemoteFlush(){
+  if(!crmPendingRemoteFlushTimer) return;
+  clearInterval(crmPendingRemoteFlushTimer);
+  crmPendingRemoteFlushTimer=null;
 }
 
 function processPendingRemoteUpdate(options={}){
@@ -21415,6 +21437,7 @@ function processPendingRemoteUpdate(options={}){
   crmPendingRemoteNotified=false;
   crmPendingRemoteDirty=false;
   crmPendingRemoteRequireRefresh=false;
+  stopPendingRemoteFlush();
   if(skipDeferred){
     showToast({
       title:'CRM',
