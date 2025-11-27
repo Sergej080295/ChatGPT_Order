@@ -9621,6 +9621,22 @@ function attachCrmStageDetailScrollbar(){
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
+(function ensureSingleCrmStageDetailCard(){
+  const detailCards=Array.from(document.querySelectorAll('#crmStageDetailCard'));
+  if(detailCards.length>1){
+    detailCards.slice(1).forEach(node=>node.remove());
+  }
+  const primary=detailCards[0];
+  document.querySelectorAll('.crm-stage-detail-card').forEach(section=>{
+    if(section===primary) return;
+    const hasViewport=section.querySelector('.crm-stage-detail-viewport');
+    const hasNavButtons=section.querySelector('#crmStageDetailPrev') && section.querySelector('#crmStageDetailNext');
+    if(!hasViewport || !hasNavButtons){
+      section.remove();
+    }
+  });
+})();
+
 
 const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       boardSelect=$('#boardSelect'),
