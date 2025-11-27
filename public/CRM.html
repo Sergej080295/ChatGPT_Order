@@ -6604,7 +6604,6 @@ const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop',
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
-const CRM_DEFAULT_KEEP_FREE={ draw:0, laser:0, bend:0, weld:0, mech:0 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
@@ -7003,7 +7002,6 @@ function sanitizeCrmSettings(raw){
     minimum:sanitizeExtraMinimum(extraSource.minimum)
   };
   result.capacity=normalizeCapacityMap(base.capacity, CRM_DEFAULT_CAPACITY);
-  result.keepFree=normalizeKeepFreeMap(base.keepFree, CRM_DEFAULT_KEEP_FREE);
   result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
@@ -7062,7 +7060,6 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   };
 
   result.capacity={ ...fallback.capacity, ...preferred.capacity };
-  result.keepFree={ ...fallback.keepFree, ...preferred.keepFree };
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
   const mergedPreferences={ ...fallback.preferences, ...preferred.preferences };
   if(Array.isArray(fallback.preferences?.hiddenLanes)){
@@ -7503,10 +7500,6 @@ function getCrmCapacitySettings(){
   return normalizeCapacityMap(state?.settings?.capacity, CRM_DEFAULT_CAPACITY);
 }
 
-function getCrmKeepFreeSettings(){
-  return normalizeKeepFreeMap(state?.settings?.keepFree, CRM_DEFAULT_KEEP_FREE);
-}
-
 function getCrmParallelSettings(){
   return normalizeParallelMap(state?.settings?.parallel, CRM_DEFAULT_PARALLEL);
 }
@@ -7518,16 +7511,6 @@ function getCrmStageCapacity(stageKey){
   if(Number.isFinite(num) && num>=0) return num;
   const fallback=CRM_DEFAULT_CAPACITY[stageKey];
   return Number.isFinite(fallback)?fallback:0;
-}
-
-function getCrmStageKeepFree(stageKey){
-  if(CRM_NOHOUR_STAGES.has(stageKey)) return 0;
-  const map=getCrmKeepFreeSettings();
-  const value=map?.[stageKey];
-  const num=Number(value);
-  if(Number.isFinite(num) && num>=0) return Math.max(0, Math.round(num*10)/10);
-  const fallback=CRM_DEFAULT_KEEP_FREE[stageKey];
-  return Number.isFinite(fallback)&&fallback>=0?Math.max(0,Math.round(fallback*10)/10):0;
 }
 
 function getCrmStageParallel(stageKey){
@@ -8178,23 +8161,6 @@ function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY){
     const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
     const num=Number(raw);
     result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*100)/100:fallbackValue;
-  });
-  return result;
-}
-
-function normalizeKeepFreeMap(source, fallback=CRM_DEFAULT_KEEP_FREE){
-  const result={};
-  const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_KEEP_FREE;
-  CRM_STAGE_KEYS.forEach(stage=>{
-    if(CRM_NOHOUR_STAGES.has(stage)){
-      result[stage]=0;
-      return;
-    }
-    const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_KEEP_FREE[stage]);
-    const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>=0?Math.round(fallbackRaw*10)/10:0;
-    const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
-    const num=parseNumericValue(raw).number;
-    result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*10)/10:fallbackValue;
   });
   return result;
 }
@@ -11176,9 +11142,6 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.capacity)!==JSON.stringify(nextSanitized.capacity)){
     sections.push('Константы вместимости');
   }
-  if(JSON.stringify(prevSanitized.keepFree)!==JSON.stringify(nextSanitized.keepFree)){
-    sections.push('Запас часов по сменам');
-  }
   if(JSON.stringify(prevSanitized.parallel)!==JSON.stringify(nextSanitized.parallel)){
     sections.push('Графики нечасовых переделов');
   }
@@ -11549,7 +11512,6 @@ function buildCrmStageSchedule(stageKey, rows, options){
   }
   const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
   const baseCapacity=Math.max(isHourless?getCrmStageParallel(stageKey):getCrmStageCapacity(stageKey), isHourless?1:0.01);
-  const keepFree=Math.max(0, isHourless?0:getCrmStageKeepFree(stageKey));
   const calendar=getCrmStageCalendar(stageKey);
   const exceptionMap=calendar?.exceptions||new Map();
   const reserveMap=isHourless?new Map():(calendar?.reserves||new Map());
@@ -11698,14 +11660,13 @@ function buildCrmStageSchedule(stageKey, rows, options){
       const reserveWanted=!isHourless && working?(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0):0;
       const resLim=Math.min(reserveWanted, capDay);
       const pubCap=Math.max(0, capDay-resLim);
-      const pubRem=Math.max(0, pubCap-Math.max(0, keepFree));
+      const pubRem=Math.max(0, pubCap);
       perDay.set(ds,{
         date:addDays(date,0),
         segments:[],
         meta:{
           capDay,
           pubCap,
-          keepFree,
           resLim,
           pubRem,
           resRem:resLim,
@@ -11842,7 +11803,6 @@ function buildCrmStageSchedule(stageKey, rows, options){
       day.meta.pubUsed=publicUsed;
       day.meta.resUsed=reserveUsed;
     }
-    day.meta.keepFree=keepFree;
     day.meta.freezeLocked=true;
     day.meta.freezeManual=record.manual===true;
     day.meta.freezeSource=record.manual?'manual':'auto';
@@ -11999,17 +11959,14 @@ function buildCrmStageSchedule(stageKey, rows, options){
         if(day.meta.pubRem>1e-6){
           const take=Math.min(remain, day.meta.pubRem);
           if(take>0){
-            const tinySlice=take<=keepFree+1e-6;
-            if(!tinySlice){
-              day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
-              day.segments.push({ uid:task.id, hours:take, late, section:'public', orderId:task.orderId||'' });
-              record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'public' });
-              remain-=take;
-              progressed=true;
-              day.meta.pubUsed=(day.meta.pubUsed||0)+take;
-              lastFailReason='';
-              lastFailDate=null;
-            }
+            day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
+            day.segments.push({ uid:task.id, hours:take, late, section:'public', orderId:task.orderId||'' });
+            record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'public' });
+            remain-=take;
+            progressed=true;
+            day.meta.pubUsed=(day.meta.pubUsed||0)+take;
+            lastFailReason='';
+            lastFailDate=null;
           }
         }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
           lastFailReason=late
@@ -18398,7 +18355,6 @@ function renderCrmCapacitySettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmCapacitySettings();
-  const keepFree=getCrmKeepFreeSettings();
   CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
@@ -18419,29 +18375,6 @@ function renderCrmCapacitySettingsUI(){
   hint.className='crm-settings-summary';
   hint.textContent='Часы в день по каждому переделу.';
   control.appendChild(hint);
-
-  const keepFreeRow=document.createElement('div');
-  keepFreeRow.className='crm-settings-matrix crm-settings-matrix--secondary';
-  const keepFreeTitle=document.createElement('div');
-  keepFreeTitle.className='crm-settings-summary';
-  keepFreeTitle.textContent='Минимальный свободный остаток в дне (часы)';
-  CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
-    const item=document.createElement('div');
-    item.className='crm-settings-matrix-row';
-    const title=document.createElement('label');
-    title.textContent=CRM_STAGE_LABELS[stage]||stage;
-    const input=document.createElement('input');
-    input.type='number';
-    input.min='0';
-    input.step='0.1';
-    input.dataset.crmSetting='keepfree';
-    input.dataset.crmStage=stage;
-    input.value=String(keepFree[stage]??0);
-    item.append(title, input);
-    keepFreeRow.appendChild(item);
-  });
-  control.appendChild(keepFreeTitle);
-  control.appendChild(keepFreeRow);
   row.appendChild(label);
   row.appendChild(control);
   crmCapacityContainer.appendChild(row);
@@ -19535,17 +19468,6 @@ boardForm.addEventListener('submit',e=>{
     }
   });
   state.settings.capacity=normalizeCapacityMap(capacityDraft, state.settings?.capacity||CRM_DEFAULT_CAPACITY);
-  const keepFreeInputs=[...boardForm.querySelectorAll('input[data-crm-setting="keepfree"]')];
-  const keepFreeDraft={};
-  keepFreeInputs.forEach(input=>{
-    const stage=input.dataset.crmStage;
-    if(!stage) return;
-    const value=parseNumericValue(input.value).number;
-    if(Number.isFinite(value)&&value>=0){
-      keepFreeDraft[stage]=Math.round(value*10)/10;
-    }
-  });
-  state.settings.keepFree=normalizeKeepFreeMap(keepFreeDraft, state.settings?.keepFree||CRM_DEFAULT_KEEP_FREE);
   const parallelInputs=[...boardForm.querySelectorAll('input[data-crm-setting="parallel"]')];
   const parallelDraft={};
   parallelInputs.forEach(input=>{
