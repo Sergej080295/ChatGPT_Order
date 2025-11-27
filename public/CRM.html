@@ -2624,6 +2624,12 @@
     min-height: 0;
     flex: 1 1 auto;
     padding: 0 0 6px;
+    display: flex;
+    flex-direction: column;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
+    touch-action: pan-x pan-y;
   }
 
   .crm-stage-detail-scrollbar {
@@ -2672,11 +2678,7 @@
     min-width: 0;
     min-height: 0;
     padding: 0 2px 2px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-gutter: stable both-edges;
-    touch-action: pan-x;
-    overscroll-behavior-x: contain;
+    overflow: visible;
   }
 
   .crm-stage-stack-col {
@@ -9532,28 +9534,33 @@ function setCrmStageCalendar(stageKey, payload){
 let crmDetailScrollObserver=null;
 let crmDetailScrollInitialized=false;
 
+function crmStageDetailScrollHost(){
+  return crmStageDetailViewport || crmStageStackWrap;
+}
+
 function scrollCrmStageDetail(direction){
-  if(!crmStageStackWrap) return;
-  const viewport=crmStageDetailViewport||crmStageStackWrap;
-  const basis=Math.max(160, Math.floor((viewport?.clientWidth||crmStageStackWrap.clientWidth||0)*0.9));
+  const scrollHost=crmStageDetailScrollHost();
+  if(!scrollHost) return;
+  const basis=Math.max(160, Math.floor((scrollHost.clientWidth||0)*0.9));
   const delta=direction==='left'?-basis:basis;
-  crmStageStackWrap.scrollBy({ left: delta, behavior:'smooth' });
+  scrollHost.scrollBy({ left: delta, behavior:'smooth' });
 }
 
 function updateCrmStageDetailScrollState(){
-  if(!crmStageStackWrap) return;
-  const scrollWidth=crmStageStackWrap.scrollWidth;
-  const clientWidth=crmStageStackWrap.clientWidth;
+  const scrollHost=crmStageDetailScrollHost();
+  if(!scrollHost) return;
+  const scrollWidth=scrollHost.scrollWidth;
+  const clientWidth=scrollHost.clientWidth;
   const maxScroll=Math.max(0, scrollWidth-clientWidth);
   const hasOverflow=maxScroll>1;
   if(crmStageDetailScrollbar){
     crmStageDetailScrollbar.hidden=!hasOverflow;
   }
   if(crmStageDetailPrev){
-    crmStageDetailPrev.disabled=!hasOverflow || crmStageStackWrap.scrollLeft<=0;
+    crmStageDetailPrev.disabled=!hasOverflow || scrollHost.scrollLeft<=0;
   }
   if(crmStageDetailNext){
-    crmStageDetailNext.disabled=!hasOverflow || crmStageStackWrap.scrollLeft>=maxScroll;
+    crmStageDetailNext.disabled=!hasOverflow || scrollHost.scrollLeft>=maxScroll;
   }
   if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
     return;
@@ -9566,51 +9573,54 @@ function updateCrmStageDetailScrollState(){
   }
   const thumbWidth=Math.max(32, trackWidth*(clientWidth/Math.max(scrollWidth,1)));
   const maxThumbShift=Math.max(0, trackWidth-thumbWidth);
-  const ratio=maxScroll>0?crmStageStackWrap.scrollLeft/maxScroll:0;
+  const ratio=maxScroll>0?scrollHost.scrollLeft/maxScroll:0;
   const thumbLeft=Math.min(maxThumbShift, Math.max(0, maxThumbShift*ratio));
   crmStageDetailScrollbarThumb.style.width=`${thumbWidth}px`;
   crmStageDetailScrollbarThumb.style.transform=`translateX(${thumbLeft}px)`;
 }
 
 function handleCrmStageDetailWheel(evt){
-  if(!crmStageStackWrap) return;
+  const scrollHost=crmStageDetailScrollHost();
+  if(!scrollHost) return;
   if(evt.defaultPrevented) return;
-  const overflow=crmStageStackWrap.scrollWidth>crmStageStackWrap.clientWidth+1;
+  const overflow=scrollHost.scrollWidth>scrollHost.clientWidth+1;
   if(!overflow) return;
   const dominant=Math.abs(evt.deltaY)>=Math.abs(evt.deltaX)?evt.deltaY:evt.deltaX;
   if(!dominant) return;
-  const before=crmStageStackWrap.scrollLeft;
-  crmStageStackWrap.scrollLeft=before+dominant;
-  if(crmStageStackWrap.scrollLeft!==before){
+  const before=scrollHost.scrollLeft;
+  scrollHost.scrollLeft=before+dominant;
+  if(scrollHost.scrollLeft!==before){
     evt.preventDefault();
     updateCrmStageDetailScrollState();
   }
 }
 
 function handleCrmStageDetailTrackClick(evt){
-  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap) return;
+  const scrollHost=crmStageDetailScrollHost();
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !scrollHost) return;
   if(evt.target===crmStageDetailScrollbarThumb) return;
   const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
   const ratio=(evt.clientX-trackRect.left)/Math.max(trackRect.width,1);
-  const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
-  crmStageStackWrap.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
+  const maxScroll=Math.max(0, scrollHost.scrollWidth-scrollHost.clientWidth);
+  scrollHost.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
 }
 
 function handleCrmStageDetailThumbDown(evt){
-  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap) return;
+  const scrollHost=crmStageDetailScrollHost();
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !scrollHost) return;
   evt.preventDefault();
   const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
   const thumbRect=crmStageDetailScrollbarThumb.getBoundingClientRect();
   const startX=evt.clientX;
   const startLeft=thumbRect.left-trackRect.left;
   const maxThumbShift=Math.max(0, trackRect.width-thumbRect.width);
-  const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
+  const maxScroll=Math.max(0, scrollHost.scrollWidth-scrollHost.clientWidth);
   const pointerId=evt.pointerId;
   const handleMove=moveEvt=>{
     const delta=moveEvt.clientX-startX;
     const nextLeft=Math.min(maxThumbShift, Math.max(0, startLeft+delta));
     const ratio=maxThumbShift>0?nextLeft/maxThumbShift:0;
-    crmStageStackWrap.scrollLeft=maxScroll*ratio;
+    scrollHost.scrollLeft=maxScroll*ratio;
     updateCrmStageDetailScrollState();
   };
   const handleUp=()=>{
@@ -9627,13 +9637,14 @@ function handleCrmStageDetailThumbDown(evt){
 
 function setupCrmStageDetailScroll(){
   if(crmDetailScrollInitialized) return;
-  if(!crmStageStackWrap) return;
+  const scrollHost=crmStageDetailScrollHost();
+  if(!scrollHost || !crmStageStackWrap) return;
   crmDetailScrollInitialized=true;
-  const wheelTarget=crmStageDetailViewport||crmStageStackWrap;
+  const wheelTarget=crmStageDetailScrollHost();
   if(wheelTarget){
     wheelTarget.addEventListener('wheel', handleCrmStageDetailWheel, { passive:false });
   }
-  crmStageStackWrap.addEventListener('scroll', updateCrmStageDetailScrollState);
+  scrollHost.addEventListener('scroll', updateCrmStageDetailScrollState);
   window.addEventListener('resize', updateCrmStageDetailScrollState);
   if(crmStageDetailPrev){
     crmStageDetailPrev.addEventListener('click',()=>scrollCrmStageDetail('left'));
@@ -12289,8 +12300,11 @@ function buildCrmStageSchedule(stageKey, rows, options){
 
 function renderCrmStageStack(schedule){
   if(!crmStageStackWrap) return;
+  const scrollHost=crmStageDetailScrollHost();
   crmStageStackWrap.innerHTML='';
-  crmStageStackWrap.scrollLeft=0;
+  if(scrollHost){
+    scrollHost.scrollLeft=0;
+  }
   if(!schedule){
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
     if(crmStageDetailNext) crmStageDetailNext.disabled=true;
