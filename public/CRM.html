@@ -5808,7 +5808,7 @@
             <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmDetailCollapseToggle" aria-label="Свернуть раздел «Подетально»" aria-expanded="true" aria-controls="crmStageDetailBody">▾</button>
           </div>
           <div class="crm-collapsible__body" id="crmStageDetailBody">
-            <div class="crm-stage-detail-viewport">
+            <div class="crm-stage-detail-viewport" id="crmStageDetailViewport">
               <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
             </div>
             <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
@@ -9444,6 +9444,22 @@ function setCrmStageCalendar(stageKey, payload){
   };
 }
 
+function enableHorizontalWheelScroll(container){
+  if(!container) return;
+  const handleWheel=evt=>{
+    if(evt.defaultPrevented) return;
+    if(container.scrollWidth<=container.clientWidth) return;
+    const dominantVertical=Math.abs(evt.deltaY)>=Math.abs(evt.deltaX);
+    if(!dominantVertical) return;
+    const prevLeft=container.scrollLeft;
+    container.scrollLeft+=evt.deltaY;
+    if(container.scrollLeft!==prevLeft){
+      evt.preventDefault();
+    }
+  };
+  container.addEventListener('wheel', handleWheel, { passive:false });
+}
+
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
@@ -9472,6 +9488,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageExceptionsBtn=$('#crmStageExceptionsBtn'),
       crmStageReserveBtn=$('#crmStageReserveBtn'),
       crmStageOptimizeBtn=$('#crmStageOptimizeBtn'),
+      crmStageDetailViewport=$('#crmStageDetailViewport'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
@@ -21165,6 +21182,9 @@ if(crmGanttCollapseToggle){
 }
 if(crmRouteCollapseToggle){
   crmRouteCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('route', !crmCollapsedSections.route));
+}
+if(crmStageDetailViewport){
+  enableHorizontalWheelScroll(crmStageDetailViewport);
 }
 applyCrmCollapseStates();
 if(crmStageSelect){
