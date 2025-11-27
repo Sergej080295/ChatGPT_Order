@@ -9965,11 +9965,15 @@ let stageSourceMap=new Map();
 let pendingStageDeletes=[];
 let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
-let crmPendingRemotePayload=null;
-let crmPendingRemoteNotified=false;
-let crmPendingRemoteDirty=false;
-let crmPendingRemoteRequireRefresh=false;
-let crmPendingRemoteFlushTimer=null;
+  let crmPendingRemotePayload=null;
+  let crmPendingRemoteNotified=false;
+  let crmPendingRemoteDirty=false;
+  let crmPendingRemoteRequireRefresh=false;
+  let crmPendingRemoteFlushTimer=null;
+  let crmAutoSyncTimer=null;
+  let crmAutoSyncBusy=false;
+  let crmAutoSyncBacklog=false;
+  let crmAutoSyncLastFingerprint=null;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -21467,11 +21471,11 @@ function stopPendingRemoteFlush(){
   crmPendingRemoteFlushTimer=null;
 }
 
-function processPendingRemoteUpdate(options={}){
-  if(!crmPendingRemotePayload) return;
-  if(isOrderDialogActive() || hasPendingLocalChanges()){
-    return;
-  }
+  function processPendingRemoteUpdate(options={}){
+    if(!crmPendingRemotePayload) return;
+    if(isOrderDialogActive() || hasPendingLocalChanges()){
+      return;
+    }
   const deferredPayload=crmPendingRemotePayload;
   const wasNotified=crmPendingRemoteNotified;
   const skipDeferred=crmPendingRemoteDirty;
@@ -21497,11 +21501,11 @@ function processPendingRemoteUpdate(options={}){
   applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:options.silent??wasNotified });
 }
 
-if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
-  window.plannerRemote.onRemoteUpdate(payload=>{
-    if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload) return;
-    const needsState=!payload.state || !payload.state.trim();
+  if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
+    window.plannerRemote.onRemoteUpdate(payload=>{
+      if(crmSuppressNext){ crmSuppressNext=false; return; }
+      if(!payload) return;
+      const needsState=!payload.state || !payload.state.trim();
     if(isOrderDialogActive() || hasPendingLocalChanges()){
       deferPlannerRemotePayload(payload,{ requireRefresh:needsState });
       return;
@@ -21511,8 +21515,74 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
       return;
     }
     applyPlannerRemotePayload(payload);
-  });
-}
+    });
+  }
+
+  async function fetchPlannerSnapshotForAutoSync(){
+    if(!window.plannerRemote||typeof window.plannerRemote.loadState!=='function') return null;
+    try{
+      const meta=await window.plannerRemote.loadState({ withMeta:true });
+      if(meta && typeof window.plannerRemote.applyFingerprint==='function'){
+        window.plannerRemote.applyFingerprint({ etag:meta.etag, hash:meta.hash });
+      }
+      if(meta && typeof meta.state==='string' && meta.state.trim()){
+        return { state:meta.state, etag:meta.etag, hash:meta.hash, reason:'crm-auto-sync' };
+      }
+    }catch(err){
+      console.warn('CRM auto-sync load failed',err);
+    }
+    return null;
+  }
+
+  async function runCrmAutoSync(forceApply=false){
+    if(sessionExpired) return;
+    if(crmSyncInFlight){
+      crmAutoSyncBacklog=true;
+      return;
+    }
+    if(crmAutoSyncBusy){
+      crmAutoSyncBacklog=true;
+      return;
+    }
+    crmAutoSyncBusy=true;
+    try{
+      const currentFingerprint=(window.plannerRemote&&typeof window.plannerRemote.getFingerprint==='function')
+        ? window.plannerRemote.getFingerprint()
+        : {};
+      const baselineHash=crmAutoSyncLastFingerprint?.hash || currentFingerprint.hash || null;
+      const payload=await fetchPlannerSnapshotForAutoSync();
+      if(!payload) return;
+      const incomingHash=payload.hash||null;
+      if(!forceApply && incomingHash && baselineHash && incomingHash===baselineHash){
+        return;
+      }
+      crmAutoSyncLastFingerprint={ hash:incomingHash||baselineHash||null, etag:payload.etag||currentFingerprint.etag||null };
+      if(isOrderDialogActive() || hasPendingLocalChanges()){
+        deferPlannerRemotePayload(payload,{ requireRefresh:false });
+        return;
+      }
+      applyPlannerRemotePayload(payload,{ silent:true });
+    }catch(err){
+      console.warn('CRM auto-sync tick failed',err);
+    }finally{
+      crmAutoSyncBusy=false;
+      if(crmAutoSyncBacklog){
+        crmAutoSyncBacklog=false;
+        setTimeout(()=>runCrmAutoSync(true),500);
+      }
+    }
+  }
+
+  function startCrmAutoSyncLoop(){
+    if(crmAutoSyncTimer){
+      clearInterval(crmAutoSyncTimer);
+      crmAutoSyncTimer=null;
+    }
+    crmAutoSyncTimer=setInterval(()=>runCrmAutoSync(false),5000);
+    runCrmAutoSync(true);
+  }
+
+  startCrmAutoSyncLoop();
 
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden' && crmSyncTimer){
