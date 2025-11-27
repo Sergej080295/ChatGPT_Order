@@ -11999,14 +11999,17 @@ function buildCrmStageSchedule(stageKey, rows, options){
         if(day.meta.pubRem>1e-6){
           const take=Math.min(remain, day.meta.pubRem);
           if(take>0){
-            day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
-            day.segments.push({ uid:task.id, hours:take, late, section:'public', orderId:task.orderId||'' });
-            record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'public' });
-            remain-=take;
-            progressed=true;
-            day.meta.pubUsed=(day.meta.pubUsed||0)+take;
-            lastFailReason='';
-            lastFailDate=null;
+            const tinySlice=take<=keepFree+1e-6;
+            if(!tinySlice){
+              day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
+              day.segments.push({ uid:task.id, hours:take, late, section:'public', orderId:task.orderId||'' });
+              record.segments.push({ date:addDays(dayCursor,0), hours:take, late, section:'public' });
+              remain-=take;
+              progressed=true;
+              day.meta.pubUsed=(day.meta.pubUsed||0)+take;
+              lastFailReason='';
+              lastFailDate=null;
+            }
           }
         }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
           lastFailReason=late
