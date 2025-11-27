@@ -2583,6 +2583,17 @@
     overflow: hidden;
   }
 
+  .crm-collapsible__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-collapsible[data-collapsed="1"] .crm-collapsible__body {
+    display: none;
+  }
+
   #crmStageDetailBody {
     display: flex;
     flex-direction: column;
@@ -9518,104 +9529,133 @@ function setCrmStageCalendar(stageKey, payload){
   };
 }
 
-function enableHorizontalWheelScroll(container){
-  if(!container) return;
-  const handleWheel=evt=>{
-    if(evt.defaultPrevented) return;
-    if(container.scrollWidth<=container.clientWidth) return;
-    const dominantVertical=Math.abs(evt.deltaY)>=Math.abs(evt.deltaX);
-    if(!dominantVertical) return;
-    const prevLeft=container.scrollLeft;
-    container.scrollLeft+=evt.deltaY;
-    if(container.scrollLeft!==prevLeft){
-      evt.preventDefault();
-    }
-  };
-  container.addEventListener('wheel', handleWheel, { passive:false });
-}
+let crmDetailScrollObserver=null;
+let crmDetailScrollInitialized=false;
 
 function scrollCrmStageDetail(direction){
   if(!crmStageStackWrap) return;
-  const step=Math.max(160, Math.floor(crmStageStackWrap.clientWidth*0.9));
-  const delta=direction==='left'?-step:step;
+  const viewport=crmStageDetailViewport||crmStageStackWrap;
+  const basis=Math.max(160, Math.floor((viewport?.clientWidth||crmStageStackWrap.clientWidth||0)*0.9));
+  const delta=direction==='left'?-basis:basis;
   crmStageStackWrap.scrollBy({ left: delta, behavior:'smooth' });
 }
 
-function updateCrmStageDetailScrollbar(){
-  if(!crmStageStackWrap || !crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
-    return;
-  }
+function updateCrmStageDetailScrollState(){
+  if(!crmStageStackWrap) return;
   const scrollWidth=crmStageStackWrap.scrollWidth;
   const clientWidth=crmStageStackWrap.clientWidth;
   const maxScroll=Math.max(0, scrollWidth-clientWidth);
   const hasOverflow=maxScroll>1;
-  crmStageDetailScrollbar.hidden=!hasOverflow;
+  if(crmStageDetailScrollbar){
+    crmStageDetailScrollbar.hidden=!hasOverflow;
+  }
   if(crmStageDetailPrev){
-    crmStageDetailPrev.disabled=!hasOverflow || crmStageStackWrap.scrollLeft<=1;
+    crmStageDetailPrev.disabled=!hasOverflow || crmStageStackWrap.scrollLeft<=0;
   }
   if(crmStageDetailNext){
-    crmStageDetailNext.disabled=!hasOverflow || crmStageStackWrap.scrollLeft>=maxScroll-1;
+    crmStageDetailNext.disabled=!hasOverflow || crmStageStackWrap.scrollLeft>=maxScroll;
   }
-  if(!hasOverflow){
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
+    return;
+  }
+  const trackWidth=Math.max(0, crmStageDetailScrollbar.clientWidth);
+  if(!hasOverflow || trackWidth<=0){
     crmStageDetailScrollbarThumb.style.width='100%';
     crmStageDetailScrollbarThumb.style.transform='translateX(0)';
     return;
   }
-  const trackWidth=crmStageDetailScrollbar.clientWidth;
-  const thumbRatio=clientWidth/scrollWidth;
-  const thumbWidth=Math.max(32, trackWidth*thumbRatio);
+  const thumbWidth=Math.max(32, trackWidth*(clientWidth/Math.max(scrollWidth,1)));
   const maxThumbShift=Math.max(0, trackWidth-thumbWidth);
-  const thumbLeft=maxScroll>0?Math.min(maxThumbShift, (crmStageStackWrap.scrollLeft/maxScroll)*maxThumbShift):0;
+  const ratio=maxScroll>0?crmStageStackWrap.scrollLeft/maxScroll:0;
+  const thumbLeft=Math.min(maxThumbShift, Math.max(0, maxThumbShift*ratio));
   crmStageDetailScrollbarThumb.style.width=`${thumbWidth}px`;
   crmStageDetailScrollbarThumb.style.transform=`translateX(${thumbLeft}px)`;
 }
 
-function attachCrmStageDetailScrollbar(){
-  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap){
-    return;
-  }
-  const handleTrackClick=evt=>{
-    if(evt.target===crmStageDetailScrollbarThumb) return;
-    const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
-    const ratio=(evt.clientX-trackRect.left)/Math.max(trackRect.width,1);
-    const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
-    crmStageStackWrap.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
-  };
-  const handleThumbPointerDown=evt=>{
+function handleCrmStageDetailWheel(evt){
+  if(!crmStageStackWrap) return;
+  if(evt.defaultPrevented) return;
+  const overflow=crmStageStackWrap.scrollWidth>crmStageStackWrap.clientWidth+1;
+  if(!overflow) return;
+  const dominant=Math.abs(evt.deltaY)>=Math.abs(evt.deltaX)?evt.deltaY:evt.deltaX;
+  if(!dominant) return;
+  const before=crmStageStackWrap.scrollLeft;
+  crmStageStackWrap.scrollLeft=before+dominant;
+  if(crmStageStackWrap.scrollLeft!==before){
     evt.preventDefault();
-    const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
-    const thumbRect=crmStageDetailScrollbarThumb.getBoundingClientRect();
-    const startX=evt.clientX;
-    const startLeft=thumbRect.left-trackRect.left;
-    const maxThumbShift=Math.max(0, trackRect.width-thumbRect.width);
-    const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
-    const pointerId=evt.pointerId;
-    crmStageDetailScrollbarThumb.setPointerCapture(pointerId);
-    const handleMove=moveEvt=>{
-      const delta=moveEvt.clientX-startX;
-      const nextLeft=Math.min(maxThumbShift, Math.max(0, startLeft+delta));
-      const ratio=maxThumbShift>0?nextLeft/maxThumbShift:0;
-      crmStageStackWrap.scrollLeft=maxScroll*ratio;
-    };
-    const handleUp=()=>{
-      crmStageDetailScrollbarThumb.releasePointerCapture(pointerId);
-      crmStageDetailScrollbarThumb.removeEventListener('pointermove', handleMove);
-      crmStageDetailScrollbarThumb.removeEventListener('pointerup', handleUp);
-      crmStageDetailScrollbarThumb.removeEventListener('pointercancel', handleUp);
-    };
-    crmStageDetailScrollbarThumb.addEventListener('pointermove', handleMove);
-    crmStageDetailScrollbarThumb.addEventListener('pointerup', handleUp);
-    crmStageDetailScrollbarThumb.addEventListener('pointercancel', handleUp);
-  };
-  crmStageDetailScrollbar.addEventListener('pointerdown', handleTrackClick);
-  crmStageDetailScrollbarThumb.addEventListener('pointerdown', handleThumbPointerDown);
-  crmStageStackWrap.addEventListener('scroll', updateCrmStageDetailScrollbar);
-  window.addEventListener('resize', updateCrmStageDetailScrollbar);
-  if(crmStageStackWrap && 'ResizeObserver' in window){
-    const resizeObserver=new ResizeObserver(()=>updateCrmStageDetailScrollbar());
-    resizeObserver.observe(crmStageStackWrap);
+    updateCrmStageDetailScrollState();
   }
-  updateCrmStageDetailScrollbar();
+}
+
+function handleCrmStageDetailTrackClick(evt){
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap) return;
+  if(evt.target===crmStageDetailScrollbarThumb) return;
+  const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
+  const ratio=(evt.clientX-trackRect.left)/Math.max(trackRect.width,1);
+  const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
+  crmStageStackWrap.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
+}
+
+function handleCrmStageDetailThumbDown(evt){
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap) return;
+  evt.preventDefault();
+  const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
+  const thumbRect=crmStageDetailScrollbarThumb.getBoundingClientRect();
+  const startX=evt.clientX;
+  const startLeft=thumbRect.left-trackRect.left;
+  const maxThumbShift=Math.max(0, trackRect.width-thumbRect.width);
+  const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
+  const pointerId=evt.pointerId;
+  const handleMove=moveEvt=>{
+    const delta=moveEvt.clientX-startX;
+    const nextLeft=Math.min(maxThumbShift, Math.max(0, startLeft+delta));
+    const ratio=maxThumbShift>0?nextLeft/maxThumbShift:0;
+    crmStageStackWrap.scrollLeft=maxScroll*ratio;
+    updateCrmStageDetailScrollState();
+  };
+  const handleUp=()=>{
+    crmStageDetailScrollbarThumb.releasePointerCapture(pointerId);
+    crmStageDetailScrollbarThumb.removeEventListener('pointermove', handleMove);
+    crmStageDetailScrollbarThumb.removeEventListener('pointerup', handleUp);
+    crmStageDetailScrollbarThumb.removeEventListener('pointercancel', handleUp);
+  };
+  crmStageDetailScrollbarThumb.setPointerCapture(pointerId);
+  crmStageDetailScrollbarThumb.addEventListener('pointermove', handleMove);
+  crmStageDetailScrollbarThumb.addEventListener('pointerup', handleUp);
+  crmStageDetailScrollbarThumb.addEventListener('pointercancel', handleUp);
+}
+
+function setupCrmStageDetailScroll(){
+  if(crmDetailScrollInitialized) return;
+  if(!crmStageStackWrap) return;
+  crmDetailScrollInitialized=true;
+  const wheelTarget=crmStageDetailViewport||crmStageStackWrap;
+  if(wheelTarget){
+    wheelTarget.addEventListener('wheel', handleCrmStageDetailWheel, { passive:false });
+  }
+  crmStageStackWrap.addEventListener('scroll', updateCrmStageDetailScrollState);
+  window.addEventListener('resize', updateCrmStageDetailScrollState);
+  if(crmStageDetailPrev){
+    crmStageDetailPrev.addEventListener('click',()=>scrollCrmStageDetail('left'));
+  }
+  if(crmStageDetailNext){
+    crmStageDetailNext.addEventListener('click',()=>scrollCrmStageDetail('right'));
+  }
+  if(crmStageDetailScrollbar){
+    crmStageDetailScrollbar.addEventListener('pointerdown', handleCrmStageDetailTrackClick);
+  }
+  if(crmStageDetailScrollbarThumb){
+    crmStageDetailScrollbarThumb.addEventListener('pointerdown', handleCrmStageDetailThumbDown);
+  }
+  if('ResizeObserver' in window){
+    crmDetailScrollObserver=new ResizeObserver(()=>updateCrmStageDetailScrollState());
+    crmDetailScrollObserver.observe(crmStageStackWrap);
+  }
+  updateCrmStageDetailScrollState();
+}
+
+function refreshCrmStageDetailScroll(){
+  updateCrmStageDetailScrollState();
 }
 
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
@@ -9667,8 +9707,10 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageDetailNext=$('#crmStageDetailNext'),
       crmStageDetailScrollbar=$('#crmStageDetailScrollbar'),
       crmStageDetailScrollbarThumb=$('#crmStageDetailScrollbarThumb'),
+      crmStageDetailBody=$('#crmStageDetailBody'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
+      crmStageGanttBodyWrap=$('#crmStageGanttBodyWrap'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
       crmStageGanttLeftHeader=$('#crmStageGanttLeftHeader'),
       crmStageGanttLeft=$('#crmStageGanttLeft'),
@@ -9682,6 +9724,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmDetailCollapseToggle=$('#crmDetailCollapseToggle'),
       crmGanttCollapseToggle=$('#crmGanttCollapseToggle'),
       crmRouteCollapseToggle=$('#crmRouteCollapseToggle'),
+      crmStageRouteBodyWrap=$('#crmStageRouteBodyWrap'),
       crmStageRouteWrap=$('#crmStageRoute'),
       crmStageRouteLegend=$('#crmStageRouteLegend'),
       crmStageRouteDetailed=$('#crmStageRouteDetailed'),
@@ -12247,11 +12290,13 @@ function buildCrmStageSchedule(stageKey, rows, options){
 function renderCrmStageStack(schedule){
   if(!crmStageStackWrap) return;
   crmStageStackWrap.innerHTML='';
+  crmStageStackWrap.scrollLeft=0;
   if(!schedule){
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
     if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
     if(crmStageDetailScrollbar) crmStageDetailScrollbar.hidden=true;
+    refreshCrmStageDetailScroll();
     return;
   }
   const today=today0();
@@ -12265,6 +12310,7 @@ function renderCrmStageStack(schedule){
     if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
     if(crmStageDetailScrollbar) crmStageDetailScrollbar.hidden=true;
+    refreshCrmStageDetailScroll();
     return;
   }
   if(crmStageStackEmpty) crmStageStackEmpty.hidden=true;
@@ -12427,12 +12473,7 @@ function renderCrmStageStack(schedule){
     }
     crmStageStackWrap.appendChild(col);
   });
-  if(crmStageDetailPrev || crmStageDetailNext){
-    const noOverflow=!crmStageStackWrap || crmStageStackWrap.scrollWidth<=crmStageStackWrap.clientWidth+1;
-    if(crmStageDetailPrev) crmStageDetailPrev.disabled=noOverflow;
-    if(crmStageDetailNext) crmStageDetailNext.disabled=noOverflow;
-  }
-  updateCrmStageDetailScrollbar();
+  refreshCrmStageDetailScroll();
 }
 
 function renderCrmStageGantt(rows, schedule){
@@ -13938,13 +13979,18 @@ function applyCrmCollapseStates(section){
   const keys=section?[section]:['detail','gantt','route'];
   const containers={ detail:crmStageDetailCard, gantt:crmStageGanttCard, route:crmStageRouteCard };
   const toggles={ detail:crmDetailCollapseToggle, gantt:crmGanttCollapseToggle, route:crmRouteCollapseToggle };
+  const bodies={ detail:crmStageDetailBody, gantt:crmStageGanttBodyWrap, route:crmStageRouteBodyWrap };
   keys.forEach(key=>{
     if(!Object.prototype.hasOwnProperty.call(CRM_SECTION_COLLAPSE_DEFAULTS,key)) return;
     const collapsed=!!crmCollapsedSections[key];
     const target=containers[key];
     const toggle=toggles[key];
+    const body=bodies[key];
     if(target){
       target.dataset.collapsed=collapsed?'1':'0';
+    }
+    if(body){
+      body.hidden=collapsed;
     }
     if(toggle){
       toggle.setAttribute('aria-expanded', collapsed?'false':'true');
@@ -13955,12 +14001,14 @@ function applyCrmCollapseStates(section){
 
 function setCrmSectionCollapsed(section, collapsed){
   if(!Object.prototype.hasOwnProperty.call(CRM_SECTION_COLLAPSE_DEFAULTS, section)) return;
-  const prev=!!crmCollapsedSections[section];
   const next=!!collapsed;
   crmCollapsedSections={ ...crmCollapsedSections, [section]:next };
   persistSectionCollapsePrefs(crmCollapsedSections);
   applyCrmCollapseStates(section);
-  if(prev && !next){
+  if(!next){
+    if(section==='detail'){
+      refreshCrmStageDetailScroll();
+    }
     if(section==='gantt'){
       syncCrmGanttLayout();
     }
@@ -21367,22 +21415,13 @@ if(crmStageTabBtn){
 if(crmDetailCollapseToggle){
   crmDetailCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('detail', !crmCollapsedSections.detail));
 }
-if(crmStageDetailPrev){
-  crmStageDetailPrev.addEventListener('click',()=>scrollCrmStageDetail('left'));
-}
-if(crmStageDetailNext){
-  crmStageDetailNext.addEventListener('click',()=>scrollCrmStageDetail('right'));
-}
 if(crmGanttCollapseToggle){
   crmGanttCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('gantt', !crmCollapsedSections.gantt));
 }
 if(crmRouteCollapseToggle){
   crmRouteCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('route', !crmCollapsedSections.route));
 }
-if(crmStageStackWrap){
-  enableHorizontalWheelScroll(crmStageStackWrap);
-}
-attachCrmStageDetailScrollbar();
+setupCrmStageDetailScroll();
 applyCrmCollapseStates();
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
