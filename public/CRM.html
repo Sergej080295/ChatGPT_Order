@@ -2583,6 +2583,22 @@
     overflow: hidden;
   }
 
+  .crm-stage-detail-header {
+    align-items: center;
+  }
+
+  .crm-stage-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .crm-stage-detail-scroll {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+  }
+
   .crm-stage-detail-viewport {
     width: 100%;
     max-width: 100%;
@@ -5803,9 +5819,15 @@
           <span><i class="crm-stage-chip crm-stage-chip--late"></i> Просрочено</span>
         </div>
         <section class="crm-stage-detail-card crm-collapsible" data-section="detail" id="crmStageDetailCard">
-          <div class="crm-collapsible__header">
+          <div class="crm-collapsible__header crm-stage-detail-header">
             <h3>Подетально</h3>
-            <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmDetailCollapseToggle" aria-label="Свернуть раздел «Подетально»" aria-expanded="true" aria-controls="crmStageDetailBody">▾</button>
+            <div class="crm-stage-detail-actions">
+              <div class="crm-stage-detail-scroll">
+                <button type="button" class="pc-icon-btn pc-icon-btn--ghost" id="crmStageDetailPrev" aria-label="Прокрутить календарь назад">◂</button>
+                <button type="button" class="pc-icon-btn pc-icon-btn--ghost" id="crmStageDetailNext" aria-label="Прокрутить календарь вперёд">▸</button>
+              </div>
+              <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmDetailCollapseToggle" aria-label="Свернуть раздел «Подетально»" aria-expanded="true" aria-controls="crmStageDetailBody">▾</button>
+            </div>
           </div>
           <div class="crm-collapsible__body" id="crmStageDetailBody">
             <div class="crm-stage-detail-viewport" id="crmStageDetailViewport">
@@ -9460,6 +9482,13 @@ function enableHorizontalWheelScroll(container){
   container.addEventListener('wheel', handleWheel, { passive:false });
 }
 
+function scrollCrmStageDetail(direction){
+  if(!crmStageDetailViewport) return;
+  const step=Math.max(160, Math.floor(crmStageDetailViewport.clientWidth*0.9));
+  const delta=direction==='left'?-step:step;
+  crmStageDetailViewport.scrollBy({ left: delta, behavior:'smooth' });
+}
+
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
@@ -9489,6 +9518,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveBtn=$('#crmStageReserveBtn'),
       crmStageOptimizeBtn=$('#crmStageOptimizeBtn'),
       crmStageDetailViewport=$('#crmStageDetailViewport'),
+      crmStageDetailPrev=$('#crmStageDetailPrev'),
+      crmStageDetailNext=$('#crmStageDetailNext'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
@@ -12070,6 +12101,8 @@ function renderCrmStageStack(schedule){
   if(!crmStageStackWrap) return;
   crmStageStackWrap.innerHTML='';
   if(!schedule){
+    if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
+    if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
     return;
   }
@@ -12080,6 +12113,8 @@ function renderCrmStageStack(schedule){
     .filter(entry=>entry.day.date>=today)
     .sort((a,b)=>a.day.date-b.day.date);
   if(!entries.length){
+    if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
+    if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
     return;
   }
@@ -12243,6 +12278,11 @@ function renderCrmStageStack(schedule){
     }
     crmStageStackWrap.appendChild(col);
   });
+  if(crmStageDetailPrev || crmStageDetailNext){
+    const noOverflow=!crmStageDetailViewport || crmStageDetailViewport.scrollWidth<=crmStageDetailViewport.clientWidth+1;
+    if(crmStageDetailPrev) crmStageDetailPrev.disabled=noOverflow;
+    if(crmStageDetailNext) crmStageDetailNext.disabled=noOverflow;
+  }
 }
 
 function renderCrmStageGantt(rows, schedule){
@@ -21176,6 +21216,12 @@ if(crmStageTabBtn){
 }
 if(crmDetailCollapseToggle){
   crmDetailCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('detail', !crmCollapsedSections.detail));
+}
+if(crmStageDetailPrev){
+  crmStageDetailPrev.addEventListener('click',()=>scrollCrmStageDetail('left'));
+}
+if(crmStageDetailNext){
+  crmStageDetailNext.addEventListener('click',()=>scrollCrmStageDetail('right'));
 }
 if(crmGanttCollapseToggle){
   crmGanttCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('gantt', !crmCollapsedSections.gantt));
