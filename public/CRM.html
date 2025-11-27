@@ -2612,13 +2612,7 @@
     min-width: 0;
     min-height: 0;
     flex: 1 1 auto;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-gutter: stable both-edges;
-    padding: 0 2px 6px;
-    position: relative;
-    contain: layout paint;
-    touch-action: pan-x pan-y;
+    padding: 0 0 6px;
   }
 
   .crm-stage-detail-scrollbar {
@@ -2658,13 +2652,20 @@
   }
 
   .crm-stage-stack-wrap {
-    display: inline-flex;
+    display: flex;
     flex-wrap: nowrap;
     align-items: stretch;
     gap: 12px;
-    width: max-content;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     min-height: 0;
-    padding-bottom: 2px;
+    padding: 0 2px 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable both-edges;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
   }
 
   .crm-stage-stack-col {
@@ -9534,26 +9535,26 @@ function enableHorizontalWheelScroll(container){
 }
 
 function scrollCrmStageDetail(direction){
-  if(!crmStageDetailViewport) return;
-  const step=Math.max(160, Math.floor(crmStageDetailViewport.clientWidth*0.9));
+  if(!crmStageStackWrap) return;
+  const step=Math.max(160, Math.floor(crmStageStackWrap.clientWidth*0.9));
   const delta=direction==='left'?-step:step;
-  crmStageDetailViewport.scrollBy({ left: delta, behavior:'smooth' });
+  crmStageStackWrap.scrollBy({ left: delta, behavior:'smooth' });
 }
 
 function updateCrmStageDetailScrollbar(){
-  if(!crmStageDetailViewport || !crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
+  if(!crmStageStackWrap || !crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
     return;
   }
-  const scrollWidth=crmStageDetailViewport.scrollWidth;
-  const clientWidth=crmStageDetailViewport.clientWidth;
+  const scrollWidth=crmStageStackWrap.scrollWidth;
+  const clientWidth=crmStageStackWrap.clientWidth;
   const maxScroll=Math.max(0, scrollWidth-clientWidth);
   const hasOverflow=maxScroll>1;
   crmStageDetailScrollbar.hidden=!hasOverflow;
   if(crmStageDetailPrev){
-    crmStageDetailPrev.disabled=!hasOverflow || crmStageDetailViewport.scrollLeft<=1;
+    crmStageDetailPrev.disabled=!hasOverflow || crmStageStackWrap.scrollLeft<=1;
   }
   if(crmStageDetailNext){
-    crmStageDetailNext.disabled=!hasOverflow || crmStageDetailViewport.scrollLeft>=maxScroll-1;
+    crmStageDetailNext.disabled=!hasOverflow || crmStageStackWrap.scrollLeft>=maxScroll-1;
   }
   if(!hasOverflow){
     crmStageDetailScrollbarThumb.style.width='100%';
@@ -9564,21 +9565,21 @@ function updateCrmStageDetailScrollbar(){
   const thumbRatio=clientWidth/scrollWidth;
   const thumbWidth=Math.max(32, trackWidth*thumbRatio);
   const maxThumbShift=Math.max(0, trackWidth-thumbWidth);
-  const thumbLeft=maxScroll>0?Math.min(maxThumbShift, (crmStageDetailViewport.scrollLeft/maxScroll)*maxThumbShift):0;
+  const thumbLeft=maxScroll>0?Math.min(maxThumbShift, (crmStageStackWrap.scrollLeft/maxScroll)*maxThumbShift):0;
   crmStageDetailScrollbarThumb.style.width=`${thumbWidth}px`;
   crmStageDetailScrollbarThumb.style.transform=`translateX(${thumbLeft}px)`;
 }
 
 function attachCrmStageDetailScrollbar(){
-  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageDetailViewport){
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageStackWrap){
     return;
   }
   const handleTrackClick=evt=>{
     if(evt.target===crmStageDetailScrollbarThumb) return;
     const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
     const ratio=(evt.clientX-trackRect.left)/Math.max(trackRect.width,1);
-    const maxScroll=Math.max(0, crmStageDetailViewport.scrollWidth-crmStageDetailViewport.clientWidth);
-    crmStageDetailViewport.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
+    const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
+    crmStageStackWrap.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
   };
   const handleThumbPointerDown=evt=>{
     evt.preventDefault();
@@ -9587,14 +9588,14 @@ function attachCrmStageDetailScrollbar(){
     const startX=evt.clientX;
     const startLeft=thumbRect.left-trackRect.left;
     const maxThumbShift=Math.max(0, trackRect.width-thumbRect.width);
-    const maxScroll=Math.max(0, crmStageDetailViewport.scrollWidth-crmStageDetailViewport.clientWidth);
+    const maxScroll=Math.max(0, crmStageStackWrap.scrollWidth-crmStageStackWrap.clientWidth);
     const pointerId=evt.pointerId;
     crmStageDetailScrollbarThumb.setPointerCapture(pointerId);
     const handleMove=moveEvt=>{
       const delta=moveEvt.clientX-startX;
       const nextLeft=Math.min(maxThumbShift, Math.max(0, startLeft+delta));
       const ratio=maxThumbShift>0?nextLeft/maxThumbShift:0;
-      crmStageDetailViewport.scrollLeft=maxScroll*ratio;
+      crmStageStackWrap.scrollLeft=maxScroll*ratio;
     };
     const handleUp=()=>{
       crmStageDetailScrollbarThumb.releasePointerCapture(pointerId);
@@ -9608,12 +9609,11 @@ function attachCrmStageDetailScrollbar(){
   };
   crmStageDetailScrollbar.addEventListener('pointerdown', handleTrackClick);
   crmStageDetailScrollbarThumb.addEventListener('pointerdown', handleThumbPointerDown);
-  crmStageDetailViewport.addEventListener('scroll', updateCrmStageDetailScrollbar);
+  crmStageStackWrap.addEventListener('scroll', updateCrmStageDetailScrollbar);
   window.addEventListener('resize', updateCrmStageDetailScrollbar);
   if(crmStageStackWrap && 'ResizeObserver' in window){
     const resizeObserver=new ResizeObserver(()=>updateCrmStageDetailScrollbar());
     resizeObserver.observe(crmStageStackWrap);
-    resizeObserver.observe(crmStageDetailViewport);
   }
   updateCrmStageDetailScrollbar();
 }
@@ -12412,7 +12412,7 @@ function renderCrmStageStack(schedule){
     crmStageStackWrap.appendChild(col);
   });
   if(crmStageDetailPrev || crmStageDetailNext){
-    const noOverflow=!crmStageDetailViewport || crmStageDetailViewport.scrollWidth<=crmStageDetailViewport.clientWidth+1;
+    const noOverflow=!crmStageStackWrap || crmStageStackWrap.scrollWidth<=crmStageStackWrap.clientWidth+1;
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=noOverflow;
     if(crmStageDetailNext) crmStageDetailNext.disabled=noOverflow;
   }
@@ -21363,8 +21363,8 @@ if(crmGanttCollapseToggle){
 if(crmRouteCollapseToggle){
   crmRouteCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('route', !crmCollapsedSections.route));
 }
-if(crmStageDetailViewport){
-  enableHorizontalWheelScroll(crmStageDetailViewport);
+if(crmStageStackWrap){
+  enableHorizontalWheelScroll(crmStageStackWrap);
 }
 attachCrmStageDetailScrollbar();
 applyCrmCollapseStates();
