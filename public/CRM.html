@@ -7,6 +7,10 @@
 <link rel="stylesheet" href="plan-core.css" />
 <script defer src="plan-core.js"></script>
 <script>
+  window.MIN_REFRESH_INTERVAL_MS = window.MIN_REFRESH_INTERVAL_MS || 1000;
+  window.DEFAULT_REFRESH_INTERVAL_MS = window.DEFAULT_REFRESH_INTERVAL_MS || 5000;
+</script>
+<script>
 (() => {
   const STATE_ENDPOINT = '/api/state';
   const EVENTS_ENDPOINT = '/api/events';
@@ -14,8 +18,10 @@
   let source = null;
   let currentEtag = null;
   let currentHash = null;
-  const MIN_REFRESH_INTERVAL_MS = 1000;
-  const DEFAULT_REFRESH_INTERVAL_MS = 5000;
+  const MIN_REFRESH_INTERVAL_MS = window.MIN_REFRESH_INTERVAL_MS;
+  const DEFAULT_REFRESH_INTERVAL_MS = window.DEFAULT_REFRESH_INTERVAL_MS;
+  const STATE_FETCH_TIMEOUT_MS = 12000;
+  const STATE_SAVE_TIMEOUT_MS = 15000;
   let refreshTimerId = null;
   let refreshPromise = null;
   let lastRefreshAt = 0;
@@ -24,7 +30,8 @@
   const DEFAULT_KEEPALIVE_INTERVAL_MS = 240000;
   const DEFAULT_IDLE_LOGOUT_THRESHOLD_MS = 0;
   const SESSION_REDIRECT_DELAY_MS = 1500;
-  const CONNECTION_LOSS_REDIRECT_MS = 6000;
+  const CONNECTION_LOSS_REDIRECT_MS = 60000;
+  const CONNECTION_LOSS_PROBE_INTERVAL_MS = 5000;
   let keepAliveIntervalMs = null;
   let idleLogoutThresholdMs = DEFAULT_IDLE_LOGOUT_THRESHOLD_MS;
   let keepAliveTimerId = null;
@@ -33,6 +40,8 @@
   let sessionExpired = false;
   let connectionLossTimerId = null;
   let connectionLossReason = null;
+  let connectionLossProbeTimerId = null;
+  let connectionLossStartedAt = null;
 
   const resolveKeepAliveInterval = () => {
     const candidates = [
@@ -82,17 +91,50 @@
       clearTimeout(connectionLossTimerId);
       connectionLossTimerId = null;
     }
+    if (connectionLossProbeTimerId) {
+      clearTimeout(connectionLossProbeTimerId);
+      connectionLossProbeTimerId = null;
+    }
     connectionLossReason = null;
+    connectionLossStartedAt = null;
+  };
+
+  const scheduleConnectionLossProbe = () => {
+    if (sessionExpired || connectionLossProbeTimerId) {
+      return;
+    }
+
+    const attemptProbe = async () => {
+      connectionLossProbeTimerId = null;
+      if (sessionExpired) return;
+
+      const probe = await requestSessionProbe('connection-loss');
+      if (probe) {
+        clearConnectionLossRedirect(true);
+        return;
+      }
+
+      const elapsed = connectionLossStartedAt ? Date.now() - connectionLossStartedAt : 0;
+      const remaining = Math.max(0, CONNECTION_LOSS_REDIRECT_MS - elapsed);
+      if (remaining <= 0) return;
+
+      const nextDelay = Math.max(1000, Math.min(CONNECTION_LOSS_PROBE_INTERVAL_MS, remaining));
+      connectionLossProbeTimerId = setTimeout(attemptProbe, nextDelay);
+    };
+
+    connectionLossProbeTimerId = setTimeout(attemptProbe, 0);
   };
 
   const armConnectionLossRedirect = (origin = 'connection-lost') => {
     if (sessionExpired) return;
     if (connectionLossTimerId) return;
     connectionLossReason = origin;
+    connectionLossStartedAt = Date.now();
     connectionLossTimerId = setTimeout(() => {
       connectionLossTimerId = null;
       handleSessionExpired(origin);
     }, CONNECTION_LOSS_REDIRECT_MS);
+    scheduleConnectionLossProbe();
   };
 
   const sessionExpiredMessage = (origin) => {
@@ -118,6 +160,11 @@
       clearInterval(refreshTimerId);
       refreshTimerId = null;
     }
+    if (crmPendingRemoteFlushTimer) {
+      clearInterval(crmPendingRemoteFlushTimer);
+      crmPendingRemoteFlushTimer = null;
+    }
+    clearCrmRemoteRecovery();
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -143,6 +190,30 @@
     }, SESSION_REDIRECT_DELAY_MS);
   };
 
+  const createAbortableTimeout = (timeoutMs) => {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || typeof AbortController !== 'function') {
+      return { signal: undefined, abort: () => {}, cancel: () => {} };
+    }
+    const controller = new AbortController();
+    let cancelled = false;
+    const timerId = setTimeout(() => {
+      cancelled = true;
+      controller.abort();
+    }, timeoutMs);
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      clearTimeout(timerId);
+    };
+    const abort = () => {
+      if (cancelled) return;
+      cancelled = true;
+      clearTimeout(timerId);
+      controller.abort();
+    };
+    return { signal: controller.signal, abort, cancel };
+  };
+
   const requestSessionProbe = (reason = 'interval') => {
     if (sessionExpired) {
       return Promise.resolve(null);
@@ -165,7 +236,7 @@
         if (!res.ok) {
           return null;
         }
-        clearConnectionLossRedirect();
+        clearConnectionLossRedirect(true);
         return await res.json().catch(() => null);
       } catch (_err) {
         armConnectionLossRedirect('server-restart');
@@ -222,22 +293,10 @@
   }
 
   const resolveAutoRefreshInterval = () => {
-    const candidates = [
-      window.CRM_AUTO_REFRESH_MS,
-      window.PLANNER_AUTO_REFRESH_MS,
-      window.__CRM_AUTO_REFRESH_MS__,
-      document.documentElement?.dataset?.crmAutoRefresh
-    ];
-    for (const candidate of candidates) {
-      const parsed = parseIntervalInput(candidate);
-      if (parsed == null) continue;
-      if (parsed <= 0) return 0;
-      return Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
-    }
     return DEFAULT_REFRESH_INTERVAL_MS;
   };
 
-  let autoRefreshIntervalMs = resolveAutoRefreshInterval();
+  let autoRefreshIntervalMs = 5000;
 
   const hasPendingLocalChanges = () => {
     try {
@@ -325,7 +384,7 @@
     }
     source = new EventSource(EVENTS_ENDPOINT);
     source.onopen = () => {
-      clearConnectionLossRedirect();
+      clearConnectionLossRedirect(true);
     };
     source.onmessage = async (event) => {
       if (!event?.data) {
@@ -370,12 +429,16 @@
   };
 
   const loadState = async (options = {}) => {
+    const opts = options && typeof options === 'object' ? options : {};
+    const providedSignal = opts.signal;
+    const timeout = providedSignal ? { signal: providedSignal, cancel: () => {} } : createAbortableTimeout(STATE_FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(STATE_ENDPOINT, {
         headers: { 'Accept': 'application/json,text/plain' },
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: timeout.signal
       });
-      clearConnectionLossRedirect();
+      clearConnectionLossRedirect(true);
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
         if (res.status === 401) {
@@ -387,13 +450,22 @@
       const bodyInfo = extractBodyFingerprint(text);
       const etag = res.headers.get('ETag');
       updateFingerprint({ etag, hash: bodyInfo?.hash });
-      if (options && (options.withMeta || options.returnMeta)) {
+      if (opts && (opts.withMeta || opts.returnMeta)) {
         return { state: text, etag: currentEtag, hash: currentHash };
       }
       return text;
     } catch (err) {
+      if (err && err.name === 'AbortError') {
+        console.warn('plannerRemote state load aborted', err);
+        return null;
+      }
       armConnectionLossRedirect('server-restart');
       throw err;
+    }
+    finally {
+      if (timeout && typeof timeout.cancel === 'function') {
+        timeout.cancel();
+      }
     }
   };
 
@@ -455,11 +527,17 @@
 
     const attemptSave = async (attempt = 0) => {
       const { headers, body } = buildRequestPayload();
+      const timeout = createAbortableTimeout(STATE_SAVE_TIMEOUT_MS);
       const res = await fetch(STATE_ENDPOINT, {
         method: 'PUT',
         headers,
         body,
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        signal: timeout.signal
+      }).finally(() => {
+        if (timeout && typeof timeout.cancel === 'function') {
+          timeout.cancel();
+        }
       });
       const text = await res.text().catch(() => '') || '';
       const trimmed = text.trim();
@@ -509,7 +587,7 @@
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     refreshPromise = (async () => {
       try {
-        const meta = await loadState({ withMeta: true });
+        const meta = await loadState({ withMeta: true, signal: createAbortableTimeout(STATE_FETCH_TIMEOUT_MS).signal });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
@@ -535,11 +613,17 @@
     return refreshPromise;
   };
 
+  const requestDeferredRefreshIfIdle = () => {
+    if (hasPendingLocalChanges()) return;
+    requestStateRefresh('deferred-auto-refresh');
+  };
+
   const scheduleAutoRefresh = () => {
     if (refreshTimerId) {
       clearTimeout(refreshTimerId);
       refreshTimerId = null;
     }
+    autoRefreshIntervalMs = resolveAutoRefreshInterval();
     if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
@@ -582,6 +666,7 @@
   const handleWindowFocus = () => {
     markUserActivity();
     requestSessionProbe('focus');
+    requestDeferredRefreshIfIdle();
     handleFocusRefresh();
   };
 
@@ -594,6 +679,7 @@
   document.addEventListener('visibilitychange', handleVisibilityChange, { passive: true });
 
   scheduleAutoRefresh();
+  ensurePendingRemoteFlush();
   scheduleKeepAlive();
   requestSessionProbe('startup');
 
@@ -623,17 +709,14 @@
       return requestStateRefresh(reason || 'manual');
     },
     setAutoRefreshInterval(value) {
-      const parsed = parseIntervalInput(value);
-      if (parsed == null) {
-        return autoRefreshIntervalMs;
-      }
-      autoRefreshIntervalMs = parsed <= 0 ? 0 : Math.max(MIN_REFRESH_INTERVAL_MS, Math.floor(parsed));
+      autoRefreshIntervalMs = 5000;
       scheduleAutoRefresh();
       return autoRefreshIntervalMs;
     },
     getAutoRefreshInterval() {
       return autoRefreshIntervalMs;
-    }
+    },
+    requestDeferredRefreshIfIdle: requestDeferredRefreshIfIdle
   };
 })();
 </script>
@@ -705,6 +788,9 @@
         }
       }
       if (parsed && typeof parsed === 'object' && parsed.crm) {
+        if(parsed.meta && parsed.meta.sharedCalendars){
+          window.__CRM_SHARED_STAGE_CALENDARS__ = parsed.meta.sharedCalendars;
+        }
         window.__CRM_INITIAL_STATE__ = parsed.crm;
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed.crm));
@@ -2048,6 +2134,12 @@
     color: var(--pc-text);
   }
 
+  .crm-settings-checkbox-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--pc-spacing-sm);
+  }
+
   .crm-chip-list {
     display: flex;
     flex-wrap: wrap;
@@ -2534,17 +2626,35 @@
     box-shadow: var(--pc-shadow-surface);
     display: grid;
     gap: var(--pc-spacing-sm);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .crm-stage-detail-viewport {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable both-edges;
+    padding: 0 2px 6px;
+    position: relative;
+    contain: layout paint;
   }
 
   .crm-stage-stack-wrap {
-    display: flex;
-    gap: 14px;
-    overflow: auto;
-    padding-bottom: 4px;
+    display: inline-flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 12px;
+    width: max-content;
+    min-height: 0;
+    padding-bottom: 2px;
   }
 
   .crm-stage-stack-col {
-    min-width: 280px;
+    flex: 0 0 auto;
+    width: clamp(240px, 28vw, 320px);
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     padding: 8px;
@@ -4502,12 +4612,13 @@
     padding: var(--pc-spacing-md);
     border-bottom: 1px dashed var(--pc-border);
     display: flex;
-    flex-direction: column;
+    align-items: center;
     gap: var(--pc-spacing-xs);
   }
 
   .col h2 {
     font-size: 14px;
+    flex: 1;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -5472,15 +5583,15 @@
     <span class="pc-logo-text">PlanCore</span>
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
-    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
-    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
-    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings">Настройки</button>
-    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false">
+    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" title="Канбан CRM с колонками статусов">CRM</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" title="Общий список заказов">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" title="Переделы и расписание">Переделы</button>
+    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" title="Настройки доски и отображения">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" title="Журнал изменений CRM">
       Журнал
       <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
     </button>
-    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden>Админ</button>
+    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden title="Раздел администрирования">Админ</button>
   </nav>
   <div class="pc-header__actions">
     <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
@@ -5738,10 +5849,17 @@
           <span><i class="crm-stage-chip crm-stage-chip--warning"></i> Раньше срока</span>
           <span><i class="crm-stage-chip crm-stage-chip--late"></i> Просрочено</span>
         </div>
-        <section class="crm-stage-detail-card">
-          <h3>Подетально</h3>
-          <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
-          <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
+        <section class="crm-stage-detail-card crm-collapsible" data-section="detail" id="crmStageDetailCard">
+          <div class="crm-collapsible__header">
+            <h3>Подетально</h3>
+            <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmDetailCollapseToggle" aria-label="Свернуть раздел «Подетально»" aria-expanded="true" aria-controls="crmStageDetailBody">▾</button>
+          </div>
+          <div class="crm-collapsible__body" id="crmStageDetailBody">
+            <div class="crm-stage-detail-viewport">
+              <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
+            </div>
+            <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
+          </div>
         </section>
       </section>
       <aside class="crm-stage-side">
@@ -5752,8 +5870,8 @@
       </aside>
     </div>
     <div class="crm-stage-secondary">
-      <section class="crm-stage-gantt-card">
-        <div class="crm-stage-gantt-header">
+      <section class="crm-stage-gantt-card crm-collapsible" data-section="gantt" id="crmStageGanttCard">
+        <div class="crm-stage-gantt-header crm-collapsible__header">
           <h3>Диаграмма Ганта</h3>
           <div class="crm-stage-gantt-controls">
             <label>Отбор
@@ -5763,24 +5881,27 @@
                 <option value="free">Свободные</option>
               </select>
             </label>
+            <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmGanttCollapseToggle" aria-label="Свернуть раздел «Диаграмма Ганта»" aria-expanded="true" aria-controls="crmStageGanttBodyWrap">▾</button>
           </div>
         </div>
-        <div class="crm-stage-gantt-grid" id="crmStageGantt">
-          <div class="crm-stage-gantt-left">
-            <div class="crm-stage-gantt-left-header" id="crmStageGanttLeftHeader">Заказ / Дата</div>
-            <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
-          </div>
-          <div class="crm-stage-gantt-right">
-            <div class="crm-stage-gantt-scroll" id="crmStageGanttScroll">
-              <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
-              <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+        <div class="crm-collapsible__body" id="crmStageGanttBodyWrap">
+          <div class="crm-stage-gantt-grid" id="crmStageGantt">
+            <div class="crm-stage-gantt-left">
+              <div class="crm-stage-gantt-left-header" id="crmStageGanttLeftHeader">Заказ / Дата</div>
+              <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
+            </div>
+            <div class="crm-stage-gantt-right">
+              <div class="crm-stage-gantt-scroll" id="crmStageGanttScroll">
+                <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
+                <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+              </div>
             </div>
           </div>
+          <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
         </div>
-        <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
       </section>
-      <section class="crm-stage-route-card">
-        <div class="crm-stage-route-header">
+      <section class="crm-stage-route-card crm-collapsible" data-section="route" id="crmStageRouteCard">
+        <div class="crm-stage-route-header crm-collapsible__header">
           <h3>Общий маршрут заказов</h3>
           <div class="crm-stage-route-actions">
             <label class="pc-switch pc-switch--sm" title="Скрыть прошедшие даты">
@@ -5791,39 +5912,47 @@
               <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
               <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
             </div>
+            <button type="button" class="pc-icon-btn pc-icon-btn--ghost crm-section-toggle" id="crmRouteCollapseToggle" aria-label="Свернуть раздел «Общий маршрут заказов»" aria-expanded="true" aria-controls="crmStageRouteBodyWrap">▾</button>
           </div>
         </div>
-        <div class="crm-stage-route" id="crmStageRoute">
-          <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
-          <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
-            <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeader">Заказ</div>
-              <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
-            </div>
-            <div class="crm-stage-route-right">
-              <div class="crm-stage-route-head">
-                <div class="crm-route-head-row" id="crmStageRouteHead"></div>
+        <div class="crm-collapsible__body" id="crmStageRouteBodyWrap">
+          <div class="crm-stage-route" id="crmStageRoute">
+            <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
+            <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
+              <div class="crm-stage-route-left">
+                <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeader">Заказ</div>
+                <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
               </div>
-              <div class="crm-stage-route-body" id="crmStageRouteBody"></div>
+              <div class="crm-stage-route-right">
+                <div class="crm-stage-route-head">
+                  <div class="crm-route-head-row" id="crmStageRouteHead"></div>
+                </div>
+                <div class="crm-stage-route-body" id="crmStageRouteBody"></div>
+              </div>
+            </div>
+            <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
+              <div class="crm-stage-route-left">
+                <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeaderCompact">Заказ</div>
+                <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
+              </div>
+              <div class="crm-stage-route-right">
+                <div class="crm-stage-route-head">
+                  <div class="crm-route-head-row" id="crmStageRouteHeadCompact"></div>
+                </div>
+                <div class="crm-stage-route-body" id="crmStageRouteBodyCompact"></div>
+              </div>
             </div>
           </div>
-          <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
-            <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeaderCompact">Заказ</div>
-              <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
-            </div>
-            <div class="crm-stage-route-right">
-              <div class="crm-stage-route-head">
-                <div class="crm-route-head-row" id="crmStageRouteHeadCompact"></div>
-              </div>
-              <div class="crm-stage-route-body" id="crmStageRouteBodyCompact"></div>
-            </div>
-          </div>
+          <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
+          <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
         </div>
-        <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
-        <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
       </section>
     </div>
+  </div>
+  <div class="crm-lane-visibility" id="crmLaneVisibility" hidden>
+    <div class="crm-lane-visibility__label">Скрытые колонки:</div>
+    <div class="crm-lane-visibility__list" id="crmHiddenLaneList"></div>
+    <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" id="crmShowAllLanes" hidden>Показать все</button>
   </div>
   <div class="pc-kanban crm-kanban" id="columns" data-animate="fade-in"></div>
 </main>
@@ -5846,7 +5975,7 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageExceptionsClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="crm-modal-hint">Каждая строка: <code>ДД.ММ.ГГГГ</code> или <code>ДД.ММ.ГГГГ (часы)</code>. Если часы не указаны, день считается выходным.</p>
+    <p class="crm-modal-hint" id="crmStageExceptionsHint">Каждая строка: <code>ДД.ММ.ГГГГ</code> или <code>ДД.ММ.ГГГГ (часы)</code>. Если часы не указаны, день считается выходным.</p>
     <textarea id="crmStageExceptionsInput" class="crm-modal-textarea" placeholder="12.09.2025&#10;15.09.2025 (18)"></textarea>
   </div>
   <div class="dlg-footer">
@@ -6409,6 +6538,8 @@ const CRM_SESSION_STAGE_KEY='planecore_crm_session_stage_v1';
 const CRM_SESSION_STAGE_FALLBACKS=['mini_crm_session_stage_v1'];
 const CRM_ROUTE_FROM_TODAY_KEY='planecore_crm_route_today_v1';
 const CRM_ROUTE_FROM_TODAY_FALLBACKS=['mini_crm_route_today_v1'];
+const CRM_SECTION_COLLAPSE_KEY='planecore_crm_stage_collapse_v1';
+const CRM_SECTION_COLLAPSE_FALLBACKS=['mini_crm_stage_collapse_v1'];
 const CRM_ALIAS_STORAGE_KEY='planecore_crm_user_alias_v1';
 const CRM_ALIAS_STORAGE_FALLBACKS=['mini_crm_user_alias_v1'];
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
@@ -6441,6 +6572,32 @@ function removeLegacyStorage(primary,fallbacks=[]){
     if(!name||name===primary) return;
     try{localStorage.removeItem(name);}catch(_err){/* ignore */}
   });
+}
+const CRM_SECTION_COLLAPSE_DEFAULTS={ detail:false, gantt:false, route:false };
+function sanitizeSectionCollapsePrefs(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  return {
+    detail:base.detail===true,
+    gantt:base.gantt===true,
+    route:base.route===true
+  };
+}
+function loadSectionCollapsePrefs(){
+  const raw=readStorageValue(CRM_SECTION_COLLAPSE_KEY, CRM_SECTION_COLLAPSE_FALLBACKS);
+  if(!raw) return { ...CRM_SECTION_COLLAPSE_DEFAULTS };
+  try{
+    const parsed=JSON.parse(raw);
+    return { ...CRM_SECTION_COLLAPSE_DEFAULTS, ...sanitizeSectionCollapsePrefs(parsed) };
+  }catch(_err){
+    return { ...CRM_SECTION_COLLAPSE_DEFAULTS };
+  }
+}
+function persistSectionCollapsePrefs(prefs){
+  const normalized=sanitizeSectionCollapsePrefs(prefs||{});
+  try{
+    localStorage.setItem(CRM_SECTION_COLLAPSE_KEY, JSON.stringify(normalized));
+    removeLegacyStorage(CRM_SECTION_COLLAPSE_KEY, CRM_SECTION_COLLAPSE_FALLBACKS);
+  }catch(_err){/* ignore */}
 }
 const CRM_CALENDAR_FORMATTER=new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'});
 function parseCalendarInputDate(value){
@@ -6494,6 +6651,7 @@ const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop',
 const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
+const CRM_DEFAULT_KEEP_FREE={ draw:0, laser:0, bend:0, weld:0, mech:0 };
 const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
@@ -6527,7 +6685,9 @@ const CRM_DEFAULT_PREFERENCES={
   linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
-  hints:CRM_HINT_DEFAULTS
+  hints:CRM_HINT_DEFAULTS,
+  autoHideEmptyLanes:false,
+  hiddenLanes:[]
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -6890,6 +7050,7 @@ function sanitizeCrmSettings(raw){
     minimum:sanitizeExtraMinimum(extraSource.minimum)
   };
   result.capacity=normalizeCapacityMap(base.capacity, CRM_DEFAULT_CAPACITY);
+  result.keepFree=normalizeKeepFreeMap(base.keepFree, CRM_DEFAULT_KEEP_FREE);
   result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
@@ -6948,8 +7109,16 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   };
 
   result.capacity={ ...fallback.capacity, ...preferred.capacity };
+  result.keepFree={ ...fallback.keepFree, ...preferred.keepFree };
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
-  result.preferences={ ...fallback.preferences, ...preferred.preferences };
+  const mergedPreferences={ ...fallback.preferences, ...preferred.preferences };
+  if(Array.isArray(fallback.preferences?.hiddenLanes)){
+    mergedPreferences.hiddenLanes=fallback.preferences.hiddenLanes.slice();
+  }
+  if(Object.prototype.hasOwnProperty.call(fallback.preferences||{},'autoHideEmptyLanes')){
+    mergedPreferences.autoHideEmptyLanes=fallback.preferences.autoHideEmptyLanes===true;
+  }
+  result.preferences=mergedPreferences;
   result.startView=preferred.startView||fallback.startView;
 
   const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
@@ -7254,6 +7423,22 @@ function sanitizeCrmPreferences(raw){
     if(typeof raw.cascadeReady==='boolean') result.cascadeReady=raw.cascadeReady;
     if(typeof raw.showLateTips==='boolean') result.showLateTips=raw.showLateTips;
     result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
+    result.autoHideEmptyLanes=raw.autoHideEmptyLanes===true;
+    const hiddenLanes=[];
+    const appendHidden=value=>{
+      if(typeof value!=='string') return;
+      const normalized=value.trim();
+      if(!normalized) return;
+      if(hiddenLanes.includes(normalized)) return;
+      hiddenLanes.push(normalized);
+    };
+    if(Array.isArray(raw.hiddenLanes)){
+      raw.hiddenLanes.forEach(appendHidden);
+    }
+    if(typeof raw.hiddenLane==='string'){
+      appendHidden(raw.hiddenLane);
+    }
+    result.hiddenLanes=hiddenLanes;
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
     const intervalKeys=[
@@ -7365,6 +7550,10 @@ function getCrmCapacitySettings(){
   return normalizeCapacityMap(state?.settings?.capacity, CRM_DEFAULT_CAPACITY);
 }
 
+function getCrmKeepFreeSettings(){
+  return normalizeKeepFreeMap(state?.settings?.keepFree, CRM_DEFAULT_KEEP_FREE);
+}
+
 function getCrmParallelSettings(){
   return normalizeParallelMap(state?.settings?.parallel, CRM_DEFAULT_PARALLEL);
 }
@@ -7376,6 +7565,16 @@ function getCrmStageCapacity(stageKey){
   if(Number.isFinite(num) && num>=0) return num;
   const fallback=CRM_DEFAULT_CAPACITY[stageKey];
   return Number.isFinite(fallback)?fallback:0;
+}
+
+function getCrmStageKeepFree(stageKey){
+  if(CRM_NOHOUR_STAGES.has(stageKey)) return 0;
+  const map=getCrmKeepFreeSettings();
+  const value=map?.[stageKey];
+  const num=Number(value);
+  if(Number.isFinite(num) && num>=0) return Math.max(0, Math.round(num*10)/10);
+  const fallback=CRM_DEFAULT_KEEP_FREE[stageKey];
+  return Number.isFinite(fallback)&&fallback>=0?Math.max(0,Math.round(fallback*10)/10):0;
 }
 
 function getCrmStageParallel(stageKey){
@@ -7398,6 +7597,86 @@ function getLaneSumModeForLane(lane){
   const normalized=typeof map[key]==='string'?map[key].trim().toLowerCase():'';
   if(CRM_LANE_SUM_MODES.has(normalized)) return normalized;
   return 'range';
+}
+
+function getHiddenLanes(){
+  const prefs=getCrmPreferences();
+  const list=Array.isArray(prefs?.hiddenLanes)?prefs.hiddenLanes:[];
+  const result=[];
+  const seen=new Set();
+  list.forEach(value=>{
+    if(typeof value!=='string') return;
+    const normalized=value.trim();
+    if(!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(normalized);
+  });
+  return result;
+}
+
+function getVisibleLanes(){
+  const b=currentBoard();
+  if(!b || !Array.isArray(b.lanes)) return [];
+  const lanes=b.lanes.filter(l=>typeof l==='string' && l.trim());
+  const hidden=new Set(getHiddenLanes());
+  const autoHide=!!getCrmPreferences()?.autoHideEmptyLanes;
+  const lanesWithOrders=new Set();
+  (b.orders||[]).forEach(o=>{
+    const lane=typeof o?.status==='string'?o.status.trim():'';
+    if(lane){
+      lanesWithOrders.add(lane);
+    }
+  });
+  const visible=lanes.filter(lane=>{
+    if(hidden.has(lane)) return false;
+    if(autoHide && !lanesWithOrders.has(lane)) return false;
+    return true;
+  });
+  if(visible.length) return visible;
+  return lanes.slice(0,1);
+}
+
+function setHiddenLanes(nextHidden){
+  const prefs=sanitizeCrmPreferences(state?.settings?.preferences);
+  const unique=[];
+  const seen=new Set();
+  (Array.isArray(nextHidden)?nextHidden:[]).forEach(value=>{
+    if(typeof value!=='string') return;
+    const normalized=value.trim();
+    if(!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    unique.push(normalized);
+  });
+  state.settings.preferences={ ...prefs, hiddenLanes:unique };
+  persistLocal();
+}
+
+function hideLane(lane){
+  if(!lane) return;
+  const hidden=new Set(getHiddenLanes());
+  if(hidden.has(lane)) return;
+  hidden.add(lane);
+  setHiddenLanes([...hidden]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
+}
+
+function showLane(lane){
+  if(!lane) return;
+  const hidden=new Set(getHiddenLanes());
+  if(!hidden.delete(lane)) return;
+  setHiddenLanes([...hidden]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
+}
+
+function showAllLanes(){
+  setHiddenLanes([]);
+  renderColumns();
+  renderCards();
+  renderHiddenLaneBar();
 }
 
 function setLaneSumModeForLane(lane, mode){
@@ -7426,12 +7705,7 @@ function getCrmStageLinkGapDays(){
 }
 
 function getPreferredAutoRefreshIntervalMs(){
-  const prefs=getCrmPreferences();
-  const seconds=Number(prefs?.autoRefreshSeconds);
-  if(Number.isFinite(seconds) && seconds>0){
-    return Math.round(seconds*1000);
-  }
-  return 0;
+  return DEFAULT_REFRESH_INTERVAL_MS;
 }
 
 function getCrmRouteHorizonDays(){
@@ -7444,17 +7718,13 @@ function getCrmRouteHorizonDays(){
 let crmAppliedAutoRefreshMs=null;
 
 function updatePlannerAutoRefreshFromPreferences(){
-  const targetMs=getPreferredAutoRefreshIntervalMs();
-  let effective=targetMs;
+  const targetMs=DEFAULT_REFRESH_INTERVAL_MS;
+  let effective=DEFAULT_REFRESH_INTERVAL_MS;
   const remote=window.plannerRemote;
   if(remote && typeof remote.setAutoRefreshInterval==='function'){
-    if(!(crmAppliedAutoRefreshMs!==null && crmAppliedAutoRefreshMs===targetMs)){
-      const applied=remote.setAutoRefreshInterval(targetMs);
-      if(Number.isFinite(applied)){
-        effective=applied;
-      }
-    }else{
-      effective=crmAppliedAutoRefreshMs;
+    const applied=remote.setAutoRefreshInterval(targetMs);
+    if(Number.isFinite(applied)){
+      effective=applied;
     }
   }
   crmAppliedAutoRefreshMs=effective;
@@ -7906,6 +8176,15 @@ const deepClone=value=>{
   }
 };
 
+const isDeepEqual=(a,b)=>{
+  if(a===b) return true;
+  try{
+    return JSON.stringify(a)===JSON.stringify(b);
+  }catch(_err){
+    return false;
+  }
+};
+
 function parseNumericValue(raw){
   if(raw===null||raw===undefined){
     return { number:0, hasValue:false };
@@ -7946,6 +8225,23 @@ function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY){
     const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
     const num=Number(raw);
     result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*100)/100:fallbackValue;
+  });
+  return result;
+}
+
+function normalizeKeepFreeMap(source, fallback=CRM_DEFAULT_KEEP_FREE){
+  const result={};
+  const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_KEEP_FREE;
+  CRM_STAGE_KEYS.forEach(stage=>{
+    if(CRM_NOHOUR_STAGES.has(stage)){
+      result[stage]=0;
+      return;
+    }
+    const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_KEEP_FREE[stage]);
+    const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>=0?Math.round(fallbackRaw*10)/10:0;
+    const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
+    const num=parseNumericValue(raw).number;
+    result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*10)/10:fallbackValue;
   });
   return result;
 }
@@ -8116,20 +8412,26 @@ const crmPermissions=(()=>{
   return { ...defaults, ...crmCurrentUser.permissions, stageAccess };
 })();
 const crmRoleLabels=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
-const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
-const crmAuthMode=CRM_AUTH_INFO.authMode||'local';
-const crmAllowGuest=!!CRM_AUTH_INFO.allowGuest;
-if(document.body){
-  document.body.dataset.crmRole=crmPrimaryRole||'';
-}
+  const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
+  const crmAuthMode=CRM_AUTH_INFO.authMode||'local';
+  const crmAllowGuest=!!CRM_AUTH_INFO.allowGuest;
+  if(document.body){
+    document.body.dataset.crmRole=crmPrimaryRole||'';
+  }
 
-let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
-state=ensureCrmStateShape(state);
-const storedCrmSettings=loadStoredCrmSettings();
-if(storedCrmSettings){
-  state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
-}
-persistLocal();
+  let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
+  state=ensureCrmStateShape(state);
+  if(window.__CRM_SHARED_STAGE_CALENDARS__){
+    applySharedStageCalendarsToBoards(window.__CRM_SHARED_STAGE_CALENDARS__);
+    window.__CRM_SHARED_STAGE_CALENDARS__=null;
+  }
+  const storedCrmSettings=loadStoredCrmSettings();
+  if(storedCrmSettings){
+    state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
+  }
+  let crmRemoteBaseline=null;
+  persistLocal();
+let crmCollapsedSections=loadSectionCollapsePrefs();
 function applyTrashRetention(){
   applyTrashRetentionToTarget(state);
 }
@@ -8154,6 +8456,23 @@ function persistLocal(){
     removeLegacyStorage(CRM_STATE_STORAGE_KEY, CRM_STATE_STORAGE_FALLBACKS);
   }
   catch(err){console.warn('CRM local save failed',err);}
+}
+
+function rememberCrmBaseline(hash,snapshot){
+  try{
+    const baseSnapshot=snapshot&&typeof snapshot==='object'?snapshot:state;
+    const normalized=ensureCrmStateShape(deepClone(baseSnapshot));
+    crmRemoteBaseline={ hash:hash||null, snapshot:normalized };
+  }catch(err){
+    console.warn('CRM baseline capture failed',err);
+  }
+}
+
+function getCrmBaselineSnapshot(fallback){
+  if(crmRemoteBaseline && crmRemoteBaseline.snapshot && typeof crmRemoteBaseline.snapshot==='object'){
+    return ensureCrmStateShape(deepClone(crmRemoteBaseline.snapshot));
+  }
+  return ensureCrmStateShape(deepClone(fallback||state));
 }
 let crmAutoOptimizeGuard=false;
 
@@ -8195,6 +8514,213 @@ function ensureCrmStageCalendars(target){
     target.stageCalendars=sanitizeCrmStageCalendars(target.stageCalendars);
   }
   return target.stageCalendars;
+}
+
+function snapshotSharedStageCalendars(boards){
+  const merged={};
+  CRM_STAGE_KEYS.forEach(stage=>{ merged[stage]={ exceptions:[], reserves:[] }; });
+  (Array.isArray(boards)?boards:[]).forEach(board=>{
+    const calendars=ensureCrmStageCalendars(board);
+    CRM_STAGE_KEYS.forEach(stage=>{
+      const entry=calendars?.[stage];
+      if(!entry) return;
+      const exceptions=Array.isArray(entry.exceptions)?entry.exceptions.slice():[];
+      const reserves=Array.isArray(entry.reserves)?entry.reserves.slice():[];
+      const hasData=exceptions.length>0||reserves.length>0;
+      if(hasData || !merged[stage].exceptions?.length && !merged[stage].reserves?.length){
+        merged[stage]={ exceptions, reserves };
+      }
+    });
+  });
+  return sanitizeCrmStageCalendars(merged);
+}
+
+function applySharedStageCalendarsToBoards(shared){
+  const sanitized=sanitizeCrmStageCalendars(shared||{});
+  if(!Array.isArray(state?.boards)) return;
+  state.boards.forEach(board=>{
+    const calendars=ensureCrmStageCalendars(board);
+    CRM_STAGE_KEYS.forEach(stage=>{
+      calendars[stage]=sanitized[stage]||{ exceptions:[], reserves:[] };
+    });
+  });
+}
+
+function buildCalendarMap(entries){
+  const map=new Map();
+  (Array.isArray(entries)?entries:[]).forEach(item=>{
+    const iso=Array.isArray(item)?item[0]:item?.[0];
+    const val=Array.isArray(item)?item[1]:item?.[1];
+    if(!iso) return;
+    map.set(String(iso), Number.isFinite(val)?val:null);
+  });
+  return map;
+}
+
+function diffCalendarMap(baseMap, nextMap){
+  const diff=new Map();
+  const keys=new Set([...baseMap.keys(), ...nextMap.keys()]);
+  keys.forEach(key=>{
+    const baseVal=baseMap.has(key)?baseMap.get(key):null;
+    const nextVal=nextMap.has(key)?nextMap.get(key):null;
+    const normalizedBase=Number.isFinite(baseVal)?baseVal:null;
+    const normalizedNext=Number.isFinite(nextVal)?nextVal:null;
+    if(normalizedBase!==normalizedNext){
+      diff.set(key, nextVal);
+    }
+  });
+  return diff;
+}
+
+function mapToCalendarEntries(map, allowZero){
+  const entries=Array.from(map.entries())
+    .filter(([iso])=>!!iso)
+    .map(([iso,value])=>[iso, value]);
+  return sanitizeCrmCalendarEntries(entries, allowZero);
+}
+
+function mergeCalendarEntries({ baseEntries=[], localEntries=[], remoteEntries=[], allowZero=false, stageKey='', kind='' }){
+  const baseMap=buildCalendarMap(sanitizeCrmCalendarEntries(baseEntries, allowZero));
+  const localMap=buildCalendarMap(sanitizeCrmCalendarEntries(localEntries, allowZero));
+  const remoteMap=buildCalendarMap(sanitizeCrmCalendarEntries(remoteEntries, allowZero));
+  const localDiff=diffCalendarMap(baseMap, localMap);
+  const remoteDiff=diffCalendarMap(baseMap, remoteMap);
+  const merged=new Map(remoteMap.entries());
+  const conflicts=[];
+
+  localDiff.forEach((value, iso)=>{
+    const remoteChanged=remoteDiff.has(iso);
+    const remoteValue=remoteMap.has(iso)?remoteMap.get(iso):null;
+    const normalizedLocal=Number.isFinite(value)?value:null;
+    const normalizedRemote=Number.isFinite(remoteValue)?remoteValue:null;
+    if(remoteChanged && normalizedLocal!==normalizedRemote){
+      conflicts.push({ stage:stageKey, kind, iso });
+      return;
+    }
+    if(value===null || value===undefined){
+      merged.delete(iso);
+    }else{
+      merged.set(iso, value);
+    }
+  });
+
+  return { entries: mapToCalendarEntries(merged, allowZero), conflicts };
+}
+
+function mergeStageCalendars(baseCalendars, localCalendars, remoteCalendars){
+  const merged={};
+  const conflicts=[];
+  const base=sanitizeCrmStageCalendars(baseCalendars||{});
+  const local=sanitizeCrmStageCalendars(localCalendars||{});
+  const remote=sanitizeCrmStageCalendars(remoteCalendars||{});
+
+  CRM_STAGE_KEYS.forEach(stage=>{
+    const localEntry=local[stage]||{ exceptions:[], reserves:[] };
+    const remoteEntry=remote[stage]||{ exceptions:[], reserves:[] };
+    const baseEntry=base[stage]||{ exceptions:[], reserves:[] };
+    const mergedExceptions=mergeCalendarEntries({
+      baseEntries:baseEntry.exceptions,
+      localEntries:localEntry.exceptions,
+      remoteEntries:remoteEntry.exceptions,
+      allowZero:true,
+      stageKey:stage,
+      kind:'exceptions'
+    });
+    const mergedReserves=mergeCalendarEntries({
+      baseEntries:baseEntry.reserves,
+      localEntries:localEntry.reserves,
+      remoteEntries:remoteEntry.reserves,
+      allowZero:false,
+      stageKey:stage,
+      kind:'reserves'
+    });
+    merged[stage]={
+      exceptions:mergedExceptions.entries,
+      reserves:mergedReserves.entries
+    };
+    conflicts.push(...mergedExceptions.conflicts, ...mergedReserves.conflicts);
+  });
+
+  return { calendars: merged, conflicts };
+}
+
+function stripBoardCalendars(board){
+  if(!board||typeof board!=='object') return null;
+  const clone=deepClone(board);
+  if(clone && typeof clone==='object'){
+    delete clone.stageCalendars;
+  }
+  return clone;
+}
+
+function mergeCrmSnapshotWithRemote({ base=null, local=null, remote=null }){
+  const baseState=ensureCrmStateShape(deepClone(base||{}));
+  const localState=ensureCrmStateShape(deepClone(local||{}));
+  const remoteState=ensureCrmStateShape(deepClone(remote||{}));
+  const merged=ensureCrmStateShape(deepClone(remoteState));
+  const conflicts=[];
+
+  if(localState.currentBoardId){
+    merged.currentBoardId=localState.currentBoardId;
+  }
+
+  const baseSettings=baseState.settings||{};
+  const localSettings=localState.settings||{};
+  const remoteSettings=remoteState.settings||{};
+  const settingsChangedLocal=!isDeepEqual(baseSettings, localSettings);
+  const settingsChangedRemote=!isDeepEqual(baseSettings, remoteSettings);
+  if(settingsChangedLocal && settingsChangedRemote && !isDeepEqual(localSettings, remoteSettings)){
+    conflicts.push({ scope:'settings' });
+  }else if(settingsChangedLocal){
+    merged.settings=deepClone(localSettings);
+  }
+
+  const baseBoards=new Map((Array.isArray(baseState.boards)?baseState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const localBoards=new Map((Array.isArray(localState.boards)?localState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const remoteBoards=new Map((Array.isArray(remoteState.boards)?remoteState.boards:[]).map(b=>[b.id||b.code||b.name||'', b]));
+  const boardIds=new Set();
+  [baseBoards, localBoards, remoteBoards].forEach(map=>{ map.forEach((_,key)=>{ if(key) boardIds.add(key); }); });
+  const remoteOrder=(Array.isArray(remoteState.boards)?remoteState.boards:[]).map(b=>b.id||b.code||b.name||'');
+
+  const mergedBoards=[];
+  boardIds.forEach(id=>{
+    const baseBoard=baseBoards.get(id)||null;
+    const localBoard=localBoards.get(id)||null;
+    const remoteBoard=remoteBoards.get(id)||null;
+    const initial=remoteBoard||localBoard||baseBoard;
+    if(!initial) return;
+    const target=deepClone(initial);
+    const calendarMerge=mergeStageCalendars(baseBoard?.stageCalendars, localBoard?.stageCalendars, target.stageCalendars);
+    target.stageCalendars=calendarMerge.calendars;
+    calendarMerge.conflicts.forEach(conf=>conflicts.push({ ...conf, scope:'stageCalendars', boardId:id }));
+
+    const baseSlim=stripBoardCalendars(baseBoard);
+    const localSlim=stripBoardCalendars(localBoard);
+    const remoteSlim=stripBoardCalendars(remoteBoard);
+    const localChanged=!isDeepEqual(baseSlim, localSlim);
+    const remoteChanged=!isDeepEqual(baseSlim, remoteSlim);
+    if(localChanged && remoteChanged && !isDeepEqual(localSlim, remoteSlim)){
+      conflicts.push({ scope:'board', boardId:id });
+    }else if(localChanged && localSlim){
+      Object.keys(localBoard||{}).forEach(key=>{
+        if(key==='stageCalendars') return;
+        target[key]=deepClone(localBoard[key]);
+      });
+    }
+
+    mergedBoards.push(target);
+  });
+
+  merged.boards=mergedBoards.sort((a,b)=>{
+    const aIdx=remoteOrder.indexOf(a.id||a.code||a.name||'');
+    const bIdx=remoteOrder.indexOf(b.id||b.code||b.name||'');
+    if(aIdx===-1 && bIdx===-1) return 0;
+    if(aIdx===-1) return 1;
+    if(bIdx===-1) return -1;
+    return aIdx-bIdx;
+  });
+
+  return { crm: merged, conflicts };
 }
 
 let crmPlanFreezeDirty=false;
@@ -8420,14 +8946,10 @@ function collectCrmPlanFreezeHorizon(stageKey, limit){
   while(result.length<days && guard<days*12+365){
     const iso=fmtDateISO(cursor);
     let working=!evaluator || evaluator.isWorking(cursor);
-    if(working){
-      if(CRM_NOHOUR_STAGES.has(stageKey)){
-        // hourless stages follow working pattern only
-      }else if(exceptions.has(iso)){
-        const value=Number(exceptions.get(iso));
-        if(!Number.isFinite(value) || value<=0){
-          working=false;
-        }
+    if(working && exceptions.has(iso)){
+      const value=Number(exceptions.get(iso));
+      if(!Number.isFinite(value) || value<=0){
+        working=false;
       }
     }
     if(working){
@@ -9205,6 +9727,9 @@ function chip(html,extra){const s=document.createElement('span');s.className='ch
 const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       boardSelect=$('#boardSelect'),
       columns=$('#columns'),
+      crmLaneVisibility=$('#crmLaneVisibility'),
+      crmHiddenLaneList=$('#crmHiddenLaneList'),
+      crmShowAllLanes=$('#crmShowAllLanes'),
       stats=$('#stats'),
       crmOrdersViewEl=$('#crmOrdersView'),
       crmOrdersTableBody=$('#crmOrdersTable tbody'),
@@ -9232,6 +9757,12 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageGanttScroll=$('#crmStageGanttScroll'),
       crmStageGanttBody=$('#crmStageGanttBody'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
+      crmStageDetailCard=$('#crmStageDetailCard'),
+      crmStageGanttCard=$('#crmStageGanttCard'),
+      crmStageRouteCard=$('#crmStageRouteCard'),
+      crmDetailCollapseToggle=$('#crmDetailCollapseToggle'),
+      crmGanttCollapseToggle=$('#crmGanttCollapseToggle'),
+      crmRouteCollapseToggle=$('#crmRouteCollapseToggle'),
       crmStageRouteWrap=$('#crmStageRoute'),
       crmStageRouteLegend=$('#crmStageRouteLegend'),
       crmStageRouteDetailed=$('#crmStageRouteDetailed'),
@@ -9259,6 +9790,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteDialogClose=$('#crmStageRouteDlgClose'),
       crmStageExceptionsDlg=$('#crmStageExceptionsDlg'),
       crmStageExceptionsInput=$('#crmStageExceptionsInput'),
+      crmStageExceptionsHint=$('#crmStageExceptionsHint'),
       crmStageExceptionsClose=$('#crmStageExceptionsClose'),
       crmStageExceptionsCancel=$('#crmStageExceptionsCancel'),
       crmStageExceptionsApply=$('#crmStageExceptionsApply'),
@@ -9372,9 +9904,15 @@ let stageSourceMap=new Map();
 let pendingStageDeletes=[];
 let crmOrderHistoryCachedEntries=[];
 let crmOrderHistoryCachedOrderId='';
-let crmPendingRemotePayload=null;
-let crmPendingRemoteNotified=false;
-let crmPendingRemoteDirty=false;
+  let crmPendingRemotePayload=null;
+  let crmPendingRemoteNotified=false;
+  let crmPendingRemoteDirty=false;
+  let crmPendingRemoteRequireRefresh=false;
+  let crmPendingRemoteFlushTimer=null;
+  let crmAutoSyncTimer=null;
+  let crmAutoSyncBusy=false;
+  let crmAutoSyncBacklog=false;
+  let crmAutoSyncLastFingerprint=null;
 const crmStartViewMode=getCrmStartViewSetting();
 const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
 let currentCrmView='kanban';
@@ -10886,6 +11424,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.capacity)!==JSON.stringify(nextSanitized.capacity)){
     sections.push('Константы вместимости');
   }
+  if(JSON.stringify(prevSanitized.keepFree)!==JSON.stringify(nextSanitized.keepFree)){
+    sections.push('Запас часов по сменам');
+  }
   if(JSON.stringify(prevSanitized.parallel)!==JSON.stringify(nextSanitized.parallel)){
     sections.push('Графики нечасовых переделов');
   }
@@ -11256,9 +11797,10 @@ function buildCrmStageSchedule(stageKey, rows, options){
   }
   const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
   const baseCapacity=Math.max(isHourless?getCrmStageParallel(stageKey):getCrmStageCapacity(stageKey), isHourless?1:0.01);
+  const keepFree=Math.max(0, isHourless?0:getCrmStageKeepFree(stageKey));
   const calendar=getCrmStageCalendar(stageKey);
-  const exceptionMap=isHourless?new Map():calendar.exceptions;
-  const reserveMap=isHourless?new Map():calendar.reserves;
+  const exceptionMap=calendar?.exceptions||new Map();
+  const reserveMap=isHourless?new Map():(calendar?.reserves||new Map());
   const scheduleEvaluator=getCrmStageScheduleEvaluator(stageKey);
   const errors=[];
   const todayBaseline=today0();
@@ -11394,32 +11936,31 @@ function buildCrmStageSchedule(stageKey, rows, options){
   const ensureDay=(date)=>{
     const ds=fmtDateISO(date);
     if(!perDay.has(ds)){
-      let capDay;
       const working=!scheduleEvaluator || scheduleEvaluator.isWorking(date);
       let patternOff=!working;
-      if(isHourless){
-        capDay=working?baseCapacity:0;
-      }else{
-        const calendarCap=exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity;
-        capDay=working?calendarCap:0;
+      const calendarCap=exceptionMap.has(ds)?Math.max(0, Number(exceptionMap.get(ds))||0):baseCapacity;
+      const capDay=working?calendarCap:0;
+      if(calendarCap<=1e-6){
+        patternOff=true;
       }
       const reserveWanted=!isHourless && working?(reserveMap.has(ds)?Math.max(0, Number(reserveMap.get(ds))||0):0):0;
       const resLim=Math.min(reserveWanted, capDay);
       const pubCap=Math.max(0, capDay-resLim);
+      const pubRem=Math.max(0, pubCap-Math.max(0, keepFree));
       perDay.set(ds,{
         date:addDays(date,0),
         segments:[],
         meta:{
           capDay,
           pubCap,
+          keepFree,
           resLim,
-          pubRem:pubCap,
+          pubRem,
           resRem:resLim,
           pubUsed:0,
           resUsed:0,
           excluded:Math.max(0, baseCapacity-capDay),
-          patternOff,
-          reserveExclusive:resLim>1e-6
+          patternOff
         }
       });
     }
@@ -11549,6 +12090,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
       day.meta.pubUsed=publicUsed;
       day.meta.resUsed=reserveUsed;
     }
+    day.meta.keepFree=keepFree;
     day.meta.freezeLocked=true;
     day.meta.freezeManual=record.manual===true;
     day.meta.freezeSource=record.manual?'manual':'auto';
@@ -11698,12 +12240,11 @@ function buildCrmStageSchedule(stageKey, rows, options){
         }
       }
       if(remain>1e-6){
-        const publicAllowed=!day.meta.reserveExclusive || task.useReserve;
         const reserveAhead=task.useReserve?hasReserveAhead(addDays(dayCursor,1)):false;
         if(task.useReserve && reserveAhead){
           return progressed;
         }
-        if(publicAllowed && day.meta.pubRem>1e-6){
+        if(day.meta.pubRem>1e-6){
           const take=Math.min(remain, day.meta.pubRem);
           if(take>0){
             day.meta.pubRem=Math.max(0, day.meta.pubRem-take);
@@ -11715,9 +12256,6 @@ function buildCrmStageSchedule(stageKey, rows, options){
             lastFailReason='';
             lastFailDate=null;
           }
-        }else if(!publicAllowed && day.meta.pubRem>1e-6){
-          lastFailReason='Доступные часы этого дня зарезервированы для заказов с бронью.';
-          lastFailDate=addDays(dayCursor,0);
         }else if(day.meta.pubRem<=1e-6 && day.meta.resRem<=1e-6){
           lastFailReason=late
             ? 'Нет свободной ёмкости: проверьте исключения и ограничения календаря.'
@@ -13015,6 +13553,13 @@ function openCrmStageExceptionsDialog(){
     return;
   }
   crmStageExceptionsDlg.dataset.stage=stageKey;
+  if(crmStageExceptionsHint){
+    if(CRM_NOHOUR_STAGES.has(stageKey)){
+      crmStageExceptionsHint.textContent='Каждая строка: ДД.ММ.ГГГГ или ДД.ММ.ГГГГ (количество заказов). Без значения — выходной день (исключение).';
+    }else{
+      crmStageExceptionsHint.textContent='Каждая строка: ДД.ММ.ГГГГ или ДД.ММ.ГГГГ (часы). Если часы не указаны, день считается выходным.';
+    }
+  }
   if(crmStageExceptionsInput){
     const { exceptions }=getCrmStageCalendar(stageKey);
     crmStageExceptionsInput.value=formatCrmCalendarLines(exceptions,'exception');
@@ -13467,6 +14012,45 @@ function renderCrmStageViews(schedule, rows, stageKey, filterMode){
   notifyCrmStageScheduleErrors(schedule||null);
   flushCrmPlanFreezeDirty();
   applyCrmStageSelectionHighlight();
+  applyCrmCollapseStates();
+}
+
+function applyCrmCollapseStates(section){
+  const keys=section?[section]:['detail','gantt','route'];
+  const containers={ detail:crmStageDetailCard, gantt:crmStageGanttCard, route:crmStageRouteCard };
+  const toggles={ detail:crmDetailCollapseToggle, gantt:crmGanttCollapseToggle, route:crmRouteCollapseToggle };
+  keys.forEach(key=>{
+    if(!Object.prototype.hasOwnProperty.call(CRM_SECTION_COLLAPSE_DEFAULTS,key)) return;
+    const collapsed=!!crmCollapsedSections[key];
+    const target=containers[key];
+    const toggle=toggles[key];
+    if(target){
+      target.dataset.collapsed=collapsed?'1':'0';
+    }
+    if(toggle){
+      toggle.setAttribute('aria-expanded', collapsed?'false':'true');
+      toggle.textContent=collapsed?'▸':'▾';
+    }
+  });
+}
+
+function setCrmSectionCollapsed(section, collapsed){
+  if(!Object.prototype.hasOwnProperty.call(CRM_SECTION_COLLAPSE_DEFAULTS, section)) return;
+  const prev=!!crmCollapsedSections[section];
+  const next=!!collapsed;
+  crmCollapsedSections={ ...crmCollapsedSections, [section]:next };
+  persistSectionCollapsePrefs(crmCollapsedSections);
+  applyCrmCollapseStates(section);
+  if(prev && !next){
+    if(section==='gantt'){
+      syncCrmGanttLayout();
+    }
+    if(section==='route'){
+      syncCrmRouteRowHeights(crmStageRouteLeft, crmStageRouteBody);
+      syncCrmRouteRowHeights(crmStageRouteLeftCompact, crmStageRouteBodyCompact);
+      syncCrmRouteHeaders();
+    }
+  }
 }
 
 function updateCrmAuxButtons(){
@@ -13491,6 +14075,20 @@ function updateCrmAuxButtons(){
     const title=trashCount>0?`Корзина (${trashCount})`:'Корзина';
     crmTrashBtn.title=title;
     crmTrashBtn.setAttribute('aria-label',title);
+  }
+  const stageKey=crmStageSelect?.value||'draw';
+  const calendar=getCrmStageCalendar(stageKey);
+  const hasExceptions=calendar?.exceptions instanceof Map && calendar.exceptions.size>0;
+  const hasReserves=calendar?.reserves instanceof Map && calendar.reserves.size>0;
+  if(crmStageExceptionsBtn){
+    crmStageExceptionsBtn.classList.toggle('has-alert', hasExceptions);
+    const base='Исключения';
+    crmStageExceptionsBtn.title=hasExceptions?`${base} есть` : base;
+  }
+  if(crmStageReserveBtn){
+    crmStageReserveBtn.classList.toggle('has-alert', hasReserves);
+    const base='Бронь';
+    crmStageReserveBtn.title=hasReserves?`${base}: заполнено` : base;
   }
 }
 
@@ -15485,6 +16083,29 @@ function laneLimit(lane){
   return laneVisibleCount.get(lane);
 }
 
+function renderHiddenLaneBar(){
+  if(!crmLaneVisibility || !crmHiddenLaneList || !crmShowAllLanes) return;
+  const hidden=getHiddenLanes();
+  crmHiddenLaneList.innerHTML='';
+  if(!hidden.length){
+    crmLaneVisibility.hidden=true;
+    crmShowAllLanes.hidden=true;
+    return;
+  }
+  crmLaneVisibility.hidden=false;
+  hidden.forEach(lane=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='pc-btn pc-btn--ghost pc-btn--xs crm-lane-visibility__chip';
+    btn.textContent=lane;
+    btn.title='Показать колонку';
+    btn.addEventListener('click',()=>showLane(lane));
+    crmHiddenLaneList.appendChild(btn);
+  });
+  crmShowAllLanes.hidden=false;
+  crmShowAllLanes.onclick=()=>showAllLanes();
+}
+
 function renderBoardSelect(){
   if(!boardSelect) return;
   boardSelect.innerHTML='';
@@ -15500,8 +16121,9 @@ function renderColumns(){
   const b=currentBoard();
   columns.innerHTML='';
   if(!b){return;}
-  ensureLaneRegistry(b.lanes,b.id);
-    b.lanes.forEach(l=>{
+  const visibleLanes=getVisibleLanes();
+  ensureLaneRegistry(visibleLanes,b.id);
+  visibleLanes.forEach(l=>{
       const c=document.createElement('div');
       c.className='col';
       const laneLabel=escapeHtml(l);
@@ -15511,6 +16133,9 @@ function renderColumns(){
         :'Сумма за период из настроек';
       c.innerHTML=`
         <header>
+          <button class="lane-visibility-toggle" type="button" aria-label="Скрыть колонку">
+            <span aria-hidden="true">▾</span>
+          </button>
           <h2>
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
@@ -15533,6 +16158,12 @@ function renderColumns(){
     const drop=c.querySelector('.drop');
     const more=c.querySelector('.col-more');
     const laneAlert=header?.querySelector('[data-lane-alert]');
+    const hideBtn=header?.querySelector('.lane-visibility-toggle');
+    if(hideBtn){
+      hideBtn.dataset.lane=l;
+      hideBtn.title=`Скрыть «${laneLabel}»`;
+      hideBtn.addEventListener('click',()=>hideLane(l));
+    }
     if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
@@ -15555,6 +16186,7 @@ function renderColumns(){
     });
   });
   enableDnd();
+  renderHiddenLaneBar();
 }
 
 function normalizeStageProgress(value){
@@ -15757,13 +16389,16 @@ function normalizeServiceTotalValue(raw){
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
-  const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  const visibleLanes=getVisibleLanes();
+  const visibleLaneSet=new Set(visibleLanes);
+  const allLaneSet=new Set(Array.isArray(b.lanes)?b.lanes:[]);
+  const map=Object.fromEntries(visibleLanes.map(l=>[l,[]]));
   const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
   const totalOrders=b.orders.length;
   let filteredTotal=0;
   let filteredActive=0;
   let totalActive=0;
-  const fallbackLane=b.lanes[0]??null;
+  const fallbackLane=visibleLanes[0]??null;
   const canCompleteOrders=crmCanCompleteOrders();
   const laneSumRange=resolveLaneSumRange();
   const todayTime=today0().getTime();
@@ -15771,23 +16406,25 @@ function renderCards(){
     computeOrderDatesFromStages(o);
     ensureOrderStatusEnteredAt(o);
     let lane=o.status;
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      lane=fallbackLane;
-    }
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      return;
-    }
     if(!doneLane || lane!==doneLane){
       totalActive++;
     }
     if(!orderMatchesSearch(o)){
       return;
     }
-    map[lane].push(o);
     filteredTotal++;
     if(!doneLane || lane!==doneLane){
       filteredActive++;
     }
+    const laneKnown=allLaneSet.has(lane);
+    const laneVisible=visibleLaneSet.has(lane);
+    if(!laneVisible){
+      if(!laneKnown && fallbackLane){
+        map[fallbackLane].push(o);
+      }
+      return;
+    }
+    map[lane].push(o);
   });
 
   Object.entries(map).forEach(([lane,arr])=>{
@@ -15839,7 +16476,8 @@ function renderCards(){
       if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){const sd=o.start||'—';const ed=o.end||'—';chips.appendChild(chip(`${sd} — ${ed}`,hasOverdueStage?'danger':'warn'))}
+      const periodLabel=formatStagePeriod(o.start,o.end);
+      if(periodLabel && periodLabel!=='—'){chips.appendChild(chip(periodLabel,hasOverdueStage?'danger':'warn'))}
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
         <div class="row">
@@ -16603,9 +17241,6 @@ function isStageWorkingDayForLink(stageKey, date){
   if(evaluator && typeof evaluator.isWorking==='function' && !evaluator.isWorking(date)){
     return false;
   }
-  if(CRM_NOHOUR_STAGES.has(normalized)){
-    return true;
-  }
   const calendar=getCrmStageCalendar(normalized);
   const iso=fmtDateISO(date);
   if(calendar?.exceptions instanceof Map && calendar.exceptions.has(iso)){
@@ -16614,7 +17249,7 @@ function isStageWorkingDayForLink(stageKey, date){
       return false;
     }
   }
-  const baseCap=getCrmStageCapacity(normalized);
+  const baseCap=CRM_NOHOUR_STAGES.has(normalized)?getCrmStageParallel(normalized):getCrmStageCapacity(normalized);
   return baseCap>1e-6;
 }
 
@@ -17165,23 +17800,7 @@ if(orderDlg){
     orderCommentsDraft=[];
     renderOrderComments();
     resetOrderCommentInputs();
-    if(crmPendingRemotePayload){
-      const deferredPayload=crmPendingRemotePayload;
-      crmPendingRemotePayload=null;
-      const wasNotified=crmPendingRemoteNotified;
-      const skipDeferred=crmPendingRemoteDirty;
-      crmPendingRemoteNotified=false;
-      crmPendingRemoteDirty=false;
-      if(skipDeferred){
-        showToast({
-          title:'CRM',
-          message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Данные обновятся при следующей синхронизации.',
-          tone:'info'
-        });
-      }else{
-        applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:wasNotified });
-      }
-    }
+    processPendingRemoteUpdate();
   });
 }
 
@@ -18008,6 +18627,7 @@ function renderCrmCapacitySettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmCapacitySettings();
+  const keepFree=getCrmKeepFreeSettings();
   CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
@@ -18028,6 +18648,29 @@ function renderCrmCapacitySettingsUI(){
   hint.className='crm-settings-summary';
   hint.textContent='Часы в день по каждому переделу.';
   control.appendChild(hint);
+
+  const keepFreeRow=document.createElement('div');
+  keepFreeRow.className='crm-settings-matrix crm-settings-matrix--secondary';
+  const keepFreeTitle=document.createElement('div');
+  keepFreeTitle.className='crm-settings-summary';
+  keepFreeTitle.textContent='Минимальный свободный остаток в дне (часы)';
+  CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
+    const item=document.createElement('div');
+    item.className='crm-settings-matrix-row';
+    const title=document.createElement('label');
+    title.textContent=CRM_STAGE_LABELS[stage]||stage;
+    const input=document.createElement('input');
+    input.type='number';
+    input.min='0';
+    input.step='0.1';
+    input.dataset.crmSetting='keepfree';
+    input.dataset.crmStage=stage;
+    input.value=String(keepFree[stage]??0);
+    item.append(title, input);
+    keepFreeRow.appendChild(item);
+  });
+  control.appendChild(keepFreeTitle);
+  control.appendChild(keepFreeRow);
   row.appendChild(label);
   row.appendChild(control);
   crmCapacityContainer.appendChild(row);
@@ -18572,6 +19215,32 @@ function renderCrmPreferencesSettingsUI(){
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
+
+  const laneRow=document.createElement('div');
+  laneRow.className='crm-settings-row crm-settings-row--stack';
+  const laneLabel=document.createElement('div');
+  laneLabel.className='crm-settings-label';
+  laneLabel.textContent='Отображение колонок';
+  const laneControl=document.createElement('div');
+  laneControl.className='crm-settings-control crm-settings-control--column';
+
+  const autoHideOption=document.createElement('label');
+  autoHideOption.className='crm-settings-checkbox';
+  const autoHideCheckbox=document.createElement('input');
+  autoHideCheckbox.type='checkbox';
+  autoHideCheckbox.name='prefAutoHideEmptyLanes';
+  autoHideCheckbox.checked=prefs.autoHideEmptyLanes===true;
+  const autoHideText=document.createElement('span');
+  autoHideText.textContent='Автоматически скрывать пустые колонки';
+  autoHideOption.append(autoHideCheckbox, autoHideText);
+
+  const lanesHint=document.createElement('span');
+  lanesHint.className='crm-field__hint';
+  lanesHint.textContent='Ручное скрытие колонок теперь доступно прямо на доске (стрелка на заголовке колонки). Настройка сохраняется только для текущего пользователя.';
+
+  laneControl.append(autoHideOption, lanesHint);
+  laneRow.append(laneLabel, laneControl);
+  crmPreferencesContainer.appendChild(laneRow);
 }
 
 function renderCrmStartViewSettingsUI(){
@@ -18744,7 +19413,13 @@ function renderCrmMappingSettingsUI(){
       const hoursText=document.createElement('span');
       hoursText.textContent='Есть часы';
       hoursLabel.append(hoursInput, hoursText);
-      controls.append(selectWrap, hoursLabel);
+      const removeBtn=document.createElement('button');
+      removeBtn.type='button';
+      removeBtn.className='pc-icon-btn pc-icon-btn--ghost crm-mapping-row__remove';
+      removeBtn.dataset.crmMappingRemove=entry.normalized;
+      removeBtn.setAttribute('aria-label',`Удалить строку для «${title.textContent}»`);
+      removeBtn.textContent='✕';
+      controls.append(selectWrap, hoursLabel, removeBtn);
       updateCrmMappingRowState(rowEl, select.value);
       rowEl.append(title, controls);
       list.appendChild(rowEl);
@@ -18760,7 +19435,18 @@ function renderCrmMappingSettingsUI(){
   row.appendChild(label);
   row.appendChild(control);
   crmMappingContainer.appendChild(row);
+  updateCrmMappingNoteText();
   updateCrmMappingAlertState();
+}
+
+function updateCrmMappingNoteText(){
+  if(!crmMappingContainer) return;
+  const note=crmMappingContainer.querySelector('.crm-mapping-note');
+  if(!note) return;
+  const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
+  note.textContent=hasUnmapped
+    ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
+    : 'Настройте сопоставление названий стадий CRM с переделами.';
 }
 
 if(crmMappingContainer){
@@ -18787,18 +19473,27 @@ if(crmMappingContainer){
           }
         }
       }
-      const note=crmMappingContainer.querySelector('.crm-mapping-note');
-      if(note){
-        const hasUnmapped=!!crmMappingContainer.querySelector('.crm-mapping-row[data-state="unmapped"]');
-        note.textContent=hasUnmapped
-          ? 'Есть стадии без сопоставления — выберите соответствующий передел.'
-          : 'Настройте сопоставление названий стадий CRM с переделами.';
-      }
+      updateCrmMappingNoteText();
       updateCrmMappingAlertState();
       return;
     }
     if(target instanceof HTMLInputElement && target.name==='crmMappingHours'){
       target.dataset.manual='1';
+    }
+  });
+  crmMappingContainer.addEventListener('click',event=>{
+    const target=event.target;
+    if(target instanceof HTMLButtonElement && target.dataset.crmMappingRemove){
+      const normalized=normalizeCrmStageKey(target.dataset.crmMappingRemove);
+      const row=target.closest('.crm-mapping-row');
+      if(row){
+        row.remove();
+      }
+      if(normalized){
+        setCrmStageMappingEntry(normalized,null);
+      }
+      updateCrmMappingNoteText();
+      updateCrmMappingAlertState();
     }
   });
 }
@@ -19069,6 +19764,17 @@ boardForm.addEventListener('submit',e=>{
     }
   });
   state.settings.capacity=normalizeCapacityMap(capacityDraft, state.settings?.capacity||CRM_DEFAULT_CAPACITY);
+  const keepFreeInputs=[...boardForm.querySelectorAll('input[data-crm-setting="keepfree"]')];
+  const keepFreeDraft={};
+  keepFreeInputs.forEach(input=>{
+    const stage=input.dataset.crmStage;
+    if(!stage) return;
+    const value=parseNumericValue(input.value).number;
+    if(Number.isFinite(value)&&value>=0){
+      keepFreeDraft[stage]=Math.round(value*10)/10;
+    }
+  });
+  state.settings.keepFree=normalizeKeepFreeMap(keepFreeDraft, state.settings?.keepFree||CRM_DEFAULT_KEEP_FREE);
   const parallelInputs=[...boardForm.querySelectorAll('input[data-crm-setting="parallel"]')];
   const parallelDraft={};
   parallelInputs.forEach(input=>{
@@ -19094,6 +19800,8 @@ boardForm.addEventListener('submit',e=>{
       to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
     },
     laneSumModes:state.settings?.preferences?.laneSumModes||{},
+    autoHideEmptyLanes:!!boardForm.prefAutoHideEmptyLanes?.checked,
+    hiddenLanes:getHiddenLanes(),
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
       level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
@@ -19527,6 +20235,45 @@ let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
+let crmRemoteRecoveryTimer=null;
+let crmRemoteRecoveryPending=false;
+
+function crmHasPendingLocalChanges(){
+  return !!crmSyncInFlight || !!crmSyncTimer;
+}
+
+function scheduleCrmRemoteRecovery(immediate){
+  if(crmRemoteRecoveryTimer) return;
+  const runRecovery=async()=>{
+    if(sessionExpired) return;
+    if(crmDataSource===CRM_DATA_SOURCE.remote && !crmRemoteRecoveryPending) return;
+    if(crmHasPendingLocalChanges()) return;
+    crmRemoteRecoveryPending=false;
+    if(window.plannerRemote && typeof window.plannerRemote.refresh==='function'){
+      try{
+        const payload=await window.plannerRemote.refresh('crm-recover');
+        if(payload && payload.state){
+          applyPlannerRemotePayload(payload,{ silent:true });
+        }
+      }catch(err){ console.warn('CRM remote recover failed',err); }
+    }
+  };
+  crmRemoteRecoveryTimer=setInterval(runRecovery,5000);
+  if(immediate){ runRecovery(); }
+}
+
+function markCrmRemoteStale(){
+  crmRemoteRecoveryPending=true;
+  scheduleCrmRemoteRecovery(true);
+}
+
+function clearCrmRemoteRecovery(){
+  if(!crmRemoteRecoveryTimer) return;
+  clearInterval(crmRemoteRecoveryTimer);
+  crmRemoteRecoveryTimer=null;
+  crmRemoteRecoveryPending=false;
+}
+scheduleCrmRemoteRecovery(true);
 
 function resolveCrmUserDisplay(){
   if(typeof crmCurrentUser?.displayName==='string'){
@@ -20293,177 +21040,220 @@ function buildCrmOrdersSummary(snapshot){
 async function pushCrmToServer(){
   if(crmSyncInFlight) return;
   crmSyncTimer=null;
-  if(!crmWriteAccessEnabled()){
-    const now=Date.now();
-    if(now - lastCrmWriteBlockedAt > 5000){
-      showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
-      lastCrmWriteBlockedAt = now;
-    }
-    return;
-  }
   crmSyncInFlight=true;
-  if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
-    setCrmDataSource(CRM_DATA_SOURCE.local);
-    crmSyncInFlight=false;
-    return;
-  }
-  state=ensureCrmStateShape(state);
-  const snapshot=deepClone(state);
-  if(!snapshot){
-    crmSyncInFlight=false;
-    return;
-  }
-  const summaryText = crmPendingSummary || 'Изменения CRM';
-
-  const buildPlannerSyncPayload = async () => {
-    let plannerSnapshot=null;
-    let baseEtag=null;
-    let baseHash=null;
-    try{
-      const loaded=await window.plannerRemote.loadState({ withMeta:true });
-      let raw=loaded;
-      if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
-        raw=loaded.state;
-        if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
-        if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
-      }
-      plannerSnapshot=raw?JSON.parse(raw):{};
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-    }catch(err){
-      const loadError=new Error('CRM planner state load failed');
-      loadError.code='CRM_PLANNER_LOAD_FAILED';
-      loadError.originalError=err;
-      setCrmDataSource(CRM_DATA_SOURCE.local);
-      throw loadError;
-    }
-    if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
-    syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
-    const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
-    currentWriteMode = adminWriteMode;
-    applyCrmWriteAccess();
-    if(adminWriteMode === DATA_WRITE_MODES.planner){
-      const err = new Error('Изменения разрешены только из Планировщика');
-      err.code = 'WRITE_MODE_FORBIDDEN';
-      throw err;
-    }
-    plannerSnapshot.crm=snapshot;
-    const nowIso=new Date().toISOString();
-    plannerSnapshot.crm.updatedAt=nowIso;
-    const actorName=getCrmActorName();
-    const now=new Date(nowIso);
-    const nowLabel=now.toLocaleString();
-    const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
-    const settingsRef = (meta.settings && typeof meta.settings==='object') ? meta.settings : (meta.settings = {});
-    if(settingsRef && typeof settingsRef==='object'){
-      settingsRef.plannerMode='crm';
-    }
-    const versions=meta.versions || (meta.versions={});
-    versions.crm=(Number(versions.crm)||0)+1;
-    meta.lastAuthors=meta.lastAuthors || {};
-    meta.lastAuthors.crm={ name:actorName, at:nowIso };
-    const summaryObj=buildCrmOrdersSummary(snapshot);
-    meta.lastChange={
-      stage:'crm',
-      stages:['crm'],
-      summary:summaryText,
-      user:actorName,
-      source:'crm',
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    };
-    meta.ordersSummary=summaryObj;
-    const history=Array.isArray(meta.history)?meta.history.slice(-199):[];
-    history.push({
-      id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
-      stage:'crm',
-      user:actorName,
-      summary:summaryText,
-      source:'crm',
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    });
-    meta.history=history;
-
-    const metaPayload={
-      stage:'crm',
-      source:'crm',
-      summary:summaryText,
-      user:actorName,
-      time:nowLabel,
-      changeType:'CRM',
-      ordersSummary:summaryObj
-    };
-    if(baseHash) metaPayload.baseHash=baseHash;
-    if(baseEtag) metaPayload.baseEtag=baseEtag;
-    if(!metaPayload.ifMatch){
-      if(baseEtag) metaPayload.ifMatch=baseEtag;
-      else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
-    }
-    metaPayload.channel='crm';
-    return {
-      stateString:JSON.stringify(plannerSnapshot),
-      metaPayload
-    };
-  };
-
-  let attempt=0;
-  let success=false;
-  let lastError=null;
-  while(attempt<2 && !success){
-    attempt+=1;
-    let payload;
-    try{
-      payload=await buildPlannerSyncPayload();
-    }catch(err){
-      lastError=err;
-      break;
-    }
-    try{
-      crmSuppressNext=true;
-      await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
-      setCrmDataSource(CRM_DATA_SOURCE.remote);
-      success=true;
-    }catch(err){
-      crmSuppressNext=false;
-      lastError=err;
-      if(err && err.code==='WRITE_MODE_FORBIDDEN'){
-        break;
-      }
-      if(err && err.name==='PlannerConflictError' && attempt<2){
-        continue;
-      }
-      break;
-    }
-  }
-
-  if(success){
-    showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
-  }else if(lastError){
-    crmSuppressNext=false;
-    if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
-      console.error('CRM: load planner state failed',lastError.originalError||lastError);
-      showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
-      setCrmDataSource(CRM_DATA_SOURCE.local);
-    }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+  try{
+    if(!crmWriteAccessEnabled()){
       const now=Date.now();
       if(now - lastCrmWriteBlockedAt > 5000){
-        showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+        showToast({ title:'CRM', message:'Изменения разрешены только из Планировщика.', tone:'warn' });
         lastCrmWriteBlockedAt = now;
       }
-    }else{
-      console.error('CRM sync failed',lastError);
-      const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
-      let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
-      if(lastError && lastError.name==='PlannerConflictError'){
-        message='Данные планировщика изменились. Обновите список и повторите попытку.';
+      return;
+    }
+    if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
+      setCrmDataSource(CRM_DATA_SOURCE.local);
+      markCrmRemoteStale();
+      return;
+    }
+    state=ensureCrmStateShape(state);
+    const localSnapshot=deepClone(state);
+    if(!localSnapshot){
+      return;
+    }
+    const summaryText = crmPendingSummary || 'Изменения CRM';
+    let lastMergedCrm=null;
+    let lastBaseHash=null;
+    let lastBaseEtag=null;
+
+    const buildPlannerSyncPayload = async () => {
+      let plannerSnapshot=null;
+      let baseEtag=null;
+      let baseHash=null;
+      try{
+        const loaded=await window.plannerRemote.loadState({ withMeta:true });
+        let raw=loaded;
+          if(loaded && typeof loaded==='object' && typeof loaded.state==='string'){
+            raw=loaded.state;
+            if(loaded.etag) baseEtag=String(loaded.etag).trim()||null;
+            if(loaded.hash) baseHash=String(loaded.hash).trim()||null;
+          }
+          lastBaseHash=baseHash;
+          lastBaseEtag=baseEtag;
+          plannerSnapshot=raw?JSON.parse(raw):{};
+          setCrmDataSource(CRM_DATA_SOURCE.remote);
+        }catch(err){
+        const loadError=new Error('CRM planner state load failed');
+        loadError.code='CRM_PLANNER_LOAD_FAILED';
+        loadError.originalError=err;
+        setCrmDataSource(CRM_DATA_SOURCE.local);
+        markCrmRemoteStale();
+        throw loadError;
       }
-      showToast({title:'CRM',message,tone:'error',autoClose:5000});
+      if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
+      syncCrmNotificationsMutedFromPlanner(plannerSnapshot);
+      const adminWriteMode = normalizeWriteMode(plannerSnapshot?.meta?.settings?.admin?.writeMode);
+      currentWriteMode = adminWriteMode;
+      applyCrmWriteAccess();
+      if(adminWriteMode === DATA_WRITE_MODES.planner){
+        const err = new Error('Изменения разрешены только из Планировщика');
+        err.code = 'WRITE_MODE_FORBIDDEN';
+        throw err;
+      }
+      const baseSnapshot=getCrmBaselineSnapshot(plannerSnapshot.crm);
+      const mergeResult=mergeCrmSnapshotWithRemote({ base:baseSnapshot, local:localSnapshot, remote:plannerSnapshot.crm });
+      if(Array.isArray(mergeResult.conflicts) && mergeResult.conflicts.length){
+        const conflictError=new Error('Конфликт одновременных изменений CRM');
+        conflictError.code='CRM_MERGE_CONFLICT';
+        conflictError.conflicts=mergeResult.conflicts;
+        throw conflictError;
+      }
+      plannerSnapshot.crm=mergeResult.crm;
+      lastMergedCrm=mergeResult.crm;
+      const nowIso=new Date().toISOString();
+      plannerSnapshot.crm.updatedAt=nowIso;
+      const actorName=getCrmActorName();
+      const now=new Date(nowIso);
+      const nowLabel=now.toLocaleString();
+      const meta=plannerSnapshot.meta || (plannerSnapshot.meta={});
+      const settingsRef = (meta.settings && typeof meta.settings==='object') ? meta.settings : (meta.settings = {});
+      if(settingsRef && typeof settingsRef==='object'){
+        settingsRef.plannerMode='crm';
+      }
+      meta.sharedCalendars=snapshotSharedStageCalendars(plannerSnapshot.crm.boards);
+      const versions=meta.versions || (meta.versions={});
+      versions.crm=(Number(versions.crm)||0)+1;
+      meta.lastAuthors=meta.lastAuthors || {};
+      meta.lastAuthors.crm={ name:actorName, at:nowIso };
+      const summaryObj=buildCrmOrdersSummary(plannerSnapshot.crm);
+      meta.lastChange={
+        stage:'crm',
+        stages:['crm'],
+        summary:summaryText,
+        user:actorName,
+        source:'crm',
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      };
+      meta.ordersSummary=summaryObj;
+      const history=Array.isArray(meta.history)?meta.history.slice(-199):[];
+      history.push({
+        id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
+        stage:'crm',
+        user:actorName,
+        summary:summaryText,
+        source:'crm',
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      });
+      meta.history=history;
+
+      const metaPayload={
+        stage:'crm',
+        source:'crm',
+        summary:summaryText,
+        user:actorName,
+        time:nowLabel,
+        changeType:'CRM',
+        ordersSummary:summaryObj
+      };
+      if(baseHash) metaPayload.baseHash=baseHash;
+      if(baseEtag) metaPayload.baseEtag=baseEtag;
+      if(!metaPayload.ifMatch){
+        if(baseEtag) metaPayload.ifMatch=baseEtag;
+        else if(baseHash) metaPayload.ifMatch=`W/"${baseHash}"`;
+      }
+      metaPayload.channel='crm';
+      return {
+        stateString:JSON.stringify(plannerSnapshot),
+        metaPayload
+      };
+    };
+
+    let attempt=0;
+    let success=false;
+    let lastError=null;
+    while(attempt<2 && !success){
+      attempt+=1;
+      let payload;
+      try{
+        payload=await buildPlannerSyncPayload();
+      }catch(err){
+        lastError=err;
+        break;
+      }
+      try{
+        crmSuppressNext=true;
+        await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
+        setCrmDataSource(CRM_DATA_SOURCE.remote);
+        success=true;
+      }catch(err){
+        crmSuppressNext=false;
+        lastError=err;
+        if(err && err.code==='WRITE_MODE_FORBIDDEN'){
+          break;
+        }
+        if(err && err.name==='PlannerConflictError' && attempt<2){
+          continue;
+        }
+        break;
+      }
+    }
+
+    if(success){
+      rememberCrmBaseline(currentHash||lastBaseHash||null, lastMergedCrm||localSnapshot);
+      showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    }else if(lastError){
+      crmSuppressNext=false;
+      if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
+        console.error('CRM: load planner state failed',lastError.originalError||lastError);
+        showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
+        setCrmDataSource(CRM_DATA_SOURCE.local);
+        markCrmRemoteStale();
+      }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
+        const now=Date.now();
+        if(now - lastCrmWriteBlockedAt > 5000){
+          showToast({title:'CRM',message:'Изменения разрешены только из Планировщика.',tone:'warn'});
+          lastCrmWriteBlockedAt = now;
+        }
+      }else if(lastError.code==='CRM_MERGE_CONFLICT'){
+        const conflicts=Array.isArray(lastError.conflicts)?lastError.conflicts:[];
+        const conflictLabel=conflicts.slice(0,3).map(item=>{
+          if(!item||typeof item!=='object') return '';
+          if(item.scope==='stageCalendars' && item.stage){
+            return `${item.stage.toUpperCase()} ${item.kind||''} ${item.iso||''}`.trim();
+          }
+          if(item.boardId){
+            return `Доска ${item.boardId}`;
+          }
+          return '';
+        }).filter(Boolean).join(', ');
+        const message=conflictLabel
+          ? `Данные изменились параллельно (${conflictLabel}). Обновите и повторите сохранение.`
+          : 'Данные изменились параллельно. Обновите список и повторите сохранение.';
+        showToast({title:'CRM',message,tone:'error',autoClose:6000});
+      }else{
+        console.error('CRM sync failed',lastError);
+        const detail=(lastError?.detail&&typeof lastError.detail==='object')? (lastError.detail.message||lastError.detail.error||'') : '';
+        let message=detail || lastError?.message || 'Не удалось синхронизировать изменения';
+        if(lastError && lastError.name==='PlannerConflictError'){
+          message='Данные планировщика изменились. Обновите список и повторите попытку.';
+        }
+        showToast({title:'CRM',message,tone:'error',autoClose:5000});
+      }
+    }
+  }catch(err){
+    crmSuppressNext=false;
+    console.error('CRM sync crashed', err);
+    showToast({ title:'CRM', message:'Синхронизация CRM прервана. Обновите страницу и повторите.', tone:'error', autoClose:6000 });
+  }finally{
+    crmSyncInFlight=false;
+    processPendingRemoteUpdate({ silent:true });
+    if(window.plannerRemote && typeof window.plannerRemote.requestDeferredRefreshIfIdle==='function'){
+      window.plannerRemote.requestDeferredRefreshIfIdle();
     }
   }
-
-  crmSyncInFlight=false;
 }
 
 function captureCrmScrollSnapshot(){
@@ -20548,17 +21338,23 @@ function restoreCrmScrollSnapshot(snapshot){
   runner(5);
 }
 
-function applyRemoteCrm(crm){
+function applyRemoteCrm(crm, sharedCalendars){
   if(!crm||typeof crm!=='object') return;
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  const unifiedCalendars=sharedCalendars||snapshotSharedStageCalendars(state.boards);
+  if(unifiedCalendars){
+    applySharedStageCalendarsToBoards(unifiedCalendars);
+    window.__CRM_SHARED_STAGE_CALENDARS__=unifiedCalendars;
+  }
   const storedSettings=loadStoredCrmSettings();
   if(storedSettings){
     state.settings=mergeCrmSettings(state.settings, storedSettings);
   }
   persistLocal();
   renderAll();
+  rememberCrmBaseline(currentHash||null, state);
   restoreCrmScrollSnapshot(uiSnapshot);
 }
 
@@ -20571,7 +21367,8 @@ function applyPlannerRemotePayload(payload, options={}){
     applyCrmWriteAccess();
     setCrmDataSource(CRM_DATA_SOURCE.remote);
     if(parsed&&parsed.crm){
-      applyRemoteCrm(parsed.crm);
+      const sharedCalendars=parsed?.meta?.sharedCalendars;
+      applyRemoteCrm(parsed.crm, sharedCalendars);
       const reason=payload?.reason||'';
       const shouldToast=!options.silent && (!reason || reason==='sse');
       if(shouldToast){
@@ -20584,29 +21381,147 @@ function applyPlannerRemotePayload(payload, options={}){
   }catch(err){ console.warn('CRM remote update parse failed',err); }
 }
 
-function deferPlannerRemotePayload(payload){
+function deferPlannerRemotePayload(payload, options={}){
   crmPendingRemotePayload=payload;
   crmPendingRemoteDirty=false;
+  crmPendingRemoteRequireRefresh=!!options.requireRefresh;
   if(crmPendingRemoteNotified) return;
   crmPendingRemoteNotified=true;
   showToast({
     title:'CRM',
-    message:'Получено новое обновление. Оно будет применено после завершения редактирования заказа.',
+    message:'Получено новое обновление. Оно будет применено после завершения текущих правок.',
     tone:'info'
   });
+  ensurePendingRemoteFlush();
 }
 
-if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
-  window.plannerRemote.onRemoteUpdate(payload=>{
-    if(crmSuppressNext){ crmSuppressNext=false; return; }
-    if(!payload||!payload.state) return;
-    if(isOrderDialogActive()){
-      deferPlannerRemotePayload(payload);
+function ensurePendingRemoteFlush(){
+  if(crmPendingRemoteFlushTimer) return;
+  crmPendingRemoteFlushTimer=setInterval(()=>{
+    if(!crmPendingRemotePayload) return;
+    if(isOrderDialogActive() || hasPendingLocalChanges()) return;
+    processPendingRemoteUpdate({ silent:true });
+  },1500);
+}
+
+function stopPendingRemoteFlush(){
+  if(!crmPendingRemoteFlushTimer) return;
+  clearInterval(crmPendingRemoteFlushTimer);
+  crmPendingRemoteFlushTimer=null;
+}
+
+  function processPendingRemoteUpdate(options={}){
+    if(!crmPendingRemotePayload) return;
+    if(isOrderDialogActive() || hasPendingLocalChanges()){
+      return;
+    }
+  const deferredPayload=crmPendingRemotePayload;
+  const wasNotified=crmPendingRemoteNotified;
+  const skipDeferred=crmPendingRemoteDirty;
+  const needsRefresh=crmPendingRemoteRequireRefresh;
+  crmPendingRemotePayload=null;
+  crmPendingRemoteNotified=false;
+  crmPendingRemoteDirty=false;
+  crmPendingRemoteRequireRefresh=false;
+  stopPendingRemoteFlush();
+  if(skipDeferred){
+    showToast({
+      title:'CRM',
+      message:'Пропустили внешнее обновление, чтобы не потерять ваши изменения. Обновляем данные...',
+      tone:'info'
+    });
+    requestStateRefresh('missed-update', deferredPayload);
+    return;
+  }
+  if(needsRefresh && (!deferredPayload.state || !deferredPayload.state.trim())){
+    requestStateRefresh(deferredPayload.reason||'deferred', deferredPayload);
+    return;
+  }
+  applyPlannerRemotePayload(deferredPayload,{ deferredApplied:true, silent:options.silent??wasNotified });
+}
+
+  if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'){
+    window.plannerRemote.onRemoteUpdate(payload=>{
+      if(crmSuppressNext){ crmSuppressNext=false; return; }
+      if(!payload) return;
+      const needsState=!payload.state || !payload.state.trim();
+    if(isOrderDialogActive() || hasPendingLocalChanges()){
+      deferPlannerRemotePayload(payload,{ requireRefresh:needsState });
+      return;
+    }
+    if(needsState){
+      requestStateRefresh(payload.reason||'sse', payload);
       return;
     }
     applyPlannerRemotePayload(payload);
-  });
-}
+    });
+  }
+
+  async function fetchPlannerSnapshotForAutoSync(){
+    if(!window.plannerRemote||typeof window.plannerRemote.loadState!=='function') return null;
+    try{
+      const meta=await window.plannerRemote.loadState({ withMeta:true });
+      if(meta && typeof window.plannerRemote.applyFingerprint==='function'){
+        window.plannerRemote.applyFingerprint({ etag:meta.etag, hash:meta.hash });
+      }
+      if(meta && typeof meta.state==='string' && meta.state.trim()){
+        return { state:meta.state, etag:meta.etag, hash:meta.hash, reason:'crm-auto-sync' };
+      }
+    }catch(err){
+      console.warn('CRM auto-sync load failed',err);
+    }
+    return null;
+  }
+
+  async function runCrmAutoSync(forceApply=false){
+    if(sessionExpired) return;
+    if(crmSyncInFlight){
+      crmAutoSyncBacklog=true;
+      return;
+    }
+    if(crmAutoSyncBusy){
+      crmAutoSyncBacklog=true;
+      return;
+    }
+    crmAutoSyncBusy=true;
+    try{
+      const currentFingerprint=(window.plannerRemote&&typeof window.plannerRemote.getFingerprint==='function')
+        ? window.plannerRemote.getFingerprint()
+        : {};
+      const baselineHash=crmAutoSyncLastFingerprint?.hash || currentFingerprint.hash || null;
+      const payload=await fetchPlannerSnapshotForAutoSync();
+      if(!payload) return;
+      const incomingHash=payload.hash||null;
+      if(!forceApply && incomingHash && baselineHash && incomingHash===baselineHash){
+        return;
+      }
+      crmAutoSyncLastFingerprint={ hash:incomingHash||baselineHash||null, etag:payload.etag||currentFingerprint.etag||null };
+      if(isOrderDialogActive() || hasPendingLocalChanges()){
+        deferPlannerRemotePayload(payload,{ requireRefresh:false });
+        return;
+      }
+      applyPlannerRemotePayload(payload,{ silent:true });
+    }catch(err){
+      console.warn('CRM auto-sync tick failed',err);
+    }finally{
+      crmAutoSyncBusy=false;
+      if(crmAutoSyncBacklog){
+        crmAutoSyncBacklog=false;
+        setTimeout(()=>runCrmAutoSync(true),500);
+      }
+    }
+  }
+
+  function startCrmAutoSyncLoop(){
+    if(crmAutoSyncTimer){
+      clearInterval(crmAutoSyncTimer);
+      crmAutoSyncTimer=null;
+    }
+    crmAutoSyncTimer=setInterval(()=>runCrmAutoSync(false),5000);
+    runCrmAutoSync(true);
+  }
+
+  startCrmAutoSyncLoop();
 
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='hidden' && crmSyncTimer){
@@ -20620,6 +21535,12 @@ window.addEventListener('beforeunload',()=>{
 });
 
 const CRM_HINT_TARGETS=[
+  { selector:'#crmNavKanbanBtn', level1:'CRM', level2:'Канбан с колонками статусов и перетаскиванием карточек заказов.' },
+  { selector:'#crmOrdersTabBtn', level1:'Заказы', level2:'Табличный список заказов с поиском, фильтрами и экспортом.' },
+  { selector:'#crmStageTabBtn', level1:'Переделы', level2:'Подетальная раскладка заказов по переделам, маршрут и диаграмма Ганта.' },
+  { selector:'#crmSettingsNavBtn', level1:'Настройки', level2:'Параметры доски, отображение колонок, мощности и графики переделов.' },
+  { selector:'#crmJournalBtn', level1:'Журнал', level2:'История изменений заказов, расписаний и настроек CRM.' },
+  { selector:'#crmAdminNavBtn', level1:'Админ', level2:'Администрирование пользователей, ролей и глобальных параметров.' },
   { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
   { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
   { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт строку передела. Shift открывает выбор из списка шаблонов.' },
@@ -20743,6 +21664,16 @@ if(crmOrdersTabBtn){
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
 }
+if(crmDetailCollapseToggle){
+  crmDetailCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('detail', !crmCollapsedSections.detail));
+}
+if(crmGanttCollapseToggle){
+  crmGanttCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('gantt', !crmCollapsedSections.gantt));
+}
+if(crmRouteCollapseToggle){
+  crmRouteCollapseToggle.addEventListener('click',()=>setCrmSectionCollapsed('route', !crmCollapsedSections.route));
+}
+applyCrmCollapseStates();
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
     const stageKey=crmStageSelect.value||'draw';
@@ -20762,6 +21693,7 @@ if(crmStageSelect){
     if(currentCrmView==='stage'){
       renderCrmStageTable();
     }
+    updateCrmAuxButtons();
     applyCrmWriteAccess();
   });
 }
