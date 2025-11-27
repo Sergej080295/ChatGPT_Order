@@ -22,7 +22,6 @@
   const DEFAULT_REFRESH_INTERVAL_MS = window.DEFAULT_REFRESH_INTERVAL_MS;
   const STATE_FETCH_TIMEOUT_MS = 12000;
   const STATE_SAVE_TIMEOUT_MS = 15000;
-  const AUTO_REFRESH_HANG_MS = 20000;
   let refreshTimerId = null;
   let refreshPromise = null;
   let lastRefreshAt = 0;
@@ -160,10 +159,6 @@
     if (refreshTimerId) {
       clearInterval(refreshTimerId);
       refreshTimerId = null;
-    }
-    if (autoRefreshWatchdogId) {
-      clearInterval(autoRefreshWatchdogId);
-      autoRefreshWatchdogId = null;
     }
     if (crmPendingRemoteFlushTimer) {
       clearInterval(crmPendingRemoteFlushTimer);
@@ -591,11 +586,8 @@
     }
     const effectiveReason = typeof reason === 'string' && reason ? reason : 'refresh';
     refreshPromise = (async () => {
-      const refreshTimeout = createAbortableTimeout(STATE_FETCH_TIMEOUT_MS);
-      lastRefreshStartAt = Date.now();
-      refreshAbortHandle = refreshTimeout.abort;
       try {
-        const meta = await loadState({ withMeta: true, signal: refreshTimeout.signal });
+        const meta = await loadState({ withMeta: true, signal: createAbortableTimeout(STATE_FETCH_TIMEOUT_MS).signal });
         lastRefreshAt = Date.now();
         if (meta && typeof meta.state === 'string' && meta.state) {
           const payload = {
@@ -615,97 +607,44 @@
         armConnectionLossRedirect('state-refresh');
         return null;
       } finally {
-        lastRefreshStartAt = 0;
-        refreshAbortHandle = null;
-        if (refreshTimeout && typeof refreshTimeout.cancel === 'function') {
-          refreshTimeout.cancel();
-        }
         refreshPromise = null;
       }
     })();
     return refreshPromise;
   };
 
-  let autoRefreshWatchdogId = null;
-  let autoRefreshLoopTimerId = null;
-  let autoRefreshLoopRunning = false;
-  let autoRefreshLoopPending = false;
-  let lastRefreshStartAt = 0;
-  let refreshAbortHandle = null;
-
   const requestDeferredRefreshIfIdle = () => {
     if (hasPendingLocalChanges()) return;
     requestStateRefresh('deferred-auto-refresh');
   };
 
-  const scheduleNextAutoRefreshTick = (delayMs = autoRefreshIntervalMs) => {
-    if (autoRefreshLoopTimerId) {
-      clearTimeout(autoRefreshLoopTimerId);
-      autoRefreshLoopTimerId = null;
+  const scheduleAutoRefresh = () => {
+    if (refreshTimerId) {
+      clearTimeout(refreshTimerId);
+      refreshTimerId = null;
     }
-    if (!Number.isFinite(delayMs) || delayMs <= 0) {
-      delayMs = autoRefreshIntervalMs;
-    }
-    autoRefreshLoopTimerId = setTimeout(runAutoRefreshTick, delayMs);
-  };
-
-  async function runAutoRefreshTick(){
-    if (autoRefreshLoopRunning) {
-      autoRefreshLoopPending = true;
+    autoRefreshIntervalMs = resolveAutoRefreshInterval();
+    if (!autoRefreshIntervalMs || autoRefreshIntervalMs <= 0) {
       return;
     }
-    autoRefreshLoopRunning = true;
-    try {
-      processPendingRemoteUpdate({ silent:true });
-      if (sessionExpired) return;
-      if (document.hidden) return;
-      const payload = await requestStateRefresh('interval');
-      if (!payload && hasPendingLocalChanges()) {
-        autoRefreshLoopPending = true;
-      }
-      lastRefreshAt = Date.now();
-    } catch (err) {
-      console.warn('plannerRemote auto-refresh tick failed', err);
-    } finally {
-      autoRefreshLoopRunning = false;
-      const nextDelay = autoRefreshLoopPending ? Math.min(2000, autoRefreshIntervalMs) : autoRefreshIntervalMs;
-      autoRefreshLoopPending = false;
-      scheduleNextAutoRefreshTick(nextDelay);
-    }
-  }
-
-  const scheduleAutoRefresh = () => {
-    autoRefreshIntervalMs = 5000;
-    scheduleNextAutoRefreshTick(0);
-    armAutoRefreshWatchdog();
-  };
-
-  function armAutoRefreshWatchdog(){
-    if (autoRefreshWatchdogId) {
-      clearInterval(autoRefreshWatchdogId);
-      autoRefreshWatchdogId = null;
-    }
-    const watchdogInterval = 10000;
-    autoRefreshWatchdogId = setInterval(() => {
-      const idleFor = lastRefreshAt ? Date.now() - lastRefreshAt : Infinity;
-      const timerMissing = !autoRefreshLoopTimerId && !autoRefreshLoopRunning;
-      const overdue = idleFor > Math.max(autoRefreshIntervalMs * 2.5, 15000);
-      const runningTooLong = autoRefreshLoopRunning && lastRefreshStartAt
-        && (Date.now() - lastRefreshStartAt > AUTO_REFRESH_HANG_MS);
-      if (runningTooLong) {
-        if (typeof refreshAbortHandle === 'function') {
-          refreshAbortHandle();
-        }
-        refreshPromise = null;
-        autoRefreshLoopRunning = false;
-        scheduleAutoRefresh();
+    const tick = () => {
+      refreshTimerId = null;
+      if (document.hidden) {
+        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
         return;
       }
-      if (timerMissing || overdue) {
-        scheduleAutoRefresh();
+      if (hasPendingLocalChanges()) {
+        refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+        return;
       }
-    }, watchdogInterval);
-  }
+      const now = Date.now();
+      if (!refreshPromise && (!lastRefreshAt || now - lastRefreshAt >= Math.max(2500, Math.floor(autoRefreshIntervalMs / 3)))) {
+        requestStateRefresh('interval');
+      }
+      refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+    };
+    refreshTimerId = setTimeout(tick, autoRefreshIntervalMs);
+  };
 
   const handleFocusRefresh = () => {
     if (document.hidden) return;
