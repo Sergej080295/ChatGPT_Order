@@ -2611,6 +2611,40 @@
     contain: layout paint;
   }
 
+  .crm-stage-detail-scrollbar {
+    position: relative;
+    height: 12px;
+    padding: 2px 0 4px;
+    box-sizing: border-box;
+  }
+
+  .crm-stage-detail-scrollbar__track {
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-border) 45%, transparent);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .crm-stage-detail-scrollbar__thumb {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--pc-primary) 55%, var(--pc-surface));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-primary) 20%, transparent);
+    cursor: grab;
+    min-width: 32px;
+    transition: background 120ms ease;
+  }
+
+  .crm-stage-detail-scrollbar__thumb:active {
+    cursor: grabbing;
+    background: color-mix(in srgb, var(--pc-primary) 70%, var(--pc-surface));
+  }
+
   .crm-stage-stack-wrap {
     display: inline-flex;
     flex-wrap: nowrap;
@@ -5832,6 +5866,11 @@
           <div class="crm-collapsible__body" id="crmStageDetailBody">
             <div class="crm-stage-detail-viewport" id="crmStageDetailViewport">
               <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
+            </div>
+            <div class="crm-stage-detail-scrollbar" id="crmStageDetailScrollbar" hidden>
+              <div class="crm-stage-detail-scrollbar__track" aria-hidden="true">
+                <div class="crm-stage-detail-scrollbar__thumb" id="crmStageDetailScrollbarThumb"></div>
+              </div>
             </div>
             <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
           </div>
@@ -9489,6 +9528,73 @@ function scrollCrmStageDetail(direction){
   crmStageDetailViewport.scrollBy({ left: delta, behavior:'smooth' });
 }
 
+function updateCrmStageDetailScrollbar(){
+  if(!crmStageDetailViewport || !crmStageDetailScrollbar || !crmStageDetailScrollbarThumb){
+    return;
+  }
+  const scrollWidth=crmStageDetailViewport.scrollWidth;
+  const clientWidth=crmStageDetailViewport.clientWidth;
+  const maxScroll=Math.max(0, scrollWidth-clientWidth);
+  const hasOverflow=maxScroll>1;
+  crmStageDetailScrollbar.hidden=!hasOverflow;
+  if(!hasOverflow){
+    crmStageDetailScrollbarThumb.style.width='100%';
+    crmStageDetailScrollbarThumb.style.transform='translateX(0)';
+    return;
+  }
+  const trackWidth=crmStageDetailScrollbar.clientWidth;
+  const thumbRatio=clientWidth/scrollWidth;
+  const thumbWidth=Math.max(32, trackWidth*thumbRatio);
+  const maxThumbShift=Math.max(0, trackWidth-thumbWidth);
+  const thumbLeft=maxScroll>0?Math.min(maxThumbShift, (crmStageDetailViewport.scrollLeft/maxScroll)*maxThumbShift):0;
+  crmStageDetailScrollbarThumb.style.width=`${thumbWidth}px`;
+  crmStageDetailScrollbarThumb.style.transform=`translateX(${thumbLeft}px)`;
+}
+
+function attachCrmStageDetailScrollbar(){
+  if(!crmStageDetailScrollbar || !crmStageDetailScrollbarThumb || !crmStageDetailViewport){
+    return;
+  }
+  const handleTrackClick=evt=>{
+    if(evt.target===crmStageDetailScrollbarThumb) return;
+    const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
+    const ratio=(evt.clientX-trackRect.left)/Math.max(trackRect.width,1);
+    const maxScroll=Math.max(0, crmStageDetailViewport.scrollWidth-crmStageDetailViewport.clientWidth);
+    crmStageDetailViewport.scrollTo({ left: maxScroll*Math.min(1, Math.max(0, ratio)), behavior:'smooth' });
+  };
+  const handleThumbPointerDown=evt=>{
+    evt.preventDefault();
+    const trackRect=crmStageDetailScrollbar.getBoundingClientRect();
+    const thumbRect=crmStageDetailScrollbarThumb.getBoundingClientRect();
+    const startX=evt.clientX;
+    const startLeft=thumbRect.left-trackRect.left;
+    const maxThumbShift=Math.max(0, trackRect.width-thumbRect.width);
+    const maxScroll=Math.max(0, crmStageDetailViewport.scrollWidth-crmStageDetailViewport.clientWidth);
+    const pointerId=evt.pointerId;
+    crmStageDetailScrollbarThumb.setPointerCapture(pointerId);
+    const handleMove=moveEvt=>{
+      const delta=moveEvt.clientX-startX;
+      const nextLeft=Math.min(maxThumbShift, Math.max(0, startLeft+delta));
+      const ratio=maxThumbShift>0?nextLeft/maxThumbShift:0;
+      crmStageDetailViewport.scrollLeft=maxScroll*ratio;
+    };
+    const handleUp=()=>{
+      crmStageDetailScrollbarThumb.releasePointerCapture(pointerId);
+      crmStageDetailScrollbarThumb.removeEventListener('pointermove', handleMove);
+      crmStageDetailScrollbarThumb.removeEventListener('pointerup', handleUp);
+      crmStageDetailScrollbarThumb.removeEventListener('pointercancel', handleUp);
+    };
+    crmStageDetailScrollbarThumb.addEventListener('pointermove', handleMove);
+    crmStageDetailScrollbarThumb.addEventListener('pointerup', handleUp);
+    crmStageDetailScrollbarThumb.addEventListener('pointercancel', handleUp);
+  };
+  crmStageDetailScrollbar.addEventListener('pointerdown', handleTrackClick);
+  crmStageDetailScrollbarThumb.addEventListener('pointerdown', handleThumbPointerDown);
+  crmStageDetailViewport.addEventListener('scroll', updateCrmStageDetailScrollbar);
+  window.addEventListener('resize', updateCrmStageDetailScrollbar);
+  updateCrmStageDetailScrollbar();
+}
+
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
 function chip(html,extra){const s=document.createElement('span');s.className='chip'+(extra?(' '+extra):'');s.innerHTML=html;return s}
 
@@ -9520,6 +9626,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageDetailViewport=$('#crmStageDetailViewport'),
       crmStageDetailPrev=$('#crmStageDetailPrev'),
       crmStageDetailNext=$('#crmStageDetailNext'),
+      crmStageDetailScrollbar=$('#crmStageDetailScrollbar'),
+      crmStageDetailScrollbarThumb=$('#crmStageDetailScrollbarThumb'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
@@ -12104,6 +12212,7 @@ function renderCrmStageStack(schedule){
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
     if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
+    if(crmStageDetailScrollbar) crmStageDetailScrollbar.hidden=true;
     return;
   }
   const today=today0();
@@ -12116,6 +12225,7 @@ function renderCrmStageStack(schedule){
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=true;
     if(crmStageDetailNext) crmStageDetailNext.disabled=true;
     if(crmStageStackEmpty) crmStageStackEmpty.hidden=false;
+    if(crmStageDetailScrollbar) crmStageDetailScrollbar.hidden=true;
     return;
   }
   if(crmStageStackEmpty) crmStageStackEmpty.hidden=true;
@@ -12283,6 +12393,7 @@ function renderCrmStageStack(schedule){
     if(crmStageDetailPrev) crmStageDetailPrev.disabled=noOverflow;
     if(crmStageDetailNext) crmStageDetailNext.disabled=noOverflow;
   }
+  updateCrmStageDetailScrollbar();
 }
 
 function renderCrmStageGantt(rows, schedule){
@@ -21232,6 +21343,7 @@ if(crmRouteCollapseToggle){
 if(crmStageDetailViewport){
   enableHorizontalWheelScroll(crmStageDetailViewport);
 }
+attachCrmStageDetailScrollbar();
 applyCrmCollapseStates();
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
