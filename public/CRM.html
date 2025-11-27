@@ -2583,6 +2583,13 @@
     overflow: hidden;
   }
 
+  #crmStageDetailBody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+  }
+
   .crm-stage-detail-header {
     align-items: center;
   }
@@ -2603,12 +2610,15 @@
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-gutter: stable both-edges;
     padding: 0 2px 6px;
     position: relative;
     contain: layout paint;
+    touch-action: pan-x pan-y;
   }
 
   .crm-stage-detail-scrollbar {
@@ -2616,6 +2626,8 @@
     height: 12px;
     padding: 2px 0 4px;
     box-sizing: border-box;
+    flex: 0 0 auto;
+    min-height: 12px;
   }
 
   .crm-stage-detail-scrollbar__track {
@@ -9537,6 +9549,12 @@ function updateCrmStageDetailScrollbar(){
   const maxScroll=Math.max(0, scrollWidth-clientWidth);
   const hasOverflow=maxScroll>1;
   crmStageDetailScrollbar.hidden=!hasOverflow;
+  if(crmStageDetailPrev){
+    crmStageDetailPrev.disabled=!hasOverflow || crmStageDetailViewport.scrollLeft<=1;
+  }
+  if(crmStageDetailNext){
+    crmStageDetailNext.disabled=!hasOverflow || crmStageDetailViewport.scrollLeft>=maxScroll-1;
+  }
   if(!hasOverflow){
     crmStageDetailScrollbarThumb.style.width='100%';
     crmStageDetailScrollbarThumb.style.transform='translateX(0)';
@@ -9592,6 +9610,11 @@ function attachCrmStageDetailScrollbar(){
   crmStageDetailScrollbarThumb.addEventListener('pointerdown', handleThumbPointerDown);
   crmStageDetailViewport.addEventListener('scroll', updateCrmStageDetailScrollbar);
   window.addEventListener('resize', updateCrmStageDetailScrollbar);
+  if(crmStageStackWrap && 'ResizeObserver' in window){
+    const resizeObserver=new ResizeObserver(()=>updateCrmStageDetailScrollbar());
+    resizeObserver.observe(crmStageStackWrap);
+    resizeObserver.observe(crmStageDetailViewport);
+  }
   updateCrmStageDetailScrollbar();
 }
 
