@@ -169,6 +169,7 @@
       clearInterval(crmPendingRemoteFlushTimer);
       crmPendingRemoteFlushTimer = null;
     }
+    clearCrmRemoteRecovery();
     if (keepAliveTimerId) {
       clearInterval(keepAliveTimerId);
       keepAliveTimerId = null;
@@ -20291,6 +20292,45 @@ let crmPendingSummary='Изменения CRM';
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
+let crmRemoteRecoveryTimer=null;
+let crmRemoteRecoveryPending=false;
+
+function crmHasPendingLocalChanges(){
+  return !!crmSyncInFlight || !!crmSyncTimer;
+}
+
+function scheduleCrmRemoteRecovery(immediate){
+  if(crmRemoteRecoveryTimer) return;
+  const runRecovery=async()=>{
+    if(sessionExpired) return;
+    if(crmDataSource===CRM_DATA_SOURCE.remote && !crmRemoteRecoveryPending) return;
+    if(crmHasPendingLocalChanges()) return;
+    crmRemoteRecoveryPending=false;
+    if(window.plannerRemote && typeof window.plannerRemote.refresh==='function'){
+      try{
+        const payload=await window.plannerRemote.refresh('crm-recover');
+        if(payload && payload.state){
+          applyPlannerRemotePayload(payload,{ silent:true });
+        }
+      }catch(err){ console.warn('CRM remote recover failed',err); }
+    }
+  };
+  crmRemoteRecoveryTimer=setInterval(runRecovery,5000);
+  if(immediate){ runRecovery(); }
+}
+
+function markCrmRemoteStale(){
+  crmRemoteRecoveryPending=true;
+  scheduleCrmRemoteRecovery(true);
+}
+
+function clearCrmRemoteRecovery(){
+  if(!crmRemoteRecoveryTimer) return;
+  clearInterval(crmRemoteRecoveryTimer);
+  crmRemoteRecoveryTimer=null;
+  crmRemoteRecoveryPending=false;
+}
+scheduleCrmRemoteRecovery(true);
 
 function resolveCrmUserDisplay(){
   if(typeof crmCurrentUser?.displayName==='string'){
@@ -21069,6 +21109,7 @@ async function pushCrmToServer(){
     }
     if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
       setCrmDataSource(CRM_DATA_SOURCE.local);
+      markCrmRemoteStale();
       return;
     }
     state=ensureCrmStateShape(state);
@@ -21102,6 +21143,7 @@ async function pushCrmToServer(){
         loadError.code='CRM_PLANNER_LOAD_FAILED';
         loadError.originalError=err;
         setCrmDataSource(CRM_DATA_SOURCE.local);
+        markCrmRemoteStale();
         throw loadError;
       }
       if(!plannerSnapshot||typeof plannerSnapshot!=='object') plannerSnapshot={};
@@ -21225,6 +21267,7 @@ async function pushCrmToServer(){
         console.error('CRM: load planner state failed',lastError.originalError||lastError);
         showToast({title:'CRM',message:'Не удалось получить данные планировщика',tone:'error'});
         setCrmDataSource(CRM_DATA_SOURCE.local);
+        markCrmRemoteStale();
       }else if(lastError.code==='WRITE_MODE_FORBIDDEN'){
         const now=Date.now();
         if(now - lastCrmWriteBlockedAt > 5000){
