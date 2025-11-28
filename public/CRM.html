@@ -4754,6 +4754,7 @@
     font-size: 12px;
     cursor: pointer;
     color: var(--pc-text-muted);
+    line-height: 1;
   }
 
   .lane-hide:focus-visible {
@@ -8063,6 +8064,22 @@ function ensureCrmStateShape(value){
     board.planFreeze=sanitizeCrmPlanFreeze(board.planFreeze);
     normalizedBoards.push(board);
   });
+  let sharedStageCalendars=sanitizeCrmStageCalendars(base.sharedStageCalendars);
+  normalizedBoards.forEach(board=>{
+    CRM_STAGE_KEYS.forEach(stage=>{
+      const entry=board.stageCalendars?.[stage];
+      const sanitizedEntry=entry?sanitizeCrmStageCalendars({ [stage]: entry })[stage]:null;
+      const hasData=sanitizedEntry && (
+        (Array.isArray(sanitizedEntry.exceptions) && sanitizedEntry.exceptions.length>0) ||
+        (Array.isArray(sanitizedEntry.reserves) && sanitizedEntry.reserves.length>0)
+      );
+      if(hasData){
+        sharedStageCalendars[stage]=sanitizedEntry;
+      }
+    });
+    delete board.stageCalendars;
+  });
+  base.sharedStageCalendars=sanitizeCrmStageCalendars(sharedStageCalendars);
   if(!normalizedBoards.length){
     const fallback=defaultBoard('crm-board-1');
     normalizedBoards.push(fallback);
@@ -8558,14 +8575,14 @@ function currentBoard(){
   return state.boards.find(b=>b.id===state.currentBoardId);
 }
 
-function ensureCrmStageCalendars(target){
-  if(!target) return {};
-  if(!target.stageCalendars || typeof target.stageCalendars!=='object'){
-    target.stageCalendars=sanitizeCrmStageCalendars({});
+function ensureCrmStageCalendars(){
+  state=ensureCrmStateShape(state);
+  if(!state.sharedStageCalendars || typeof state.sharedStageCalendars!=='object'){
+    state.sharedStageCalendars=sanitizeCrmStageCalendars({});
   }else{
-    target.stageCalendars=sanitizeCrmStageCalendars(target.stageCalendars);
+    state.sharedStageCalendars=sanitizeCrmStageCalendars(state.sharedStageCalendars);
   }
-  return target.stageCalendars;
+  return state.sharedStageCalendars;
 }
 
 let crmPlanFreezeDirty=false;
@@ -9551,11 +9568,7 @@ function mapFromCalendarEntries(entries, allowZero){
 }
 
 function getCrmStageCalendar(stageKey){
-  const board=currentBoard();
-  if(!board){
-    return { exceptions:new Map(), reserves:new Map() };
-  }
-  const calendars=ensureCrmStageCalendars(board);
+  const calendars=ensureCrmStageCalendars();
   const entry=calendars[stageKey]||{ exceptions:[], reserves:[] };
   return {
     exceptions:mapFromCalendarEntries(entry.exceptions, true),
@@ -9564,9 +9577,7 @@ function getCrmStageCalendar(stageKey){
 }
 
 function setCrmStageCalendar(stageKey, payload){
-  const board=currentBoard();
-  if(!board) return;
-  const calendars=ensureCrmStageCalendars(board);
+  const calendars=ensureCrmStageCalendars();
   const exceptions=payload&&payload.exceptions?entriesFromAny(payload.exceptions):[];
   const reserves=payload&&payload.reserves?entriesFromAny(payload.reserves):[];
   calendars[stageKey]={
@@ -16131,7 +16142,7 @@ function renderColumns(){
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
-              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Скрыть колонку" aria-label="Скрыть колонку">⨯</button>
+              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Свернуть колонку" aria-label="Свернуть колонку">✓</button>
             </span>
           </h2>
         </header>
