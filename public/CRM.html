@@ -8222,7 +8222,7 @@ function updateCrmCalendarButtons(stageKey){
     btn.classList.toggle('crm-calendar-flag', !!active);
     btn.classList.toggle('crm-calendar-flag--info', !!active && !!info);
   };
-  applyFlag(crmStageExceptionsBtn, hasExceptions, false);
+  applyFlag(crmStageExceptionsBtn, hasExceptions, true);
   applyFlag(crmStageReserveBtn, hasReserves, true);
 }
 
@@ -15736,14 +15736,54 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
   const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage) return;
   const previousSnapshot=snapshotOrderForJournal(order);
+  const completionMeta=async()=>{
+    const now=new Date();
+    if(!stage||typeof stage!=='object'){
+      return { doneAt:now.toISOString(), completedLate:false, delayReason:'' };
+    }
+    const dueIso=extractStageDueIso(stage);
+    let completedLate=false;
+    let doneAt=now;
+    let delayReason='';
+    if(dueIso){
+      const dueDate=new Date(`${dueIso}T23:59:59.999`);
+      if(!Number.isNaN(dueDate.getTime()) && now.getTime()>dueDate.getTime()){
+        const diffDays=Math.ceil((now-dueDate)/86400000);
+        const decision=await requestStageDelayReason(stage.delayReason||'', diffDays);
+        if(!decision || decision.action==='cancel'){
+          return null;
+        }
+        if(decision.action==='yesterday'){
+          doneAt=new Date(now.getTime()-86400000);
+          delayReason='Выполнено вчера';
+        }else if(decision.reason){
+          delayReason=decision.reason;
+        }
+        completedLate=doneAt.getTime()>dueDate.getTime();
+      }
+    }
+    return { doneAt:doneAt.toISOString(), completedLate, delayReason:completedLate?delayReason:'' };
+  };
   if(checked){
     const targetStatus=await promptStageCompletionStatus(order);
     if(targetStatus===null){
       if(sourceInput) sourceInput.checked=!!stage.done;
       return;
     }
+    const meta=await completionMeta();
+    if(!meta){
+      if(sourceInput) sourceInput.checked=!!stage.done;
+      return;
+    }
     stage.done=true;
     stage.progress=100;
+    stage.doneAt=meta.doneAt;
+    stage.completedLate=!!meta.completedLate;
+    if(stage.completedLate){
+      stage.delayReason=meta.delayReason||'';
+    }else{
+      delete stage.delayReason;
+    }
     if(targetStatus && targetStatus!==order.status){
       order.status=targetStatus;
       order.statusEnteredAt=fmtDateISO(today0());
@@ -15752,6 +15792,9 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
     stage.done=false;
     const current=normalizeStageProgress(stage.progress??0);
     stage.progress=current>=100?0:current;
+    delete stage.doneAt;
+    delete stage.completedLate;
+    delete stage.delayReason;
   }
   if(Array.isArray(order.stages) && stageIndex>=0){
     order.stages[stageIndex]=stage;
@@ -16142,7 +16185,7 @@ function renderColumns(){
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
-              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Свернуть колонку" aria-label="Свернуть колонку">✓</button>
+              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Свернуть колонку" aria-label="Свернуть колонку">⇤</button>
             </span>
           </h2>
         </header>
