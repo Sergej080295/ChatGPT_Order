@@ -16006,12 +16006,21 @@ function computeLaneVisibility(board){
 }
 
 function renderLaneVisibilityPanel(){
-  if(!crmLaneVisibility || !laneVisibilityState){
-    if(crmLaneVisibility){ crmLaneVisibility.hidden=true; }
+  if(!crmLaneVisibility){
     return;
   }
-  const manualHidden=laneVisibilityState.manualHidden||new Set();
-  const autoHidden=laneVisibilityState.autoHidden||new Set();
+  if(!laneVisibilityState){
+    const board=currentBoard();
+    if(board){
+      laneVisibilityState=computeLaneVisibility(board);
+    }
+  }
+  if(!laneVisibilityState){
+    crmLaneVisibility.hidden=true;
+    return;
+  }
+  const manualHidden=new Set(laneVisibilityState.manualHidden||[]);
+  const autoHidden=new Set(laneVisibilityState.autoHidden||[]);
   const hasManual=manualHidden.size>0;
   const hasAuto=autoHidden.size>0;
   const shouldShow=hasManual||hasAuto;
@@ -16122,7 +16131,7 @@ function renderColumns(){
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
-              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Скрыть колонку">Скрыть</button>
+              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Скрыть колонку" aria-label="Скрыть колонку">⨯</button>
             </span>
           </h2>
         </header>
