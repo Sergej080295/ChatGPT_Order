@@ -2582,6 +2582,53 @@
     gap: var(--pc-spacing-sm);
   }
 
+  .crm-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-section-toggle {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 80%, transparent);
+    background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    color: var(--pc-text-muted);
+    border-radius: var(--pc-radius-pill);
+    padding: 4px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: background var(--pc-transition-short), color var(--pc-transition-short), border-color var(--pc-transition-short);
+  }
+
+  .crm-section-toggle:hover,
+  .crm-section-toggle:focus-visible {
+    background: color-mix(in srgb, var(--pc-primary) 15%, transparent);
+    color: var(--pc-text);
+  }
+
+  .crm-section-toggle__icon {
+    display: inline-flex;
+    transition: transform var(--pc-transition-short);
+  }
+
+  .crm-section-toggle.is-collapsed .crm-section-toggle__icon {
+    transform: rotate(-90deg);
+  }
+
+  [data-collapse-body][hidden] {
+    display: none !important;
+  }
+
+  .crm-stage-detail-body,
+  .crm-stage-gantt-shell,
+  .crm-stage-route-shell {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-sm);
+  }
+
   .crm-stage-stack-wrap {
     display: flex;
     gap: 14px;
@@ -5542,15 +5589,15 @@
     <span class="pc-logo-text">PlanCore</span>
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
-    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban">CRM</button>
-    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage">Переделы</button>
-    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings">Настройки</button>
-    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false">
+    <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" data-tooltip-primary="Переделы" data-tooltip-secondary="Распределение по переделам, исключения/бронь и маршрут заказа.">Переделы</button>
+    <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
+    <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
       <span class="pc-nav__badge" id="crmJournalBadge" hidden>0</span>
     </button>
-    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" hidden>Админ</button>
+    <button class="pc-nav__link" type="button" id="crmAdminNavBtn" data-section="admin" data-tooltip-primary="Админ" data-tooltip-secondary="Управление пользователями, ролями и ключевыми параметрами." hidden>Админ</button>
   </nav>
   <div class="pc-header__actions">
     <div class="crm-db-indicator" id="crmDbIndicator" role="status" aria-live="polite">
@@ -5808,10 +5855,18 @@
           <span><i class="crm-stage-chip crm-stage-chip--warning"></i> Раньше срока</span>
           <span><i class="crm-stage-chip crm-stage-chip--late"></i> Просрочено</span>
         </div>
-        <section class="crm-stage-detail-card">
-          <h3>Подетально</h3>
-          <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
-          <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
+        <section class="crm-stage-detail-card" data-collapse-section="detail">
+          <div class="crm-section-header">
+            <h3>Подетально</h3>
+            <button type="button" class="crm-section-toggle" id="crmStageDetailToggle" data-collapse-toggle="detail" aria-expanded="true" aria-controls="crmStageDetailBody">
+              <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
+              <span class="crm-section-toggle__label">Свернуть</span>
+            </button>
+          </div>
+          <div class="crm-stage-detail-body" id="crmStageDetailBody" data-collapse-body="detail">
+            <div class="crm-stage-stack-wrap" id="crmStageStackWrap"></div>
+            <div class="crm-stage-detail-empty" id="crmStageStackEmpty" hidden>Недостаточно данных для распределения</div>
+          </div>
         </section>
       </section>
       <aside class="crm-stage-side">
@@ -5822,8 +5877,8 @@
       </aside>
     </div>
     <div class="crm-stage-secondary">
-      <section class="crm-stage-gantt-card">
-        <div class="crm-stage-gantt-header">
+      <section class="crm-stage-gantt-card" data-collapse-section="gantt">
+        <div class="crm-stage-gantt-header crm-section-header">
           <h3>Диаграмма Ганта</h3>
           <div class="crm-stage-gantt-controls">
             <label>Отбор
@@ -5833,23 +5888,29 @@
                 <option value="free">Свободные</option>
               </select>
             </label>
+            <button type="button" class="crm-section-toggle" id="crmStageGanttToggle" data-collapse-toggle="gantt" aria-expanded="true" aria-controls="crmStageGanttBodyWrap">
+              <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
+              <span class="crm-section-toggle__label">Свернуть</span>
+            </button>
           </div>
         </div>
-        <div class="crm-stage-gantt-grid" id="crmStageGantt">
-          <div class="crm-stage-gantt-left">
-            <div class="crm-stage-gantt-left-header" id="crmStageGanttLeftHeader">Заказ / Дата</div>
-            <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
-          </div>
-          <div class="crm-stage-gantt-right">
-            <div class="crm-stage-gantt-scroll" id="crmStageGanttScroll">
-              <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
-              <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+        <div class="crm-stage-gantt-shell" id="crmStageGanttBodyWrap" data-collapse-body="gantt">
+          <div class="crm-stage-gantt-grid" id="crmStageGantt">
+            <div class="crm-stage-gantt-left">
+              <div class="crm-stage-gantt-left-header" id="crmStageGanttLeftHeader">Заказ / Дата</div>
+              <div class="crm-stage-gantt-left-body" id="crmStageGanttLeft"></div>
+            </div>
+            <div class="crm-stage-gantt-right">
+              <div class="crm-stage-gantt-scroll" id="crmStageGanttScroll">
+                <div class="crm-stage-gantt-header-row" id="crmStageGanttHeader"></div>
+                <div class="crm-stage-gantt-body" id="crmStageGanttBody"></div>
+              </div>
             </div>
           </div>
+          <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
         </div>
-        <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
       </section>
-      <section class="crm-stage-route-card">
+      <section class="crm-stage-route-card" data-collapse-section="route">
         <div class="crm-stage-route-header">
           <h3>Общий маршрут заказов</h3>
           <div class="crm-stage-route-actions">
@@ -5861,37 +5922,43 @@
               <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
               <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
             </div>
+            <button type="button" class="crm-section-toggle" id="crmStageRouteToggle" data-collapse-toggle="route" aria-expanded="true" aria-controls="crmStageRouteBodyWrap">
+              <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
+              <span class="crm-section-toggle__label">Свернуть</span>
+            </button>
           </div>
         </div>
-        <div class="crm-stage-route" id="crmStageRoute">
-          <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
-          <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
-            <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeader">Заказ</div>
-              <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
-            </div>
-            <div class="crm-stage-route-right">
-              <div class="crm-stage-route-head">
-                <div class="crm-route-head-row" id="crmStageRouteHead"></div>
+        <div class="crm-stage-route-shell" id="crmStageRouteBodyWrap" data-collapse-body="route">
+          <div class="crm-stage-route" id="crmStageRoute">
+            <div class="crm-stage-route-legend" id="crmStageRouteLegend"></div>
+            <div class="crm-stage-route-detailed" id="crmStageRouteDetailed" hidden>
+              <div class="crm-stage-route-left">
+                <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeader">Заказ</div>
+                <div class="crm-stage-route-left-body" id="crmStageRouteLeft"></div>
               </div>
-              <div class="crm-stage-route-body" id="crmStageRouteBody"></div>
+              <div class="crm-stage-route-right">
+                <div class="crm-stage-route-head">
+                  <div class="crm-route-head-row" id="crmStageRouteHead"></div>
+                </div>
+                <div class="crm-stage-route-body" id="crmStageRouteBody"></div>
+              </div>
+            </div>
+            <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
+              <div class="crm-stage-route-left">
+                <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeaderCompact">Заказ</div>
+                <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
+              </div>
+              <div class="crm-stage-route-right">
+                <div class="crm-stage-route-head">
+                  <div class="crm-route-head-row" id="crmStageRouteHeadCompact"></div>
+                </div>
+                <div class="crm-stage-route-body" id="crmStageRouteBodyCompact"></div>
+              </div>
             </div>
           </div>
-          <div class="crm-stage-route-compact" id="crmStageRouteCompact" hidden>
-            <div class="crm-stage-route-left">
-              <div class="crm-route-label crm-route-label--header" id="crmStageRouteLeftHeaderCompact">Заказ</div>
-              <div class="crm-stage-route-left-body" id="crmStageRouteLeftCompact"></div>
-            </div>
-            <div class="crm-stage-route-right">
-              <div class="crm-stage-route-head">
-                <div class="crm-route-head-row" id="crmStageRouteHeadCompact"></div>
-              </div>
-              <div class="crm-stage-route-body" id="crmStageRouteBodyCompact"></div>
-            </div>
-          </div>
+          <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
+          <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
         </div>
-        <div class="crm-stage-route-summary" id="crmStageRouteSummary"></div>
-        <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
       </section>
     </div>
   </div>
@@ -6481,6 +6548,9 @@ const CRM_ROUTE_FROM_TODAY_KEY='planecore_crm_route_today_v1';
 const CRM_ROUTE_FROM_TODAY_FALLBACKS=['mini_crm_route_today_v1'];
 const CRM_ALIAS_STORAGE_KEY='planecore_crm_user_alias_v1';
 const CRM_ALIAS_STORAGE_FALLBACKS=['mini_crm_user_alias_v1'];
+const CRM_STAGE_COLLAPSE_KEY='planecore_crm_stage_collapse_v1';
+const CRM_STAGE_COLLAPSE_FALLBACKS=['mini_crm_stage_collapse_v1'];
+const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:false });
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -6511,6 +6581,34 @@ function removeLegacyStorage(primary,fallbacks=[]){
     if(!name||name===primary) return;
     try{localStorage.removeItem(name);}catch(_err){/* ignore */}
   });
+}
+
+function readCrmStageCollapseState(){
+  const raw=readStorageValue(CRM_STAGE_COLLAPSE_KEY, CRM_STAGE_COLLAPSE_FALLBACKS);
+  if(!raw) return { ...CRM_STAGE_COLLAPSE_DEFAULTS };
+  try{
+    const parsed=JSON.parse(raw);
+    return {
+      detail: !!parsed.detail,
+      gantt: !!parsed.gantt,
+      route: !!parsed.route,
+    };
+  }catch(_err){
+    return { ...CRM_STAGE_COLLAPSE_DEFAULTS };
+  }
+}
+
+function persistCrmStageCollapseState(state){
+  const normalized={
+    detail: !!state?.detail,
+    gantt: !!state?.gantt,
+    route: !!state?.route,
+  };
+  try{
+    localStorage.setItem(CRM_STAGE_COLLAPSE_KEY, JSON.stringify(normalized));
+    removeLegacyStorage(CRM_STAGE_COLLAPSE_KEY, CRM_STAGE_COLLAPSE_FALLBACKS);
+  }catch(_err){/* ignore */}
+  return normalized;
 }
 const CRM_CALENDAR_FORMATTER=new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'});
 function formatOrderWord(value){
@@ -9326,6 +9424,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageOptimizeBtn=$('#crmStageOptimizeBtn'),
       crmStageStackWrap=$('#crmStageStackWrap'),
       crmStageStackEmpty=$('#crmStageStackEmpty'),
+      crmStageDetailToggle=$('#crmStageDetailToggle'),
+      crmStageDetailBody=$('#crmStageDetailBody'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
       crmStageGanttLeftHeader=$('#crmStageGanttLeftHeader'),
       crmStageGanttLeft=$('#crmStageGanttLeft'),
@@ -9333,6 +9433,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageGanttScroll=$('#crmStageGanttScroll'),
       crmStageGanttBody=$('#crmStageGanttBody'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
+      crmStageGanttToggle=$('#crmStageGanttToggle'),
+      crmStageGanttBodyWrap=$('#crmStageGanttBodyWrap'),
       crmStageRouteWrap=$('#crmStageRoute'),
       crmStageRouteLegend=$('#crmStageRouteLegend'),
       crmStageRouteDetailed=$('#crmStageRouteDetailed'),
@@ -9347,6 +9449,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteBodyCompact=$('#crmStageRouteBodyCompact'),
       crmStageRouteSummary=$('#crmStageRouteSummary'),
       crmStageRouteEmpty=$('#crmStageRouteEmpty'),
+      crmStageRouteToggle=$('#crmStageRouteToggle'),
+      crmStageRouteBodyWrap=$('#crmStageRouteBodyWrap'),
       crmRouteTodayToggle=$('#crmRouteTodayToggle'),
       crmStageTotalHours=$('#crmStageTotalHours'),
       crmStageTotalRest=$('#crmStageTotalRest'),
@@ -9663,11 +9767,58 @@ let currentCrmTrashFilter='all';
 let crmStageRouteMode='detailed';
 let crmRouteDayFilter='all';
 let crmRouteFromToday=CRM_ROUTE_FROM_TODAY_DEFAULT;
+let crmStageCollapseState=readCrmStageCollapseState();
 try{
   const stored=readStorageValue(CRM_ROUTE_FROM_TODAY_KEY, CRM_ROUTE_FROM_TODAY_FALLBACKS);
   if(stored==='0'){ crmRouteFromToday=false; }
   else if(stored==='1'){ crmRouteFromToday=true; }
 }catch(_err){/* ignore */}
+
+const CRM_COLLAPSE_LABELS={
+  detail:'Подетально',
+  gantt:'Диаграмма Ганта',
+  route:'Общий маршрут заказов'
+};
+
+function applyCrmSectionCollapse(section){
+  if(!section) return;
+  const collapsed=!!crmStageCollapseState?.[section];
+  const body=document.querySelector(`[data-collapse-body="${section}"]`);
+  const toggle=document.querySelector(`[data-collapse-toggle="${section}"]`);
+  const card=document.querySelector(`[data-collapse-section="${section}"]`);
+  if(body){
+    body.hidden=collapsed;
+  }
+  if(card){
+    card.classList.toggle('crm-section-collapsed', collapsed);
+  }
+  if(toggle){
+    toggle.classList.toggle('is-collapsed', collapsed);
+    toggle.setAttribute('aria-expanded', collapsed?'false':'true');
+    const label=CRM_COLLAPSE_LABELS[section]||'раздел';
+    toggle.setAttribute('aria-label', `${collapsed?'Развернуть':'Свернуть'} раздел «${label}»`);
+    const labelSpan=toggle.querySelector('.crm-section-toggle__label');
+    if(labelSpan){
+      labelSpan.textContent=collapsed?'Развернуть':'Свернуть';
+    }
+  }
+}
+
+function applyAllCrmSectionCollapse(){
+  ['detail','gantt','route'].forEach(applyCrmSectionCollapse);
+}
+
+function setCrmSectionCollapsed(section, collapsed){
+  if(!section) return;
+  crmStageCollapseState={ ...CRM_STAGE_COLLAPSE_DEFAULTS, ...crmStageCollapseState, [section]:!!collapsed };
+  persistCrmStageCollapseState(crmStageCollapseState);
+  applyCrmSectionCollapse(section);
+}
+
+function toggleCrmSection(section){
+  if(!section) return;
+  setCrmSectionCollapsed(section, !crmStageCollapseState?.[section]);
+}
 
 function stageIconForKey(stageKey){
   const key=typeof stageKey==='string'?stageKey.trim():'';
@@ -20973,6 +21124,17 @@ if(crmStageGanttFilter){
     renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
   });
 }
+
+if(crmStageDetailToggle){
+  crmStageDetailToggle.addEventListener('click',()=>toggleCrmSection('detail'));
+}
+if(crmStageGanttToggle){
+  crmStageGanttToggle.addEventListener('click',()=>toggleCrmSection('gantt'));
+}
+if(crmStageRouteToggle){
+  crmStageRouteToggle.addEventListener('click',()=>toggleCrmSection('route'));
+}
+applyAllCrmSectionCollapse();
 
 document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
   btn.addEventListener('click',()=>{
