@@ -4590,6 +4590,75 @@
     min-height: 0;
   }
 
+  .crm-lane-visibility {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-md);
+    margin: 0 var(--pc-spacing-md);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border: 1px dashed var(--pc-border-strong);
+    border-radius: var(--pc-radius-md);
+    background: color-mix(in srgb, var(--pc-surface) 80%, var(--pc-primary) 6%);
+  }
+
+  .crm-lane-visibility__left {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    flex-wrap: wrap;
+  }
+
+  .crm-lane-visibility__title {
+    font-weight: var(--pc-font-weight-semibold);
+    font-size: 14px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-lane-visibility__chips {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs);
+    flex-wrap: wrap;
+  }
+
+  .crm-lane-visibility__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--pc-surface-stronger);
+    border: 1px solid var(--pc-border-strong);
+    font-size: 13px;
+    line-height: 1.2;
+  }
+
+  .crm-lane-visibility__chip button {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--pc-text-muted);
+    padding: 0;
+    font-size: 14px;
+  }
+
+  .crm-lane-visibility__chip button:hover,
+  .crm-lane-visibility__chip button:focus-visible {
+    color: var(--pc-primary);
+  }
+
+  .crm-lane-visibility__auto {
+    font-size: 13px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-lane-visibility__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-xs);
+  }
+
   .crm-kanban {
     align-items: flex-start;
     padding: var(--pc-spacing-md);
@@ -4674,6 +4743,21 @@
 
   .lane-sum-toggle:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--pc-info) 70%, transparent);
+    outline-offset: 1px;
+  }
+
+  .lane-hide {
+    border: 1px solid var(--pc-border-strong);
+    background: var(--pc-surface-strong);
+    border-radius: var(--pc-radius-sm);
+    padding: 2px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--pc-text-muted);
+  }
+
+  .lane-hide:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--pc-primary) 70%, transparent);
     outline-offset: 1px;
   }
 
@@ -5966,6 +6050,16 @@
       </section>
     </div>
   </div>
+  <div class="crm-lane-visibility" id="crmLaneVisibility" hidden>
+    <div class="crm-lane-visibility__left">
+      <div class="crm-lane-visibility__title">Скрытые колонки</div>
+      <div class="crm-lane-visibility__chips" id="crmLaneVisibilityChips"></div>
+      <div class="crm-lane-visibility__auto" id="crmLaneVisibilityAuto" hidden></div>
+    </div>
+    <div class="crm-lane-visibility__actions">
+      <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" id="crmLaneVisibilityReset">Показать все</button>
+    </div>
+  </div>
   <div class="pc-kanban crm-kanban" id="columns" data-animate="fade-in"></div>
 </main>
 
@@ -6707,7 +6801,8 @@ const CRM_DEFAULT_PREFERENCES={
   linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
-  hints:CRM_HINT_DEFAULTS
+  hints:CRM_HINT_DEFAULTS,
+  laneVisibility:{ autoHideEmpty:false, hiddenByBoard:{} }
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -7130,6 +7225,12 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   result.capacity={ ...fallback.capacity, ...preferred.capacity };
   result.parallel={ ...fallback.parallel, ...preferred.parallel };
   result.preferences={ ...fallback.preferences, ...preferred.preferences };
+  const preferredVisibility=sanitizeLaneVisibility(preferred.preferences?.laneVisibility);
+  const fallbackVisibility=sanitizeLaneVisibility(fallback.preferences?.laneVisibility);
+  result.preferences.laneVisibility={
+    autoHideEmpty:preferredVisibility.autoHideEmpty===true || fallbackVisibility.autoHideEmpty===true,
+    hiddenByBoard:{ ...fallbackVisibility.hiddenByBoard, ...preferredVisibility.hiddenByBoard }
+  };
   result.startView=preferred.startView||fallback.startView;
 
   const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
@@ -7427,6 +7528,31 @@ function sanitizeLaneSumModes(raw){
   return result;
 }
 
+function sanitizeLaneVisibility(raw){
+  const result={ autoHideEmpty:false, hiddenByBoard:{} };
+  if(!raw || typeof raw!=='object') return result;
+  result.autoHideEmpty=raw.autoHideEmpty===true;
+  const source=raw.hiddenByBoard && typeof raw.hiddenByBoard==='object' ? raw.hiddenByBoard : {};
+  const sanitizedMap={};
+  Object.entries(source).forEach(([boardId, lanes])=>{
+    const key=typeof boardId==='string'?boardId.trim():'';
+    if(!key) return;
+    const seen=new Set();
+    const unique=[];
+    (Array.isArray(lanes)?lanes:[]).forEach(lane=>{
+      const normalized=typeof lane==='string'?lane.trim():'';
+      if(!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      unique.push(normalized);
+    });
+    if(unique.length){
+      sanitizedMap[key]=unique;
+    }
+  });
+  result.hiddenByBoard=sanitizedMap;
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -7436,6 +7562,7 @@ function sanitizeCrmPreferences(raw){
     result.hints=sanitizeCrmHintPreferences(raw.hints||raw.hintsSettings);
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
+    result.laneVisibility=sanitizeLaneVisibility(raw.laneVisibility);
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -7571,6 +7698,39 @@ function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
 }
 
+function getCrmLaneVisibilityPrefs(){
+  const prefs=getCrmPreferences();
+  return sanitizeLaneVisibility(prefs?.laneVisibility);
+}
+
+function getHiddenLanesForBoard(boardId){
+  const prefs=getCrmLaneVisibilityPrefs();
+  const key=typeof boardId==='string'?boardId.trim():'';
+  if(!key) return new Set();
+  const list=Array.isArray(prefs?.hiddenByBoard?.[key])?prefs.hiddenByBoard[key]:[];
+  return new Set(list.map(lane=>typeof lane==='string'?lane.trim():''));
+}
+
+function setHiddenLanesForBoard(boardId, lanes){
+  const key=typeof boardId==='string'?boardId.trim():'';
+  if(!key) return;
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  const visibility=sanitizeLaneVisibility(prefs.laneVisibility);
+  const seen=new Set();
+  const normalized=Array.isArray(lanes)?lanes.map(lane=>typeof lane==='string'?lane.trim():''):[
+    typeof lanes==='string'?lanes.trim():''
+  ];
+  const filtered=normalized.filter(lane=>{if(!lane||seen.has(lane)) return false; seen.add(lane); return true;});
+  if(filtered.length){
+    visibility.hiddenByBoard[key]=filtered;
+  }else{
+    delete visibility.hiddenByBoard[key];
+  }
+  prefs.laneVisibility=visibility;
+  state.settings.preferences=prefs;
+}
+
 function getLaneSumModeForLane(lane){
   const prefs=getCrmPreferences();
   const map=prefs?.laneSumModes||{};
@@ -7578,6 +7738,20 @@ function getLaneSumModeForLane(lane){
   const normalized=typeof map[key]==='string'?map[key].trim().toLowerCase():'';
   if(CRM_LANE_SUM_MODES.has(normalized)) return normalized;
   return 'range';
+}
+
+function isAutoHideEmptyLanesEnabled(){
+  const prefs=getCrmLaneVisibilityPrefs();
+  return prefs.autoHideEmpty===true;
+}
+
+function setAutoHideEmptyLanes(enabled){
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  const visibility=sanitizeLaneVisibility(prefs.laneVisibility);
+  visibility.autoHideEmpty=enabled===true;
+  prefs.laneVisibility=visibility;
+  state.settings.preferences=prefs;
 }
 
 function setLaneSumModeForLane(lane, mode){
@@ -9538,7 +9712,11 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmUserRoleEl=$('#crmUserRole'),
       crmUserAvatarEl=$('#crmUserAvatar'),
       crmUserMetaEl=$('#crmUserMeta'),
-      crmUserLogoutBtn=$('#crmUserLogoutBtn');
+      crmUserLogoutBtn=$('#crmUserLogoutBtn'),
+      crmLaneVisibility=document.getElementById('crmLaneVisibility'),
+      crmLaneVisibilityChips=document.getElementById('crmLaneVisibilityChips'),
+      crmLaneVisibilityAuto=document.getElementById('crmLaneVisibilityAuto'),
+      crmLaneVisibilityReset=document.getElementById('crmLaneVisibilityReset');
 
 crmOrderHistoryDlg=$('#crmOrderHistoryDlg');
 crmOrderHistoryTitle=$('#crmOrderHistoryTitle');
@@ -9575,6 +9753,7 @@ const laneVisibleCount=new Map();
 let laneRegistryBoardId=null;
 let dndInitialized=false;
 let draggingId=null;
+let laneVisibilityState=null;
 let editingOrderId=null;
 let orderCommentsDraft=[];
 let stageSourceMap=new Map();
@@ -15797,6 +15976,117 @@ function laneLimit(lane){
   return laneVisibleCount.get(lane);
 }
 
+function computeLaneVisibility(board){
+  const prefs=getCrmLaneVisibilityPrefs();
+  const lanes=Array.isArray(board?.lanes)?board.lanes:[];
+  const fallback=lanes[0]||'';
+  const counts=new Map();
+  (board?.orders||[]).forEach(order=>{
+    let lane=typeof order?.status==='string'?order.status:'';
+    if(!lanes.includes(lane)) lane=fallback;
+    if(!lane) return;
+    counts.set(lane,(counts.get(lane)||0)+1);
+  });
+  const manualHidden=board?.id?getHiddenLanesForBoard(board.id):new Set();
+  const autoHidden=new Set();
+  const visible=[];
+  lanes.forEach(lane=>{
+    const name=typeof lane==='string'?lane:'';
+    if(!name) return;
+    const shouldAutoHide=prefs.autoHideEmpty===true && (counts.get(name)||0)===0;
+    if(shouldAutoHide){
+      autoHidden.add(name);
+    }
+    if(manualHidden.has(name) || shouldAutoHide){
+      return;
+    }
+    visible.push(name);
+  });
+  return { visible, manualHidden, autoHidden, counts, prefs };
+}
+
+function renderLaneVisibilityPanel(){
+  if(!crmLaneVisibility || !laneVisibilityState){
+    if(crmLaneVisibility){ crmLaneVisibility.hidden=true; }
+    return;
+  }
+  const manualHidden=laneVisibilityState.manualHidden||new Set();
+  const autoHidden=laneVisibilityState.autoHidden||new Set();
+  const hasManual=manualHidden.size>0;
+  const hasAuto=autoHidden.size>0;
+  const shouldShow=hasManual||hasAuto;
+  crmLaneVisibility.hidden=!shouldShow;
+  if(crmLaneVisibilityChips){
+    crmLaneVisibilityChips.innerHTML='';
+    if(hasManual){
+      manualHidden.forEach(lane=>{
+        const chip=document.createElement('span');
+        chip.className='crm-lane-visibility__chip';
+        const label=document.createElement('span');
+        label.textContent=lane;
+        const restore=document.createElement('button');
+        restore.type='button';
+        restore.dataset.lane=lane;
+        restore.setAttribute('aria-label',`Показать колонку «${lane}»`);
+        restore.textContent='✕';
+        chip.append(label, restore);
+        crmLaneVisibilityChips.appendChild(chip);
+      });
+    }
+  }
+  if(crmLaneVisibilityAuto){
+    if(hasAuto){
+      const list=Array.from(autoHidden).join(', ');
+      crmLaneVisibilityAuto.textContent=`Автоскрытие пустых: ${list}`;
+      crmLaneVisibilityAuto.hidden=false;
+    }else{
+      crmLaneVisibilityAuto.hidden=true;
+      crmLaneVisibilityAuto.textContent='';
+    }
+  }
+  if(crmLaneVisibilityReset){
+    crmLaneVisibilityReset.disabled=!hasManual;
+  }
+}
+
+function hideLaneForCurrentBoard(lane){
+  const name=typeof lane==='string'?lane.trim():'';
+  const board=currentBoard();
+  if(!board || !name) return;
+  const manualHidden=getHiddenLanesForBoard(board.id);
+  manualHidden.add(name);
+  setHiddenLanesForBoard(board.id, Array.from(manualHidden));
+  save('Скрытие колонки');
+  renderColumns();
+  renderCards();
+  renderLaneVisibilityPanel();
+}
+
+function showLaneForCurrentBoard(lane){
+  const name=typeof lane==='string'?lane.trim():'';
+  const board=currentBoard();
+  if(!board || !name) return;
+  const manualHidden=getHiddenLanesForBoard(board.id);
+  if(!manualHidden.has(name)) return;
+  manualHidden.delete(name);
+  setHiddenLanesForBoard(board.id, Array.from(manualHidden));
+  save('Возврат колонки');
+  renderColumns();
+  renderCards();
+  renderLaneVisibilityPanel();
+}
+
+function resetHiddenLanesForCurrentBoard(){
+  const board=currentBoard();
+  if(!board) return;
+  if(!getHiddenLanesForBoard(board.id).size) return;
+  setHiddenLanesForBoard(board.id, []);
+  save('Показ всех колонок');
+  renderColumns();
+  renderCards();
+  renderLaneVisibilityPanel();
+}
+
 function renderBoardSelect(){
   if(!boardSelect) return;
   boardSelect.innerHTML='';
@@ -15812,8 +16102,10 @@ function renderColumns(){
   const b=currentBoard();
   columns.innerHTML='';
   if(!b){return;}
-  ensureLaneRegistry(b.lanes,b.id);
-    b.lanes.forEach(l=>{
+  laneVisibilityState=computeLaneVisibility(b);
+  const visibleLanes=laneVisibilityState.visible.length?laneVisibilityState.visible:(b.lanes||[]);
+  ensureLaneRegistry(visibleLanes,b.id);
+    visibleLanes.forEach(l=>{
       const c=document.createElement('div');
       c.className='col';
       const laneLabel=escapeHtml(l);
@@ -15830,6 +16122,7 @@ function renderColumns(){
               <span class="lane-sum" data-lane-sum>0 ₽</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
+              <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Скрыть колонку">Скрыть</button>
             </span>
           </h2>
         </header>
@@ -15866,7 +16159,15 @@ function renderColumns(){
       renderCards();
     });
   });
+  $$('.lane-hide',columns).forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const lane=btn.dataset.lane;
+      if(!lane) return;
+      hideLaneForCurrentBoard(lane);
+    });
+  });
   enableDnd();
+  renderLaneVisibilityPanel();
 }
 
 function normalizeStageProgress(value){
@@ -16069,13 +16370,15 @@ function normalizeServiceTotalValue(raw){
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
-  const map=Object.fromEntries(b.lanes.map(l=>[l,[]]));
+  laneVisibilityState=computeLaneVisibility(b);
+  const visibleLanes=laneVisibilityState.visible.length?laneVisibilityState.visible:(b.lanes||[]);
+  const map=Object.fromEntries(visibleLanes.map(l=>[l,[]]));
   const doneLane=b.lanes.length?b.lanes[b.lanes.length-1]:null;
   const totalOrders=b.orders.length;
   let filteredTotal=0;
   let filteredActive=0;
   let totalActive=0;
-  const fallbackLane=b.lanes[0]??null;
+  const fallbackLane=visibleLanes[0]??null;
   const canCompleteOrders=crmCanCompleteOrders();
   const laneSumRange=resolveLaneSumRange();
   const todayTime=today0().getTime();
@@ -16083,12 +16386,8 @@ function renderCards(){
     computeOrderDatesFromStages(o);
     ensureOrderStatusEnteredAt(o);
     let lane=o.status;
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      lane=fallbackLane;
-    }
-    if(!Object.prototype.hasOwnProperty.call(map,lane)){
-      return;
-    }
+    if(!Object.prototype.hasOwnProperty.call(map,lane)) lane=fallbackLane;
+    if(!Object.prototype.hasOwnProperty.call(map,lane)) return;
     if(!doneLane || lane!==doneLane){
       totalActive++;
     }
@@ -16249,6 +16548,7 @@ function renderCards(){
       showCrmToolbarStats(`Всего: ${totalOrders} • Активных: ${totalActive}`);
     }
   }
+  renderLaneVisibilityPanel();
   updateSearchUI();
 }
 
@@ -18299,6 +18599,19 @@ crmSettingsTabButtons.forEach(btn=>{
 if(crmSettingsPanels.length){
   setCrmSettingsActiveTab(crmSettingsActiveTabId);
 }
+
+if(crmLaneVisibilityReset){
+  crmLaneVisibilityReset.addEventListener('click', resetHiddenLanesForCurrentBoard);
+}
+
+if(crmLaneVisibilityChips){
+  crmLaneVisibilityChips.addEventListener('click', event=>{
+    const btn=event.target.closest('button[data-lane]');
+    if(!btn) return;
+    const lane=btn.dataset.lane;
+    showLaneForCurrentBoard(lane);
+  });
+}
 let crmUnaccountedDraft=[];
 let crmStageScheduleDrafts={};
 let crmStageScheduleActiveStage=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'';
@@ -18825,6 +19138,16 @@ function renderCrmPreferencesSettingsUI(){
   syncLaneSumControls();
   laneSumField.append(laneSumLabel, laneSumSelect, laneSumCustomWrap, laneSumHint);
 
+  const autoHideOption=document.createElement('label');
+  autoHideOption.className='crm-settings-checkbox';
+  const autoHideCheckbox=document.createElement('input');
+  autoHideCheckbox.type='checkbox';
+  autoHideCheckbox.name='prefAutoHideEmptyLanes';
+  autoHideCheckbox.checked=isAutoHideEmptyLanesEnabled();
+  const autoHideText=document.createElement('span');
+  autoHideText.textContent='Скрывать пустые колонки автоматически';
+  autoHideOption.append(autoHideCheckbox, autoHideText);
+
   const hintsTitle=document.createElement('div');
   hintsTitle.className='crm-field__label';
   hintsTitle.textContent='Подсказки к важным кнопкам';
@@ -18883,7 +19206,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -19442,6 +19765,10 @@ boardForm.addEventListener('submit',e=>{
       to:boardForm.prefLaneSumTo?boardForm.prefLaneSumTo.value:''
     },
     laneSumModes:state.settings?.preferences?.laneSumModes||{},
+    laneVisibility:{
+      autoHideEmpty:!!boardForm.prefAutoHideEmptyLanes?.checked,
+      hiddenByBoard:state.settings?.preferences?.laneVisibility?.hiddenByBoard||{}
+    },
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
       level1:boardForm.prefHintLevel1?boardForm.prefHintLevel1.checked:true,
