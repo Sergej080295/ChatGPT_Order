@@ -4769,20 +4769,8 @@
     color: var(--pc-text-muted);
   }
 
-  .lane-ignored-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 8px;
-    border-radius: var(--pc-radius-pill);
-    background: color-mix(in srgb, var(--pc-warning, #fcc419) 25%, transparent);
-    color: color-mix(in srgb, var(--pc-warning, #fcc419) 75%, var(--pc-text));
-    font-weight: var(--pc-font-weight-semibold);
-    border: 1px solid color-mix(in srgb, var(--pc-warning, #fcc419) 45%, transparent);
-  }
-
-  .lane-sum {
-    font-weight: var(--pc-font-weight-semibold);
+    .lane-sum {
+      font-weight: var(--pc-font-weight-semibold);
     color: var(--pc-text);
   }
 
@@ -9472,14 +9460,17 @@ function openAddStageMenu(anchor){
     closeAddStageMenu();
     showStagePicker(anchor);
   });
-  const customBtn=document.createElement('button');
-  customBtn.type='button';
-  customBtn.className='pc-btn pc-btn--secondary pc-btn--sm';
-  customBtn.textContent='Свой';
-  customBtn.addEventListener('click',()=>{
-    closeAddStageMenu();
-    appendStageByName('');
-  });
+    const customBtn=document.createElement('button');
+    customBtn.type='button';
+    customBtn.className='pc-btn pc-btn--secondary pc-btn--sm';
+    customBtn.textContent='Свой';
+    customBtn.addEventListener('click',()=>{
+      closeAddStageMenu();
+      const stageName=promptCustomStageName();
+      if(stageName){
+        appendStageByName(stageName);
+      }
+    });
   const hint=document.createElement('div');
   hint.className='crm-stage-add-menu__hint';
   hint.textContent='Выберите стандартный передел или создайте свой.';
@@ -10134,6 +10125,7 @@ const CRM_ROUTE_STAGE_CLASS={
 
 let crmStageRowsCache=[];
 let crmStageRowsFullCache=[];
+let crmStageGanttRowsCache=[];
 let crmStageSelectionId=null;
 let crmStageSelectObserver=null;
 let crmStageSelectDisplay=null;
@@ -12899,17 +12891,27 @@ function renderCrmStageGantt(rows, schedule){
   syncCrmGanttLayout();
 }
 
-function syncCrmGanttLayout(){
-  const apply=()=>{
-    syncCrmGanttHeaderHeight();
-    syncCrmGanttRowHeights();
-  };
-  if(typeof requestAnimationFrame==='function'){
-    requestAnimationFrame(apply);
-  }else{
-    setTimeout(apply,0);
+  function syncCrmGanttLayout(){
+    const apply=()=>{
+      syncCrmGanttHeaderHeight();
+      syncCrmGanttRowHeights();
+    };
+    if(typeof requestAnimationFrame==='function'){
+      requestAnimationFrame(apply);
+    }else{
+      setTimeout(apply,0);
+    }
   }
-}
+
+  function getCrmStageGanttRows(){
+    if(Array.isArray(crmStageGanttRowsCache) && crmStageGanttRowsCache.length){
+      return crmStageGanttRowsCache;
+    }
+    if(Array.isArray(crmStageRouteContext?.rows) && crmStageRouteContext.rows.length){
+      return crmStageRouteContext.rows;
+    }
+    return [];
+  }
 
 function syncCrmGanttHeaderHeight(){
   if(!crmStageGanttLeftHeader || !crmStageGanttHeader){
@@ -14198,18 +14200,19 @@ function notifyCrmStageScheduleErrors(schedule){
   });
 }
 
-function renderCrmStageViews(schedule, rows, stageKey, filterMode){
-  if(crmStageGanttRangeToggle){
-    const enabled=isGanttRangeHintsEnabled();
-    crmStageGanttRangeToggle.checked=enabled;
-    crmStageGanttRangeToggle.setAttribute('aria-pressed', enabled?'true':'false');
-  }
-  const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
-  const key=stageKey||crmStageSelect?.value||'draw';
-  const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:getCrmStageFilter(key);
-  const routeRows=crmStageRowsFullCache.length?crmStageRowsFullCache.slice():effectiveRows.slice();
-  crmStageScheduleCache=schedule||null;
-  renderCrmStageStack(schedule||null);
+  function renderCrmStageViews(schedule, rows, stageKey, filterMode){
+    if(crmStageGanttRangeToggle){
+      const enabled=isGanttRangeHintsEnabled();
+      crmStageGanttRangeToggle.checked=enabled;
+      crmStageGanttRangeToggle.setAttribute('aria-pressed', enabled?'true':'false');
+    }
+    const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
+    crmStageGanttRowsCache=Array.isArray(effectiveRows)?effectiveRows.slice():[];
+    const key=stageKey||crmStageSelect?.value||'draw';
+    const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:getCrmStageFilter(key);
+    const routeRows=crmStageRowsFullCache.length?crmStageRowsFullCache.slice():effectiveRows.slice();
+    crmStageScheduleCache=schedule||null;
+    renderCrmStageStack(schedule||null);
   renderCrmStageGantt(effectiveRows, schedule||null);
   crmStageRouteContext={
     rows:routeRows,
@@ -16461,20 +16464,14 @@ function renderColumns(){
     if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
-    const laneKey=normalizeStatusKey(l);
-    const isIgnored=laneKey && ignoredSet.has(laneKey);
-    if(isIgnored){
-      c.classList.add('col--unaccounted');
-      if(laneMeta){
-        const badge=document.createElement('span');
-        badge.className='lane-ignored-badge';
-        badge.textContent='Не учитывается';
-        laneMeta.prepend(badge);
+      const laneKey=normalizeStatusKey(l);
+      const isIgnored=laneKey && ignoredSet.has(laneKey);
+      if(isIgnored){
+        c.classList.add('col--unaccounted');
+        if(header){
+          header.title='Колонка отмечена как «Не учитывать состояния»';
+        }
       }
-      if(header){
-        header.title='Колонка отмечена как «Не учитывать состояния»';
-      }
-    }
   });
   $$('.col-more',columns).forEach(btn=>{
     const lane=btn.dataset.lane;
@@ -18639,19 +18636,36 @@ function appendStageRow(st){
   return tr;
 }
 
-function focusStageRow(tr){
-  if(!tr) return;
-  const input=tr.querySelector('[data-k="name"]');
-  if(input){
-    input.focus();
-    input.select?.();
+  function focusStageRow(tr){
+    if(!tr) return;
+    const input=tr.querySelector('[data-k="name"]');
+    if(input){
+      input.focus();
+      input.select?.();
+    }
   }
-}
 
-function appendStageByName(name){
-  const row=appendStageRow({name,done:false,progress:0,start:'',end:'',value:''});
-  focusStageRow(row);
-}
+  function resolveKnownStageName(name){
+    const normalized=normalizeStageName(name||'');
+    if(!normalized) return '';
+    const matched=ALL_STAGE_PRESETS.find(stage=>normalizeStageName(stage)===normalized);
+    return matched || name.trim();
+  }
+
+  function promptCustomStageName(){
+    const hint=`Доступные переделы: ${ALL_STAGE_PRESETS.join(', ')}`;
+    const raw=window.prompt(`Название передела\n${hint}`,'');
+    if(typeof raw!=='string') return '';
+    const trimmed=raw.trim();
+    if(!trimmed) return '';
+    return resolveKnownStageName(trimmed);
+  }
+
+  function appendStageByName(name){
+    const targetName=resolveKnownStageName(name);
+    const row=appendStageRow({name:targetName,done:false,progress:0,start:'',end:'',value:''});
+    focusStageRow(row);
+  }
 
 function applyStagePreset(names){
   stagesTableBody.innerHTML='';
@@ -21789,18 +21803,18 @@ if(crmStageFilter){
     }
   });
 }
-if(crmStageGanttFilter){
-  crmStageGanttFilter.addEventListener('change',()=>{
-    renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
-  });
-}
-if(crmStageGanttRangeToggle){
-  crmStageGanttRangeToggle.checked=isGanttRangeHintsEnabled();
-  crmStageGanttRangeToggle.addEventListener('change',()=>{
-    setGanttRangeHintsEnabled(!!crmStageGanttRangeToggle.checked);
-    renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
-  });
-}
+  if(crmStageGanttFilter){
+    crmStageGanttFilter.addEventListener('change',()=>{
+      renderCrmStageGantt(getCrmStageGanttRows(), crmStageScheduleCache);
+    });
+  }
+  if(crmStageGanttRangeToggle){
+    crmStageGanttRangeToggle.checked=isGanttRangeHintsEnabled();
+    crmStageGanttRangeToggle.addEventListener('change',()=>{
+      setGanttRangeHintsEnabled(!!crmStageGanttRangeToggle.checked);
+      renderCrmStageGantt(getCrmStageGanttRows(), crmStageScheduleCache);
+    });
+  }
 
 if(crmStageDetailToggle){
   crmStageDetailToggle.addEventListener('click',()=>toggleCrmSection('detail'));
