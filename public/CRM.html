@@ -6716,6 +6716,8 @@ const CRM_ALIAS_STORAGE_KEY='planecore_crm_user_alias_v1';
 const CRM_ALIAS_STORAGE_FALLBACKS=['mini_crm_user_alias_v1'];
 const CRM_STAGE_COLLAPSE_KEY='planecore_crm_stage_collapse_v1';
 const CRM_STAGE_COLLAPSE_FALLBACKS=['mini_crm_stage_collapse_v1'];
+const CRM_GANTT_RANGE_PREF_KEY='planecore_crm_gantt_range_pref_v1';
+const CRM_GANTT_RANGE_PREF_FALLBACKS=['mini_crm_gantt_range_pref_v1'];
 const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:false });
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -6741,6 +6743,51 @@ function readStorageValue(primary,fallbacks=[]){
     }catch(_err){/* ignore */}
   }
   return null;
+}
+
+function resolveUserStorageKey(){
+  const login=(window.__CRM_AUTH__?.user?.login||window.__CRM_AUTH__?.user?.username||'').toString().trim();
+  if(login) return login.toLowerCase();
+  return 'default';
+}
+
+function readGanttRangePreference(){
+  const raw=readStorageValue(CRM_GANTT_RANGE_PREF_KEY, CRM_GANTT_RANGE_PREF_FALLBACKS);
+  if(!raw) return null;
+  try{
+    const parsed=JSON.parse(raw);
+    if(!parsed || typeof parsed!=='object') return null;
+    const userKey=resolveUserStorageKey();
+    if(Object.prototype.hasOwnProperty.call(parsed,userKey)){
+      return parsed[userKey]===true;
+    }
+    if(Object.prototype.hasOwnProperty.call(parsed,'enabled')){
+      return parsed.enabled===true;
+    }
+    return null;
+  }catch(_err){
+    return null;
+  }
+}
+
+function persistGanttRangePreference(enabled){
+  const userKey=resolveUserStorageKey();
+  let nextValue={};
+  try{
+    const raw=readStorageValue(CRM_GANTT_RANGE_PREF_KEY, CRM_GANTT_RANGE_PREF_FALLBACKS);
+    if(raw){
+      const parsed=JSON.parse(raw);
+      if(parsed && typeof parsed==='object'){
+        nextValue={ ...parsed };
+      }
+    }
+  }catch(_err){ nextValue={}; }
+  nextValue[userKey]=enabled===true;
+  try{
+    localStorage.setItem(CRM_GANTT_RANGE_PREF_KEY, JSON.stringify(nextValue));
+    removeLegacyStorage(CRM_GANTT_RANGE_PREF_KEY, CRM_GANTT_RANGE_PREF_FALLBACKS);
+  }catch(_err){ /* ignore */ }
+  return enabled===true;
 }
 function removeLegacyStorage(primary,fallbacks=[]){
   fallbacks.forEach(name=>{
@@ -7840,16 +7887,20 @@ function setLaneSumModeForLane(lane, mode){
 }
 
 function isGanttRangeHintsEnabled(){
+  const stored=readGanttRangePreference();
+  if(stored!==null) return stored===true;
   const prefs=getCrmPreferences();
   return prefs?.ganttRangeHints===true;
 }
 
 function setGanttRangeHintsEnabled(enabled){
+  const normalized=enabled===true;
+  persistGanttRangePreference(normalized);
   if(!state.settings) state.settings={};
   const prefs=sanitizeCrmPreferences(state.settings.preferences);
-  prefs.ganttRangeHints=enabled===true;
+  prefs.ganttRangeHints=normalized;
   state.settings.preferences=prefs;
-  save('Переключение подсказки диапазона Ганта');
+  persistStoredCrmSettings(state.settings);
 }
 
 function isStageLinkEnabledByDefault(){
@@ -12641,6 +12692,9 @@ function renderCrmStageGantt(rows, schedule){
   if(!crmStageGanttLeft || !crmStageGanttHeader || !crmStageGanttBody){
     return;
   }
+  const safeRows=Array.isArray(rows)
+    ? rows.filter(row=>row && row.identity && (row.orderTitle||row.order||row.orderId))
+    : [];
   crmStageGanttLeft.innerHTML='';
   crmStageGanttHeader.innerHTML='';
   crmStageGanttBody.innerHTML='';
@@ -12655,7 +12709,7 @@ function renderCrmStageGantt(rows, schedule){
   if(crmStageGanttLeftHeader){
     crmStageGanttLeftHeader.style.removeProperty('min-height');
   }
-  if(!schedule || !Array.isArray(rows) || !rows.length){
+  if(!schedule || !safeRows.length){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
@@ -12732,14 +12786,15 @@ function renderCrmStageGantt(rows, schedule){
     crmStageGanttHeader.appendChild(headerCell);
   });
   const perTask=schedule.perTask;
-  const orderedRows=rows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
+  const orderedRows=safeRows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
-  orderedRows.forEach(row=>{
+  orderedRows.forEach((row,rowIdx)=>{
     const orderId=row.orderId||row.order?.id||'';
+    const displayIndex=Number.isFinite(row.displayIndex)?row.displayIndex:rowIdx+1;
     const label=document.createElement('div');
     label.className='crm-stage-gantt-left-row';
-    label.textContent=`${row.displayIndex}. ${row.orderTitle||'Заказ'}`;
+    label.textContent=`${displayIndex}. ${row.orderTitle||'Заказ'}`;
     if(orderId && crmCanViewOrderDetails()){
       label.classList.add('crm-linklike');
       label.title='Открыть карточку заказа';
