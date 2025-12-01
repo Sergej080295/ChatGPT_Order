@@ -2992,6 +2992,7 @@
     font-size: 12px;
     min-height: 28px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
+    position: relative;
   }
 
   .crm-stage-gantt-cell {
@@ -3016,6 +3017,17 @@
 
   .crm-stage-gantt-cell.offday.today {
     background: color-mix(in srgb, var(--pc-primary) 15%, color-mix(in srgb, var(--pc-danger, #fa5252) 12%, transparent));
+  }
+
+  .crm-stage-gantt-range {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    border: 1px dashed color-mix(in srgb, var(--pc-primary) 50%, var(--pc-border));
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-primary) 10%, transparent);
+    pointer-events: none;
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--pc-primary) 12%, transparent);
   }
 
   .crm-stage-gantt-fill {
@@ -3425,6 +3437,30 @@
     color: var(--pc-text-muted);
     padding: 12px;
     text-align: center;
+  }
+
+  .crm-stage-add-menu {
+    position: absolute;
+    background: var(--pc-surface);
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    box-shadow: var(--pc-shadow-layer, var(--pc-shadow-surface));
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+    min-width: 200px;
+    z-index: 60;
+  }
+
+  .crm-stage-add-menu button {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .crm-stage-add-menu__hint {
+    font-size: 12px;
+    color: var(--pc-text-muted);
   }
 
   .crm-route-stage--draw { background: #38bdf8; }
@@ -4688,6 +4724,21 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-status-waiting) 20%, transparent);
   }
 
+  .col.col--unaccounted {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--pc-warning, #fcc419) 40%, var(--pc-border));
+    background: color-mix(in srgb, var(--pc-warning, #fcc419) 12%, var(--pc-surface));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--pc-warning, #fcc419) 16%, transparent);
+  }
+
+  .col.col--unaccounted > header {
+    border-color: color-mix(in srgb, var(--pc-warning, #fcc419) 35%, var(--pc-border));
+  }
+
+  .col.col--unaccounted .lane-title {
+    color: color-mix(in srgb, var(--pc-warning, #fcc419) 75%, var(--pc-text));
+  }
+
   .col > header {
     padding: var(--pc-spacing-md);
     border-bottom: 1px dashed var(--pc-border);
@@ -4716,6 +4767,18 @@
     flex-wrap: wrap;
     font-size: 12px;
     color: var(--pc-text-muted);
+  }
+
+  .lane-ignored-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: var(--pc-radius-pill);
+    background: color-mix(in srgb, var(--pc-warning, #fcc419) 25%, transparent);
+    color: color-mix(in srgb, var(--pc-warning, #fcc419) 75%, var(--pc-text));
+    font-weight: var(--pc-font-weight-semibold);
+    border: 1px solid color-mix(in srgb, var(--pc-warning, #fcc419) 45%, transparent);
   }
 
   .lane-sum {
@@ -5977,6 +6040,10 @@
                 <option value="free">Свободные</option>
               </select>
             </label>
+            <label class="pc-switch pc-switch--sm" title="Показать плановый диапазон дат">
+              <input type="checkbox" id="crmStageGanttRangeToggle" />
+              <span>Плановый диапазон</span>
+            </label>
             <button type="button" class="crm-section-toggle" id="crmStageGanttToggle" data-collapse-toggle="gantt" aria-expanded="true" aria-controls="crmStageGanttBodyWrap">
               <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
               <span class="crm-section-toggle__label">Свернуть</span>
@@ -6803,7 +6870,8 @@ const CRM_DEFAULT_PREFERENCES={
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
-  laneVisibility:{ autoHideEmpty:false, hiddenByBoard:{} }
+  laneVisibility:{ autoHideEmpty:false, hiddenByBoard:{} },
+  ganttRangeHints:false
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -7596,6 +7664,9 @@ function sanitizeCrmPreferences(raw){
         result.linkedStageGapDays=normalized;
       }
     }
+    if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
+      result.ganttRangeHints=raw.ganttRangeHints===true;
+    }
   }
   return result;
 }
@@ -7766,6 +7837,19 @@ function setLaneSumModeForLane(lane, mode){
   prefs.laneSumModes=map;
   state.settings.preferences=prefs;
   save('Переключение режима суммы колонки');
+}
+
+function isGanttRangeHintsEnabled(){
+  const prefs=getCrmPreferences();
+  return prefs?.ganttRangeHints===true;
+}
+
+function setGanttRangeHintsEnabled(enabled){
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  prefs.ganttRangeHints=enabled===true;
+  state.settings.preferences=prefs;
+  save('Переключение подсказки диапазона Ганта');
 }
 
 function isStageLinkEnabledByDefault(){
@@ -9294,6 +9378,75 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
   renderCrmStageTable();
 }
 
+function closeAddStageMenu(){
+  if(crmStageAddMenuOutsideHandler){
+    document.removeEventListener('mousedown', crmStageAddMenuOutsideHandler, true);
+    crmStageAddMenuOutsideHandler=null;
+  }
+  if(crmStageAddMenuKeyHandler){
+    document.removeEventListener('keydown', crmStageAddMenuKeyHandler, true);
+    crmStageAddMenuKeyHandler=null;
+  }
+  if(crmStageAddMenu){
+    crmStageAddMenu.remove();
+    crmStageAddMenu=null;
+  }
+  crmStageAddMenuAnchor=null;
+}
+
+function handleAddStageOutside(event){
+  if(!crmStageAddMenu) return;
+  const target=event.target;
+  if(crmStageAddMenu.contains(target)) return;
+  if(crmStageAddMenuAnchor && crmStageAddMenuAnchor.contains(target)) return;
+  closeAddStageMenu();
+}
+
+function handleAddStageKey(event){
+  if(event.key==='Escape'){
+    closeAddStageMenu();
+  }
+}
+
+function openAddStageMenu(anchor){
+  if(!anchor || anchor.disabled) return;
+  closeAddStageMenu();
+  const menu=document.createElement('div');
+  menu.className='crm-stage-add-menu';
+  const fromList=document.createElement('button');
+  fromList.type='button';
+  fromList.className='pc-btn pc-btn--ghost pc-btn--sm';
+  fromList.textContent='Из списка';
+  fromList.addEventListener('click',()=>{
+    closeAddStageMenu();
+    showStagePicker(anchor);
+  });
+  const customBtn=document.createElement('button');
+  customBtn.type='button';
+  customBtn.className='pc-btn pc-btn--secondary pc-btn--sm';
+  customBtn.textContent='Свой';
+  customBtn.addEventListener('click',()=>{
+    closeAddStageMenu();
+    appendStageByName('');
+  });
+  const hint=document.createElement('div');
+  hint.className='crm-stage-add-menu__hint';
+  hint.textContent='Выберите стандартный передел или создайте свой.';
+  menu.append(fromList, customBtn, hint);
+  document.body.appendChild(menu);
+  const rect=anchor.getBoundingClientRect();
+  const top=rect.bottom+window.scrollY+6;
+  const left=rect.left+window.scrollX;
+  menu.style.top=`${top}px`;
+  menu.style.left=`${left}px`;
+  crmStageAddMenu=menu;
+  crmStageAddMenuAnchor=anchor;
+  crmStageAddMenuOutsideHandler=handleAddStageOutside;
+  crmStageAddMenuKeyHandler=handleAddStageKey;
+  document.addEventListener('mousedown', crmStageAddMenuOutsideHandler, true);
+  document.addEventListener('keydown', crmStageAddMenuKeyHandler, true);
+}
+
 function refillCrmPlanFreeze(options){
   const opts=options&&typeof options==='object'?options:{};
   const board=currentBoard();
@@ -9616,6 +9769,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageDetailToggle=$('#crmStageDetailToggle'),
       crmStageDetailBody=$('#crmStageDetailBody'),
       crmStageGanttFilter=$('#crmStageGanttFilter'),
+      crmStageGanttRangeToggle=$('#crmStageGanttRangeToggle'),
       crmStageGanttLeftHeader=$('#crmStageGanttLeftHeader'),
       crmStageGanttLeft=$('#crmStageGanttLeft'),
       crmStageGanttHeader=$('#crmStageGanttHeader'),
@@ -9938,6 +10092,10 @@ let crmStageSelectMenu=null;
 let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
+let crmStageAddMenu=null;
+let crmStageAddMenuAnchor=null;
+let crmStageAddMenuOutsideHandler=null;
+let crmStageAddMenuKeyHandler=null;
 let crmMappingRemovedDraft=new Set();
 
 if(crmStageSelect){
@@ -12538,7 +12696,9 @@ function renderCrmStageGantt(rows, schedule){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
+  const rangeHintsEnabled=isGanttRangeHintsEnabled();
   const dayWidth=120;
+  const dayTimeByIndex=filteredDays.map(entry=>entry.day.date.getTime());
   const totalWidth=filteredDays.length*dayWidth;
   const widthValue=`${totalWidth}px`;
   const headerTemplate=`repeat(${filteredDays.length}, ${dayWidth}px)`;
@@ -12592,6 +12752,29 @@ function renderCrmStageGantt(rows, schedule){
     rowEl.style.minWidth=widthValue;
     rowEl.style.width=widthValue;
     const record=perTask.get(row.identity);
+    let rangeStartIdx=-1;
+    let rangeEndIdx=-1;
+    if(rangeHintsEnabled){
+      const startDate=row.startDate instanceof Date?new Date(row.startDate):null;
+      const endDate=row.endDate instanceof Date?new Date(row.endDate):null;
+      if(startDate && endDate && !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())){
+        startDate.setHours(0,0,0,0);
+        endDate.setHours(0,0,0,0);
+        const startMs=Math.min(startDate.getTime(), endDate.getTime());
+        const endMs=Math.max(startDate.getTime(), endDate.getTime());
+        rangeStartIdx=dayTimeByIndex.findIndex(ts=>ts>=startMs);
+        for(let idx=dayTimeByIndex.length-1; idx>=0; idx-=1){
+          if(dayTimeByIndex[idx]<=endMs){
+            rangeEndIdx=idx;
+            break;
+          }
+        }
+        if(rangeEndIdx<rangeStartIdx){
+          rangeStartIdx=-1;
+          rangeEndIdx=-1;
+        }
+      }
+    }
     filteredDays.forEach(({ key, day })=>{
       const cell=document.createElement('div');
       cell.className='crm-stage-gantt-cell';
@@ -12617,6 +12800,15 @@ function renderCrmStageGantt(rows, schedule){
       }
       rowEl.appendChild(cell);
     });
+    if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
+      const range=document.createElement('div');
+      range.className='crm-stage-gantt-range';
+      const left=(rangeStartIdx*dayWidth)+2;
+      const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
+      range.style.left=`${left}px`;
+      range.style.width=`${width}px`;
+      rowEl.appendChild(range);
+    }
     fragmentBody.appendChild(rowEl);
   });
   crmStageGanttLeft.appendChild(fragmentLeft);
@@ -13952,6 +14144,11 @@ function notifyCrmStageScheduleErrors(schedule){
 }
 
 function renderCrmStageViews(schedule, rows, stageKey, filterMode){
+  if(crmStageGanttRangeToggle){
+    const enabled=isGanttRangeHintsEnabled();
+    crmStageGanttRangeToggle.checked=enabled;
+    crmStageGanttRangeToggle.setAttribute('aria-pressed', enabled?'true':'false');
+  }
   const effectiveRows=Array.isArray(rows)?rows:crmStageRowsCache;
   const key=stageKey||crmStageSelect?.value||'draw';
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:getCrmStageFilter(key);
@@ -16165,18 +16362,22 @@ function renderColumns(){
   const b=currentBoard();
   columns.innerHTML='';
   if(!b){return;}
+  const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
+    ? state.settings.unaccountedStatuses.map(normalizeStatusKey).filter(Boolean)
+    : [];
+  const ignoredSet=new Set(ignoredStatuses);
   laneVisibilityState=computeLaneVisibility(b);
   const visibleLanes=laneVisibilityState.visible.length?laneVisibilityState.visible:(b.lanes||[]);
   ensureLaneRegistry(visibleLanes,b.id);
-    visibleLanes.forEach(l=>{
-      const c=document.createElement('div');
-      c.className='col';
-      const laneLabel=escapeHtml(l);
-      const laneMode=getLaneSumModeForLane(l);
-      const laneModeTitle=laneMode==='all'
-        ?'Суммировать все заказы в колонке'
-        :'Сумма за период из настроек';
-      c.innerHTML=`
+  visibleLanes.forEach(l=>{
+    const c=document.createElement('div');
+    c.className='col';
+    const laneLabel=escapeHtml(l);
+    const laneMode=getLaneSumModeForLane(l);
+    const laneModeTitle=laneMode==='all'
+      ?'Суммировать все заказы в колонке'
+      :'Сумма за период из настроек';
+    c.innerHTML=`
         <header>
           <h2>
             <span class="lane-title">${laneLabel}</span>
@@ -16200,10 +16401,25 @@ function renderColumns(){
     if(header) header.dataset.lane=l;
     const drop=c.querySelector('.drop');
     const more=c.querySelector('.col-more');
+    const laneMeta=c.querySelector('.lane-meta');
     const laneAlert=header?.querySelector('[data-lane-alert]');
     if(laneAlert){laneAlert.classList.remove('visible');laneAlert.removeAttribute('title');}
     if(drop) drop.dataset.lane=l;
     if(more) more.dataset.lane=l;
+    const laneKey=normalizeStatusKey(l);
+    const isIgnored=laneKey && ignoredSet.has(laneKey);
+    if(isIgnored){
+      c.classList.add('col--unaccounted');
+      if(laneMeta){
+        const badge=document.createElement('span');
+        badge.className='lane-ignored-badge';
+        badge.textContent='Не учитывается';
+        laneMeta.prepend(badge);
+      }
+      if(header){
+        header.title='Колонка отмечена как «Не учитывать состояния»';
+      }
+    }
   });
   $$('.col-more',columns).forEach(btn=>{
     const lane=btn.dataset.lane;
@@ -17651,10 +17867,11 @@ if(addStageBtn){
   addStageBtn.addEventListener('click',e=>{
     e.preventDefault();
     if(e.shiftKey||e.altKey||e.metaKey||e.ctrlKey){
+      closeAddStageMenu();
       showStagePicker(addStageBtn);
       return;
     }
-    appendStageByName('');
+    openAddStageMenu(addStageBtn);
   });
 }
 if(presetStagesBtn){
@@ -17692,6 +17909,10 @@ if(orderCommentInput){
 }
 if(orderCommentThread){
   orderCommentThread.addEventListener('click',handleOrderCommentThreadAction);
+}
+
+if(orderDlg){
+  orderDlg.addEventListener('close',()=>closeAddStageMenu());
 }
 
 function setOrderFormReadOnly(readOnly){
@@ -21515,6 +21736,13 @@ if(crmStageFilter){
 }
 if(crmStageGanttFilter){
   crmStageGanttFilter.addEventListener('change',()=>{
+    renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
+  });
+}
+if(crmStageGanttRangeToggle){
+  crmStageGanttRangeToggle.checked=isGanttRangeHintsEnabled();
+  crmStageGanttRangeToggle.addEventListener('change',()=>{
+    setGanttRangeHintsEnabled(!!crmStageGanttRangeToggle.checked);
     renderCrmStageGantt(crmStageRouteContext.rows, crmStageScheduleCache);
   });
 }
