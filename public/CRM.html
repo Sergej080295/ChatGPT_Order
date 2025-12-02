@@ -3440,7 +3440,7 @@
   }
 
   .crm-stage-add-menu {
-    position: absolute;
+    position: fixed;
     background: var(--pc-surface);
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
@@ -3449,7 +3449,7 @@
     display: grid;
     gap: 6px;
     min-width: 200px;
-    z-index: 60;
+    z-index: 10000;
   }
 
   .crm-stage-add-menu button {
@@ -9475,10 +9475,15 @@ function openAddStageMenu(anchor){
   menu.append(fromList, customBtn, hint);
   document.body.appendChild(menu);
   const rect=anchor.getBoundingClientRect();
-  const top=rect.bottom+window.scrollY+6;
-  const left=rect.left+window.scrollX;
-  menu.style.top=`${top}px`;
+  const padding=12;
+  const preferredLeft=rect?rect.left:padding;
+  const preferredTop=rect?(rect.bottom+6):padding;
+  const maxLeft=Math.max(padding, window.innerWidth-menu.offsetWidth-padding);
+  const maxTop=Math.max(padding, window.innerHeight-menu.offsetHeight-padding);
+  const left=Math.max(padding, Math.min(maxLeft, preferredLeft));
+  const top=Math.max(padding, Math.min(maxTop, preferredTop));
   menu.style.left=`${left}px`;
+  menu.style.top=`${top}px`;
   crmStageAddMenu=menu;
   crmStageAddMenuAnchor=anchor;
   crmStageAddMenuOutsideHandler=handleAddStageOutside;
