@@ -3439,30 +3439,6 @@
     text-align: center;
   }
 
-  .crm-stage-add-menu {
-    position: fixed;
-    background: var(--pc-surface);
-    border: 1px solid var(--pc-border);
-    border-radius: var(--pc-radius-md);
-    box-shadow: var(--pc-shadow-layer, var(--pc-shadow-surface));
-    padding: 8px;
-    display: grid;
-    gap: 6px;
-    min-width: 200px;
-    z-index: 10000;
-  }
-
-  .crm-stage-add-menu button {
-    width: 100%;
-    justify-content: flex-start;
-    gap: 8px;
-  }
-
-  .crm-stage-add-menu__hint {
-    font-size: 12px;
-    color: var(--pc-text-muted);
-  }
-
   .crm-route-stage--draw { background: #38bdf8; }
   .crm-route-stage--proc { background: #22c55e; }
   .crm-route-stage--shear { background: #fde047; color: #5b4100; }
@@ -6227,7 +6203,8 @@
               <span class="note">Галочка «Готово» = 100% по переделу.</span>
             </div>
             <div class="right">
-              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Shift — выбрать из списка">+ Передел</button>
+              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Добавить новый передел">+ Передел</button>
+              <button type="button" id="addStageFromListBtn" class="pc-btn pc-btn--ghost" title="Выбрать передел из шаблона">📋 Из списка</button>
               <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost">🔁 Базовые</button>
               <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost">📋 Все</button>
             </div>
@@ -9417,81 +9394,6 @@ function toggleCrmPlanFreezeDay(stageKey, iso){
   renderCrmStageTable();
 }
 
-function closeAddStageMenu(){
-  if(crmStageAddMenuOutsideHandler){
-    document.removeEventListener('mousedown', crmStageAddMenuOutsideHandler, true);
-    crmStageAddMenuOutsideHandler=null;
-  }
-  if(crmStageAddMenuKeyHandler){
-    document.removeEventListener('keydown', crmStageAddMenuKeyHandler, true);
-    crmStageAddMenuKeyHandler=null;
-  }
-  if(crmStageAddMenu){
-    crmStageAddMenu.remove();
-    crmStageAddMenu=null;
-  }
-  crmStageAddMenuAnchor=null;
-}
-
-function handleAddStageOutside(event){
-  if(!crmStageAddMenu) return;
-  const target=event.target;
-  if(crmStageAddMenu.contains(target)) return;
-  if(crmStageAddMenuAnchor && crmStageAddMenuAnchor.contains(target)) return;
-  closeAddStageMenu();
-}
-
-function handleAddStageKey(event){
-  if(event.key==='Escape'){
-    closeAddStageMenu();
-  }
-}
-
-function openAddStageMenu(anchor){
-  if(!anchor || anchor.disabled) return;
-  closeAddStageMenu();
-  const menu=document.createElement('div');
-  menu.className='crm-stage-add-menu';
-  const fromList=document.createElement('button');
-  fromList.type='button';
-  fromList.className='pc-btn pc-btn--ghost pc-btn--sm';
-  fromList.textContent='Из списка';
-  fromList.addEventListener('click',()=>{
-    closeAddStageMenu();
-    showStagePicker(anchor);
-  });
-  const customBtn=document.createElement('button');
-  customBtn.type='button';
-  customBtn.className='pc-btn pc-btn--secondary pc-btn--sm';
-  customBtn.textContent='Свой';
-  customBtn.addEventListener('click',()=>{
-    closeAddStageMenu();
-    const row=appendStageRow({name:'',done:false,progress:0,start:'',end:'',value:''});
-    focusStageRow(row);
-  });
-  const hint=document.createElement('div');
-  hint.className='crm-stage-add-menu__hint';
-  hint.textContent='Выберите стандартный передел или создайте свой.';
-  menu.append(fromList, customBtn, hint);
-  document.body.appendChild(menu);
-  const rect=anchor.getBoundingClientRect();
-  const padding=12;
-  const preferredLeft=rect?rect.left:padding;
-  const preferredTop=rect?(rect.bottom+6):padding;
-  const maxLeft=Math.max(padding, window.innerWidth-menu.offsetWidth-padding);
-  const maxTop=Math.max(padding, window.innerHeight-menu.offsetHeight-padding);
-  const left=Math.max(padding, Math.min(maxLeft, preferredLeft));
-  const top=Math.max(padding, Math.min(maxTop, preferredTop));
-  menu.style.left=`${left}px`;
-  menu.style.top=`${top}px`;
-  crmStageAddMenu=menu;
-  crmStageAddMenuAnchor=anchor;
-  crmStageAddMenuOutsideHandler=handleAddStageOutside;
-  crmStageAddMenuKeyHandler=handleAddStageKey;
-  document.addEventListener('mousedown', crmStageAddMenuOutsideHandler, true);
-  document.addEventListener('keydown', crmStageAddMenuKeyHandler, true);
-}
-
 function refillCrmPlanFreeze(options){
   const opts=options&&typeof options==='object'?options:{};
   const board=currentBoard();
@@ -10138,10 +10040,6 @@ let crmStageSelectMenu=null;
 let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
-let crmStageAddMenu=null;
-let crmStageAddMenuAnchor=null;
-let crmStageAddMenuOutsideHandler=null;
-let crmStageAddMenuKeyHandler=null;
 let crmMappingRemovedDraft=new Set();
 
 if(crmStageSelect){
@@ -17003,7 +16901,7 @@ function showTooltipForOrder(o,anchorEl){
 function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
-const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),addStageBtn=$('#addStageBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),addStageBtn=$('#addStageBtn'),addStageFromListBtn=$('#addStageFromListBtn'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
 let suppressAutoStatusUpdate=false;
 
 if(orderForm){
@@ -17921,12 +17819,14 @@ async function handleOrderDoneChange(){
 if(addStageBtn){
   addStageBtn.addEventListener('click',e=>{
     e.preventDefault();
-    if(e.shiftKey||e.altKey||e.metaKey||e.ctrlKey){
-      closeAddStageMenu();
-      showStagePicker(addStageBtn);
-      return;
-    }
-    openAddStageMenu(addStageBtn);
+    const row=appendStageRow({name:'',done:false,progress:0,start:'',end:'',value:''});
+    focusStageRow(row);
+  });
+}
+if(addStageFromListBtn){
+  addStageFromListBtn.addEventListener('click',e=>{
+    e.preventDefault();
+    showStagePicker(addStageFromListBtn);
   });
 }
 if(presetStagesBtn){
@@ -17966,10 +17866,6 @@ if(orderCommentThread){
   orderCommentThread.addEventListener('click',handleOrderCommentThreadAction);
 }
 
-if(orderDlg){
-  orderDlg.addEventListener('close',()=>closeAddStageMenu());
-}
-
 function setOrderFormReadOnly(readOnly){
   if(!orderDlg) return;
   orderDlg.classList.toggle('crm-order-readonly', !!readOnly);
@@ -18003,6 +17899,9 @@ function setOrderFormReadOnly(readOnly){
   }
   if(addStageBtn){
     addStageBtn.disabled=readOnly;
+  }
+  if(addStageFromListBtn){
+    addStageFromListBtn.disabled=readOnly;
   }
   if(presetStagesBtn){
     presetStagesBtn.disabled=readOnly;
@@ -21653,7 +21552,8 @@ window.addEventListener('beforeunload',()=>{
 const CRM_HINT_TARGETS=[
   { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
   { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
-  { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт строку передела. Shift открывает выбор из списка шаблонов.' },
+  { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт пустую строку передела для ручного ввода.' },
+  { selector:'#addStageFromListBtn', level1:'Передел из списка', level2:'Открывает справочник стандартных переделов для вставки.' },
   { selector:'#presetStagesBtn', level1:'Базовые переделы', level2:'Добавляет преднастроенный набор шагов в заказ.' },
   { selector:'#allStagesBtn', level1:'Все переделы', level2:'Открывает полный справочник переделов для вставки в заказ.' },
   { selector:'#splitBtn', level1:'Подзаказ', level2:'Разбивает текущий заказ на отдельный подзаказ без потери истории.' },
