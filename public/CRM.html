@@ -8241,6 +8241,7 @@ const crmCanViewOrderDetails=()=> !!crmPermissions.viewOrderDetails;
 const crmCanManageOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.manageOrders;
 const crmCanCompleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.completeOrders;
 const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manageStages;
+const crmCanAddStages=()=> crmWriteAccessEnabled() && !!crmPermissions.addStages;
 const crmCanUseJournal=()=> !!crmPermissions.useJournal;
 const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
@@ -8286,6 +8287,7 @@ const applyCrmWriteAccess=()=>{
   const canViewOrders=crmCanViewOrderDetails();
   const canStages=crmCanManageStages();
   const canComplete=crmCanCompleteOrders();
+  const canAddStages=crmCanAddStages();
   const selectedStage=crmStageSelect?.value||'draw';
   const canSelectedStage=crmCanManageStage(selectedStage);
   if(document.body){
@@ -8305,6 +8307,14 @@ const applyCrmWriteAccess=()=>{
   if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
   if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canSelectedStage; }
   if(crmStageReserveApply){ crmStageReserveApply.disabled=!canSelectedStage; }
+  if(addStageBtn){
+    addStageBtn.hidden=!canAddStages;
+    addStageBtn.disabled=!canAddStages;
+  }
+  if(addStageFromListBtn){
+    addStageFromListBtn.hidden=!canAddStages;
+    addStageFromListBtn.disabled=!canAddStages;
+  }
   if(orderDone){
     orderDone.disabled=!canComplete;
     orderDone.title=canComplete?'Отметить заказ готовым':'Недостаточно прав для отметки заказа готовым.';
@@ -8596,12 +8606,16 @@ function ensureStageHoursPreference(normalized, label){
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
   const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
   const stageAccess=crmDefaultStageAccess(false);
   CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ stageAccess[stage]=!!stageSource[stage]; });
-  return { ...defaults, ...crmCurrentUser.permissions, stageAccess };
+  const merged={ ...defaults, ...crmCurrentUser.permissions, stageAccess };
+  if(typeof merged.addStages!=='boolean'){
+    merged.addStages=!!merged.manageStages;
+  }
+  return merged;
 })();
 const crmRoleLabels=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
 const crmPrimaryRole=crmRoleLabels.length?crmRoleLabels[0].displayName: (Array.isArray(crmCurrentUser?.roles)&&crmCurrentUser.roles.length?crmCurrentUser.roles[0]:null);
@@ -9917,14 +9931,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -9962,7 +9976,8 @@ const CRM_ROLE_PERMISSION_GROUPS=[
     key:'production',
     title:'Производство — общие операции',
     items:[
-      { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' }
+      { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' },
+      { key:'addStages', label:'Добавлять переделы', hint:'Показывает кнопки «+ Передел» и «Из списка» в карточке заказа.' }
     ]
   },
   {
@@ -17898,10 +17913,14 @@ function setOrderFormReadOnly(readOnly){
     splitBtn.disabled=readOnly;
   }
   if(addStageBtn){
-    addStageBtn.disabled=readOnly;
+    const canAdd=crmCanAddStages();
+    addStageBtn.disabled=readOnly || !canAdd;
+    addStageBtn.hidden=!canAdd;
   }
   if(addStageFromListBtn){
-    addStageFromListBtn.disabled=readOnly;
+    const canAdd=crmCanAddStages();
+    addStageFromListBtn.disabled=readOnly || !canAdd;
+    addStageFromListBtn.hidden=!canAdd;
   }
   if(presetStagesBtn){
     presetStagesBtn.disabled=readOnly;
