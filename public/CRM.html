@@ -18631,43 +18631,44 @@ function suppressValueForStage(normalizedName){
 }
 
 function showStagePicker(anchor){
-  const rect=anchor?.getBoundingClientRect?.();
+  const presets=Array.isArray(ALL_STAGE_PRESETS)?ALL_STAGE_PRESETS.filter(Boolean):[];
   closePopup();
+  if(!presets.length){
+    appendStageByName('');
+    return;
+  }
+  const rect=anchor?.getBoundingClientRect?.();
   const menu=document.createElement('div');
   menu.className='popup stage-picker';
-  menu.innerHTML='<h4>Добавить передел</h4>';
+  menu.innerHTML='<h4>Выберите передел из списка</h4>';
   const list=document.createElement('div');
   list.className='items';
-  ALL_STAGE_PRESETS.forEach(stageName=>{
+  presets.forEach(stageName=>{
     const item=document.createElement('button');
     item.type='button';
     item.className='item';
     item.textContent=stageName;
     item.onclick=()=>{appendStageByName(stageName);closePopup();};
+    item.addEventListener('keydown',ev=>{
+      if(ev.key==='Enter' || ev.key===' '){
+        ev.preventDefault();
+        appendStageByName(stageName);
+        closePopup();
+      }
+    });
     list.appendChild(item);
   });
   menu.appendChild(list);
-  const custom=document.createElement('button');
-  custom.type='button';
-  custom.className='item custom';
-  custom.textContent='➕ Свой передел';
-  custom.onclick=()=>{
-    let name=prompt('Название передела');
-    if(name){
-      name=name.trim();
-      if(name){
-        appendStageByName(name);
-      }
-    }
-    closePopup();
-  };
-  menu.appendChild(custom);
   document.body.appendChild(menu);
   const left=Math.min(window.innerWidth- menu.offsetWidth - 12, rect?rect.left:20);
   const top=Math.min(window.innerHeight- menu.offsetHeight - 12, rect?(rect.bottom+6):20);
   menu.style.left=`${Math.max(12,left)}px`;
   menu.style.top=`${Math.max(12,top)}px`;
   _popup=menu;
+  const first=list.querySelector('button');
+  if(first){
+    requestAnimationFrame(()=>first.focus());
+  }
   setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
 
