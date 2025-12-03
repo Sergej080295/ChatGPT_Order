@@ -8610,15 +8610,57 @@ const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
   const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
+  const normalizeFlag=(value, fallback=null)=>{
+    if(typeof value==='boolean') return value;
+    if(typeof value==='number') return value!==0;
+    if(typeof value==='string'){
+      const v=value.trim().toLowerCase();
+      if(['true','1','yes','y','on','ok'].includes(v)) return true;
+      if(['false','0','no','n','off',''].includes(v)) return false;
+    }
+    return fallback;
+  };
+  const ensureRoleDerivedPermissions=()=>{
+    const roles=Array.isArray(crmCurrentUser?.roleDetails)?crmCurrentUser.roleDetails:[];
+    const derived={};
+    CRM_ROLE_PERMISSION_KEYS.forEach(key=>{ derived[key]=undefined; });
+    roles.forEach(role=>{
+      const slug=resolveCrmRoleSlug(role?.slug||role?.name||'');
+      const defaultsForRole=CRM_ROLE_DEFAULT_PERMISSIONS[slug]||{};
+      const rolePerms=(role&&typeof role.permissions==='object')?role.permissions:{};
+      CRM_ROLE_PERMISSION_KEYS.forEach(key=>{
+        const fromRole=normalizeFlag(rolePerms[key], null);
+        const fromDefaults=normalizeFlag(defaultsForRole[key], null);
+        if(fromRole!==null){
+          derived[key]=derived[key]===undefined?fromRole:(derived[key]||fromRole);
+        }else if(fromDefaults!==null){
+          derived[key]=derived[key]===undefined?fromDefaults:(derived[key]||fromDefaults);
+        }
+      });
+    });
+    return derived;
+  };
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
   const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
   const stageAccess=crmDefaultStageAccess(false);
   CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ stageAccess[stage]=!!stageSource[stage]; });
-  const merged={ ...defaults, ...crmCurrentUser.permissions, stageAccess };
+  const roleDerived=ensureRoleDerivedPermissions();
+  const merged={ ...defaults, stageAccess };
+  CRM_ROLE_PERMISSION_KEYS.forEach(key=>{
+    const raw=crmCurrentUser.permissions[key];
+    const normalized=normalizeFlag(raw, null);
+    if(normalized!==null){
+      merged[key]=normalized;
+      return;
+    }
+    if(roleDerived[key]!==undefined){
+      merged[key]=roleDerived[key];
+      return;
+    }
+    merged[key]=normalizeFlag(defaults[key], false);
+  });
   if(merged.addStages===undefined || merged.addStages===null){
     merged.addStages=!!merged.manageStages;
-  }else{
-    merged.addStages=!!merged.addStages;
   }
   return merged;
 })();
