@@ -8290,6 +8290,7 @@ const applyCrmWriteAccess=()=>{
   const canStages=crmCanManageStages();
   const canComplete=crmCanCompleteOrders();
   const canAddStages=crmCanAddStages();
+  const canPickStageFromList=crmCanManageStages();
   const selectedStage=crmStageSelect?.value||'draw';
   const canSelectedStage=crmCanManageStage(selectedStage);
   if(document.body){
@@ -8314,8 +8315,8 @@ const applyCrmWriteAccess=()=>{
     addStageBtn.disabled=!canAddStages;
   }
   if(addStageFromListBtn){
-    addStageFromListBtn.hidden=!canAddStages;
-    addStageFromListBtn.disabled=!canAddStages;
+    addStageFromListBtn.hidden=false;
+    addStageFromListBtn.disabled=!canPickStageFromList;
   }
   if(orderDone){
     orderDone.disabled=!canComplete;
@@ -9979,7 +9980,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
     title:'Производство — общие операции',
     items:[
       { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' },
-      { key:'addStages', label:'Добавлять переделы', hint:'Показывает кнопки «+ Передел» и «Из списка» в карточке заказа.' }
+      { key:'addStages', label:'Добавлять переделы', hint:'Показывает кнопку «+ Передел» в карточке заказа.' }
     ]
   },
   {
@@ -17922,9 +17923,9 @@ function setOrderFormReadOnly(readOnly){
     addStageBtn.hidden=!canAdd;
   }
   if(addStageFromListBtn){
-    const canAdd=crmCanAddStages();
-    addStageFromListBtn.disabled=readOnly || !canAdd;
-    addStageFromListBtn.hidden=!canAdd;
+    const canPick=crmCanManageStages();
+    addStageFromListBtn.disabled=readOnly || !canPick;
+    addStageFromListBtn.hidden=false;
   }
   if(presetStagesBtn){
     presetStagesBtn.disabled=readOnly;
