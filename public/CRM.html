@@ -8606,6 +8606,83 @@ function ensureStageHoursPreference(normalized, label){
   }
 }
 
+const CRM_STAGE_ALIASES={
+  proc:['proc','закупка','закуп','поставка','закупки'],
+  shear:['shear','рубка','резка','рез','раскрой'],
+  draw:['draw','подготовка','подготовка в работу','пвр','подготовкавработу'],
+  laser:['laser','лазер','лазерная резка','лазерная'],
+  bend:['bend','гибка','гибочный','гиб'],
+  weld:['weld','сварка','сборка','св'],
+  mech:['mech','мехобработка','мех','мехобр','mechanic'],
+  coop:['coop','кооперация','кооп'],
+  pack:['pack','упаковка','упак'],
+  ship:['ship','отгрузка','отгруз','отгр']
+};
+function crmDefaultStageAccess(enabled){
+  const map={};
+  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ map[stage]=!!enabled; });
+  return map;
+}
+const CRM_ROLE_DEFAULT_PERMISSIONS={
+  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
+};
+CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
+const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
+function resolveCrmRoleSlug(slug){
+  if(!slug && slug!==0) return '';
+  const normalized=String(slug).trim().toLowerCase();
+  if(!normalized) return '';
+  return CRM_ROLE_SLUG_ALIASES[normalized] || normalized;
+}
+const CRM_ROLE_PERMISSION_GROUPS=[
+  {
+    key:'core',
+    title:'Основное',
+    items:[
+      { key:'view', label:'Просмотр CRM', hint:'Доступ к канбану, заказам, переделам и аналитике.' },
+      { key:'write', label:'Изменение данных', hint:'Сохранение заказов, статусов и расписаний.' }
+    ]
+  },
+  {
+    key:'orders',
+    title:'Заказы и очередь',
+    items:[
+      { key:'viewOrderDetails', label:'Просмотр карточки заказа', hint:'Открывать окно заказа для просмотра данных.' },
+      { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
+      { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
+      { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
+    ]
+  },
+  {
+    key:'comments',
+    title:'Комментарии',
+    items:[
+      { key:'editComments', label:'Редактировать комментарии', hint:'Изменение текста существующих комментариев в заказе.' },
+      { key:'deleteComments', label:'Удалять комментарии', hint:'Удаление комментариев из карточки заказа.' }
+    ]
+  },
+  {
+    key:'production',
+    title:'Производство — общие операции',
+    items:[
+      { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' },
+      { key:'addStages', label:'Добавлять переделы', hint:'Показывает кнопку «+ Передел» в карточке заказа.' }
+    ]
+  },
+  {
+    key:'admin',
+    title:'Администрирование',
+    items:[
+      { key:'manageSettings', label:'Настройки CRM', hint:'Изменение параметров досок и расписаний.' },
+      { key:'manageUsers', label:'Пользователи и роли', hint:'Создание учетных записей и управление правами.' },
+      { key:'viewAudit', label:'Просмотр аудита', hint:'Просмотр журнала действий пользователей.' }
+    ]
+  }
+];
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
@@ -9960,83 +10037,6 @@ if(!CRM_VIEW_MODES.has(storedView)){
 }else if(currentCrmView==='stage' && !(storedStage && CRM_STAGE_KEYS.includes(storedStage)) && CRM_STAGE_KEYS.includes(crmStartViewMode)){
   initialStageViewKey=crmStartViewMode;
 }
-const CRM_STAGE_ALIASES={
-  proc:['proc','закупка','закуп','поставка','закупки'],
-  shear:['shear','рубка','резка','рез','раскрой'],
-  draw:['draw','подготовка','подготовка в работу','пвр','подготовкавработу'],
-  laser:['laser','лазер','лазерная резка','лазерная'],
-  bend:['bend','гибка','гибочный','гиб'],
-  weld:['weld','сварка','сборка','св'],
-  mech:['mech','мехобработка','мех','мехобр','mechanic'],
-  coop:['coop','кооперация','кооп'],
-  pack:['pack','упаковка','упак'],
-  ship:['ship','отгрузка','отгруз','отгр']
-};
-function crmDefaultStageAccess(enabled){
-  const map={};
-  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ map[stage]=!!enabled; });
-  return map;
-}
-const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
-};
-CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
-const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
-function resolveCrmRoleSlug(slug){
-  if(!slug && slug!==0) return '';
-  const normalized=String(slug).trim().toLowerCase();
-  if(!normalized) return '';
-  return CRM_ROLE_SLUG_ALIASES[normalized] || normalized;
-}
-const CRM_ROLE_PERMISSION_GROUPS=[
-  {
-    key:'core',
-    title:'Основное',
-    items:[
-      { key:'view', label:'Просмотр CRM', hint:'Доступ к канбану, заказам, переделам и аналитике.' },
-      { key:'write', label:'Изменение данных', hint:'Сохранение заказов, статусов и расписаний.' }
-    ]
-  },
-  {
-    key:'orders',
-    title:'Заказы и очередь',
-    items:[
-      { key:'viewOrderDetails', label:'Просмотр карточки заказа', hint:'Открывать окно заказа для просмотра данных.' },
-      { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
-      { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
-      { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
-    ]
-  },
-  {
-    key:'comments',
-    title:'Комментарии',
-    items:[
-      { key:'editComments', label:'Редактировать комментарии', hint:'Изменение текста существующих комментариев в заказе.' },
-      { key:'deleteComments', label:'Удалять комментарии', hint:'Удаление комментариев из карточки заказа.' }
-    ]
-  },
-  {
-    key:'production',
-    title:'Производство — общие операции',
-    items:[
-      { key:'manageStages', label:'Переделы и мощности', hint:'Бронь, исключения и оптимизация переделов.' },
-      { key:'addStages', label:'Добавлять переделы', hint:'Показывает кнопку «+ Передел» в карточке заказа.' }
-    ]
-  },
-  {
-    key:'admin',
-    title:'Администрирование',
-    items:[
-      { key:'manageSettings', label:'Настройки CRM', hint:'Изменение параметров досок и расписаний.' },
-      { key:'manageUsers', label:'Пользователи и роли', hint:'Создание учетных записей и управление правами.' },
-      { key:'viewAudit', label:'Просмотр аудита', hint:'Просмотр журнала действий пользователей.' }
-    ]
-  }
-];
 const CRM_PROGRESS_STAGES=['draw','laser','bend','weld','mech'];
 const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
 const CRM_STAGE_LABELS={
