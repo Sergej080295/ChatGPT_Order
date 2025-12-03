@@ -8615,8 +8615,10 @@ const crmPermissions=(()=>{
   const stageAccess=crmDefaultStageAccess(false);
   CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ stageAccess[stage]=!!stageSource[stage]; });
   const merged={ ...defaults, ...crmCurrentUser.permissions, stageAccess };
-  if(typeof merged.addStages!=='boolean'){
+  if(merged.addStages===undefined || merged.addStages===null){
     merged.addStages=!!merged.manageStages;
+  }else{
+    merged.addStages=!!merged.addStages;
   }
   return merged;
 })();
