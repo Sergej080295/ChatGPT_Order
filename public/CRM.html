@@ -11777,6 +11777,7 @@ function collectCrmStageRows(stageKey, options={}){
         startDate,
         endDate,
         isLate:orderIsLate,
+        orderLate:orderIsLate,
         shipLate:orderShipLate,
         orderTitle:title,
         stateLabel:order?.status||'—',
@@ -12817,8 +12818,10 @@ function renderCrmStageGantt(rows, schedule){
     rowEl.style.width=widthValue;
     const record=perTask.get(row.identity);
     const rowSegments=record?.segments||[];
-    const rowStageLate=rowSegments.some(seg=>seg.late)||!!row.isLate;
-    const shipLate=row.shipLate===true || isOrderShippingLate(row.order);
+    const orderLate=row.orderLate===true || row.orderLate==='true';
+    const legacyLate=!('orderLate' in row) && row.isLate===true;
+    const rowStageLate=rowSegments.some(seg=>seg.late) || orderLate || legacyLate;
+    const shipLate=row.shipLate===true || row.shipLate==='true' || isOrderShippingLate(row.order);
     const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     let rangeStartIdx=-1;
     let rangeEndIdx=-1;
@@ -15604,10 +15607,14 @@ function renderCrmStageTable(){
   allRows.forEach(entry=>{
     const matchesSearch=!orderSearchNormalized || orderMatchesSearch(entry.order);
     const statusInfo=computeCrmStageStatus(entry, schedule);
+    const orderLateFlag=entry.orderLate===true || entry.orderLate==='true';
+    const normalizedOrderLate=orderLateFlag || (!('orderLate' in entry) && orderHasOverdueStage(entry.order));
+    entry.orderLate=normalizedOrderLate;
     entry.statusLabel=statusInfo.label;
     entry.statusClass=statusInfo.className;
     entry.statusTitle=statusInfo.title;
-    entry.isLate=statusInfo.className==='status-late';
+    entry.stageLate=statusInfo.className==='status-late';
+    entry.isLate=entry.stageLate;
     entry.lateDays=statusInfo.lateDays||0;
     if(!entry.isLate && !entry.done && entry.endDate instanceof Date){
       const dueTime=entry.endDate.getTime();
