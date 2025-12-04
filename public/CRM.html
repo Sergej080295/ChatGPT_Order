@@ -10105,6 +10105,7 @@ const CRM_ROUTE_STAGE_CLASS={
 
 let crmStageRowsCache=[];
 let crmStageRowsFullCache=[];
+const CRM_STAGE_GANTT_PLACEHOLDER_DAYS=14;
 let crmStageGanttRowsCache=[];
 let crmStageSelectionId=null;
 let crmStageSelectObserver=null;
@@ -12692,6 +12693,42 @@ function renderCrmStageStack(schedule){
   });
 }
 
+function buildCrmStageGanttPlaceholderSchedule(stageKey){
+  const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
+  const baseCapacity=Math.max(isHourless?getCrmStageParallel(stageKey):getCrmStageCapacity(stageKey), isHourless?1:0.01);
+  const today=today0();
+  const perDay=new Map();
+  for(let offset=0; offset<CRM_STAGE_GANTT_PLACEHOLDER_DAYS; offset+=1){
+    const date=addDays(today, offset);
+    const key=fmtDateISO(date);
+    perDay.set(key, {
+      date,
+      segments:[],
+      meta:{
+        capDay:baseCapacity,
+        pubCap:baseCapacity,
+        pubUsed:0,
+        pubRem:baseCapacity,
+        resLim:0,
+        resUsed:0,
+        resRem:0,
+        patternOff:false
+      }
+    });
+  }
+  return {
+    stageKey,
+    isHourless,
+    baseCapacity,
+    tasks:[],
+    perDay,
+    perTask:new Map(),
+    minDate:addDays(today,0),
+    maxDate:addDays(today, CRM_STAGE_GANTT_PLACEHOLDER_DAYS-1),
+    errors:[]
+  };
+}
+
 function renderCrmStageGantt(rows, schedule){
   if(!crmStageGanttLeft || !crmStageGanttHeader || !crmStageGanttBody){
     return;
@@ -12699,6 +12736,7 @@ function renderCrmStageGantt(rows, schedule){
   const safeRows=Array.isArray(rows)
     ? rows.filter(row=>row && row.identity && (row.orderTitle||row.order||row.orderId))
     : [];
+  const hasRows=safeRows.length>0;
   crmStageGanttLeft.innerHTML='';
   crmStageGanttHeader.innerHTML='';
   crmStageGanttBody.innerHTML='';
@@ -12713,7 +12751,7 @@ function renderCrmStageGantt(rows, schedule){
   if(crmStageGanttLeftHeader){
     crmStageGanttLeftHeader.style.removeProperty('min-height');
   }
-  if(!schedule || !safeRows.length){
+  if(!schedule){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
@@ -12727,6 +12765,7 @@ function renderCrmStageGantt(rows, schedule){
     if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
     return;
   }
+  if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=hasRows;
   const filterValue=crmStageGanttFilter?crmStageGanttFilter.value:'all';
   const filteredDays=dayEntries.filter(entry=>{
     const meta=entry.day.meta||{};
@@ -14277,17 +14316,18 @@ function notifyCrmStageScheduleErrors(schedule){
     const routeRows=crmStageRowsFullCache.length?crmStageRowsFullCache.slice():effectiveRows.slice();
     crmStageScheduleCache=schedule||null;
     renderCrmStageStack(schedule||null);
-  renderCrmStageGantt(effectiveRows, schedule||null);
-  crmStageRouteContext={
-    rows:routeRows,
-    stageKey:key,
-    filter
-  };
-  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
-  notifyCrmStageScheduleErrors(schedule||null);
-  flushCrmPlanFreezeDirty();
-  applyCrmStageSelectionHighlight();
-}
+    const ganttSchedule=(schedule||null)??buildCrmStageGanttPlaceholderSchedule(key);
+    renderCrmStageGantt(effectiveRows, ganttSchedule);
+    crmStageRouteContext={
+      rows:routeRows,
+      stageKey:key,
+      filter
+    };
+    renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
+    notifyCrmStageScheduleErrors(schedule||null);
+    flushCrmPlanFreezeDirty();
+    applyCrmStageSelectionHighlight();
+  }
 
 function updateCrmAuxButtons(){
   const unaccounted=collectCrmUnaccountedOrders();
