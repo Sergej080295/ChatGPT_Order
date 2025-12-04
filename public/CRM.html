@@ -12778,6 +12778,12 @@ function renderCrmStageGantt(rows, schedule){
   });
   const perTask=schedule.perTask;
   const orderedRows=safeRows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
+  const dayResidualMap=new Map(filteredDays.map(({ key })=>{
+    const meta=schedule.perDay.get(key)?.meta||{};
+    const capacityRaw=Number(meta.capDay);
+    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
+    return [key, capacity];
+  }));
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach((row,rowIdx)=>{
@@ -12850,10 +12856,12 @@ function renderCrmStageGantt(rows, schedule){
           fill.classList.add('status-free');
         }else if(total>0){
           if(isHourly){
-            const capLabel=formatStageWorkload(capacityInfo.capacity,{ hourless:false });
+            const residualBefore=Math.max(0, dayResidualMap.get(key) ?? capacityInfo.capacity ?? schedule.baseCapacity);
+            const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
             const plannedLabel=formatStageWorkload(total,{ hourless:false });
             fill.textContent=`${plannedLabel} / ${capLabel}`;
             fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+            dayResidualMap.set(key, Math.max(0, residualBefore-total));
           }else{
             fill.textContent=formatStageWorkload(total,{ hourless:true });
             fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
