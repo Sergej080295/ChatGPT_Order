@@ -3035,7 +3035,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--pc-warning, #f59f00) 26%, transparent);
+    background: color-mix(in srgb, var(--pc-success, #40c057) 26%, transparent);
     border-radius: var(--pc-radius-sm);
     margin: 2px;
     color: var(--pc-text);
@@ -3045,15 +3045,15 @@
 
   .crm-stage-gantt-fill.late,
   .crm-stage-gantt-fill.status-ship-late {
-    background: color-mix(in srgb, var(--pc-danger) 26%, transparent);
+    background: color-mix(in srgb, var(--pc-danger) 28%, transparent);
   }
 
   .crm-stage-gantt-fill.status-stage-late {
-    background: color-mix(in srgb, #ffd43b 32%, transparent);
+    background: color-mix(in srgb, #ffd43b 36%, transparent);
   }
 
   .crm-stage-gantt-fill.status-ok {
-    background: color-mix(in srgb, var(--pc-warning, #f59f00) 26%, transparent);
+    background: color-mix(in srgb, var(--pc-success, #40c057) 26%, transparent);
   }
 
   .crm-stage-gantt-fill.status-free {
@@ -12813,6 +12813,10 @@ function renderCrmStageGantt(rows, schedule){
     rowEl.style.minWidth=widthValue;
     rowEl.style.width=widthValue;
     const record=perTask.get(row.identity);
+    const rowSegments=record?.segments||[];
+    const rowStageLate=rowSegments.some(seg=>seg.late)||!!row.isLate;
+    const shipLate=isOrderShippingLate(row.order);
+    const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     let rangeStartIdx=-1;
     let rangeEndIdx=-1;
     if(rangeHintsEnabled){
@@ -12850,7 +12854,7 @@ function renderCrmStageGantt(rows, schedule){
       if(key===todayKey){
         cell.classList.add('today');
       }
-      const segs=record?record.segments.filter(seg=>fmtDateISO(seg.date)===key):[];
+      const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
       const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
       const showFreeLabel=isHourly && filterValue==='free';
@@ -12875,19 +12879,15 @@ function renderCrmStageGantt(rows, schedule){
             fill.textContent=formatStageWorkload(total,{ hourless:true });
             fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
           }
-        }
-        if(isHourly){
-          const stageLate=segs.some(seg=>seg.late)||!!row.isLate;
-          const shipLate=isOrderShippingLate(row.order);
+          fill.classList.add(fillStatusClass);
           if(shipLate){
-            fill.classList.add('status-ship-late','late');
-          }else if(stageLate){
-            fill.classList.add('status-stage-late');
-          }else{
-            fill.classList.add('status-ok');
+            fill.classList.add('late');
           }
-        }else if(segs.some(seg=>seg.late)){
-          fill.classList.add('late');
+        }else{
+          fill.classList.add(fillStatusClass);
+          if(shipLate){
+            fill.classList.add('late');
+          }
         }
         cell.appendChild(fill);
       }
