@@ -3049,7 +3049,7 @@
   }
 
   .crm-stage-gantt-fill.status-stage-late {
-    background: color-mix(in srgb, #ffd43b 36%, transparent);
+    background: color-mix(in srgb, #ffa94d 38%, transparent);
   }
 
   .crm-stage-gantt-fill.status-ok {
@@ -10852,6 +10852,7 @@ function stageEntryIsLate(stage,{ todayTime=today0().getTime() }={}){
 }
 
 const orderShippingLateCache=new WeakMap();
+const orderOverdueCache=new WeakMap();
 
 function isOrderShippingLate(order){
   if(!order||typeof order!=='object') return false;
@@ -10861,6 +10862,16 @@ function isOrderShippingLate(order){
   const late=shippingStage?stageEntryIsLate(shippingStage):false;
   orderShippingLateCache.set(order, late);
   return late;
+}
+
+function getOrderOverdueFlags(order){
+  if(!order||typeof order!=='object') return { orderLate:false, shipLate:false };
+  if(orderOverdueCache.has(order)) return orderOverdueCache.get(order);
+  const shipLate=isOrderShippingLate(order);
+  const orderLate=orderHasOverdueStage(order);
+  const result={ orderLate, shipLate };
+  orderOverdueCache.set(order, result);
+  return result;
 }
 
 function orderHasOverdueStage(order,{ todayTime=today0().getTime() }={}){
@@ -12818,10 +12829,11 @@ function renderCrmStageGantt(rows, schedule){
     rowEl.style.width=widthValue;
     const record=perTask.get(row.identity);
     const rowSegments=record?.segments||[];
-    const orderLate=row.orderLate===true || row.orderLate==='true';
+    const overdue=getOrderOverdueFlags(row.order);
+    const orderLate=row.orderLate===true || row.orderLate==='true' || overdue.orderLate;
     const legacyLate=!('orderLate' in row) && row.isLate===true;
     const rowStageLate=rowSegments.some(seg=>seg.late) || orderLate || legacyLate;
-    const shipLate=row.shipLate===true || row.shipLate==='true' || isOrderShippingLate(row.order);
+    const shipLate=row.shipLate===true || row.shipLate==='true' || overdue.shipLate;
     const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     let rangeStartIdx=-1;
     let rangeEndIdx=-1;
