@@ -11751,6 +11751,8 @@ function collectCrmStageRows(stageKey, options={}){
       const expectedBehind=!done && expectedProgress!=null && progress<expectedProgress-0.49;
       const queueOrderRaw=Number(stageEntry.crmQueueOrder);
       const queueOrder=Number.isFinite(queueOrderRaw)?queueOrderRaw:null;
+      const orderIsLate=orderHasOverdueStage(order);
+      const orderShipLate=isOrderShippingLate(order);
       rows.push({
         order,
         orderId:order?.id||'',
@@ -11774,7 +11776,8 @@ function collectCrmStageRows(stageKey, options={}){
         endRaw,
         startDate,
         endDate,
-        isLate:false,
+        isLate:orderIsLate,
+        shipLate:orderShipLate,
         orderTitle:title,
         stateLabel:order?.status||'—',
         statusLabel,
@@ -12815,7 +12818,7 @@ function renderCrmStageGantt(rows, schedule){
     const record=perTask.get(row.identity);
     const rowSegments=record?.segments||[];
     const rowStageLate=rowSegments.some(seg=>seg.late)||!!row.isLate;
-    const shipLate=isOrderShippingLate(row.order);
+    const shipLate=row.shipLate===true || isOrderShippingLate(row.order);
     const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     let rangeStartIdx=-1;
     let rangeEndIdx=-1;
