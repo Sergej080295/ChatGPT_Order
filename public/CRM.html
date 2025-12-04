@@ -10869,6 +10869,15 @@ function orderHasOverdueStage(order,{ todayTime=today0().getTime() }={}){
   return stages.some(stage=>stageEntryIsLate(stage,{ todayTime }));
 }
 
+function orderHasOverdueStageExcludingShipping(order,{ todayTime=today0().getTime() }={}){
+  if(!order||typeof order!=='object') return false;
+  const stages=Array.isArray(order.stages)?order.stages:[];
+  return stages.some(stage=>{
+    if(resolveCrmStageKey(stage?.name)==='ship') return false;
+    return stageEntryIsLate(stage,{ todayTime });
+  });
+}
+
 function getOrderStartTimestamp(order){
   if(!order||typeof order!=='object') return Number.POSITIVE_INFINITY;
   let best=Number.POSITIVE_INFINITY;
@@ -16806,7 +16815,8 @@ function renderCards(){
     }
     visible.forEach(o=>{
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
-      const hasOverdueStage=orderHasOverdueStage(o,{ todayTime });
+      const shippingLate=isOrderShippingLate(o);
+      const hasOverdueStage=orderHasOverdueStageExcludingShipping(o,{ todayTime });
       let progress=calcAutoProgress(o.stages);
       const manualProgress=normalizeStageProgress(o.progress);
       if(o.progressManual===true || !Array.isArray(o.stages) || !o.stages.length){
@@ -16820,7 +16830,8 @@ function renderCards(){
       if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
       if(o.start||o.end){
         const rangeLabel=formatOrderRangeLabel(o.start,o.end);
-        chips.appendChild(chip(rangeLabel,hasOverdueStage?'danger':'warn'));
+        const rangeTone=shippingLate?'danger':(hasOverdueStage?'warn':'ok');
+        chips.appendChild(chip(rangeLabel,rangeTone));
       }
       const readyChecked=o.done?'checked':'';
       card.innerHTML=`
