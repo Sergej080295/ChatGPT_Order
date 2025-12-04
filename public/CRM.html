@@ -3035,7 +3035,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: color-mix(in srgb, var(--pc-primary) 20%, transparent);
+    background: color-mix(in srgb, var(--pc-success, #2f9e44) 24%, transparent);
     border-radius: var(--pc-radius-sm);
     margin: 2px;
     color: var(--pc-text);
@@ -3043,8 +3043,21 @@
     font-weight: var(--pc-font-weight-semibold);
   }
 
-  .crm-stage-gantt-fill.late {
-    background: color-mix(in srgb, var(--pc-danger) 20%, transparent);
+  .crm-stage-gantt-fill.late,
+  .crm-stage-gantt-fill.status-ship-late {
+    background: color-mix(in srgb, var(--pc-danger) 26%, transparent);
+  }
+
+  .crm-stage-gantt-fill.status-stage-late {
+    background: color-mix(in srgb, var(--pc-warning, #f59f00) 32%, transparent);
+  }
+
+  .crm-stage-gantt-fill.status-ok {
+    background: color-mix(in srgb, var(--pc-success, #2f9e44) 24%, transparent);
+  }
+
+  .crm-stage-gantt-fill.status-free {
+    background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
   }
 
   .crm-stage-route {
@@ -10838,6 +10851,18 @@ function stageEntryIsLate(stage,{ todayTime=today0().getTime() }={}){
   return dueDate.getTime()<todayTime;
 }
 
+const orderShippingLateCache=new WeakMap();
+
+function isOrderShippingLate(order){
+  if(!order||typeof order!=='object') return false;
+  if(orderShippingLateCache.has(order)) return orderShippingLateCache.get(order);
+  const stages=Array.isArray(order?.stages)?order.stages:[];
+  const shippingStage=stages.find(stage=>resolveCrmStageKey(stage?.name)==='ship');
+  const late=shippingStage?stageEntryIsLate(shippingStage):false;
+  orderShippingLateCache.set(order, late);
+  return late;
+}
+
 function orderHasOverdueStage(order,{ todayTime=today0().getTime() }={}){
   if(!order||typeof order!=='object') return false;
   const stages=Array.isArray(order.stages)?order.stages:[];
@@ -12711,6 +12736,17 @@ function renderCrmStageGantt(rows, schedule){
   const totalWidth=filteredDays.length*dayWidth;
   const widthValue=`${totalWidth}px`;
   const headerTemplate=`repeat(${filteredDays.length}, ${dayWidth}px)`;
+  const isHourly=!schedule.isHourless;
+  const dayCapacityMap=new Map(filteredDays.map(({ key, day })=>{
+    const meta=day.meta||{};
+    const capacityRaw=Number(meta.capDay);
+    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
+    const pubRem=Math.max(0, Number(meta.pubRem)||0);
+    const resRem=Math.max(0, Number(meta.resRem)||0);
+    const used=Math.max(0, (Number(meta.pubUsed)||0)+(Number(meta.resUsed)||0));
+    const free=Math.max(0, pubRem+resRem, capacity-used);
+    return [key,{ capacity, free, used }];
+  }));
   crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
   crmStageGanttHeader.style.minWidth=widthValue;
   crmStageGanttHeader.style.width=widthValue;
@@ -12801,11 +12837,41 @@ function renderCrmStageGantt(rows, schedule){
       }
       const segs=record?record.segments.filter(seg=>fmtDateISO(seg.date)===key):[];
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
-      if(total>0){
+      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+      const showFreeLabel=isHourly && filterValue==='free';
+      if(total>0 || showFreeLabel){
         const fill=document.createElement('div');
         fill.className='crm-stage-gantt-fill';
-        if(segs.some(seg=>seg.late)) fill.classList.add('late');
-        fill.textContent=formatStageWorkload(total,{ hourless:schedule.isHourless });
+        if(showFreeLabel && isHourly){
+          const freeLabel=formatStageWorkload(capacityInfo.free,{ hourless:false });
+          const capLabel=formatStageWorkload(capacityInfo.capacity,{ hourless:false });
+          fill.textContent=`${freeLabel} / ${capLabel}`;
+          fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
+          fill.classList.add('status-free');
+        }else if(total>0){
+          if(isHourly){
+            const capLabel=formatStageWorkload(capacityInfo.capacity,{ hourless:false });
+            const plannedLabel=formatStageWorkload(total,{ hourless:false });
+            fill.textContent=`${plannedLabel} / ${capLabel}`;
+            fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+          }else{
+            fill.textContent=formatStageWorkload(total,{ hourless:true });
+            fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
+          }
+        }
+        if(isHourly){
+          const stageLate=segs.some(seg=>seg.late)||!!row.isLate;
+          const shipLate=isOrderShippingLate(row.order);
+          if(shipLate){
+            fill.classList.add('status-ship-late','late');
+          }else if(stageLate){
+            fill.classList.add('status-stage-late');
+          }else{
+            fill.classList.add('status-ok');
+          }
+        }else if(segs.some(seg=>seg.late)){
+          fill.classList.add('late');
+        }
         cell.appendChild(fill);
       }
       rowEl.appendChild(cell);
