@@ -17553,7 +17553,18 @@ function calculateOrderStageDates(options={}){
     const stageLabel=stageDraft.name||CRM_STAGE_LABELS[stageKey]||'Передел';
     if(manualStart || manualEnd){
       const manualEndDate=manualEnd?parseDateInputValue(manualEnd):null;
-      if(manualEndDate) previousEndDate=manualEndDate;
+      const scheduleEndDate=extractStageBoundaryDate(stageDraft,'end');
+      const effectiveEndDate=(()=>{
+        const dates=[];
+        if(manualEndDate instanceof Date && !Number.isNaN(manualEndDate.getTime())) dates.push(manualEndDate);
+        if(scheduleEndDate instanceof Date && !Number.isNaN(scheduleEndDate.getTime())) dates.push(scheduleEndDate);
+        if(!dates.length) return null;
+        dates.sort((a,b)=>a-b);
+        return dates[dates.length-1];
+      })();
+      if(effectiveEndDate instanceof Date && !Number.isNaN(effectiveEndDate.getTime())){
+        previousEndDate=effectiveEndDate;
+      }
       return;
     }
     const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate, isStageLinkActive(tr));
