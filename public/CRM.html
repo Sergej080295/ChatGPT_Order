@@ -18890,9 +18890,67 @@ function showStagePicker(anchor){
 
 function readStages(){
   const rows=[...stagesTableBody.querySelectorAll('tr')];
-  return rows
+  const stages=rows
     .map(tr=>mergeStageDraftWithSource(readStageRow(tr)))
     .filter(Boolean);
+  enforceLinkedStageSequence(stages, rows);
+  return stages;
+}
+
+function enforceLinkedStageSequence(stages, rows){
+  if(!Array.isArray(stages) || !Array.isArray(rows) || !stages.length) return;
+  let previousEndDate=null;
+  for(let i=0;i<stages.length;i+=1){
+    const stage=stages[i];
+    const tr=rows[i];
+    const linked=isStageLinkActive(tr);
+    const startIso=(stage?.start||'').trim();
+    const endIso=(stage?.end||'').trim();
+    const startDate=parseDateInputValue(startIso);
+    const endDate=parseDateInputValue(endIso);
+    if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
+      const minStart=addDays(previousEndDate,0);
+      if(!(startDate instanceof Date) || startDate<minStart){
+        const durationDays=(startDate instanceof Date && endDate instanceof Date)
+          ? Math.max(0, daysBetween(startDate,endDate))
+          : null;
+        const newStartIso=fmtDateISO(minStart);
+        stage.start=newStartIso;
+        const startInput=tr?.querySelector('[data-k="start"]');
+        if(startInput){
+          startInput.value=newStartIso;
+          startInput.dataset.lastAccepted=newStartIso;
+          applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        }
+        if(durationDays!==null){
+          const newEndDate=addDays(minStart,durationDays);
+          const newEndIso=fmtDateISO(newEndDate);
+          stage.end=newEndIso;
+          const endInput=tr?.querySelector('[data-k="end"]');
+          if(endInput){
+            endInput.value=newEndIso;
+            endInput.dataset.lastAccepted=newEndIso;
+            applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+          }
+          previousEndDate=newEndDate;
+          continue;
+        }
+        if(endDate instanceof Date && endDate<minStart){
+          const adjustedEndIso=fmtDateISO(minStart);
+          stage.end=adjustedEndIso;
+          const endInput=tr?.querySelector('[data-k="end"]');
+          if(endInput){
+            endInput.value=adjustedEndIso;
+            endInput.dataset.lastAccepted=adjustedEndIso;
+            applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+          }
+        }
+      }
+    }
+    if(endDate instanceof Date && !Number.isNaN(endDate.getTime())){
+      previousEndDate=endDate;
+    }
+  }
 }
 
 function calcAutoProgress(stages){
