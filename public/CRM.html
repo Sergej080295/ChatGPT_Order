@@ -18957,6 +18957,47 @@ function extractStageBoundaryDate(stage, direction){
 
 function enforceLinkedStageSequence(stages, rows){
   if(!Array.isArray(stages) || !Array.isArray(rows) || !stages.length) return;
+  const scheduleCacheByStage=new Map();
+  const getStageScheduledEndDate=(stage)=>{
+    if(!stage) return null;
+    const stageKey=resolveCrmStageKey(stage?.name||'');
+    if(!stageKey) return null;
+    const stageId=stage.crmStageId||stage.id||stage.stageId||ensureStageIdentity(stage);
+    if(!stageId) return null;
+    let schedule=scheduleCacheByStage.has(stageKey)
+      ? scheduleCacheByStage.get(stageKey)
+      : undefined;
+    if(schedule===undefined){
+      const { rows:allRows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+      const rowsList=Array.isArray(allRows)?allRows:[];
+      schedule=buildCrmStageSchedule(stageKey, rowsList, { allowPullback:false })||null;
+      scheduleCacheByStage.set(stageKey, schedule);
+    }
+    if(!schedule || !(schedule.perTask instanceof Map)) return null;
+    const record=schedule.perTask.get(stageId);
+    let latest=null;
+    const considerDate=(date)=>{
+      if(!(date instanceof Date) || Number.isNaN(date.getTime())) return;
+      if(!latest || date>latest){
+        latest=addDays(date,0);
+      }
+    };
+    if(record && Array.isArray(record.segments)){
+      record.segments.forEach(seg=>considerDate(seg?.date));
+    }
+    if(!latest && schedule.perDay instanceof Map){
+      schedule.perDay.forEach(day=>{
+        if(!day || !(day.date instanceof Date)) return;
+        const hasSegment=Array.isArray(day.segments)
+          ? day.segments.some(seg=>seg && seg.uid===stageId)
+          : false;
+        if(hasSegment){
+          considerDate(day.date);
+        }
+      });
+    }
+    return latest;
+  };
   let previousEndDate=null;
   for(let i=0;i<stages.length;i+=1){
     const stage=stages[i];
@@ -18968,6 +19009,7 @@ function enforceLinkedStageSequence(stages, rows){
     const inputEndDate=parseDateInputValue(inputEndIso);
     const scheduleStartDate=extractStageBoundaryDate(stage,'start');
     const scheduleEndDate=extractStageBoundaryDate(stage,'end');
+    const plannedEndDate=getStageScheduledEndDate(stage);
     const effectiveEndDate=(()=>{
       const dates=[];
       if(scheduleEndDate instanceof Date && !Number.isNaN(scheduleEndDate.getTime())){
@@ -18975,6 +19017,9 @@ function enforceLinkedStageSequence(stages, rows){
       }
       if(inputEndDate instanceof Date && !Number.isNaN(inputEndDate.getTime())){
         dates.push(inputEndDate);
+      }
+      if(plannedEndDate instanceof Date && !Number.isNaN(plannedEndDate.getTime())){
+        dates.push(plannedEndDate);
       }
       if(!dates.length) return null;
       dates.sort((a,b)=>a-b);
