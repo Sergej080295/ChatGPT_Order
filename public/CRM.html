@@ -17114,6 +17114,7 @@ const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
+let crmStageCascadeLock=false;
 
 if(orderForm){
   const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
@@ -18266,6 +18267,7 @@ function fillOrderForm(o,b){
   renderOrderComments();
   resetOrderCommentInputs();
   collapseOrderCommentSection();
+  normalizeLinkedStageFactsInOrder(o);
   const stageList=o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}));
   stageList.forEach(st=>{
     const stageId=ensureStageIdentity(st);
@@ -18594,12 +18596,16 @@ function ensureStageFactInputs(tr, startDate, endDate){
 }
 
 function recalculateLinkedStagesFrom(tr){
-  if(!stagesTableBody || !tr) return;
+  if(!stagesTableBody || !tr || crmStageCascadeLock) return;
+  crmStageCascadeLock=true;
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
   const startIndex=rows.indexOf(tr);
-  if(startIndex<0) return;
+  if(startIndex<0){
+    crmStageCascadeLock=false;
+    return;
+  }
   const startFact=readStageFactDates(rows[startIndex]);
-  let previousEnd=startFact.end;
+  let previousEnd=startFact.end||startFact.start||null;
   for(let i=startIndex+1;i<rows.length;i++){
     const row=rows[i];
     const stageDraft=mergeStageDraftWithSource(readStageRow(row));
@@ -18644,10 +18650,13 @@ function recalculateLinkedStagesFrom(tr){
     const refreshedFacts=readStageFactDates(row);
     if(refreshedFacts.end instanceof Date && !Number.isNaN(refreshedFacts.end.getTime())){
       previousEnd=refreshedFacts.end;
+    }else if(refreshedFacts.start instanceof Date && !Number.isNaN(refreshedFacts.start.getTime())){
+      previousEnd=refreshedFacts.start;
     }
   }
   syncAutoDates();
   updateAllStageExpectations();
+  crmStageCascadeLock=false;
 }
 
 function handleLinkedStageManualChange(tr, input){
@@ -18712,6 +18721,9 @@ function appendStageRow(st){
   }
   const linkEnabled=st.linkPrev===undefined?isStageLinkEnabledByDefault():!!st.linkPrev;
   tr.dataset.linkPrev=linkEnabled?'1':'0';
+  if(st.linkOverride){
+    tr.dataset.linkOverride='1';
+  }
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
@@ -18904,6 +18916,7 @@ function readStageRow(tr){
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
     crmStageId:stageId,
     linkPrev:tr.dataset?.linkPrev==='1',
+    linkOverride:tr.dataset?.linkOverride==='1',
     doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
@@ -21781,11 +21794,59 @@ function restoreCrmScrollSnapshot(snapshot){
   runner(5);
 }
 
+function normalizeLinkedStageFacts(crmState){
+  if(!crmState || !Array.isArray(crmState.boards)) return;
+  crmState.boards.forEach(board=>{
+    if(!board || !Array.isArray(board.orders)) return;
+    board.orders.forEach(order=>normalizeLinkedStageFactsInOrder(order));
+  });
+}
+
+function normalizeLinkedStageFactsInOrder(order){
+  if(!order || !Array.isArray(order.stages)) return;
+  let previousEnd=null;
+  order.stages=order.stages.map(stage=>{
+    const draft=stage||{};
+    const linked=draft.linkPrev===undefined?isStageLinkEnabledByDefault():!!draft.linkPrev;
+    const override=draft.linkOverride===true || draft.linkOverride==='1';
+    const stageKey=resolveCrmStageKey(draft.name||'');
+    const parsedStart=parseDateInputValue(draft.start||'');
+    const parsedEnd=parseDateInputValue(draft.end||'');
+    let startDate=parsedStart instanceof Date && !Number.isNaN(parsedStart.getTime())?addDays(parsedStart,0):null;
+    let endDate=parsedEnd instanceof Date && !Number.isNaN(parsedEnd.getTime())?addDays(parsedEnd,0):null;
+    const prevEnd=previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())?addDays(previousEnd,0):null;
+    if(linked && !override && prevEnd){
+      const earliest=findLinkedStageStartDate(stageKey, prevEnd);
+      if(earliest){
+        const span=startDate&&endDate?Math.max(0, daysBetween(startDate, endDate)):null;
+        if(!startDate || startDate<earliest){
+          startDate=addDays(earliest,0);
+          if(span!==null){
+            endDate=addDays(startDate, span);
+          }else if(endDate && endDate<startDate){
+            endDate=addDays(startDate,0);
+          }
+        }
+      }
+    }
+    const normalized={ ...draft };
+    if(startDate instanceof Date && !Number.isNaN(startDate.getTime())){
+      normalized.start=fmtDateISO(startDate);
+    }
+    if(endDate instanceof Date && !Number.isNaN(endDate.getTime())){
+      normalized.end=fmtDateISO(endDate);
+    }
+    previousEnd=endDate||startDate||previousEnd;
+    return normalized;
+  });
+}
+
 function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  normalizeLinkedStageFacts(state);
   const storedSettings=loadStoredCrmSettings();
   if(storedSettings){
     state.settings=mergeCrmSettings(state.settings, storedSettings);
