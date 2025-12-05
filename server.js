@@ -700,7 +700,8 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'viewAudit',
   'useJournal',
   'editComments',
-  'deleteComments'
+  'deleteComments',
+  'addStages'
 ]);
 
 function createStageAccessDefaults(enabled) {
@@ -724,6 +725,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     useJournal: true,
     editComments: true,
     deleteComments: true,
+    addStages: true,
     stageAccess: createStageAccessDefaults(true)
   },
   admin: {
@@ -739,6 +741,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     useJournal: true,
     editComments: true,
     deleteComments: true,
+    addStages: true,
     stageAccess: createStageAccessDefaults(true)
   },
   master: {
@@ -754,6 +757,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     useJournal: true,
     editComments: false,
     deleteComments: false,
+    addStages: true,
     stageAccess: createStageAccessDefaults(true)
   },
   guest: {
@@ -769,6 +773,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     useJournal: false,
     editComments: false,
     deleteComments: false,
+    addStages: false,
     stageAccess: createStageAccessDefaults(false)
   }
 };
@@ -1037,6 +1042,9 @@ function normalizeRolePermissions(payload, slug) {
     } else {
       result[key] = !!defaults[key];
     }
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload || {}, 'addStages') && defaults.addStages === undefined) {
+    result.addStages = !!result.manageStages;
   }
   const stageDefaults = defaults.stageAccess && typeof defaults.stageAccess === 'object' ? defaults.stageAccess : {};
   const sourceStages = payload && typeof payload.stageAccess === 'object' ? payload.stageAccess : {};

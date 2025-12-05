@@ -53,11 +53,80 @@
     });
   };
 
+  let navTooltipEl = null;
+  let navTooltipTitle = null;
+  let navTooltipDesc = null;
+
+  const ensureNavTooltip = () => {
+    if (navTooltipEl) return navTooltipEl;
+    navTooltipEl = document.createElement('div');
+    navTooltipEl.className = 'pc-nav__tooltip';
+    navTooltipTitle = document.createElement('div');
+    navTooltipTitle.className = 'pc-nav__tooltip-title';
+    navTooltipDesc = document.createElement('div');
+    navTooltipDesc.className = 'pc-nav__tooltip-desc';
+    navTooltipEl.append(navTooltipTitle, navTooltipDesc);
+    document.body.appendChild(navTooltipEl);
+    return navTooltipEl;
+  };
+
+  const hideNavTooltip = () => {
+    if (!navTooltipEl) return;
+    navTooltipEl.classList.remove('is-visible');
+  };
+
+  const positionNavTooltip = (target) => {
+    if (!navTooltipEl || !target) return;
+    const rect = target.getBoundingClientRect();
+    const spacing = 10;
+    const viewportWidth = document.documentElement.clientWidth;
+    const tooltipWidth = navTooltipEl.offsetWidth || 0;
+    const preferredLeft = rect.left + rect.width / 2 - tooltipWidth / 2;
+    const clampedLeft = Math.min(Math.max(preferredLeft, 8), viewportWidth - tooltipWidth - 8);
+    const top = rect.bottom + spacing + window.scrollY;
+    navTooltipEl.style.left = `${clampedLeft + window.scrollX}px`;
+    navTooltipEl.style.top = `${top}px`;
+    navTooltipEl.style.transformOrigin = 'top center';
+  };
+
+  const showNavTooltip = (target) => {
+    if (!target) return;
+    const primary = target.dataset.tooltipPrimary;
+    if (!primary) return;
+    const tooltip = ensureNavTooltip();
+    navTooltipTitle.textContent = primary;
+    const secondary = target.dataset.tooltipSecondary || '';
+    navTooltipDesc.textContent = secondary;
+    navTooltipDesc.hidden = !secondary;
+    tooltip.style.visibility = 'hidden';
+    tooltip.classList.add('is-visible');
+    requestAnimationFrame(() => {
+      positionNavTooltip(target);
+      tooltip.style.visibility = 'visible';
+    });
+  };
+
+  const bindNavTooltips = () => {
+    const links = document.querySelectorAll('.pc-nav__link[data-tooltip-primary]');
+    if (!links.length) return;
+    links.forEach((link) => {
+      const show = () => showNavTooltip(link);
+      const hide = () => hideNavTooltip();
+      link.addEventListener('mouseenter', show);
+      link.addEventListener('focus', show);
+      link.addEventListener('mouseleave', hide);
+      link.addEventListener('blur', hide);
+    });
+    window.addEventListener('scroll', hideNavTooltip, true);
+    window.addEventListener('resize', hideNavTooltip);
+  };
+
   const init = () => {
     const theme = resolveInitialTheme();
     applyTheme(theme, { save: false });
     updateToggleLabel(theme);
     initNav();
+    bindNavTooltips();
 
     const toggleBtn = document.querySelector('[data-action="toggle-theme"]');
     if (toggleBtn) {
