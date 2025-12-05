@@ -18274,6 +18274,9 @@ function fillOrderForm(o,b){
     }
     appendStageRow(st);
   });
+  if(stagesTableBody && stagesTableBody.firstElementChild){
+    recalculateLinkedStagesFrom(stagesTableBody.firstElementChild);
+  }
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
   updateOrderDialogMeta();
@@ -18607,11 +18610,35 @@ function recalculateLinkedStagesFrom(tr){
     if(linked && !override && previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())){
       const earliest=findLinkedStageStartDate(stageKey, previousEnd);
       const currentStart=factDates.start;
-      if(earliest && (!currentStart || currentStart<earliest)){
+      const orderId=(orderForm?.id?.value||'').trim();
+      const orderTitle=deriveEditingOrderTitle();
+      let scheduledStart=null;
+      let scheduledEnd=null;
+      if(earliest){
+        const schedule=planStageAutoSchedule({
+          stage:stageDraft,
+          stageKey,
+          orderId,
+          orderTitle,
+          earliestStart:earliest
+        });
+        if(schedule?.startIso){
+          scheduledStart=parseDateInputValue(schedule.startIso);
+          scheduledEnd=parseDateInputValue(schedule.endIso);
+          if(scheduledStart && scheduledStart<earliest){
+            const span=(scheduledStart && scheduledEnd)?Math.max(0, daysBetween(scheduledStart, scheduledEnd)):0;
+            scheduledStart=addDays(earliest,0);
+            scheduledEnd=scheduledEnd?addDays(scheduledStart, span):null;
+          }
+        }
+      }
+      if(!scheduledStart && earliest && (!currentStart || currentStart<earliest)){
         const span=(factDates.start && factDates.end)?Math.max(0, daysBetween(factDates.start, factDates.end)):0;
-        const newStart=addDays(earliest,0);
-        const newEnd=factDates.end?addDays(newStart, span):null;
-        ensureStageFactInputs(row, newStart, newEnd);
+        scheduledStart=addDays(earliest,0);
+        scheduledEnd=factDates.end?addDays(scheduledStart, span):null;
+      }
+      if(scheduledStart){
+        ensureStageFactInputs(row, scheduledStart, scheduledEnd);
       }
     }
     const refreshedFacts=readStageFactDates(row);
