@@ -18897,6 +18897,53 @@ function readStages(){
   return stages;
 }
 
+function extractStageBoundaryDate(stage, direction){
+  if(!stage || typeof stage!=='object') return null;
+  const dates=[];
+  const push=iso=>{
+    const normalized=coerceCalendarIso(iso);
+    if(!normalized) return;
+    const parsed=parseDateInputValue(normalized);
+    if(parsed) dates.push(parsed);
+  };
+  if(direction==='start'){
+    push(stage.start); push(stage.originalStart); push(stage.startDate); push(stage.crmStart);
+  }else{
+    push(stage.end); push(stage.originalEnd); push(stage.endDate); push(stage.crmEnd);
+  }
+  const schedule=stage.crmSchedule && typeof stage.crmSchedule==='object' ? stage.crmSchedule : null;
+  if(schedule){
+    if(direction==='start'){
+      push(schedule.start); push(schedule.date);
+    }else{
+      push(schedule.end); push(schedule.due); push(schedule.date);
+    }
+    if(Array.isArray(schedule.segments)){
+      schedule.segments.forEach(seg=>{
+        if(!seg || typeof seg!=='object') return;
+        if(direction==='start'){
+          push(seg.start||seg.date);
+        }else{
+          push(seg.end||seg.date);
+        }
+      });
+    }
+  }
+  if(Array.isArray(stage.segments)){
+    stage.segments.forEach(seg=>{
+      if(!seg || typeof seg!=='object') return;
+      if(direction==='start'){
+        push(seg.start||seg.date);
+      }else{
+        push(seg.end||seg.date);
+      }
+    });
+  }
+  if(!dates.length) return null;
+  dates.sort((a,b)=>a-b);
+  return direction==='start'?dates[0]:dates[dates.length-1];
+}
+
 function enforceLinkedStageSequence(stages, rows){
   if(!Array.isArray(stages) || !Array.isArray(rows) || !stages.length) return;
   let previousEndDate=null;
@@ -18904,16 +18951,21 @@ function enforceLinkedStageSequence(stages, rows){
     const stage=stages[i];
     const tr=rows[i];
     const linked=isStageLinkActive(tr);
-    const startIso=(stage?.start||'').trim();
-    const endIso=(stage?.end||'').trim();
-    const startDate=parseDateInputValue(startIso);
-    const endDate=parseDateInputValue(endIso);
+    const inputStartIso=(stage?.start||'').trim();
+    const inputEndIso=(stage?.end||'').trim();
+    const inputStartDate=parseDateInputValue(inputStartIso);
+    const inputEndDate=parseDateInputValue(inputEndIso);
+    const scheduleStartDate=extractStageBoundaryDate(stage,'start');
+    const scheduleEndDate=extractStageBoundaryDate(stage,'end');
+    const effectiveEndDate=scheduleEndDate||inputEndDate;
     if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
       const minStart=addDays(previousEndDate,0);
-      if(!(startDate instanceof Date) || startDate<minStart){
-        const durationDays=(startDate instanceof Date && endDate instanceof Date)
-          ? Math.max(0, daysBetween(startDate,endDate))
-          : null;
+      if(!(inputStartDate instanceof Date) || inputStartDate<minStart){
+        const durationDays=(inputStartDate instanceof Date && inputEndDate instanceof Date)
+          ? Math.max(0, daysBetween(inputStartDate,inputEndDate))
+          : (scheduleStartDate instanceof Date && scheduleEndDate instanceof Date)
+            ? Math.max(0, daysBetween(scheduleStartDate, scheduleEndDate))
+            : null;
         const newStartIso=fmtDateISO(minStart);
         stage.start=newStartIso;
         const startInput=tr?.querySelector('[data-k="start"]');
@@ -18935,7 +18987,7 @@ function enforceLinkedStageSequence(stages, rows){
           previousEndDate=newEndDate;
           continue;
         }
-        if(endDate instanceof Date && endDate<minStart){
+        if(inputEndDate instanceof Date && inputEndDate<minStart){
           const adjustedEndIso=fmtDateISO(minStart);
           stage.end=adjustedEndIso;
           const endInput=tr?.querySelector('[data-k="end"]');
@@ -18944,11 +18996,13 @@ function enforceLinkedStageSequence(stages, rows){
             endInput.dataset.lastAccepted=adjustedEndIso;
             applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
           }
+          previousEndDate=minStart;
+          continue;
         }
       }
     }
-    if(endDate instanceof Date && !Number.isNaN(endDate.getTime())){
-      previousEndDate=endDate;
+    if(effectiveEndDate instanceof Date && !Number.isNaN(effectiveEndDate.getTime())){
+      previousEndDate=effectiveEndDate;
     }
   }
 }
