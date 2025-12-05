@@ -18957,7 +18957,18 @@ function enforceLinkedStageSequence(stages, rows){
     const inputEndDate=parseDateInputValue(inputEndIso);
     const scheduleStartDate=extractStageBoundaryDate(stage,'start');
     const scheduleEndDate=extractStageBoundaryDate(stage,'end');
-    const effectiveEndDate=scheduleEndDate||inputEndDate;
+    const effectiveEndDate=(()=>{
+      const dates=[];
+      if(scheduleEndDate instanceof Date && !Number.isNaN(scheduleEndDate.getTime())){
+        dates.push(scheduleEndDate);
+      }
+      if(inputEndDate instanceof Date && !Number.isNaN(inputEndDate.getTime())){
+        dates.push(inputEndDate);
+      }
+      if(!dates.length) return null;
+      dates.sort((a,b)=>a-b);
+      return dates[dates.length-1];
+    })();
     if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
       const minStart=addDays(previousEndDate,0);
       if(!(inputStartDate instanceof Date) || inputStartDate<minStart){
