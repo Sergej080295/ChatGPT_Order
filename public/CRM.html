@@ -17807,6 +17807,11 @@ function runStageLinkCascade(sourceTr){
     const row=rows[i];
     if(!isStageLinkActive(row)) break;
     if(row.dataset.linkOverride==='1') break;
+    const prevRow=rows[i-1];
+    const resolvedPrevEnd=getStageActualEndDate(prevRow)||getStageFactDates(prevRow).end||previousEnd;
+    if(resolvedPrevEnd instanceof Date && !Number.isNaN(resolvedPrevEnd.getTime())){
+      previousEnd=addDays(resolvedPrevEnd,0);
+    }
     if(!(previousEnd instanceof Date) || Number.isNaN(previousEnd.getTime())) break;
     const result=scheduleLinkedStageFactDates(row, previousEnd);
     if(result && result.end instanceof Date){
