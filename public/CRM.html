@@ -17748,6 +17748,76 @@ function isStageWorkingDayForLink(stageKey, date){
   return baseCap>1e-6;
 }
 
+function getStageFactDates(tr){
+  if(!tr) return { start:null, end:null };
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  const startDate=parseDateInputValue(startInput?.value||'');
+  const endDate=parseDateInputValue(endInput?.value||'');
+  return {
+    start:startDate instanceof Date && !Number.isNaN(startDate.getTime())?addDays(startDate,0):null,
+    end:endDate instanceof Date && !Number.isNaN(endDate.getTime())?addDays(endDate,0):null
+  };
+}
+
+function scheduleLinkedStageFactDates(tr, previousEndDate){
+  if(!tr || !(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
+    return { end:previousEndDate||null, scheduled:false };
+  }
+  const stageDraft=mergeStageDraftWithSource(readStageRow(tr));
+  if(!stageDraft) return { end:previousEndDate||null, scheduled:false };
+  const stageKey=resolveCrmStageKey(stageDraft.name);
+  if(!stageKey){
+    return { end:previousEndDate||null, scheduled:false };
+  }
+  const minStart=findLinkedStageStartDate(stageKey, previousEndDate);
+  if(!(minStart instanceof Date)){
+    return { end:previousEndDate||null, scheduled:false };
+  }
+  const currentStart=parseDateInputValue(stageDraft.start||'');
+  let earliest=minStart;
+  if(currentStart instanceof Date && !Number.isNaN(currentStart.getTime()) && currentStart>earliest){
+    earliest=currentStart;
+  }
+  const orderId=(orderForm?.id?.value||'').trim();
+  const orderTitle=deriveEditingOrderTitle();
+  const scheduleResult=planStageAutoSchedule({
+    stage:stageDraft,
+    stageKey,
+    orderId,
+    orderTitle,
+    earliestStart:earliest
+  });
+  if(scheduleResult && scheduleResult.startIso){
+    applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
+    resetStageLinkOverride(tr,{ skipCascade:true });
+    return { end:scheduleResult.endDateObj||parseDateInputValue(scheduleResult.endIso)||null, scheduled:true };
+  }
+  return { end:previousEndDate||null, scheduled:false };
+}
+
+function runStageLinkCascade(sourceTr){
+  if(!stagesTableBody || !sourceTr) return;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const startIndex=rows.indexOf(sourceTr);
+  if(startIndex<0) return;
+  let previousEnd=getStageFactDates(sourceTr).end;
+  for(let i=startIndex+1;i<rows.length;i+=1){
+    const row=rows[i];
+    if(!isStageLinkActive(row)) break;
+    if(row.dataset.linkOverride==='1') break;
+    if(!(previousEnd instanceof Date) || Number.isNaN(previousEnd.getTime())) break;
+    const result=scheduleLinkedStageFactDates(row, previousEnd);
+    if(result && result.end instanceof Date){
+      previousEnd=result.end;
+      continue;
+    }
+    previousEnd=getStageFactDates(row).end;
+  }
+  syncAutoDates();
+  updateAllStageExpectations();
+}
+
 function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestStart }){
   const normalizedStage=normalizeCrmStageKey(stageKey||'');
   if(!normalizedStage) return null;
@@ -18623,15 +18693,18 @@ function setStageLinkState(tr, enabled){
   }
   const button=tr.querySelector('.stage-link-toggle');
   updateStageLinkButtonState(button, !!enabled);
+  runStageLinkCascade(tr);
 }
 
 function isStageLinkActive(tr){
   return tr?.dataset?.linkPrev==='1';
 }
 
-function resetStageLinkOverride(tr){
+function resetStageLinkOverride(tr, options={}){
   if(!tr) return;
   delete tr.dataset.linkOverride;
+  if(options && options.skipCascade) return;
+  runStageLinkCascade(tr);
 }
 
 function handleLinkedStageManualChange(tr, input){
@@ -18805,6 +18878,7 @@ function appendStageRow(st){
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      runStageLinkCascade(tr);
     });
   }
   if(endInput){
@@ -18819,6 +18893,7 @@ function appendStageRow(st){
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      runStageLinkCascade(tr);
     });
   }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
