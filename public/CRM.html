@@ -14121,23 +14121,24 @@ function computeCrmRouteStatusInfo(snapshot){
   return computeCrmStageStatus(snapshot, schedule);
 }
 
-function computeCrmStageActualPeriod(snapshot){
+function computeCrmStageActualPeriod(snapshot, options={}){
   if(!snapshot) return null;
   const normalizedStage=normalizeCrmStageKey(snapshot.stageKey);
   if(!normalizedStage) return null;
-  let schedule=crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage
-    ? crmStageScheduleCache
-    : null;
+  const useCache=!options?.forceRefresh;
+  let schedule=null;
+  if(useCache && crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage){
+    schedule=crmStageScheduleCache;
+  }
+  if(!schedule && useCache && crmStageRouteActualScheduleCache.has(normalizedStage)){
+    schedule=crmStageRouteActualScheduleCache.get(normalizedStage);
+  }
   if(!schedule){
-    if(crmStageRouteActualScheduleCache.has(normalizedStage)){
-      schedule=crmStageRouteActualScheduleCache.get(normalizedStage);
-    }else{
-      const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
-      if(Array.isArray(rows) && rows.length){
-        schedule=buildCrmStageSchedule(normalizedStage, rows) || null;
-      }
-      crmStageRouteActualScheduleCache.set(normalizedStage, schedule||null);
+    const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
+    if(Array.isArray(rows) && rows.length){
+      schedule=buildCrmStageSchedule(normalizedStage, rows) || null;
     }
+    crmStageRouteActualScheduleCache.set(normalizedStage, schedule||null);
   }
   if(!schedule || normalizeCrmStageKey(schedule.stageKey)!==normalizedStage) return null;
   const record=schedule.perTask instanceof Map ? schedule.perTask.get(snapshot.identity) : null;
@@ -17821,7 +17822,7 @@ function runStageLinkCascade(sourceTr){
 function getStageActualEndDate(tr){
   const snapshot=buildStageSnapshotForCascade(tr);
   if(!snapshot) return null;
-  const period=computeCrmStageActualPeriod(snapshot);
+  const period=computeCrmStageActualPeriod(snapshot,{ forceRefresh:true });
   if(period && period.end instanceof Date && !Number.isNaN(period.end.getTime())){
     return addDays(period.end,0);
   }
