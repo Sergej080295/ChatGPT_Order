@@ -3571,6 +3571,24 @@
     border-bottom: none;
   }
 
+  .crm-route-mini-periods {
+    display: grid;
+    gap: 6px;
+    text-align: left;
+  }
+
+  .crm-route-mini-period__label {
+    display: block;
+    font-size: 11px;
+    color: var(--pc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
+  }
+
+  .crm-route-mini-period__value {
+    display: block;
+  }
+
   .crm-route-mini-wrapper {
     display: flex;
     flex-direction: column;
@@ -14103,6 +14121,29 @@ function computeCrmRouteStatusInfo(snapshot){
   return computeCrmStageStatus(snapshot, schedule);
 }
 
+function computeCrmStageActualPeriod(snapshot){
+  if(!snapshot) return null;
+  const schedule=crmStageScheduleCache;
+  if(!schedule || schedule.stageKey!==snapshot.stageKey) return null;
+  const record=schedule.perTask instanceof Map ? schedule.perTask.get(snapshot.identity) : null;
+  if(!record || !Array.isArray(record.segments) || !record.segments.length) return null;
+  const dates=record.segments
+    .map(seg=>{
+      if(seg?.date instanceof Date){
+        return addDays(seg.date,0);
+      }
+      if(seg?.date){
+        const parsed=new Date(seg.date);
+        if(!Number.isNaN(parsed.getTime())) return addDays(parsed,0);
+      }
+      return null;
+    })
+    .filter(date=>date instanceof Date);
+  if(!dates.length) return null;
+  dates.sort((a,b)=>a-b);
+  return { start:dates[0], end:dates[dates.length-1] };
+}
+
 function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
   const stages=Array.isArray(order.stages)?order.stages:[];
@@ -14194,7 +14235,21 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     tr.appendChild(labelCell);
 
     const periodCell=document.createElement('td');
-    periodCell.textContent=formatStagePeriod(snapshot.startRaw, snapshot.endRaw) || '—';
+    const plannedLabel=formatStagePeriod(snapshot.startRaw, snapshot.endRaw) || '—';
+    const actualPeriod=computeCrmStageActualPeriod(snapshot);
+    const actualLabel=actualPeriod?formatStagePeriod(actualPeriod.start, actualPeriod.end):'—';
+    const periodWrapper=document.createElement('div');
+    periodWrapper.className='crm-route-mini-periods';
+    periodWrapper.innerHTML=`
+      <div class="crm-route-mini-period crm-route-mini-period--planned">
+        <span class="crm-route-mini-period__label">Плановые даты</span>
+        <span class="crm-route-mini-period__value">${plannedLabel}</span>
+      </div>
+      <div class="crm-route-mini-period crm-route-mini-period--actual">
+        <span class="crm-route-mini-period__label">Фактические даты</span>
+        <span class="crm-route-mini-period__value">${actualLabel}</span>
+      </div>`;
+    periodCell.appendChild(periodWrapper);
     tr.appendChild(periodCell);
 
     const hoursCell=document.createElement('td');
