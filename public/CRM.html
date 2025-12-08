@@ -18562,6 +18562,80 @@ function resetStageLinkOverride(tr){
   delete tr.dataset.linkOverride;
 }
 
+function cascadeLinkedStageDatesFrom(tr){
+  if(!stagesTableBody || !tr) return;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const startIndex=rows.indexOf(tr);
+  if(startIndex<0) return;
+  let previousEnd=null;
+  let changed=false;
+  const parseInputDate=input=>{
+    const iso=input?.value||'';
+    return iso?parseDateInputValue(iso):null;
+  };
+  const deriveStageKey=row=>{
+    const nameInput=row.querySelector('[data-k="name"]');
+    return resolveCrmStageKey(nameInput?.value||'');
+  };
+  const updateDateInputs=(row,targetStart,targetEnd)=>{
+    const startInput=row.querySelector('[data-k="start"]');
+    const endInput=row.querySelector('[data-k="end"]');
+    if(startInput){
+      const startIso=fmtDateISO(targetStart);
+      if(startInput.value!==startIso){
+        startInput.value=startIso;
+        startInput.dataset.lastAccepted=startIso;
+        applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        changed=true;
+      }
+    }
+    if(endInput){
+      const endIso=fmtDateISO(targetEnd);
+      if(endInput.value!==endIso){
+        endInput.value=endIso;
+        endInput.dataset.lastAccepted=endIso;
+        applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+        changed=true;
+      }
+    }
+  };
+  rows.forEach((row,index)=>{
+    const startInput=row.querySelector('[data-k="start"]');
+    const endInput=row.querySelector('[data-k="end"]');
+    const startDate=startInput?parseInputDate(startInput):null;
+    const endDate=endInput?parseInputDate(endInput):null;
+    if(index<=startIndex){
+      previousEnd=endDate||startDate||previousEnd;
+      return;
+    }
+    if(!isStageLinkActive(row) || row.dataset.linkOverride==='1'){
+      previousEnd=endDate||startDate||previousEnd;
+      return;
+    }
+    const stageKey=deriveStageKey(row);
+    if(!stageKey || !(previousEnd instanceof Date)){
+      previousEnd=endDate||startDate||previousEnd;
+      return;
+    }
+    const desiredStart=findLinkedStageStartDate(stageKey, previousEnd)||addDays(previousEnd,0);
+    const durationDays=(startDate && endDate)
+      ? Math.max(0, Math.round((endDate.getTime()-startDate.getTime())/86400000))
+      : 0;
+    let desiredEnd=endDate || desiredStart;
+    if(durationDays>0){
+      desiredEnd=addDays(desiredStart, durationDays);
+    }else if(desiredEnd<desiredStart){
+      desiredEnd=addDays(desiredStart,0);
+    }
+    updateDateInputs(row, desiredStart, desiredEnd);
+    previousEnd=desiredEnd;
+  });
+  if(changed){
+    syncAutoDates();
+    updateAllStageExpectations();
+  }
+}
+
 function handleLinkedStageManualChange(tr, input){
   if(!tr || !input) return true;
   if(!isStageLinkActive(tr)) return true;
@@ -18733,6 +18807,7 @@ function appendStageRow(st){
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      cascadeLinkedStageDatesFrom(tr);
     });
   }
   if(endInput){
@@ -18747,6 +18822,7 @@ function appendStageRow(st){
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      cascadeLinkedStageDatesFrom(tr);
     });
   }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
