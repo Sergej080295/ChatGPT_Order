@@ -17824,6 +17824,28 @@ function scheduleLinkedStageFactDates(tr, previousEndDate){
   return { end:finalEnd, scheduled:usedScheduler };
 }
 
+function enforceFullStageLinkCascade(){
+  if(!stagesTableBody) return;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  if(!rows.length) return;
+  let previousEnd=getStageActualEndDate(rows[0])||getStageFactDates(rows[0]).end||null;
+  for(let i=1;i<rows.length;i+=1){
+    const row=rows[i];
+    const linkActive=isStageLinkActive(row) && row.dataset.linkOverride!=='1';
+    if(linkActive && previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())){
+      const result=scheduleLinkedStageFactDates(row, previousEnd);
+      const resolvedEnd=getStageActualEndDate(row)||result?.end||getStageFactDates(row).end;
+      previousEnd=resolvedEnd instanceof Date && !Number.isNaN(resolvedEnd.getTime())
+        ? addDays(resolvedEnd,0)
+        : null;
+      continue;
+    }
+    previousEnd=getStageActualEndDate(row)||getStageFactDates(row).end||null;
+  }
+  syncAutoDates();
+  updateAllStageExpectations();
+}
+
 function computeSoloStageEndDate(stageDraft, stageKey, startDate){
   const normalizedStage=normalizeCrmStageKey(stageKey||'');
   if(!normalizedStage) return null;
@@ -18512,6 +18534,7 @@ function fillOrderForm(o,b){
     }
     appendStageRow(st);
   });
+  enforceFullStageLinkCascade();
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
   updateOrderDialogMeta();
