@@ -17114,6 +17114,7 @@ const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
+let crmStageCascadeLock=false;
 
 if(orderForm){
   const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
@@ -17483,13 +17484,21 @@ function applyStageAutoDatesToRow(tr,startIso,endIso){
   if(!tr) return;
   const startInput=tr.querySelector('[data-k="start"]');
   if(startInput){
+    const prev=startInput.value||'';
     startInput.value=startIso||'';
+    if((startIso||'')!==prev){
+      requestLinkedStagesCascade(tr);
+    }
     startInput.dataset.lastAccepted=startIso||'';
     applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
   }
   const endInput=tr.querySelector('[data-k="end"]');
   if(endInput){
+    const prev=endInput.value||'';
     endInput.value=endIso||'';
+    if((endIso||'')!==prev){
+      requestLinkedStagesCascade(tr);
+    }
     endInput.dataset.lastAccepted=endIso||'';
     applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
   }
@@ -17615,17 +17624,18 @@ function calculateOrderStageDates(options={}){
   }
 }
 
-function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
+function determineStageEarliestStartDate(stageKey, previousEndDate, linked, options={}){
+  const factPreviousEnd=options?.factPreviousEnd instanceof Date && !Number.isNaN(options.factPreviousEnd.getTime())
+    ? addDays(options.factPreviousEnd,0)
+    : null;
   const today=today0();
   let earliest=addDays(today,0);
-  if(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const prev=addDays(previousEndDate,0);
-    if(prev>earliest){
-      earliest=prev;
-    }
+  const prevEnd=factPreviousEnd||(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())?addDays(previousEndDate,0):null);
+  if(prevEnd && prevEnd>earliest){
+    earliest=prevEnd;
   }
-  if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const linkedStart=findLinkedStageStartDate(stageKey, previousEndDate);
+  if(linked && prevEnd){
+    const linkedStart=findLinkedStageStartDate(stageKey, prevEnd);
     if(linkedStart && linkedStart>earliest){
       earliest=linkedStart;
     }
@@ -18265,6 +18275,7 @@ function fillOrderForm(o,b){
   renderOrderComments();
   resetOrderCommentInputs();
   collapseOrderCommentSection();
+  normalizeLinkedStageFactsInOrder(o);
   const stageList=o.stages?.length?o.stages:DEFAULT_STAGES.map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}));
   stageList.forEach(st=>{
     const stageId=ensureStageIdentity(st);
@@ -18273,6 +18284,9 @@ function fillOrderForm(o,b){
     }
     appendStageRow(st);
   });
+  if(stagesTableBody && stagesTableBody.firstElementChild){
+    recalculateLinkedStagesFrom(stagesTableBody.firstElementChild);
+  }
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
   updateOrderDialogMeta();
@@ -18562,6 +18576,127 @@ function resetStageLinkOverride(tr){
   delete tr.dataset.linkOverride;
 }
 
+function readStageFactDates(tr){
+  if(!tr) return { start:null, end:null };
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  const start=parseDateInputValue(startInput?.value||'');
+  const end=parseDateInputValue(endInput?.value||'');
+  return { start, end };
+}
+
+function ensureStageFactInputs(tr, startDate, endDate){
+  if(!tr) return;
+  const startInput=tr.querySelector('[data-k="start"]');
+  const endInput=tr.querySelector('[data-k="end"]');
+  const prevStart=startInput?.value||'';
+  const prevEnd=endInput?.value||'';
+  let mutated=false;
+  if(startInput && startDate instanceof Date && !Number.isNaN(startDate.getTime())){
+    const iso=fmtDateISO(startDate);
+    if(startInput.value!==iso){
+      startInput.value=iso;
+      mutated=true;
+    }
+    startInput.dataset.lastAccepted=iso;
+    applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+  }
+  if(endInput && endDate instanceof Date && !Number.isNaN(endDate.getTime())){
+    const iso=fmtDateISO(endDate);
+    if(endInput.value!==iso){
+      endInput.value=iso;
+      mutated=true;
+    }
+    endInput.dataset.lastAccepted=iso;
+    applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+  }
+  if(mutated){
+    requestLinkedStagesCascade(tr);
+  }
+}
+
+function hasLinkedSuccessorStages(tr){
+  if(!stagesTableBody || !tr) return false;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const startIndex=rows.indexOf(tr);
+  if(startIndex<0) return false;
+  for(let i=startIndex+1;i<rows.length;i++){
+    if(rows[i]?.dataset?.linkPrev==='1') return true;
+  }
+  return false;
+}
+
+function requestLinkedStagesCascade(tr){
+  if(!stagesTableBody || !tr) return;
+  if(crmStageCascadeLock) return;
+  if(!hasLinkedSuccessorStages(tr)) return;
+  recalculateLinkedStagesFrom(tr);
+}
+
+function recalculateLinkedStagesFrom(tr){
+  if(!stagesTableBody || !tr || crmStageCascadeLock) return;
+  crmStageCascadeLock=true;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const startIndex=rows.indexOf(tr);
+  if(startIndex<0){
+    crmStageCascadeLock=false;
+    return;
+  }
+  const startFact=readStageFactDates(rows[startIndex]);
+  let previousEnd=startFact.end||startFact.start||null;
+  for(let i=startIndex+1;i<rows.length;i++){
+    const row=rows[i];
+    const stageDraft=mergeStageDraftWithSource(readStageRow(row));
+    const stageKey=resolveCrmStageKey(stageDraft?.name||'');
+    const linked=isStageLinkActive(row);
+    const override=row.dataset.linkOverride==='1';
+    const factDates=readStageFactDates(row);
+    if(linked && !override && previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())){
+      const earliest=findLinkedStageStartDate(stageKey, previousEnd);
+      const currentStart=factDates.start;
+      const orderId=(orderForm?.id?.value||'').trim();
+      const orderTitle=deriveEditingOrderTitle();
+      let scheduledStart=null;
+      let scheduledEnd=null;
+      if(earliest){
+        const schedule=planStageAutoSchedule({
+          stage:stageDraft,
+          stageKey,
+          orderId,
+          orderTitle,
+          earliestStart:earliest
+        });
+        if(schedule?.startIso){
+          scheduledStart=parseDateInputValue(schedule.startIso);
+          scheduledEnd=parseDateInputValue(schedule.endIso);
+          if(scheduledStart && scheduledStart<earliest){
+            const span=(scheduledStart && scheduledEnd)?Math.max(0, daysBetween(scheduledStart, scheduledEnd)):0;
+            scheduledStart=addDays(earliest,0);
+            scheduledEnd=scheduledEnd?addDays(scheduledStart, span):null;
+          }
+        }
+      }
+      if(!scheduledStart && earliest && (!currentStart || currentStart<earliest)){
+        const span=(factDates.start && factDates.end)?Math.max(0, daysBetween(factDates.start, factDates.end)):0;
+        scheduledStart=addDays(earliest,0);
+        scheduledEnd=factDates.end?addDays(scheduledStart, span):null;
+      }
+      if(scheduledStart){
+        ensureStageFactInputs(row, scheduledStart, scheduledEnd);
+      }
+    }
+    const refreshedFacts=readStageFactDates(row);
+    if(refreshedFacts.end instanceof Date && !Number.isNaN(refreshedFacts.end.getTime())){
+      previousEnd=refreshedFacts.end;
+    }else if(refreshedFacts.start instanceof Date && !Number.isNaN(refreshedFacts.start.getTime())){
+      previousEnd=refreshedFacts.start;
+    }
+  }
+  syncAutoDates();
+  updateAllStageExpectations();
+  crmStageCascadeLock=false;
+}
+
 function handleLinkedStageManualChange(tr, input){
   if(!tr || !input) return true;
   if(!isStageLinkActive(tr)) return true;
@@ -18624,6 +18759,9 @@ function appendStageRow(st){
   }
   const linkEnabled=st.linkPrev===undefined?isStageLinkEnabledByDefault():!!st.linkPrev;
   tr.dataset.linkPrev=linkEnabled?'1':'0';
+  if(st.linkOverride){
+    tr.dataset.linkOverride='1';
+  }
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
@@ -18731,8 +18869,7 @@ function appendStageRow(st){
       if(!handleLinkedStageManualChange(tr, startInput)) return;
       enforceStageDateConstraints(tr, startInput);
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
+      recalculateLinkedStagesFrom(tr);
     });
   }
   if(endInput){
@@ -18745,8 +18882,7 @@ function appendStageRow(st){
       if(!handleLinkedStageManualChange(tr, endInput)) return;
       enforceStageDateConstraints(tr, endInput);
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
+      recalculateLinkedStagesFrom(tr);
     });
   }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
@@ -18818,6 +18954,7 @@ function readStageRow(tr){
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
     crmStageId:stageId,
     linkPrev:tr.dataset?.linkPrev==='1',
+    linkOverride:tr.dataset?.linkOverride==='1',
     doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
@@ -21695,11 +21832,59 @@ function restoreCrmScrollSnapshot(snapshot){
   runner(5);
 }
 
+function normalizeLinkedStageFacts(crmState){
+  if(!crmState || !Array.isArray(crmState.boards)) return;
+  crmState.boards.forEach(board=>{
+    if(!board || !Array.isArray(board.orders)) return;
+    board.orders.forEach(order=>normalizeLinkedStageFactsInOrder(order));
+  });
+}
+
+function normalizeLinkedStageFactsInOrder(order){
+  if(!order || !Array.isArray(order.stages)) return;
+  let previousEnd=null;
+  order.stages=order.stages.map(stage=>{
+    const draft=stage||{};
+    const linked=draft.linkPrev===undefined?isStageLinkEnabledByDefault():!!draft.linkPrev;
+    const override=draft.linkOverride===true || draft.linkOverride==='1';
+    const stageKey=resolveCrmStageKey(draft.name||'');
+    const parsedStart=parseDateInputValue(draft.start||'');
+    const parsedEnd=parseDateInputValue(draft.end||'');
+    let startDate=parsedStart instanceof Date && !Number.isNaN(parsedStart.getTime())?addDays(parsedStart,0):null;
+    let endDate=parsedEnd instanceof Date && !Number.isNaN(parsedEnd.getTime())?addDays(parsedEnd,0):null;
+    const prevEnd=previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())?addDays(previousEnd,0):null;
+    if(linked && !override && prevEnd){
+      const earliest=findLinkedStageStartDate(stageKey, prevEnd);
+      if(earliest){
+        const span=startDate&&endDate?Math.max(0, daysBetween(startDate, endDate)):null;
+        if(!startDate || startDate<earliest){
+          startDate=addDays(earliest,0);
+          if(span!==null){
+            endDate=addDays(startDate, span);
+          }else if(endDate && endDate<startDate){
+            endDate=addDays(startDate,0);
+          }
+        }
+      }
+    }
+    const normalized={ ...draft };
+    if(startDate instanceof Date && !Number.isNaN(startDate.getTime())){
+      normalized.start=fmtDateISO(startDate);
+    }
+    if(endDate instanceof Date && !Number.isNaN(endDate.getTime())){
+      normalized.end=fmtDateISO(endDate);
+    }
+    previousEnd=endDate||startDate||previousEnd;
+    return normalized;
+  });
+}
+
 function applyRemoteCrm(crm){
   if(!crm||typeof crm!=='object') return;
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
+  normalizeLinkedStageFacts(state);
   const storedSettings=loadStoredCrmSettings();
   if(storedSettings){
     state.settings=mergeCrmSettings(state.settings, storedSettings);
