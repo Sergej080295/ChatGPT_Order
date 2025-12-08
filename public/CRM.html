@@ -17710,16 +17710,18 @@ function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
 }
 
 function findLinkedStageStartDate(stageKey, previousEndDate){
-  const gap=getCrmStageLinkGapDays();
+  const normalized=normalizeCrmStageKey(stageKey||'');
+  const gap=Math.max(0, getCrmStageLinkGapDays());
   if(!(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
     return null;
   }
-  let remaining=Math.max(0, gap);
+  let remaining=gap;
   let cursor=addDays(previousEndDate,0);
   let guard=0;
   while(guard<730){
     guard+=1;
-    if(isStageWorkingDayForLink(stageKey, cursor)){
+    const working=isStageWorkingDayForLink(normalized, cursor);
+    if(working){
       if(remaining<=0){
         return addDays(cursor,0);
       }
@@ -17779,9 +17781,9 @@ function scheduleLinkedStageFactDates(tr, previousEndDate){
     return { end:null, scheduled:false };
   }
   const currentStart=parseDateInputValue(stageDraft.start||'');
-  let earliest=minStart;
-  if(currentStart instanceof Date && !Number.isNaN(currentStart.getTime()) && currentStart>earliest){
-    earliest=currentStart;
+  let preferredStart=minStart;
+  if(currentStart instanceof Date && !Number.isNaN(currentStart.getTime()) && currentStart>preferredStart){
+    preferredStart=currentStart;
   }
   const orderId=(orderForm?.id?.value||'').trim();
   const orderTitle=deriveEditingOrderTitle();
@@ -17790,27 +17792,36 @@ function scheduleLinkedStageFactDates(tr, previousEndDate){
     stageKey,
     orderId,
     orderTitle,
-    earliestStart:earliest
+    earliestStart:preferredStart
   });
+  let finalStart=null;
+  let finalEnd=null;
+  let usedScheduler=false;
   if(scheduleResult && scheduleResult.startIso){
     const scheduledStart=parseDateInputValue(scheduleResult.startIso);
-    let scheduledEnd=scheduleResult.endDateObj||parseDateInputValue(scheduleResult.endIso)||null;
-    if(scheduledStart instanceof Date && !Number.isNaN(scheduledStart.getTime()) && scheduledStart<minStart){
-      const clampedStart=addDays(minStart,0);
-      const fallbackEnd=(scheduledEnd instanceof Date && scheduledEnd>clampedStart)?scheduledEnd:clampedStart;
-      applyStageAutoDatesToRow(tr, fmtDateISO(clampedStart), fmtDateISO(fallbackEnd), { skipCascade:true });
-      resetStageLinkOverride(tr,{ skipCascade:true });
-      return { end:fallbackEnd, scheduled:true };
+    const scheduledEnd=scheduleResult.endDateObj||parseDateInputValue(scheduleResult.endIso)||null;
+    if(scheduledStart instanceof Date && !Number.isNaN(scheduledStart.getTime()) && scheduledStart>=minStart){
+      finalStart=addDays(scheduledStart,0);
+      if(scheduledEnd instanceof Date && !Number.isNaN(scheduledEnd.getTime()) && scheduledEnd>=finalStart){
+        finalEnd=addDays(scheduledEnd,0);
+      }
+      usedScheduler=true;
     }
-    applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso, { skipCascade:true });
-    resetStageLinkOverride(tr,{ skipCascade:true });
-    return { end:scheduledEnd||minStart, scheduled:true };
   }
-  const soloEnd=computeSoloStageEndDate(stageDraft, stageKey, minStart);
-  applyStageAutoDatesToRow(tr, fmtDateISO(minStart), fmtDateISO(soloEnd||minStart), { skipCascade:true });
+  if(!finalStart){
+    finalStart=addDays(minStart,0);
+    finalEnd=computeSoloStageEndDate(stageDraft, stageKey, finalStart)||finalStart;
+    showToast({ title:'PlaneCore', message:'Не удалось распределить передел с учётом связи: установлен минимально допустимый старт.', tone:'warn', autoClose:4500 });
+  }else if(!finalEnd){
+    finalEnd=computeSoloStageEndDate(stageDraft, stageKey, finalStart)||finalStart;
+  }
+  if(finalStart<minStart){
+    finalStart=addDays(minStart,0);
+    finalEnd=computeSoloStageEndDate(stageDraft, stageKey, finalStart)||finalStart;
+  }
+  applyStageAutoDatesToRow(tr, fmtDateISO(finalStart), fmtDateISO(finalEnd), { skipCascade:true });
   resetStageLinkOverride(tr,{ skipCascade:true });
-  showToast({ title:'PlaneCore', message:'Не удалось распределить передел с учётом связи: используем минимально допустимую дату.', tone:'warn', autoClose:4500 });
-  return { end:soloEnd||minStart, scheduled:false };
+  return { end:finalEnd, scheduled:usedScheduler };
 }
 
 function computeSoloStageEndDate(stageDraft, stageKey, startDate){
@@ -17865,18 +17876,14 @@ function runStageLinkCascade(sourceTr){
     const row=rows[i];
     if(!isStageLinkActive(row)) break;
     if(row.dataset.linkOverride==='1') break;
-    const prevRow=rows[i-1];
-    const resolvedPrevEnd=getStageActualEndDate(prevRow)||getStageFactDates(prevRow).end||previousEnd;
-    if(resolvedPrevEnd instanceof Date && !Number.isNaN(resolvedPrevEnd.getTime())){
-      previousEnd=addDays(resolvedPrevEnd,0);
-    }
     if(!(previousEnd instanceof Date) || Number.isNaN(previousEnd.getTime())) break;
     const result=scheduleLinkedStageFactDates(row, previousEnd);
-    if(result && result.end instanceof Date){
-      previousEnd=result.end;
-      continue;
+    const resolvedEnd=getStageActualEndDate(row)||result?.end||getStageFactDates(row).end;
+    if(resolvedEnd instanceof Date && !Number.isNaN(resolvedEnd.getTime())){
+      previousEnd=addDays(resolvedEnd,0);
+    }else{
+      previousEnd=null;
     }
-    previousEnd=getStageActualEndDate(row)||getStageFactDates(row).end;
   }
   syncAutoDates();
   updateAllStageExpectations();
