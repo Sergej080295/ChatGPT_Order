@@ -17552,7 +17552,7 @@ function deriveEditingOrderTitle(){
   return title || orderNo || 'Заказ';
 }
 
-function applyStageAutoDatesToRow(tr,startIso,endIso){
+function applyStageAutoDatesToRow(tr,startIso,endIso,options={}){
   if(!tr) return;
   const startInput=tr.querySelector('[data-k="start"]');
   if(startInput){
@@ -17567,6 +17567,9 @@ function applyStageAutoDatesToRow(tr,startIso,endIso){
     applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
   }
   updateStageRowExpectation(tr);
+  if(!options?.skipCascade){
+    runStageLinkCascade(tr);
+  }
 }
 
 function handleClearStageDates(){
@@ -17763,17 +17766,17 @@ function getStageFactDates(tr){
 
 function scheduleLinkedStageFactDates(tr, previousEndDate){
   if(!tr || !(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
-    return { end:previousEndDate||null, scheduled:false };
+    return { end:null, scheduled:false };
   }
   const stageDraft=mergeStageDraftWithSource(readStageRow(tr));
-  if(!stageDraft) return { end:previousEndDate||null, scheduled:false };
+  if(!stageDraft) return { end:null, scheduled:false };
   const stageKey=resolveCrmStageKey(stageDraft.name);
   if(!stageKey){
-    return { end:previousEndDate||null, scheduled:false };
+    return { end:null, scheduled:false };
   }
   const minStart=findLinkedStageStartDate(stageKey, previousEndDate);
   if(!(minStart instanceof Date)){
-    return { end:previousEndDate||null, scheduled:false };
+    return { end:null, scheduled:false };
   }
   const currentStart=parseDateInputValue(stageDraft.start||'');
   let earliest=minStart;
@@ -17790,11 +17793,66 @@ function scheduleLinkedStageFactDates(tr, previousEndDate){
     earliestStart:earliest
   });
   if(scheduleResult && scheduleResult.startIso){
-    applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
+    const scheduledStart=parseDateInputValue(scheduleResult.startIso);
+    let scheduledEnd=scheduleResult.endDateObj||parseDateInputValue(scheduleResult.endIso)||null;
+    if(scheduledStart instanceof Date && !Number.isNaN(scheduledStart.getTime()) && scheduledStart<minStart){
+      const clampedStart=addDays(minStart,0);
+      const fallbackEnd=(scheduledEnd instanceof Date && scheduledEnd>clampedStart)?scheduledEnd:clampedStart;
+      applyStageAutoDatesToRow(tr, fmtDateISO(clampedStart), fmtDateISO(fallbackEnd), { skipCascade:true });
+      resetStageLinkOverride(tr,{ skipCascade:true });
+      return { end:fallbackEnd, scheduled:true };
+    }
+    applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso, { skipCascade:true });
     resetStageLinkOverride(tr,{ skipCascade:true });
-    return { end:scheduleResult.endDateObj||parseDateInputValue(scheduleResult.endIso)||null, scheduled:true };
+    return { end:scheduledEnd||minStart, scheduled:true };
   }
-  return { end:previousEndDate||null, scheduled:false };
+  const soloEnd=computeSoloStageEndDate(stageDraft, stageKey, minStart);
+  applyStageAutoDatesToRow(tr, fmtDateISO(minStart), fmtDateISO(soloEnd||minStart), { skipCascade:true });
+  resetStageLinkOverride(tr,{ skipCascade:true });
+  showToast({ title:'PlaneCore', message:'Не удалось распределить передел с учётом связи: используем минимально допустимую дату.', tone:'warn', autoClose:4500 });
+  return { end:soloEnd||minStart, scheduled:false };
+}
+
+function computeSoloStageEndDate(stageDraft, stageKey, startDate){
+  const normalizedStage=normalizeCrmStageKey(stageKey||'');
+  if(!normalizedStage) return null;
+  const isHourless=CRM_NOHOUR_STAGES.has(normalizedStage);
+  const baseHours=parseStageHours(stageDraft);
+  const extra=roundExtraForStage(normalizedStage, computeAutoExtra(baseHours));
+  const totalHours=isHourless?1:Math.max(0, baseHours+extra);
+  if(!isHourless && totalHours<=1e-6){
+    return null;
+  }
+  const identity=`solo:${stageDraft.crmStageId||safeRandomUUID()}:${Math.random().toString(16).slice(2)}`;
+  const candidateRow={
+    identity,
+    orderId:stageDraft.orderId||`draft:${identity}`,
+    orderTitle:stageDraft.orderTitle||'Заказ',
+    stage:stageDraft,
+    stageKey:normalizedStage,
+    startDate:(startDate instanceof Date && !Number.isNaN(startDate.getTime()))?addDays(startDate,0):today0(),
+    endDate:startDate instanceof Date?addDays(startDate,0):today0(),
+    totalHours:isHourless?1:totalHours,
+    restHours:isHourless?null:totalHours,
+    done:false,
+    progress:0,
+    queueOrder:Number.isFinite(stageDraft?.crmQueueOrder)?Number(stageDraft.crmQueueOrder):null,
+    useReserve:!!stageDraft?.useReserve
+  };
+  const soloSchedule=buildCrmStageSchedule(normalizedStage, [{ ...candidateRow }], { allowPullback:false });
+  if(!soloSchedule){
+    return null;
+  }
+  const record=soloSchedule.perTask.get(identity);
+  if(!record || !record.segments.length){
+    return null;
+  }
+  const segments=record.segments.slice().sort((a,b)=>a.date-b.date);
+  const last=segments[segments.length-1];
+  if(last?.date instanceof Date && !Number.isNaN(last.date.getTime())){
+    return addDays(last.date,0);
+  }
+  return null;
 }
 
 function runStageLinkCascade(sourceTr){
