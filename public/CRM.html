@@ -14123,8 +14123,23 @@ function computeCrmRouteStatusInfo(snapshot){
 
 function computeCrmStageActualPeriod(snapshot){
   if(!snapshot) return null;
-  const schedule=crmStageScheduleCache;
-  if(!schedule || schedule.stageKey!==snapshot.stageKey) return null;
+  const normalizedStage=normalizeCrmStageKey(snapshot.stageKey);
+  if(!normalizedStage) return null;
+  let schedule=crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage
+    ? crmStageScheduleCache
+    : null;
+  if(!schedule){
+    if(crmStageRouteActualScheduleCache.has(normalizedStage)){
+      schedule=crmStageRouteActualScheduleCache.get(normalizedStage);
+    }else{
+      const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
+      if(Array.isArray(rows) && rows.length){
+        schedule=buildCrmStageSchedule(normalizedStage, rows) || null;
+      }
+      crmStageRouteActualScheduleCache.set(normalizedStage, schedule||null);
+    }
+  }
+  if(!schedule || normalizeCrmStageKey(schedule.stageKey)!==normalizedStage) return null;
   const record=schedule.perTask instanceof Map ? schedule.perTask.get(snapshot.identity) : null;
   if(!record || !Array.isArray(record.segments) || !record.segments.length) return null;
   const dates=record.segments
@@ -14146,6 +14161,7 @@ function computeCrmStageActualPeriod(snapshot){
 
 function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
+  crmStageRouteActualScheduleCache.clear();
   const stages=Array.isArray(order.stages)?order.stages:[];
   const entries=[];
   stages.forEach((stage, stageIndex)=>{
@@ -14330,6 +14346,7 @@ function closeCrmStageRouteMini(){
 let crmStageScheduleCache=null;
 let crmStageRouteContext={ rows:[], stageKey:'draw', filter:'current' };
 let crmStageScheduleErrorSignature='';
+const crmStageRouteActualScheduleCache=new Map();
 
 function notifyCrmStageScheduleErrors(schedule){
   if(!schedule || !Array.isArray(schedule.errors)){
