@@ -17801,7 +17801,7 @@ function runStageLinkCascade(sourceTr){
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
   const startIndex=rows.indexOf(sourceTr);
   if(startIndex<0) return;
-  let previousEnd=getStageFactDates(sourceTr).end;
+  let previousEnd=getStageActualEndDate(sourceTr)||getStageFactDates(sourceTr).end;
   for(let i=startIndex+1;i<rows.length;i+=1){
     const row=rows[i];
     if(!isStageLinkActive(row)) break;
@@ -17812,10 +17812,30 @@ function runStageLinkCascade(sourceTr){
       previousEnd=result.end;
       continue;
     }
-    previousEnd=getStageFactDates(row).end;
+    previousEnd=getStageActualEndDate(row)||getStageFactDates(row).end;
   }
   syncAutoDates();
   updateAllStageExpectations();
+}
+
+function getStageActualEndDate(tr){
+  const snapshot=buildStageSnapshotForCascade(tr);
+  if(!snapshot) return null;
+  const period=computeCrmStageActualPeriod(snapshot);
+  if(period && period.end instanceof Date && !Number.isNaN(period.end.getTime())){
+    return addDays(period.end,0);
+  }
+  return null;
+}
+
+function buildStageSnapshotForCascade(tr){
+  const stageDraft=mergeStageDraftWithSource(readStageRow(tr));
+  if(!stageDraft) return null;
+  const stageKey=resolveCrmStageKey(stageDraft.name);
+  if(!stageKey) return null;
+  const stageId=stageDraft.crmStageId||stageDraft.stageId||tr.dataset.stageId||'';
+  if(!stageId) return null;
+  return { stageKey, identity:stageId };
 }
 
 function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestStart }){
