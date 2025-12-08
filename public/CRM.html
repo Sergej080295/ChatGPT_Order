@@ -17897,7 +17897,13 @@ function buildStageSnapshotForCascade(tr){
   if(!stageDraft) return null;
   const stageKey=resolveCrmStageKey(stageDraft.name);
   if(!stageKey) return null;
-  const stageId=stageDraft.crmStageId||stageDraft.stageId||tr.dataset.stageId||'';
+  const orderId=(orderForm?.id?.value||stageDraft.orderId||'').trim();
+  const rows=stagesTableBody?Array.from(stagesTableBody.querySelectorAll('tr')):null;
+  const rowIndex=rows?rows.indexOf(tr):-1;
+  const fallbackId=orderId
+    ? `${orderId}:${stageKey}:${rowIndex>=0?rowIndex:0}`
+    : `${stageKey}:${rowIndex>=0?rowIndex:0}`;
+  const stageId=ensureStageIdentity(stageDraft, stageDraft.crmStageId||stageDraft.stageId||tr.dataset.stageId||fallbackId);
   if(!stageId) return null;
   return { stageKey, identity:stageId };
 }
