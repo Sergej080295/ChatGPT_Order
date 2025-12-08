@@ -17484,13 +17484,21 @@ function applyStageAutoDatesToRow(tr,startIso,endIso){
   if(!tr) return;
   const startInput=tr.querySelector('[data-k="start"]');
   if(startInput){
+    const prev=startInput.value||'';
     startInput.value=startIso||'';
+    if((startIso||'')!==prev){
+      requestLinkedStagesCascade(tr);
+    }
     startInput.dataset.lastAccepted=startIso||'';
     applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
   }
   const endInput=tr.querySelector('[data-k="end"]');
   if(endInput){
+    const prev=endInput.value||'';
     endInput.value=endIso||'';
+    if((endIso||'')!==prev){
+      requestLinkedStagesCascade(tr);
+    }
     endInput.dataset.lastAccepted=endIso||'';
     applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
   }
@@ -18581,18 +18589,48 @@ function ensureStageFactInputs(tr, startDate, endDate){
   if(!tr) return;
   const startInput=tr.querySelector('[data-k="start"]');
   const endInput=tr.querySelector('[data-k="end"]');
+  const prevStart=startInput?.value||'';
+  const prevEnd=endInput?.value||'';
+  let mutated=false;
   if(startInput && startDate instanceof Date && !Number.isNaN(startDate.getTime())){
     const iso=fmtDateISO(startDate);
-    startInput.value=iso;
+    if(startInput.value!==iso){
+      startInput.value=iso;
+      mutated=true;
+    }
     startInput.dataset.lastAccepted=iso;
     applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
   }
   if(endInput && endDate instanceof Date && !Number.isNaN(endDate.getTime())){
     const iso=fmtDateISO(endDate);
-    endInput.value=iso;
+    if(endInput.value!==iso){
+      endInput.value=iso;
+      mutated=true;
+    }
     endInput.dataset.lastAccepted=iso;
     applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
   }
+  if(mutated){
+    requestLinkedStagesCascade(tr);
+  }
+}
+
+function hasLinkedSuccessorStages(tr){
+  if(!stagesTableBody || !tr) return false;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const startIndex=rows.indexOf(tr);
+  if(startIndex<0) return false;
+  for(let i=startIndex+1;i<rows.length;i++){
+    if(rows[i]?.dataset?.linkPrev==='1') return true;
+  }
+  return false;
+}
+
+function requestLinkedStagesCascade(tr){
+  if(!stagesTableBody || !tr) return;
+  if(crmStageCascadeLock) return;
+  if(!hasLinkedSuccessorStages(tr)) return;
+  recalculateLinkedStagesFrom(tr);
 }
 
 function recalculateLinkedStagesFrom(tr){
