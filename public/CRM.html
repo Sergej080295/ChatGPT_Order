@@ -9435,6 +9435,59 @@ function resolvePrevStageFactEndDate(tr){
   return fallbackDate;
 }
 
+function enforceSequentialFactDates(options={}){
+  if(!stagesTableBody) return;
+  const opts=options&&typeof options==='object'?options:{};
+  const startIndex=Math.max(0, Number.isInteger(opts.startIndex)?opts.startIndex:0);
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  if(!rows.length || startIndex>=rows.length) return;
+  let changed=false;
+  for(let i=startIndex;i<rows.length;i+=1){
+    const tr=rows[i];
+    const prevEnd=resolvePrevStageFactEndDate(tr);
+    if(!(prevEnd instanceof Date)) continue;
+    prevEnd.setHours(0,0,0,0);
+    const minStartIso=fmtDateISO(prevEnd);
+    const startInput=tr.querySelector('[data-k="start"]');
+    const endInput=tr.querySelector('[data-k="end"]');
+    if(!startInput) continue;
+    const rawStartIso=coerceCalendarIso(startInput.value||'');
+    const currentStart=rawStartIso?new Date(`${rawStartIso}T00:00:00`):null;
+    const needsClamp=!rawStartIso || (currentStart && currentStart<prevEnd);
+    const finalStartIso=needsClamp?minStartIso:rawStartIso;
+    if(needsClamp){
+      startInput.value=finalStartIso;
+      startInput.dataset.lastAccepted=finalStartIso;
+      startInput.dataset.prevValue=finalStartIso;
+      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+      changed=true;
+    }
+    if(endInput){
+      const rawEndIso=coerceCalendarIso(endInput.value||'');
+      if(rawEndIso){
+        const baseStart=currentStart instanceof Date && !needsClamp?currentStart:prevEnd;
+        const endDate=new Date(`${rawEndIso}T00:00:00`);
+        const durationDays=Math.max(0, Math.round((endDate.getTime()-baseStart.getTime())/86400000));
+        const newStartDate=new Date(`${finalStartIso}T00:00:00`);
+        const newEndDate=addDays(newStartDate,durationDays);
+        const newEndIso=fmtDateISO(newEndDate);
+        if(newEndIso!==rawEndIso || needsClamp){
+          endInput.value=newEndIso;
+          endInput.dataset.lastAccepted=newEndIso;
+          endInput.dataset.prevValue=newEndIso;
+          applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+          changed=true;
+        }
+      }
+    }
+    updateStageRowExpectation(tr);
+  }
+  if(changed){
+    syncAutoDates();
+    updateAllStageExpectations();
+  }
+}
+
 function enforceStageDateConstraints(tr, input){
   if(!tr || !input) return true;
   const nameInput=tr.querySelector('[data-k="name"]');
@@ -18306,6 +18359,7 @@ function fillOrderForm(o,b){
     }
     appendStageRow(st);
   });
+  enforceSequentialFactDates();
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
   updateOrderDialogMeta();
@@ -18712,6 +18766,8 @@ function appendStageRow(st){
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+      enforceSequentialFactDates({ startIndex:Math.max(0, rows.indexOf(tr)+1) });
     });
   }
   if(endInput){
@@ -18725,6 +18781,8 @@ function appendStageRow(st){
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+      enforceSequentialFactDates({ startIndex:Math.max(0, rows.indexOf(tr)+1) });
     });
   }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
