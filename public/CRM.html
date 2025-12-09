@@ -14203,7 +14203,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   wrapper.className='crm-route-mini-wrapper';
   const table=document.createElement('table');
   const thead=document.createElement('thead');
-  thead.innerHTML='<tr><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
+  thead.innerHTML='<tr><th>№</th><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
   table.appendChild(thead);
   const tbody=document.createElement('tbody');
   let totalBase=0;
@@ -14211,7 +14211,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   let doneCount=0;
   let lateCount=0;
   let lastPlannedEnd=null;
-  orderedEntries.forEach(({ key, stage, snapshot })=>{
+  orderedEntries.forEach(({ key, stage, snapshot }, idx)=>{
     const isHourless=CRM_NOHOUR_STAGES.has(snapshot.stageKey);
     if(!isHourless){
       totalBase+=Math.max(0, snapshot.baseHours);
@@ -14230,6 +14230,10 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
+    const numberCell=document.createElement('td');
+    numberCell.className='crm-stage-route-number';
+    numberCell.textContent=String(idx+1);
+    tr.appendChild(numberCell);
     const labelCell=document.createElement('td');
     labelCell.classList.add('crm-stage-route-label');
     const labelIcon=document.createElement('span');
