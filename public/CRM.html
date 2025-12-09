@@ -17853,8 +17853,46 @@ function enforceFullStageLinkCascade(){
     }
     previousEnd=getStageActualEndDate(row)||getStageFactDates(row).end||null;
   }
+  enforceStageLinkInvariantSequence();
   syncAutoDates();
   updateAllStageExpectations();
+}
+
+function enforceStageLinkInvariantSequence(){
+  if(!stagesTableBody) return;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  if(!rows.length) return;
+  let previousEnd=getStageActualEndDate(rows[0])||getStageFactDates(rows[0]).end||null;
+  for(let i=1;i<rows.length;i+=1){
+    const row=rows[i];
+    const linkActive=isStageLinkActive(row) && row.dataset.linkOverride!=='1';
+    if(linkActive && previousEnd instanceof Date && !Number.isNaN(previousEnd.getTime())){
+      const minStart=findLinkedStageStartDate(resolveCrmStageKey((mergeStageDraftWithSource(readStageRow(row))||{}).name), previousEnd);
+      const factDates=getStageFactDates(row);
+      const currentStart=factDates.start;
+      if(!(currentStart instanceof Date) || (minStart instanceof Date && currentStart<minStart)){
+        const result=scheduleLinkedStageFactDates(row, previousEnd);
+        const refreshedStart=getStageFactDates(row).start;
+        const refreshedEnd=getStageActualEndDate(row)||result?.end||getStageFactDates(row).end;
+        const stillEarly=(refreshedStart instanceof Date && minStart instanceof Date)
+          ? refreshedStart<minStart
+          : !(refreshedStart instanceof Date);
+        if(stillEarly && minStart instanceof Date){
+          const stageDraft=mergeStageDraftWithSource(readStageRow(row));
+          const stageKey=resolveCrmStageKey(stageDraft?.name);
+          const finalStart=minStart;
+          const finalEnd=computeSoloStageEndDate(stageDraft, stageKey, finalStart)||finalStart;
+          applyStageAutoDatesToRow(row, fmtDateISO(finalStart), fmtDateISO(finalEnd), { skipCascade:true });
+          resetStageLinkOverride(row,{ skipCascade:true });
+          previousEnd=finalEnd instanceof Date?addDays(finalEnd,0):null;
+          continue;
+        }
+        previousEnd=refreshedEnd instanceof Date?addDays(refreshedEnd,0):null;
+        continue;
+      }
+    }
+    previousEnd=getStageActualEndDate(row)||getStageFactDates(row).end||null;
+  }
 }
 
 function computeSoloStageEndDate(stageDraft, stageKey, startDate){
@@ -17918,6 +17956,7 @@ function runStageLinkCascade(sourceTr){
       previousEnd=null;
     }
   }
+  enforceStageLinkInvariantSequence();
   syncAutoDates();
   updateAllStageExpectations();
 }
