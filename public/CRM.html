@@ -9396,6 +9396,45 @@ function evaluateCrmStageDateWarnings(stageKey, iso){
   return result;
 }
 
+function resolvePrevStageFactEndDate(tr){
+  if(!stagesTableBody || !tr) return null;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const index=rows.indexOf(tr);
+  if(index<=0) return null;
+  const prevTr=rows[index-1];
+  const prevSnapshot=readStageRow(prevTr);
+  const stageKey=resolveCrmStageKey(prevSnapshot?.name||'');
+  const fallbackIso=coerceCalendarIso(prevSnapshot?.end||prevSnapshot?.start||'');
+  let fallbackDate=null;
+  if(fallbackIso){
+    const parsed=new Date(`${fallbackIso}T00:00:00`);
+    if(!Number.isNaN(parsed.getTime())){
+      parsed.setHours(0,0,0,0);
+      fallbackDate=parsed;
+    }
+  }
+  const orderId=(orderForm?.id?.value||'').trim();
+  if(!orderId || !stageKey){
+    return fallbackDate;
+  }
+  const board=currentBoard();
+  const order=board?.orders?.find(o=>o?.id===orderId);
+  const sourceStage=(stageSourceMap instanceof Map && prevSnapshot?.crmStageId)
+    ? stageSourceMap.get(prevSnapshot.crmStageId)||prevSnapshot
+    : prevSnapshot;
+  const orderStages=Array.isArray(order?.stages)?order.stages:[];
+  const stageIndex=orderStages.findIndex(stage=>ensureStageIdentity(stage)===ensureStageIdentity(sourceStage));
+  const stageEntry=stageIndex>=0?orderStages[stageIndex]:sourceStage;
+  const snapshot=order && stageEntry
+    ? snapshotCrmStageRowForRoute(order, stageKey, stageEntry, stageIndex)
+    : null;
+  const period=snapshot?computeCrmStageActualPeriod(snapshot,{ forceRefresh:true }):null;
+  if(period?.end instanceof Date){
+    return addDays(period.end,0);
+  }
+  return fallbackDate;
+}
+
 function enforceStageDateConstraints(tr, input){
   if(!tr || !input) return true;
   const nameInput=tr.querySelector('[data-k="name"]');
@@ -9447,6 +9486,21 @@ function enforceStageDateConstraints(tr, input){
       const endDate=new Date(`${endIso}T00:00:00`);
       if(!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime()) && endDate.getTime()<startDate.getTime()){
         alert('Дата окончания передела не может быть раньше даты начала.');
+        const revert=previousValue||'';
+        input.value=revert;
+        input.dataset.lastAccepted=revert;
+        input.dataset.prevValue=revert;
+        return false;
+      }
+    }
+  }
+  if(input && startInput && input===startInput){
+    const prevFactEnd=resolvePrevStageFactEndDate(tr);
+    const startIso=coerceCalendarIso(startInput.value||'');
+    if(prevFactEnd && startIso){
+      const startDate=new Date(`${startIso}T00:00:00`);
+      if(startDate<prevFactEnd){
+        alert('Нельзя начать раньше фактического окончания предыдущего передела.');
         const revert=previousValue||'';
         input.value=revert;
         input.dataset.lastAccepted=revert;
@@ -17591,7 +17645,8 @@ function calculateOrderStageDates(options={}){
     if(manualStart || manualEnd){
       return;
     }
-    const earliestStart=today0();
+    const minStartDate=resolvePrevStageFactEndDate(tr);
+    const earliestStart=minStartDate?addDays(minStartDate,0):today0();
     const scheduleResult=planStageAutoSchedule({
       stage:stageDraft,
       stageKey,
@@ -17602,6 +17657,12 @@ function calculateOrderStageDates(options={}){
     });
     if(!scheduleResult || !scheduleResult.startIso){
       errors.push(`«${stageLabel}»: ${scheduleResult?.error||'не удалось распределить нагрузку'}`);
+      return;
+    }
+    const startIso=coerceCalendarIso(scheduleResult.startIso||'');
+    const startDate=startIso?new Date(`${startIso}T00:00:00`):null;
+    if(minStartDate && startDate && startDate<minStartDate){
+      errors.push(`«${stageLabel}»: нет свободного слота после окончания предыдущего передела (${fmtDateHuman(minStartDate)}).`);
       return;
     }
     applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
