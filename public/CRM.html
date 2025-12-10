@@ -3534,6 +3534,7 @@
 
   .crm-route-mini table {
     width: 100%;
+    min-width: 960px;
     border-collapse: collapse;
     font-size: 12px;
     border-radius: var(--pc-radius-md, 12px);
@@ -3553,7 +3554,7 @@
   }
 
   .crm-route-mini thead th:first-child {
-    text-align: left;
+    text-align: center;
   }
 
   .crm-route-mini tbody td {
@@ -3563,12 +3564,35 @@
   }
 
   .crm-route-mini tbody td:first-child {
-    text-align: left;
+    text-align: center;
     font-weight: var(--pc-font-weight-medium, 600);
+  }
+
+  .crm-route-mini thead th:nth-child(3),
+  .crm-route-mini tbody td:nth-child(3) {
+    min-width: 320px;
   }
 
   .crm-route-mini tbody tr:last-child td {
     border-bottom: none;
+  }
+
+  .crm-route-mini-periods {
+    display: grid;
+    gap: 6px;
+    text-align: left;
+  }
+
+  .crm-route-mini-period__label {
+    display: block;
+    font-size: 11px;
+    color: var(--pc-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.2px;
+  }
+
+  .crm-route-mini-period__value {
+    display: block;
   }
 
   .crm-route-mini-wrapper {
@@ -5129,7 +5153,7 @@
     padding: 0;
     border-radius: 0;
     border: none;
-    width: auto;
+    width: min(1100px, 96vw);
     outline: none;
   }
 
@@ -6203,7 +6227,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-link" title="Связь с предыдущим переделом">⛓</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
             <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -6878,7 +6902,6 @@ const CRM_MIN_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
-const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
@@ -6890,8 +6913,6 @@ const CRM_DEFAULT_PREFERENCES={
   showLateTips:true,
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
-  linkedStagesEnabled:true,
-  linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
@@ -7556,26 +7577,6 @@ function normalizeRouteHorizonDays(value){
   return Math.max(0, Math.min(CRM_MAX_ROUTE_HORIZON_DAYS, Math.round(num)));
 }
 
-function normalizeStageLinkGapDays(value){
-  if(value===null||value===undefined||value==='') return 0;
-  let num=null;
-  if(typeof value==='number'){
-    if(!Number.isFinite(value)) return 0;
-    num=value;
-  }else if(typeof value==='string'){
-    const trimmed=value.trim();
-    if(!trimmed) return 0;
-    const normalized=trimmed.replace(',', '.');
-    const direct=Number(normalized);
-    if(!Number.isFinite(direct)) return 0;
-    num=direct;
-  }else{
-    return 0;
-  }
-  if(num===null || !Number.isFinite(num) || num<=0) return 0;
-  return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
-}
-
 function sanitizeCrmHintPreferences(raw){
   const base=raw && typeof raw==='object'?raw:{};
   const result={ ...CRM_HINT_DEFAULTS };
@@ -7679,15 +7680,6 @@ function sanitizeCrmPreferences(raw){
       if(normalized===null) continue;
       result.routeHorizonDays=normalized;
       break;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStagesEnabled')){
-      result.linkedStagesEnabled=raw.linkedStagesEnabled!==false;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStageGapDays')){
-      const normalized=normalizeStageLinkGapDays(raw.linkedStageGapDays);
-      if(normalized!==null){
-        result.linkedStageGapDays=normalized;
-      }
     }
     if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
       result.ganttRangeHints=raw.ganttRangeHints===true;
@@ -7879,18 +7871,6 @@ function setGanttRangeHintsEnabled(enabled){
   prefs.ganttRangeHints=normalized;
   state.settings.preferences=prefs;
   persistStoredCrmSettings(state.settings);
-}
-
-function isStageLinkEnabledByDefault(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return true;
-  return prefs.linkedStagesEnabled!==false;
-}
-
-function getCrmStageLinkGapDays(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return 0;
-  return normalizeStageLinkGapDays(prefs.linkedStageGapDays);
 }
 
 function getPreferredAutoRefreshIntervalMs(){
@@ -9416,6 +9396,98 @@ function evaluateCrmStageDateWarnings(stageKey, iso){
   return result;
 }
 
+function resolvePrevStageFactEndDate(tr){
+  if(!stagesTableBody || !tr) return null;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const index=rows.indexOf(tr);
+  if(index<=0) return null;
+  const prevTr=rows[index-1];
+  const prevSnapshot=readStageRow(prevTr);
+  const stageKey=resolveCrmStageKey(prevSnapshot?.name||'');
+  const fallbackIso=coerceCalendarIso(prevSnapshot?.end||prevSnapshot?.start||'');
+  let fallbackDate=null;
+  if(fallbackIso){
+    const parsed=new Date(`${fallbackIso}T00:00:00`);
+    if(!Number.isNaN(parsed.getTime())){
+      parsed.setHours(0,0,0,0);
+      fallbackDate=parsed;
+    }
+  }
+  const orderId=(orderForm?.id?.value||'').trim();
+  if(!orderId || !stageKey){
+    return fallbackDate;
+  }
+  const board=currentBoard();
+  const order=board?.orders?.find(o=>o?.id===orderId);
+  const sourceStage=(stageSourceMap instanceof Map && prevSnapshot?.crmStageId)
+    ? stageSourceMap.get(prevSnapshot.crmStageId)||prevSnapshot
+    : prevSnapshot;
+  const orderStages=Array.isArray(order?.stages)?order.stages:[];
+  const stageIndex=orderStages.findIndex(stage=>ensureStageIdentity(stage)===ensureStageIdentity(sourceStage));
+  const stageEntry=stageIndex>=0?orderStages[stageIndex]:sourceStage;
+  const snapshot=order && stageEntry
+    ? snapshotCrmStageRowForRoute(order, stageKey, stageEntry, stageIndex)
+    : null;
+  const period=snapshot?computeCrmStageActualPeriod(snapshot,{ forceRefresh:true }):null;
+  if(period?.end instanceof Date){
+    return addDays(period.end,0);
+  }
+  return fallbackDate;
+}
+
+function enforceSequentialFactDates(options={}){
+  if(!stagesTableBody) return;
+  const opts=options&&typeof options==='object'?options:{};
+  const startIndex=Math.max(0, Number.isInteger(opts.startIndex)?opts.startIndex:0);
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  if(!rows.length || startIndex>=rows.length) return;
+  let changed=false;
+  for(let i=startIndex;i<rows.length;i+=1){
+    const tr=rows[i];
+    const prevEnd=resolvePrevStageFactEndDate(tr);
+    if(!(prevEnd instanceof Date)) continue;
+    prevEnd.setHours(0,0,0,0);
+    const minStartIso=fmtDateISO(prevEnd);
+    const startInput=tr.querySelector('[data-k="start"]');
+    const endInput=tr.querySelector('[data-k="end"]');
+    if(!startInput) continue;
+    const rawStartIso=coerceCalendarIso(startInput.value||'');
+    const currentStart=rawStartIso?new Date(`${rawStartIso}T00:00:00`):null;
+    const needsClamp=!rawStartIso || (currentStart && currentStart<prevEnd);
+    const finalStartIso=needsClamp?minStartIso:rawStartIso;
+    if(needsClamp){
+      startInput.value=finalStartIso;
+      startInput.dataset.lastAccepted=finalStartIso;
+      startInput.dataset.prevValue=finalStartIso;
+      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+      changed=true;
+    }
+    if(endInput){
+      const rawEndIso=coerceCalendarIso(endInput.value||'');
+      if(rawEndIso){
+        const baseStart=currentStart instanceof Date && !needsClamp?currentStart:prevEnd;
+        const endDate=new Date(`${rawEndIso}T00:00:00`);
+        const durationDays=Math.max(0, Math.round((endDate.getTime()-baseStart.getTime())/86400000));
+        const newStartDate=new Date(`${finalStartIso}T00:00:00`);
+        const newEndDate=addDays(newStartDate,durationDays);
+        const newEndIso=fmtDateISO(newEndDate);
+        if(newEndIso!==rawEndIso || needsClamp){
+          endInput.value=newEndIso;
+          endInput.dataset.lastAccepted=newEndIso;
+          endInput.dataset.prevValue=newEndIso;
+          applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+          changed=true;
+        }
+      }
+    }
+    updateStageRowExpectation(tr);
+  }
+  if(changed){
+    syncAutoDates();
+    updateAllStageExpectations();
+  }
+}
+
 function enforceStageDateConstraints(tr, input){
   if(!tr || !input) return true;
   const nameInput=tr.querySelector('[data-k="name"]');
@@ -9467,6 +9539,21 @@ function enforceStageDateConstraints(tr, input){
       const endDate=new Date(`${endIso}T00:00:00`);
       if(!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime()) && endDate.getTime()<startDate.getTime()){
         alert('Дата окончания передела не может быть раньше даты начала.');
+        const revert=previousValue||'';
+        input.value=revert;
+        input.dataset.lastAccepted=revert;
+        input.dataset.prevValue=revert;
+        return false;
+      }
+    }
+  }
+  if(input && startInput && input===startInput){
+    const prevFactEnd=resolvePrevStageFactEndDate(tr);
+    const startIso=coerceCalendarIso(startInput.value||'');
+    if(prevFactEnd && startIso){
+      const startDate=new Date(`${startIso}T00:00:00`);
+      if(startDate<prevFactEnd){
+        alert('Нельзя начать раньше фактического окончания предыдущего передела.');
         const revert=previousValue||'';
         input.value=revert;
         input.dataset.lastAccepted=revert;
@@ -14103,8 +14190,48 @@ function computeCrmRouteStatusInfo(snapshot){
   return computeCrmStageStatus(snapshot, schedule);
 }
 
+function computeCrmStageActualPeriod(snapshot, options={}){
+  if(!snapshot) return null;
+  const normalizedStage=normalizeCrmStageKey(snapshot.stageKey);
+  if(!normalizedStage) return null;
+  const useCache=!options?.forceRefresh;
+  let schedule=null;
+  if(useCache && crmStageScheduleCache && normalizeCrmStageKey(crmStageScheduleCache.stageKey)===normalizedStage){
+    schedule=crmStageScheduleCache;
+  }
+  if(!schedule && useCache && crmStageRouteActualScheduleCache.has(normalizedStage)){
+    schedule=crmStageRouteActualScheduleCache.get(normalizedStage);
+  }
+  if(!schedule){
+    const { rows }=collectCrmStageRows(normalizedStage,{ ignoreSearch:true })||{};
+    if(Array.isArray(rows) && rows.length){
+      schedule=buildCrmStageSchedule(normalizedStage, rows) || null;
+    }
+    crmStageRouteActualScheduleCache.set(normalizedStage, schedule||null);
+  }
+  if(!schedule || normalizeCrmStageKey(schedule.stageKey)!==normalizedStage) return null;
+  const record=schedule.perTask instanceof Map ? schedule.perTask.get(snapshot.identity) : null;
+  if(!record || !Array.isArray(record.segments) || !record.segments.length) return null;
+  const dates=record.segments
+    .map(seg=>{
+      if(seg?.date instanceof Date){
+        return addDays(seg.date,0);
+      }
+      if(seg?.date){
+        const parsed=new Date(seg.date);
+        if(!Number.isNaN(parsed.getTime())) return addDays(parsed,0);
+      }
+      return null;
+    })
+    .filter(date=>date instanceof Date);
+  if(!dates.length) return null;
+  dates.sort((a,b)=>a-b);
+  return { start:dates[0], end:dates[dates.length-1] };
+}
+
 function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
+  crmStageRouteActualScheduleCache.clear();
   const stages=Array.isArray(order.stages)?order.stages:[];
   const entries=[];
   stages.forEach((stage, stageIndex)=>{
@@ -14145,7 +14272,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   wrapper.className='crm-route-mini-wrapper';
   const table=document.createElement('table');
   const thead=document.createElement('thead');
-  thead.innerHTML='<tr><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
+  thead.innerHTML='<tr><th>№</th><th>Передел</th><th>Сроки</th><th>Часы</th><th>Прогресс</th><th>Статус</th></tr>';
   table.appendChild(thead);
   const tbody=document.createElement('tbody');
   let totalBase=0;
@@ -14153,7 +14280,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   let doneCount=0;
   let lateCount=0;
   let lastPlannedEnd=null;
-  orderedEntries.forEach(({ key, stage, snapshot })=>{
+  orderedEntries.forEach(({ key, stage, snapshot }, idx)=>{
     const isHourless=CRM_NOHOUR_STAGES.has(snapshot.stageKey);
     if(!isHourless){
       totalBase+=Math.max(0, snapshot.baseHours);
@@ -14172,6 +14299,10 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     if(key===currentStageKey){
       tr.dataset.currentStage='1';
     }
+    const numberCell=document.createElement('td');
+    numberCell.className='crm-stage-route-number';
+    numberCell.textContent=String(idx+1);
+    tr.appendChild(numberCell);
     const labelCell=document.createElement('td');
     labelCell.classList.add('crm-stage-route-label');
     const labelIcon=document.createElement('span');
@@ -14194,7 +14325,21 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     tr.appendChild(labelCell);
 
     const periodCell=document.createElement('td');
-    periodCell.textContent=formatStagePeriod(snapshot.startRaw, snapshot.endRaw) || '—';
+    const plannedLabel=formatStagePeriod(snapshot.startRaw, snapshot.endRaw) || '—';
+    const actualPeriod=computeCrmStageActualPeriod(snapshot);
+    const actualLabel=actualPeriod?formatStagePeriod(actualPeriod.start, actualPeriod.end):'—';
+    const periodWrapper=document.createElement('div');
+    periodWrapper.className='crm-route-mini-periods';
+    periodWrapper.innerHTML=`
+      <div class="crm-route-mini-period crm-route-mini-period--planned">
+        <span class="crm-route-mini-period__label">Плановые даты</span>
+        <span class="crm-route-mini-period__value">${plannedLabel}</span>
+      </div>
+      <div class="crm-route-mini-period crm-route-mini-period--actual">
+        <span class="crm-route-mini-period__label">Фактические даты</span>
+        <span class="crm-route-mini-period__value">${actualLabel}</span>
+      </div>`;
+    periodCell.appendChild(periodWrapper);
     tr.appendChild(periodCell);
 
     const hoursCell=document.createElement('td');
@@ -14275,6 +14420,7 @@ function closeCrmStageRouteMini(){
 let crmStageScheduleCache=null;
 let crmStageRouteContext={ rows:[], stageKey:'draw', filter:'current' };
 let crmStageScheduleErrorSignature='';
+const crmStageRouteActualScheduleCache=new Map();
 
 function notifyCrmStageScheduleErrors(schedule){
   if(!schedule || !Array.isArray(schedule.errors)){
@@ -17511,7 +17657,6 @@ function handleClearStageDates(){
       endInput.dataset.lastAccepted='';
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
     }
-    resetStageLinkOverride(tr);
   });
   syncAutoDates();
   updateAllStageExpectations();
@@ -17540,7 +17685,6 @@ function calculateOrderStageDates(options={}){
   const errors=[];
   const suggestionMap=new Map();
   let changed=false;
-  let previousEndDate=null;
   rows.forEach((tr,index)=>{
     const stageDraft=mergeStageDraftWithSource(readStageRow(tr));
     if(!stageDraft) return;
@@ -17552,11 +17696,10 @@ function calculateOrderStageDates(options={}){
     }
     const stageLabel=stageDraft.name||CRM_STAGE_LABELS[stageKey]||'Передел';
     if(manualStart || manualEnd){
-      const manualEndDate=manualEnd?parseDateInputValue(manualEnd):null;
-      if(manualEndDate) previousEndDate=manualEndDate;
       return;
     }
-    const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate, isStageLinkActive(tr));
+    const minStartDate=resolvePrevStageFactEndDate(tr);
+    const earliestStart=minStartDate?addDays(minStartDate,0):today0();
     const scheduleResult=planStageAutoSchedule({
       stage:stageDraft,
       stageKey,
@@ -17569,10 +17712,14 @@ function calculateOrderStageDates(options={}){
       errors.push(`«${stageLabel}»: ${scheduleResult?.error||'не удалось распределить нагрузку'}`);
       return;
     }
+    const startIso=coerceCalendarIso(scheduleResult.startIso||'');
+    const startDate=startIso?new Date(`${startIso}T00:00:00`):null;
+    if(minStartDate && startDate && startDate<minStartDate){
+      errors.push(`«${stageLabel}»: нет свободного слота после окончания предыдущего передела (${fmtDateHuman(minStartDate)}).`);
+      return;
+    }
     applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
-    previousEndDate=scheduleResult.endDateObj||previousEndDate;
     changed=true;
-    resetStageLinkOverride(tr);
     const hasStartPush=scheduleResult.delayDays>0;
     const hasFinishPush=scheduleResult.finishDelayDays>0;
     if(hasStartPush || hasFinishPush){
@@ -17613,67 +17760,6 @@ function calculateOrderStageDates(options={}){
   if(suggestions.length && !skipOptimizationPrompt){
     maybePromptStageOptimization(suggestions,{ mode:'fill' });
   }
-}
-
-function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
-  const today=today0();
-  let earliest=addDays(today,0);
-  if(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const prev=addDays(previousEndDate,0);
-    if(prev>earliest){
-      earliest=prev;
-    }
-  }
-  if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const linkedStart=findLinkedStageStartDate(stageKey, previousEndDate);
-    if(linkedStart && linkedStart>earliest){
-      earliest=linkedStart;
-    }
-  }
-  return earliest;
-}
-
-function findLinkedStageStartDate(stageKey, previousEndDate){
-  const gap=getCrmStageLinkGapDays();
-  if(!(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
-    return null;
-  }
-  let remaining=Math.max(0, gap);
-  let cursor=addDays(previousEndDate,0);
-  let guard=0;
-  while(guard<730){
-    guard+=1;
-    if(isStageWorkingDayForLink(stageKey, cursor)){
-      if(remaining<=0){
-        return addDays(cursor,0);
-      }
-      remaining-=1;
-    }
-    cursor=addDays(cursor,1);
-  }
-  return addDays(cursor,0);
-}
-
-function isStageWorkingDayForLink(stageKey, date){
-  const normalized=normalizeCrmStageKey(stageKey||'');
-  if(!normalized) return true;
-  const evaluator=getCrmStageScheduleEvaluator(normalized);
-  if(evaluator && typeof evaluator.isWorking==='function' && !evaluator.isWorking(date)){
-    return false;
-  }
-  if(CRM_NOHOUR_STAGES.has(normalized)){
-    return true;
-  }
-  const calendar=getCrmStageCalendar(normalized);
-  const iso=fmtDateISO(date);
-  if(calendar?.exceptions instanceof Map && calendar.exceptions.has(iso)){
-    const cap=Math.max(0, Number(calendar.exceptions.get(iso))||0);
-    if(cap<=1e-6){
-      return false;
-    }
-  }
-  const baseCap=getCrmStageCapacity(normalized);
-  return baseCap>1e-6;
 }
 
 function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestStart }){
@@ -18273,6 +18359,7 @@ function fillOrderForm(o,b){
     }
     appendStageRow(st);
   });
+  enforceSequentialFactDates();
   computeOrderDatesFromStages(o); orderForm.start.value=o.start||''; orderForm.end.value=o.end||''; orderForm.progress.value=calcAutoProgress(o.stages);
   applyOrderAutoCompletionState();
   updateOrderDialogMeta();
@@ -18536,48 +18623,6 @@ function refreshStageReorderControls(){
   });
 }
 
-function updateStageLinkButtonState(button, enabled){
-  if(!button) return;
-  button.textContent=enabled?'🔗':'⛓';
-  button.setAttribute('aria-pressed', enabled?'true':'false');
-  button.classList.toggle('is-active', !!enabled);
-}
-
-function setStageLinkState(tr, enabled){
-  if(!tr) return;
-  tr.dataset.linkPrev=enabled?'1':'0';
-  if(enabled){
-    delete tr.dataset.linkOverride;
-  }
-  const button=tr.querySelector('.stage-link-toggle');
-  updateStageLinkButtonState(button, !!enabled);
-}
-
-function isStageLinkActive(tr){
-  return tr?.dataset?.linkPrev==='1';
-}
-
-function resetStageLinkOverride(tr){
-  if(!tr) return;
-  delete tr.dataset.linkOverride;
-}
-
-function handleLinkedStageManualChange(tr, input){
-  if(!tr || !input) return true;
-  if(!isStageLinkActive(tr)) return true;
-  if(tr.dataset.linkOverride==='1') return true;
-  const nameInput=tr.querySelector('[data-k="name"]');
-  const stageLabel=(nameInput?.value||'Передел').trim()||'Передел';
-  const message=`Изменение даты нарушит связь с предыдущим переделом для «${stageLabel}». Продолжить?`;
-  if(window.confirm(message)){
-    tr.dataset.linkOverride='1';
-    return true;
-  }
-  const revert=input.dataset.prevValue||input.dataset.lastAccepted||input.dataset.original||'';
-  input.value=revert;
-  return false;
-}
-
 function moveStageRow(tr,direction){
   if(!stagesTableBody||!tr) return;
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
@@ -18622,12 +18667,9 @@ function appendStageRow(st){
   }else if(st.completedLate===false){
     tr.dataset.completedLate='false';
   }
-  const linkEnabled=st.linkPrev===undefined?isStageLinkEnabledByDefault():!!st.linkPrev;
-  tr.dataset.linkPrev=linkEnabled?'1':'0';
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td class="col-link"><button type="button" class="pc-icon-btn stage-link-toggle" aria-pressed="${linkEnabled?'true':'false'}" title="Связь с предыдущим переделом">${linkEnabled?'🔗':'⛓'}</button></td>
     <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
     <td class="col-start"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td class="col-end"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
@@ -18659,14 +18701,6 @@ function appendStageRow(st){
     updateAllStageExpectations();
     refreshStageReorderControls();
   };
-  setStageLinkState(tr, linkEnabled);
-  const linkBtn=tr.querySelector('.stage-link-toggle');
-  if(linkBtn){
-    linkBtn.addEventListener('click',()=>{
-      const next=!(tr.dataset.linkPrev==='1');
-      setStageLinkState(tr, next);
-    });
-  }
   const moveUpBtn=tr.querySelector('[data-stage-move="up"]');
   if(moveUpBtn){
     moveUpBtn.addEventListener('click',()=>moveStageRow(tr,'up'));
@@ -18728,11 +18762,12 @@ function appendStageRow(st){
       startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
     });
     startInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, startInput)) return;
       enforceStageDateConstraints(tr, startInput);
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+      enforceSequentialFactDates({ startIndex:Math.max(0, rows.indexOf(tr)+1) });
     });
   }
   if(endInput){
@@ -18742,11 +18777,12 @@ function appendStageRow(st){
       endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
     });
     endInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, endInput)) return;
       enforceStageDateConstraints(tr, endInput);
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
       syncAutoDates();
       updateStageRowExpectation(tr);
+      const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+      enforceSequentialFactDates({ startIndex:Math.max(0, rows.indexOf(tr)+1) });
     });
   }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
@@ -18817,7 +18853,6 @@ function readStageRow(tr){
     originalEnd:endInput?.dataset?.original||'',
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
     crmStageId:stageId,
-    linkPrev:tr.dataset?.linkPrev==='1',
     doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
@@ -19541,33 +19576,6 @@ function renderCrmPreferencesSettingsUI(){
   horizonHint.className='crm-field__hint';
   horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
   horizonField.append(horizonLabel, horizonInput, horizonHint);
-  const linkOption=document.createElement('label');
-  linkOption.className='crm-settings-checkbox';
-  const linkCheckbox=document.createElement('input');
-  linkCheckbox.type='checkbox';
-  linkCheckbox.name='prefLinkedStages';
-  linkCheckbox.checked=prefs.linkedStagesEnabled!==false;
-  const linkText=document.createElement('span');
-  linkText.textContent='Связь с предыдущим переделом (по умолчанию)';
-  linkOption.append(linkCheckbox, linkText);
-  const linkGapField=document.createElement('label');
-  linkGapField.className='crm-field';
-  const linkGapLabel=document.createElement('span');
-  linkGapLabel.className='crm-field__label';
-  linkGapLabel.textContent='Смещение даты следующего передела';
-  const linkGapInput=document.createElement('input');
-  linkGapInput.type='number';
-  linkGapInput.className='pc-input';
-  linkGapInput.name='prefLinkedStageGapDays';
-  linkGapInput.min='0';
-  linkGapInput.step='1';
-  linkGapInput.inputMode='numeric';
-  linkGapInput.placeholder='0';
-  linkGapInput.value=String(Math.max(0, prefs.linkedStageGapDays||0));
-  const linkGapHint=document.createElement('span');
-  linkGapHint.className='crm-field__hint';
-  linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
-  linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
   const laneSumField=document.createElement('label');
   laneSumField.className='crm-field';
   const laneSumLabel=document.createElement('span');
@@ -19678,7 +19686,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -20229,8 +20237,6 @@ boardForm.addEventListener('submit',e=>{
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
-    linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
-    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
     laneSumPeriod:{
       mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
       from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
