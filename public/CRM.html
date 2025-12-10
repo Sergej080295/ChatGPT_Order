@@ -10744,6 +10744,19 @@ function resolveCrmStageKey(name){
   return null;
 }
 
+function resolveCrmStageKeyWithMapping(name){
+  const normalized=normalizeStageName(name||'');
+  if(!normalized) return null;
+  const mappingEntry=getCrmStageMappingEntry(normalized);
+  if(mappingEntry){
+    if(mappingEntry.stage===CRM_STAGE_IGNORE) return null;
+    if(mappingEntry.stage && CRM_STAGE_KEYS.includes(mappingEntry.stage)){
+      return mappingEntry.stage;
+    }
+  }
+  return resolveCrmStageKey(normalized);
+}
+
 function getCrmStageFilter(stageKey){
   const key=stageKey||'draw';
   const stored=crmStageFilterByKey.get(key);
@@ -11031,7 +11044,7 @@ function isOrderShippingLate(order){
   if(!order||typeof order!=='object') return false;
   if(orderShippingLateCache.has(order)) return orderShippingLateCache.get(order);
   const stages=Array.isArray(order?.stages)?order.stages:[];
-  const shippingStage=stages.find(stage=>resolveCrmStageKey(stage?.name)==='ship');
+  const shippingStage=stages.find(stage=>resolveCrmStageKeyWithMapping(stage?.name)==='ship');
   const late=shippingStage?stageEntryIsLate(shippingStage):false;
   orderShippingLateCache.set(order, late);
   return late;
@@ -11057,7 +11070,7 @@ function orderHasOverdueStageExcludingShipping(order,{ todayTime=today0().getTim
   if(!order||typeof order!=='object') return false;
   const stages=Array.isArray(order.stages)?order.stages:[];
   return stages.some(stage=>{
-    if(resolveCrmStageKey(stage?.name)==='ship') return false;
+    if(resolveCrmStageKeyWithMapping(stage?.name)==='ship') return false;
     return stageEntryIsLate(stage,{ todayTime });
   });
 }
@@ -11133,7 +11146,7 @@ function buildCrmStageSnapshot(order){
   const stages=Array.isArray(order?.stages)?order.stages:[];
   stages.forEach(stage=>{
     if(!stage) return;
-    const key=resolveCrmStageKey(stage.name);
+    const key=resolveCrmStageKeyWithMapping(stage.name);
     if(!key || map.has(key)) return;
     map.set(key,stage);
   });
@@ -11462,7 +11475,7 @@ function refreshOrderHistoryButton(orderId){
 function summarizeStagesForJournal(stages){
   const list=Array.isArray(stages)?stages:[];
   return list.map((stage,index)=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     const label=stage?.name || CRM_STAGE_LABELS[key] || `Передел ${index+1}`;
     const isHourless=key?CRM_NOHOUR_STAGES.has(key):false;
     const hours=isHourless?null:parseStageHours(stage);
@@ -11490,7 +11503,7 @@ function summarizeOrderForJournal(order){
   const stages=Array.isArray(order.stages)?order.stages:[];
   let totalHours=0;
   stages.forEach(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     if(key && !CRM_NOHOUR_STAGES.has(key)){
       const hours=parseStageHours(stage);
       if(Number.isFinite(hours) && hours>0){
@@ -11516,7 +11529,7 @@ function summarizeOrderForJournal(order){
 
 function stageSignatureForJournal(stage){
   if(!stage||typeof stage!=='object') return '';
-  const key=resolveCrmStageKey(stage?.name);
+  const key=resolveCrmStageKeyWithMapping(stage?.name);
   const hourless=key?CRM_NOHOUR_STAGES.has(key):false;
   const hours=hourless?null:roundHours(parseStageHours(stage)||0);
   const snapshot={
@@ -11917,7 +11930,7 @@ function collectCrmStageRows(stageKey, options={}){
       .map((stageEntry, stagePosition)=>({
         stageEntry,
         stagePosition,
-        stageKeyResolved:resolveCrmStageKey(stageEntry?.name)
+        stageKeyResolved:resolveCrmStageKeyWithMapping(stageEntry?.name)
       }))
       .filter(entry=>entry.stageKeyResolved===stage);
     if(!matching.length) return;
@@ -13407,7 +13420,7 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
     const stageInstancesRaw=[];
     stageList.forEach((stage, stageIndex)=>{
       if(!stage||typeof stage!=='object') return;
-      const stageKey=resolveCrmStageKey(stage.name);
+      const stageKey=resolveCrmStageKeyWithMapping(stage.name);
       if(!stageKey) return;
       const start=normalizeDate(stage.start);
       const end=normalizeDate(stage.end);
@@ -14278,7 +14291,7 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, from
 
 function snapshotCrmStageRowForRoute(order, stageKey, stageEntry, stageIndex){
   if(!order||!stageEntry) return null;
-  const resolved=resolveCrmStageKey(stageEntry.name)||stageKey;
+  const resolved=resolveCrmStageKeyWithMapping(stageEntry.name)||stageKey;
   if(!resolved) return null;
   const fallbackIdentity=`${resolveOrderIdentity(order,Number.isInteger(stageIndex)?stageIndex:0,resolved)}:${Number.isInteger(stageIndex)?stageIndex:0}`;
   const stageId=ensureStageIdentity(stageEntry,fallbackIdentity);
@@ -14378,7 +14391,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   const entries=[];
   stages.forEach((stage, stageIndex)=>{
     if(!stage||typeof stage!=='object') return;
-    const key=resolveCrmStageKey(stage.name);
+    const key=resolveCrmStageKeyWithMapping(stage.name);
     if(!key) return;
     const snapshot=snapshotCrmStageRowForRoute(order, key, stage, stageIndex);
     if(!snapshot) return;
@@ -15614,7 +15627,7 @@ function buildOrderRouteIcons(order){
   const icons=[];
   stages.forEach(stage=>{
     if(!stage||typeof stage!=='object') return;
-    const stageKey=resolveCrmStageKey(stage.name);
+    const stageKey=resolveCrmStageKeyWithMapping(stage.name);
     if(!stageKey||seen.has(stageKey)) return;
     seen.add(stageKey);
     const icon=stageIconForKey(stageKey)||stageLetterForKey(stageKey);
@@ -17847,7 +17860,7 @@ function calculateOrderStageDates(options={}){
     if(!stageDraft) return;
     const manualStart=(stageDraft.start||'').trim();
     const manualEnd=(stageDraft.end||'').trim();
-    const stageKey=resolveCrmStageKey(stageDraft.name);
+    const stageKey=resolveCrmStageKeyWithMapping(stageDraft.name);
     if(!stageKey){
       return;
     }
@@ -19240,7 +19253,7 @@ function applyOrderAutoCompletionState(){
   if(!statusSel) return;
   if(!allComplete) return;
   const shippingEntry=stages.find(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     return key==='ship';
   });
   const overdue=shippingEntry?stageEntryIsLate(shippingEntry):false;
