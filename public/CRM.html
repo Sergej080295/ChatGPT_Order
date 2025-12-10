@@ -12838,17 +12838,18 @@ function renderCrmStageGantt(rows, schedule){
   const widthValue=`${totalWidth}px`;
   const headerTemplate=`repeat(${filteredDays.length}, ${dayWidth}px)`;
   const isHourly=!schedule.isHourless;
-    const dayCapacityMap=new Map(filteredDays.map(({ key, day })=>{
-      const meta=day.meta||{};
-      const capacityRaw=Number(meta.capDay);
-      const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
-      const pubRem=Math.max(0, Number(meta.pubRem)||0);
-      const resRem=Math.max(0, Number(meta.resRem)||0);
-      const used=Math.max(0, (Number(meta.pubUsed)||0)+(Number(meta.resUsed)||0));
-      const free=Math.max(0, pubRem+resRem, capacity-used);
-      return [key,{ capacity, free, used }];
-    }));
-    const dayUsageMap=isHourly?new Map(filteredDays.map(({ key })=>[key,0])):null;
+  const dayCapacityMap=new Map(filteredDays.map(({ key, day })=>{
+    const meta=day.meta||{};
+    const capacityRaw=Number(meta.capDay);
+    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
+    const pubRem=Math.max(0, Number(meta.pubRem)||0);
+    const resRem=Math.max(0, Number(meta.resRem)||0);
+    const used=Math.max(0, (Number(meta.pubUsed)||0)+(Number(meta.resUsed)||0));
+    const free=Math.max(0, pubRem+resRem, capacity-used);
+    return [key,{ capacity, free, used }];
+  }));
+  const dayUsageMap=isHourly?new Map(filteredDays.map(({ key })=>[key,0])):null;
+  const shouldRenderOrders=!(isHourly && filterValue==='free');
   crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
   crmStageGanttHeader.style.minWidth=widthValue;
   crmStageGanttHeader.style.width=widthValue;
@@ -12880,6 +12881,18 @@ function renderCrmStageGantt(rows, schedule){
   });
   const perTask=schedule.perTask;
   const orderedRows=safeRows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
+  if(isHourly && dayUsageMap){
+    orderedRows.forEach(row=>{
+      const rowSegments=perTask.get(row.identity)?.segments||[];
+      rowSegments.forEach(seg=>{
+        const segKey=fmtDateISO(seg.date);
+        if(!dayUsageMap.has(segKey)) return;
+        const hours=Number(seg.hours)||0;
+        if(hours<=0) return;
+        dayUsageMap.set(segKey, (dayUsageMap.get(segKey)||0)+hours);
+      });
+    });
+  }
   const dayResidualMap=new Map(filteredDays.map(({ key })=>{
     const meta=schedule.perDay.get(key)?.meta||{};
     const capacityRaw=Number(meta.capDay);
@@ -12889,6 +12902,9 @@ function renderCrmStageGantt(rows, schedule){
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach((row,rowIdx)=>{
+    if(!shouldRenderOrders){
+      return;
+    }
     const orderId=row.orderId||row.order?.id||'';
     const displayIndex=Number.isFinite(row.displayIndex)?row.displayIndex:rowIdx+1;
     const label=document.createElement('div');
@@ -12950,104 +12966,93 @@ function renderCrmStageGantt(rows, schedule){
       if(key===todayKey){
         cell.classList.add('today');
       }
-        const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
-        const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
-        if(isHourly && dayUsageMap){
-          dayUsageMap.set(key, (dayUsageMap.get(key)||0)+total);
-        }
-        const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
-        const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
-        const totalsOnlyFree=isHourly && filterValue==='free';
-        if(total>0){
-          const fill=document.createElement('div');
-          fill.className='crm-stage-gantt-fill';
-          if(isHourly){
-            const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
-            const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
-            const plannedLabel=formatStageWorkload(total,{ hourless:false });
-            fill.textContent=`${plannedLabel} / ${capLabel}`;
-            fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
-            dayResidualMap.set(key, Math.max(0, residualBefore-total));
-          }else{
-            fill.textContent=formatStageWorkload(total,{ hourless:true });
-            fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
-          }
-          fill.classList.add(fillStatusClass);
-          if(shipLate){
-            fill.classList.add('late');
-          }
-          cell.appendChild(fill);
-        }else if(!totalsOnlyFree){
-          const fill=document.createElement('div');
-          fill.className='crm-stage-gantt-fill';
-          fill.classList.add(fillStatusClass);
-          if(shipLate){
-            fill.classList.add('late');
-          }
-          cell.appendChild(fill);
-        }
-      rowEl.appendChild(cell);
-    });
-      if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
-        const range=document.createElement('div');
-        range.className='crm-stage-gantt-range';
-        const left=(rangeStartIdx*dayWidth)+2;
-        const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
-        range.style.left=`${left}px`;
-        range.style.width=`${width}px`;
-        rowEl.appendChild(range);
-      }
-      fragmentBody.appendChild(rowEl);
-    });
-    if(isHourly && dayUsageMap){
-      const totalLabel=document.createElement('div');
-      totalLabel.className='crm-stage-gantt-left-row crm-stage-gantt-left-row--total';
-      totalLabel.textContent='Итого';
-      fragmentLeft.appendChild(totalLabel);
-
-      const totalRow=document.createElement('div');
-      totalRow.className='crm-stage-gantt-row crm-stage-gantt-row--total';
-      totalRow.style.gridTemplateColumns=headerTemplate;
-      totalRow.style.minWidth=widthValue;
-      totalRow.style.width=widthValue;
-
-      filteredDays.forEach(({ key, day })=>{
-        const cell=document.createElement('div');
-        cell.className='crm-stage-gantt-cell crm-stage-gantt-cell--total';
-        const isOffDay=!!(day.meta && day.meta.patternOff);
-        if(isOffDay){
-          cell.classList.add('offday');
-        }
-        if([0,6].includes(day.date.getDay())){
-          cell.classList.add('weekend');
-        }
-        if(key===todayKey){
-          cell.classList.add('today');
-        }
-
-        const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
-        const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
-        const used=Math.max(0, dayUsageMap.get(key)||Number(capacityInfo.used)||0);
-        const freeValue=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-used);
+      const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
+      const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
+      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+      const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+      const totalsOnlyFree=isHourly && filterValue==='free';
+      if(total>0){
         const fill=document.createElement('div');
-        fill.className='crm-stage-gantt-fill crm-stage-gantt-fill--total';
-        if(filterValue==='free'){
-          const freeLabel=formatStageWorkload(freeValue,{ hourless:false });
-          fill.textContent=freeLabel;
-          fill.title=`Свободно: ${freeLabel}`;
+        fill.className='crm-stage-gantt-fill';
+        if(isHourly){
+          const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
+          const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
+          const plannedLabel=formatStageWorkload(total,{ hourless:false });
+          fill.textContent=`${plannedLabel} / ${capLabel}`;
+          fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+          dayResidualMap.set(key, Math.max(0, residualBefore-total));
         }else{
-          const usedLabel=formatStageWorkload(used,{ hourless:false });
-          const remainingLabel=formatStageWorkload(freeValue,{ hourless:false });
-          fill.textContent=`${usedLabel} / ${remainingLabel}`;
-          fill.title=`Использовано: ${usedLabel}, осталось: ${remainingLabel}`;
+          fill.textContent=formatStageWorkload(total,{ hourless:true });
+          fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
+        }
+        fill.classList.add(fillStatusClass);
+        if(shipLate){
+          fill.classList.add('late');
         }
         cell.appendChild(fill);
-        totalRow.appendChild(cell);
-      });
-      fragmentBody.appendChild(totalRow);
+      }
+      rowEl.appendChild(cell);
+    });
+    if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
+      const range=document.createElement('div');
+      range.className='crm-stage-gantt-range';
+      const left=(rangeStartIdx*dayWidth)+2;
+      const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
+      range.style.left=`${left}px`;
+      range.style.width=`${width}px`;
+      rowEl.appendChild(range);
     }
-    crmStageGanttLeft.appendChild(fragmentLeft);
-    crmStageGanttBody.appendChild(fragmentBody);
+    fragmentBody.appendChild(rowEl);
+  });
+  if(isHourly && dayUsageMap){
+    const totalLabel=document.createElement('div');
+    totalLabel.className='crm-stage-gantt-left-row crm-stage-gantt-left-row--total';
+    totalLabel.textContent='Итого';
+    fragmentLeft.appendChild(totalLabel);
+
+    const totalRow=document.createElement('div');
+    totalRow.className='crm-stage-gantt-row crm-stage-gantt-row--total';
+    totalRow.style.gridTemplateColumns=headerTemplate;
+    totalRow.style.minWidth=widthValue;
+    totalRow.style.width=widthValue;
+
+    filteredDays.forEach(({ key, day })=>{
+      const cell=document.createElement('div');
+      cell.className='crm-stage-gantt-cell crm-stage-gantt-cell--total';
+      const isOffDay=!!(day.meta && day.meta.patternOff);
+      if(isOffDay){
+        cell.classList.add('offday');
+      }
+      if([0,6].includes(day.date.getDay())){
+        cell.classList.add('weekend');
+      }
+      if(key===todayKey){
+        cell.classList.add('today');
+      }
+
+      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+      const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+      const used=Math.max(0, dayUsageMap.get(key)||Number(capacityInfo.used)||0);
+      const freeValue=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-used);
+      const fill=document.createElement('div');
+      fill.className='crm-stage-gantt-fill crm-stage-gantt-fill--total';
+      if(filterValue==='free'){
+        const freeLabel=formatStageWorkload(freeValue,{ hourless:false });
+        fill.textContent=freeLabel;
+        fill.title=`Свободно: ${freeLabel}`;
+      }else{
+        const usedLabel=formatStageWorkload(used,{ hourless:false });
+        const remainingLabel=formatStageWorkload(freeValue,{ hourless:false });
+        fill.textContent=`${usedLabel} / ${remainingLabel}`;
+        fill.title=`Использовано: ${usedLabel}, осталось: ${remainingLabel}`;
+      }
+      cell.appendChild(fill);
+      totalRow.appendChild(cell);
+    });
+    fragmentBody.appendChild(totalRow);
+  }
+  crmStageGanttLeft.appendChild(fragmentLeft);
+  crmStageGanttBody.appendChild(fragmentBody);
   let syncLock=false;
   const scrollEl=crmStageGanttScroll||crmStageGanttBody;
   if(scrollEl){
