@@ -2817,8 +2817,16 @@
 
   .crm-stage-secondary .crm-stage-gantt-card,
   .crm-stage-secondary .crm-stage-route-card {
-    width: calc(100% + 12px);
-    margin-inline: -6px;
+    width: calc(100% + 24px);
+    margin-inline: -12px;
+  }
+
+  @media (max-width: 900px) {
+    .crm-stage-secondary .crm-stage-gantt-card,
+    .crm-stage-secondary .crm-stage-route-card {
+      width: 100%;
+      margin-inline: 0;
+    }
   }
 
   .crm-stage-secondary > * {
@@ -3049,9 +3057,10 @@
       justify-content: center;
     }
 
-    .crm-stage-gantt-cell--total {
-      background: none;
-    }
+  .crm-stage-gantt-cell--total {
+    background: none;
+    padding: 6px 4px;
+  }
 
   .crm-stage-gantt-cell.weekend {
     background: color-mix(in srgb, var(--pc-border) 12%, transparent);
@@ -3106,28 +3115,36 @@
     background: color-mix(in srgb, var(--pc-success, #40c057) 26%, transparent);
   }
 
-    .crm-stage-gantt-fill.status-free {
-      background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
-    }
+  .crm-stage-gantt-fill.status-free {
+    background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
+  }
 
-    .crm-stage-gantt-fill--total {
-      background: none;
-      font-size: 12px;
-      font-weight: var(--pc-font-weight-semibold);
-      color: var(--pc-text);
-    }
+  .crm-stage-gantt-fill--total {
+    background: none;
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+    letter-spacing: 0.01em;
+  }
 
-    .crm-stage-gantt-row--total {
-      border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
-      background: color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface));
-      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--pc-primary) 15%, transparent);
-    }
+  .crm-stage-gantt-row--total {
+    margin-top: var(--pc-spacing-sm);
+    border-top: none;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface)) 0%, color-mix(in srgb, var(--pc-primary) 4%, var(--pc-surface)) 100%);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--pc-primary) 16%, transparent);
+    border-radius: var(--pc-radius-sm);
+  }
 
-    .crm-stage-gantt-left-row--total {
-      font-weight: var(--pc-font-weight-semibold);
-      border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
-      background: color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface));
-    }
+  .crm-stage-gantt-left-row--total {
+    font-weight: var(--pc-font-weight-semibold);
+    margin-top: var(--pc-spacing-sm);
+    border-top: none;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--pc-primary) 10%, var(--pc-surface)) 0%, color-mix(in srgb, var(--pc-primary) 6%, var(--pc-surface)) 100%);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--pc-primary) 16%, transparent);
+    border-radius: var(--pc-radius-sm);
+    padding-block: 6px;
+    padding-inline: 8px;
+  }
 
   .crm-stage-route {
     display: flex;
@@ -6504,12 +6521,19 @@
             <details class="crm-settings-group" open>
               <summary>Фильтры и статусы</summary>
               <div class="crm-settings-fields">
-                <div class="crm-settings-row">
-                  <div class="crm-settings-label">Не учитывать состояния</div>
-                  <div class="crm-settings-control">
-                    <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
-                    <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
-                    <span id="crmUnaccountedFilterSummary" class="crm-settings-summary muted">В «Не учтённых» показываются все</span>
+                <div class="crm-settings-row crm-settings-row--stack">
+                  <div class="crm-settings-label">Состояния</div>
+                  <div class="crm-settings-control crm-settings-control--column">
+                    <div class="crm-settings-control">
+                      <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
+                      <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                      <span id="crmUnaccountedFilterSummary" class="crm-settings-summary muted">В «Не учтённых» показываются все</span>
+                    </div>
+                    <div class="crm-unaccounted-filters" id="crmUnaccountedFilters">
+                      <span class="crm-unaccounted-filter-label">Показывать в «Не учтённых»:</span>
+                      <div class="crm-unaccounted-filter-list" id="crmUnaccountedFilter"></div>
+                    </div>
+                    <div class="crm-field__hint muted">Фильтр раздела «Не учтённые» общий для всех пользователей.</div>
                   </div>
                 </div>
               </div>
@@ -6565,10 +6589,7 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmUnaccountedClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <div class="crm-unaccounted-filters" id="crmUnaccountedFilters">
-      <span class="crm-unaccounted-filter-label">Показывать состояния:</span>
-      <div class="crm-unaccounted-filter-list" id="crmUnaccountedFilter"></div>
-    </div>
+    <p class="crm-modal-empty muted">Настройки отображения состояний задаются в настройках доски.</p>
     <div class="crm-table-wrap">
       <table class="crm-modal-table" id="crmUnaccountedTable">
         <thead>
@@ -20327,6 +20348,7 @@ function openBoard(){
   setCrmUnaccountedDraft(statuses,{render:false});
   const hiddenStatuses=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
   setCrmUnaccountedHiddenDraft(hiddenStatuses,{render:false});
+  renderCrmUnaccountedFilterOptions();
   const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
