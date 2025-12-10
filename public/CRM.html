@@ -1543,6 +1543,36 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-danger) 25%, transparent);
   }
 
+  .pc-nav__item {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+  }
+
+  .crm-stage-nav__dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 12;
+    min-width: 240px;
+    background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+    border-radius: var(--pc-radius-xl);
+    padding: var(--pc-spacing-sm);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+  }
+
+  .crm-stage-nav__dropdown-inner {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-stage-nav__dropdown .crm-stage-select-shell {
+    width: 100%;
+    min-width: 220px;
+  }
+
   .pc-nav__badge {
     display: inline-flex;
     align-items: center;
@@ -5868,7 +5898,27 @@
   <nav class="pc-nav" aria-label="Основные разделы">
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" data-tooltip-primary="Переделы" data-tooltip-secondary="Распределение по переделам, исключения/бронь и маршрут заказа.">Переделы</button>
+    <div class="pc-nav__item crm-stage-nav" id="crmStageNavItem">
+      <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" aria-haspopup="true" aria-expanded="false">Переделы</button>
+      <div class="crm-stage-nav__dropdown" id="crmStageNavDropdown" hidden>
+        <div class="crm-stage-nav__dropdown-inner">
+          <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
+            <select id="crmStageSelect" class="pc-select">
+            <option value="draw">📐 Подготовка в работу</option>
+            <option value="proc">🛒 Закупка</option>
+            <option value="shear">✂️ Рубка</option>
+            <option value="laser">🔦 Лазер</option>
+            <option value="bend">🗜️ Гибка</option>
+            <option value="weld">🔩 Сварка</option>
+            <option value="mech">⚙️ Мехобработка</option>
+            <option value="coop">🤝 Кооперация</option>
+            <option value="pack">📦 Упаковка</option>
+            <option value="ship">🚚 Отгрузка</option>
+            </select>
+          </span>
+        </div>
+      </div>
+    </div>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
@@ -5920,22 +5970,6 @@
     <div class="crm-toolbar__row">
       <div class="crm-toolbar__left">
         <div class="crm-toolbar__stage-controls" id="crmStageControls" hidden>
-          <label class="crm-toolbar__stage-field" for="crmStageSelect">Передел
-            <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
-              <select id="crmStageSelect" class="pc-select">
-              <option value="draw">📐 Подготовка в работу</option>
-              <option value="proc">🛒 Закупка</option>
-              <option value="shear">✂️ Рубка</option>
-              <option value="laser">🔦 Лазер</option>
-              <option value="bend">🗜️ Гибка</option>
-              <option value="weld">🔩 Сварка</option>
-              <option value="mech">⚙️ Мехобработка</option>
-              <option value="coop">🤝 Кооперация</option>
-              <option value="pack">📦 Упаковка</option>
-              <option value="ship">🚚 Отгрузка</option>
-              </select>
-            </span>
-          </label>
           <label class="crm-toolbar__stage-field" for="crmStageFilter">Фильтр
             <select id="crmStageFilter" class="pc-select">
               <option value="current">Текущие</option>
@@ -6729,7 +6763,7 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmLateReasonClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="pc-muted">Укажите причину просрочки или отметьте выполнение вчера.</p>
+    <p class="pc-muted">Укажите причину просрочки или отметьте выполнение вчера/до выходных.</p>
     <label class="pc-field">
       <span class="pc-field__label">Причина</span>
       <textarea id="crmLateReasonInput" class="pc-textarea" rows="6" style="min-height:160px" placeholder="Например: ожидали заготовки"></textarea>
@@ -6739,6 +6773,7 @@
   <div class="dlg-footer">
     <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel">Отмена</button>
     <button class="pc-btn" type="button" id="crmLateReasonSave">Сохранить</button>
+    <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonWeekend">До выходных</button>
     <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday">Выполнено вчера</button>
   </div>
 </dialog>
@@ -9971,6 +10006,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
+      crmStageNavItem=$('#crmStageNavItem'),
+      crmStageNavDropdown=$('#crmStageNavDropdown'),
       crmStageControls=$('#crmStageControls'),
       crmOrdersFilter=$('#crmOrdersFilter'),
       crmStageViewEl=$('#crmStageView'),
@@ -10061,6 +10098,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmLateReasonSave=$('#crmLateReasonSave'),
       crmLateReasonCancel=$('#crmLateReasonCancel'),
       crmLateReasonClose=$('#crmLateReasonClose'),
+      crmLateReasonWeekend=$('#crmLateReasonWeekend'),
       crmLateReasonYesterday=$('#crmLateReasonYesterday'),
       crmAdminNavBtn=$('#crmAdminNavBtn'),
       crmSettingsNavBtn=$('#crmSettingsNavBtn'),
@@ -10236,6 +10274,7 @@ let crmStageSelectMenu=null;
 let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
+let crmStageNavHoverTimeout=null;
 let crmMappingRemovedDraft=new Set();
 
 if(crmStageSelect){
@@ -10562,6 +10601,19 @@ function closeCrmStageSelectMenu(focusDisplay=true){
     crmStageSelectDisplay.focus({ preventScroll:true });
   }else if(crmStageSelectDisplay){
     crmStageSelectDisplay.setAttribute('aria-expanded','false');
+  }
+}
+
+function setStageNavDropdown(open){
+  if(!crmStageNavDropdown) return;
+  crmStageNavDropdown.hidden=!open;
+  if(crmStageTabBtn){
+    crmStageTabBtn.setAttribute('aria-expanded', open?'true':'false');
+  }
+  if(open){
+    openCrmStageSelectMenu();
+  }else{
+    closeCrmStageSelectMenu(false);
   }
 }
 
@@ -16354,6 +16406,13 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
         if(decision.action==='yesterday'){
           doneAt=new Date(now.getTime()-86400000);
           delayReason='Выполнено вчера';
+        }else if(decision.action==='weekend'){
+          const daysBack=Math.min(3, Math.max(1, decision.daysBack||3));
+          doneAt=new Date(now.getTime()-(daysBack*86400000));
+          const dayLabel=typeof decision.dayLabel==='string' && decision.dayLabel.trim()
+            ? decision.dayLabel.trim()
+            : 'в выходные';
+          delayReason=`Выполнено ${dayLabel}`;
         }else if(decision.reason){
           delayReason=decision.reason;
         }
@@ -18593,12 +18652,22 @@ function requestStageDelayReason(initialReason, diffDays){
   resetLateReasonDialog('');
   crmLateReasonInput.value=(initialReason||'').trim();
   const allowYesterday=diffDays<=1;
+  const allowWeekend=(new Date()).getDay()===1;
+  const normalizedDiff=Number.isFinite(diffDays)?Math.ceil(diffDays):3;
+  const weekendOffset=Math.min(3, Math.max(1, normalizedDiff));
   if(crmLateReasonYesterday){
     crmLateReasonYesterday.disabled=false;
     crmLateReasonYesterday.dataset.allowYesterday=allowYesterday?'1':'0';
     crmLateReasonYesterday.title=allowYesterday
       ? 'Отметить выполнение вчера'
       : 'Доступно, если отставание не превышает 1 день';
+  }
+  if(crmLateReasonWeekend){
+    crmLateReasonWeekend.disabled=false;
+    crmLateReasonWeekend.dataset.allowWeekend=allowWeekend?'1':'0';
+    crmLateReasonWeekend.title=allowWeekend
+      ? 'Отметить выполнение до выходных'
+      : 'Доступно только в понедельник';
   }
   return new Promise(resolve=>{
     const finalize=(result)=>{
@@ -18609,6 +18678,7 @@ function requestStageDelayReason(initialReason, diffDays){
       if(crmLateReasonSave) crmLateReasonSave.removeEventListener('click', onSave);
       if(crmLateReasonCancel) crmLateReasonCancel.removeEventListener('click', onCancel);
       if(crmLateReasonClose) crmLateReasonClose.removeEventListener('click', onCancel);
+      if(crmLateReasonWeekend) crmLateReasonWeekend.removeEventListener('click', onWeekend);
       if(crmLateReasonYesterday) crmLateReasonYesterday.removeEventListener('click', onYesterday);
       resolve(result);
     };
@@ -18623,6 +18693,15 @@ function requestStageDelayReason(initialReason, diffDays){
       }
       finalize({ action:'reason', reason:value });
     };
+    const onWeekend=()=>{
+      if(!allowWeekend){
+        resetLateReasonDialog('Отметка «До выходных» доступна только в понедельник.');
+        return;
+      }
+      const dayLabel=weekendOffset===1?'в воскресенье':weekendOffset===2?'в субботу':'в пятницу';
+      showToast({ title:'CRM', message:`Отмечено как выполненное ${dayLabel}.` });
+      finalize({ action:'weekend', daysBack:weekendOffset, dayLabel });
+    };
     const onYesterday=()=>{
       if(!allowYesterday){
         resetLateReasonDialog('Отметка «Выполнено вчера» доступна, если задержка не больше 1 дня.');
@@ -18633,6 +18712,7 @@ function requestStageDelayReason(initialReason, diffDays){
     if(crmLateReasonSave) crmLateReasonSave.addEventListener('click', onSave);
     if(crmLateReasonCancel) crmLateReasonCancel.addEventListener('click', onCancel);
     if(crmLateReasonClose) crmLateReasonClose.addEventListener('click', onCancel);
+    if(crmLateReasonWeekend) crmLateReasonWeekend.addEventListener('click', onWeekend);
     if(crmLateReasonYesterday) crmLateReasonYesterday.addEventListener('click', onYesterday);
     crmLateReasonDlg.addEventListener('close', onClose, { once:true });
     crmLateReasonDlg.showModal();
@@ -18664,6 +18744,13 @@ async function processStageCompletionChange(tr, isDone){
     if(decision.action==='yesterday'){
       doneAt=new Date(now.getTime()-86400000);
       reason='Выполнено вчера';
+    }else if(decision.action==='weekend'){
+      const daysBack=Math.min(3, Math.max(1, decision.daysBack||3));
+      doneAt=new Date(now.getTime()-(daysBack*86400000));
+      const dayLabel=typeof decision.dayLabel==='string' && decision.dayLabel.trim()
+        ? decision.dayLabel.trim()
+        : 'в выходные';
+      reason=`Выполнено ${dayLabel}`;
     }else if(decision.reason){
       reason=decision.reason;
     }
@@ -22111,6 +22198,29 @@ if(crmOrdersTabBtn){
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
 }
+if(crmStageNavItem && crmStageNavDropdown){
+  const openStageDropdown=()=>{
+    if(crmStageNavHoverTimeout){
+      clearTimeout(crmStageNavHoverTimeout);
+      crmStageNavHoverTimeout=null;
+    }
+    setStageNavDropdown(true);
+  };
+  const closeStageDropdown=()=>{
+    if(crmStageNavHoverTimeout){
+      clearTimeout(crmStageNavHoverTimeout);
+    }
+    crmStageNavHoverTimeout=setTimeout(()=>setStageNavDropdown(false),120);
+  };
+  crmStageNavItem.addEventListener('mouseenter', openStageDropdown);
+  crmStageNavItem.addEventListener('mouseleave', closeStageDropdown);
+  crmStageNavDropdown.addEventListener('pointerenter', openStageDropdown);
+  crmStageNavDropdown.addEventListener('pointerleave', closeStageDropdown);
+  if(crmStageTabBtn){
+    crmStageTabBtn.addEventListener('focus', openStageDropdown);
+    crmStageTabBtn.addEventListener('blur', closeStageDropdown);
+  }
+}
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
     const stageKey=crmStageSelect.value||'draw';
@@ -22127,8 +22237,11 @@ if(crmStageSelect){
       const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
       crmStageTabBtn.textContent=`Переделы (${label})`;
     }
+    setStageNavDropdown(false);
     if(currentCrmView==='stage'){
       renderCrmStageTable();
+    }else{
+      setCrmView('stage');
     }
     updateCrmCalendarButtons(stageKey);
     applyCrmWriteAccess();
