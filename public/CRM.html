@@ -6221,7 +6221,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-link" title="Связь с предыдущим переделом">⛓</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
             <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -6896,7 +6896,6 @@ const CRM_MIN_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
-const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
@@ -6908,8 +6907,6 @@ const CRM_DEFAULT_PREFERENCES={
   showLateTips:true,
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
-  linkedStagesEnabled:true,
-  linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
@@ -7574,26 +7571,6 @@ function normalizeRouteHorizonDays(value){
   return Math.max(0, Math.min(CRM_MAX_ROUTE_HORIZON_DAYS, Math.round(num)));
 }
 
-function normalizeStageLinkGapDays(value){
-  if(value===null||value===undefined||value==='') return 0;
-  let num=null;
-  if(typeof value==='number'){
-    if(!Number.isFinite(value)) return 0;
-    num=value;
-  }else if(typeof value==='string'){
-    const trimmed=value.trim();
-    if(!trimmed) return 0;
-    const normalized=trimmed.replace(',', '.');
-    const direct=Number(normalized);
-    if(!Number.isFinite(direct)) return 0;
-    num=direct;
-  }else{
-    return 0;
-  }
-  if(num===null || !Number.isFinite(num) || num<=0) return 0;
-  return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
-}
-
 function sanitizeCrmHintPreferences(raw){
   const base=raw && typeof raw==='object'?raw:{};
   const result={ ...CRM_HINT_DEFAULTS };
@@ -7697,15 +7674,6 @@ function sanitizeCrmPreferences(raw){
       if(normalized===null) continue;
       result.routeHorizonDays=normalized;
       break;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStagesEnabled')){
-      result.linkedStagesEnabled=raw.linkedStagesEnabled!==false;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStageGapDays')){
-      const normalized=normalizeStageLinkGapDays(raw.linkedStageGapDays);
-      if(normalized!==null){
-        result.linkedStageGapDays=normalized;
-      }
     }
     if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
       result.ganttRangeHints=raw.ganttRangeHints===true;
@@ -7897,18 +7865,6 @@ function setGanttRangeHintsEnabled(enabled){
   prefs.ganttRangeHints=normalized;
   state.settings.preferences=prefs;
   persistStoredCrmSettings(state.settings);
-}
-
-function isStageLinkEnabledByDefault(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return true;
-  return prefs.linkedStagesEnabled!==false;
-}
-
-function getCrmStageLinkGapDays(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return 0;
-  return normalizeStageLinkGapDays(prefs.linkedStageGapDays);
 }
 
 function getPreferredAutoRefreshIntervalMs(){
@@ -17583,7 +17539,6 @@ function handleClearStageDates(){
       endInput.dataset.lastAccepted='';
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
     }
-    resetStageLinkOverride(tr);
   });
   syncAutoDates();
   updateAllStageExpectations();
@@ -17628,7 +17583,7 @@ function calculateOrderStageDates(options={}){
       if(manualEndDate) previousEndDate=manualEndDate;
       return;
     }
-    const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate, isStageLinkActive(tr));
+    const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate);
     const scheduleResult=planStageAutoSchedule({
       stage:stageDraft,
       stageKey,
@@ -17644,7 +17599,6 @@ function calculateOrderStageDates(options={}){
     applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
     previousEndDate=scheduleResult.endDateObj||previousEndDate;
     changed=true;
-    resetStageLinkOverride(tr);
     const hasStartPush=scheduleResult.delayDays>0;
     const hasFinishPush=scheduleResult.finishDelayDays>0;
     if(hasStartPush || hasFinishPush){
@@ -17687,7 +17641,7 @@ function calculateOrderStageDates(options={}){
   }
 }
 
-function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
+function determineStageEarliestStartDate(stageKey, previousEndDate){
   const today=today0();
   let earliest=addDays(today,0);
   if(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
@@ -17696,56 +17650,7 @@ function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
       earliest=prev;
     }
   }
-  if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const linkedStart=findLinkedStageStartDate(stageKey, previousEndDate);
-    if(linkedStart && linkedStart>earliest){
-      earliest=linkedStart;
-    }
-  }
   return earliest;
-}
-
-function findLinkedStageStartDate(stageKey, previousEndDate){
-  const gap=getCrmStageLinkGapDays();
-  if(!(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
-    return null;
-  }
-  let remaining=Math.max(0, gap);
-  let cursor=addDays(previousEndDate,0);
-  let guard=0;
-  while(guard<730){
-    guard+=1;
-    if(isStageWorkingDayForLink(stageKey, cursor)){
-      if(remaining<=0){
-        return addDays(cursor,0);
-      }
-      remaining-=1;
-    }
-    cursor=addDays(cursor,1);
-  }
-  return addDays(cursor,0);
-}
-
-function isStageWorkingDayForLink(stageKey, date){
-  const normalized=normalizeCrmStageKey(stageKey||'');
-  if(!normalized) return true;
-  const evaluator=getCrmStageScheduleEvaluator(normalized);
-  if(evaluator && typeof evaluator.isWorking==='function' && !evaluator.isWorking(date)){
-    return false;
-  }
-  if(CRM_NOHOUR_STAGES.has(normalized)){
-    return true;
-  }
-  const calendar=getCrmStageCalendar(normalized);
-  const iso=fmtDateISO(date);
-  if(calendar?.exceptions instanceof Map && calendar.exceptions.has(iso)){
-    const cap=Math.max(0, Number(calendar.exceptions.get(iso))||0);
-    if(cap<=1e-6){
-      return false;
-    }
-  }
-  const baseCap=getCrmStageCapacity(normalized);
-  return baseCap>1e-6;
 }
 
 function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestStart }){
@@ -18608,48 +18513,6 @@ function refreshStageReorderControls(){
   });
 }
 
-function updateStageLinkButtonState(button, enabled){
-  if(!button) return;
-  button.textContent=enabled?'🔗':'⛓';
-  button.setAttribute('aria-pressed', enabled?'true':'false');
-  button.classList.toggle('is-active', !!enabled);
-}
-
-function setStageLinkState(tr, enabled){
-  if(!tr) return;
-  tr.dataset.linkPrev=enabled?'1':'0';
-  if(enabled){
-    delete tr.dataset.linkOverride;
-  }
-  const button=tr.querySelector('.stage-link-toggle');
-  updateStageLinkButtonState(button, !!enabled);
-}
-
-function isStageLinkActive(tr){
-  return tr?.dataset?.linkPrev==='1';
-}
-
-function resetStageLinkOverride(tr){
-  if(!tr) return;
-  delete tr.dataset.linkOverride;
-}
-
-function handleLinkedStageManualChange(tr, input){
-  if(!tr || !input) return true;
-  if(!isStageLinkActive(tr)) return true;
-  if(tr.dataset.linkOverride==='1') return true;
-  const nameInput=tr.querySelector('[data-k="name"]');
-  const stageLabel=(nameInput?.value||'Передел').trim()||'Передел';
-  const message=`Изменение даты нарушит связь с предыдущим переделом для «${stageLabel}». Продолжить?`;
-  if(window.confirm(message)){
-    tr.dataset.linkOverride='1';
-    return true;
-  }
-  const revert=input.dataset.prevValue||input.dataset.lastAccepted||input.dataset.original||'';
-  input.value=revert;
-  return false;
-}
-
 function moveStageRow(tr,direction){
   if(!stagesTableBody||!tr) return;
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
@@ -18694,12 +18557,9 @@ function appendStageRow(st){
   }else if(st.completedLate===false){
     tr.dataset.completedLate='false';
   }
-  const linkEnabled=st.linkPrev===undefined?isStageLinkEnabledByDefault():!!st.linkPrev;
-  tr.dataset.linkPrev=linkEnabled?'1':'0';
   tr.innerHTML=`
     <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
     <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td class="col-link"><button type="button" class="pc-icon-btn stage-link-toggle" aria-pressed="${linkEnabled?'true':'false'}" title="Связь с предыдущим переделом">${linkEnabled?'🔗':'⛓'}</button></td>
     <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
     <td class="col-start"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
     <td class="col-end"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
@@ -18731,14 +18591,6 @@ function appendStageRow(st){
     updateAllStageExpectations();
     refreshStageReorderControls();
   };
-  setStageLinkState(tr, linkEnabled);
-  const linkBtn=tr.querySelector('.stage-link-toggle');
-  if(linkBtn){
-    linkBtn.addEventListener('click',()=>{
-      const next=!(tr.dataset.linkPrev==='1');
-      setStageLinkState(tr, next);
-    });
-  }
   const moveUpBtn=tr.querySelector('[data-stage-move="up"]');
   if(moveUpBtn){
     moveUpBtn.addEventListener('click',()=>moveStageRow(tr,'up'));
@@ -18800,7 +18652,6 @@ function appendStageRow(st){
       startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
     });
     startInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, startInput)) return;
       enforceStageDateConstraints(tr, startInput);
       applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
       syncAutoDates();
@@ -18814,7 +18665,6 @@ function appendStageRow(st){
       endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
     });
     endInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, endInput)) return;
       enforceStageDateConstraints(tr, endInput);
       applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
       syncAutoDates();
@@ -18889,7 +18739,6 @@ function readStageRow(tr){
     originalEnd:endInput?.dataset?.original||'',
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
     crmStageId:stageId,
-    linkPrev:tr.dataset?.linkPrev==='1',
     doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
@@ -19613,33 +19462,6 @@ function renderCrmPreferencesSettingsUI(){
   horizonHint.className='crm-field__hint';
   horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
   horizonField.append(horizonLabel, horizonInput, horizonHint);
-  const linkOption=document.createElement('label');
-  linkOption.className='crm-settings-checkbox';
-  const linkCheckbox=document.createElement('input');
-  linkCheckbox.type='checkbox';
-  linkCheckbox.name='prefLinkedStages';
-  linkCheckbox.checked=prefs.linkedStagesEnabled!==false;
-  const linkText=document.createElement('span');
-  linkText.textContent='Связь с предыдущим переделом (по умолчанию)';
-  linkOption.append(linkCheckbox, linkText);
-  const linkGapField=document.createElement('label');
-  linkGapField.className='crm-field';
-  const linkGapLabel=document.createElement('span');
-  linkGapLabel.className='crm-field__label';
-  linkGapLabel.textContent='Смещение даты следующего передела';
-  const linkGapInput=document.createElement('input');
-  linkGapInput.type='number';
-  linkGapInput.className='pc-input';
-  linkGapInput.name='prefLinkedStageGapDays';
-  linkGapInput.min='0';
-  linkGapInput.step='1';
-  linkGapInput.inputMode='numeric';
-  linkGapInput.placeholder='0';
-  linkGapInput.value=String(Math.max(0, prefs.linkedStageGapDays||0));
-  const linkGapHint=document.createElement('span');
-  linkGapHint.className='crm-field__hint';
-  linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
-  linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
   const laneSumField=document.createElement('label');
   laneSumField.className='crm-field';
   const laneSumLabel=document.createElement('span');
@@ -19750,7 +19572,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -20301,8 +20123,6 @@ boardForm.addEventListener('submit',e=>{
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
-    linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
-    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
     laneSumPeriod:{
       mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
       from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
