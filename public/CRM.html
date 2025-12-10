@@ -4230,6 +4230,72 @@
     color: var(--pc-text-muted);
   }
 
+  .crm-calendar-list {
+    display: grid;
+    gap: var(--pc-spacing-xs);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-surface) 90%, var(--pc-border) 10%);
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-row__meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .crm-calendar-row__comment {
+    color: var(--pc-text-muted);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+
+  .crm-calendar-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-actions__right {
+    display: flex;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-calendar-history {
+    border-top: 1px dashed var(--pc-border);
+    padding-top: var(--pc-spacing-sm);
+    margin-top: var(--pc-spacing-md);
+    font-size: 13px;
+    color: var(--pc-text-muted);
+    display: grid;
+    gap: 6px;
+  }
+
+  .crm-calendar-history__item strong {
+    color: var(--pc-text);
+  }
+
+  .crm-calendar-row--archived {
+    opacity: 0.75;
+    background: color-mix(in srgb, var(--pc-surface) 80%, var(--pc-border) 20%);
+  }
+
+  .crm-calendar-row__actions {
+    display: flex;
+    gap: 6px;
+  }
+
   .crm-modal-hint code {
     background: color-mix(in srgb, var(--pc-border) 18%, transparent);
     padding: 0 4px;
@@ -6308,12 +6374,18 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageExceptionsClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="crm-modal-hint">Каждая строка: <code>ДД.ММ.ГГГГ</code> или <code>ДД.ММ.ГГГГ (часы)</code>. Если часы не указаны, день считается выходным.</p>
-    <textarea id="crmStageExceptionsInput" class="crm-modal-textarea" placeholder="12.09.2025&#10;15.09.2025 (18)"></textarea>
+    <div class="crm-calendar-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmStageExceptionsAdd">Добавить исключение</button>
+      <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageExceptionsArchiveToggle">Показать архив</button>
+      </div>
+    </div>
+    <div id="crmStageExceptionsList" class="crm-calendar-list"></div>
+    <div id="crmStageExceptionsArchive" class="crm-calendar-list" hidden></div>
+    <div id="crmStageExceptionsHistory" class="crm-calendar-history" hidden></div>
   </div>
   <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageExceptionsCancel">Отмена</button>
-    <button type="button" class="pc-btn pc-btn--primary" id="crmStageExceptionsApply">Применить</button>
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageExceptionsCancel">Закрыть</button>
   </div>
 </dialog>
 
@@ -6323,14 +6395,50 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageReserveClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="crm-modal-hint">Каждая строка: <code>ДД.ММ.ГГГГ (часы)</code>. Эти часы будут зарезервированы и не попадут в основную ёмкость.</p>
-    <textarea id="crmStageReserveInput" class="crm-modal-textarea" placeholder="20.09.2025 (10)
-21.09.2025 (5)"></textarea>
+    <div class="crm-calendar-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmStageReserveAdd">Добавить бронь</button>
+      <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageReserveArchiveToggle">Показать архив</button>
+      </div>
+    </div>
+    <div id="crmStageReserveList" class="crm-calendar-list"></div>
+    <div id="crmStageReserveArchive" class="crm-calendar-list" hidden></div>
     <div id="crmStageReserveDiag" class="crm-modal-diag muted"></div>
+    <div id="crmStageReserveHistory" class="crm-calendar-history" hidden></div>
   </div>
   <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageReserveCancel">Отмена</button>
-    <button type="button" class="pc-btn pc-btn--primary" id="crmStageReserveApply">Применить</button>
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageReserveCancel">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="crmCalendarEntryDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong id="crmCalendarEntryTitle"></strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmCalendarEntryClose" aria-label="Закрыть">✖</button>
+  </div>
+  <form class="dlg-body" id="crmCalendarEntryForm">
+    <div class="row">
+      <label class="pc-input">
+        <span>Дата</span>
+        <input type="date" id="crmCalendarEntryDate" required />
+      </label>
+      <label class="pc-input">
+        <span>Время</span>
+        <input type="time" id="crmCalendarEntryTime" />
+      </label>
+    </div>
+    <label class="pc-input">
+      <span>Часы</span>
+      <input type="number" step="0.25" min="0" id="crmCalendarEntryHours" />
+    </label>
+    <label class="pc-input">
+      <span>Комментарий</span>
+      <textarea id="crmCalendarEntryComment" rows="2"></textarea>
+    </label>
+  </form>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmCalendarEntryCancel">Отмена</button>
+    <button type="submit" form="crmCalendarEntryForm" class="pc-btn pc-btn--primary" id="crmCalendarEntryApply">Сохранить</button>
   </div>
 </dialog>
 
@@ -7620,9 +7728,15 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       : [];
   const result=[];
   const seen=new Set();
+  const normalizeText=v=>typeof v==='string'?v.trim():'';
+  const nowIso=new Date().toISOString();
   source.forEach(item=>{
     let dateRaw=null;
     let valueRaw=null;
+    let timeRaw='';
+    let commentRaw='';
+    let createdRaw=null;
+    let updatedRaw=null;
     if(Array.isArray(item)){
       [dateRaw, valueRaw]=item;
     }else if(item && typeof item==='object'){
@@ -7635,6 +7749,10 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       else if(Object.prototype.hasOwnProperty.call(item,'capacity')) valueRaw=item.capacity;
       else if(Object.prototype.hasOwnProperty.call(item,'amount')) valueRaw=item.amount;
       else if(Object.prototype.hasOwnProperty.call(item,1)) valueRaw=item[1];
+      timeRaw=item.time||item.timeLabel||item.when||'';
+      commentRaw=item.comment||item.note||item.reason||'';
+      createdRaw=item.createdAt||item.created||null;
+      updatedRaw=item.updatedAt||item.updated||null;
     }
     const iso=coerceCalendarIso(dateRaw);
     if(!iso || seen.has(iso)) return;
@@ -7666,11 +7784,33 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       return;
     }
     const final=Math.round(numeric*100)/100;
-    result.push([iso, final]);
+    const timeLabel=normalizeText(timeRaw).slice(0, 32);
+    const comment=normalizeText(commentRaw).slice(0, 240);
+    const createdAt=(typeof createdRaw==='string'&&createdRaw.includes('T'))?createdRaw:nowIso;
+    const updatedAt=(typeof updatedRaw==='string'&&updatedRaw.includes('T'))?updatedRaw:nowIso;
+    result.push({ iso, value:final, time:timeLabel, comment, createdAt, updatedAt });
     seen.add(iso);
   });
-  result.sort((a,b)=>a[0].localeCompare(b[0]));
+  result.sort((a,b)=>a.iso.localeCompare(b.iso));
   return result;
+}
+
+function sanitizeCrmCalendarHistory(list){
+  if(!Array.isArray(list)) return [];
+  const normalized=list.map(entry=>{
+    const iso=coerceCalendarIso(entry.iso||entry.date||entry.day||null);
+    return {
+      kind:entry.kind==='reserve'?'reserve':'exception',
+      iso,
+      value:typeof entry.value==='number'?entry.value:null,
+      time:typeof entry.time==='string'?entry.time.trim().slice(0,32):'',
+      comment:typeof entry.comment==='string'?entry.comment.trim().slice(0,240):'',
+      action:entry.action==='delete'?'delete':'update',
+      at:(typeof entry.at==='string'&&entry.at.includes('T'))?entry.at:new Date().toISOString(),
+    };
+  }).filter(Boolean);
+  normalized.sort((a,b)=>b.at.localeCompare(a.at));
+  return normalized.slice(0,100);
 }
 
 function sanitizeCrmStageCalendars(source){
@@ -7687,9 +7827,11 @@ function sanitizeCrmStageCalendars(source){
     }
     const exceptionsSource=entry&&typeof entry==='object'?entry.exceptions:[];
     const reservesSource=entry&&typeof entry==='object'?entry.reserves:[];
+    const historySource=entry&&typeof entry==='object'?entry.history:[];
     result[stage]={
       exceptions:sanitizeCrmCalendarEntries(exceptionsSource, true),
-      reserves:sanitizeCrmCalendarEntries(reservesSource, false)
+      reserves:sanitizeCrmCalendarEntries(reservesSource, false),
+      history:sanitizeCrmCalendarHistory(historySource)
     };
   });
   return result;
@@ -8476,8 +8618,6 @@ const applyCrmWriteAccess=()=>{
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
   if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
-  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canSelectedStage; }
-  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canSelectedStage; }
   if(addStageBtn){
     addStageBtn.hidden=!canAddStages;
     addStageBtn.disabled=!canAddStages;
@@ -8993,6 +9133,7 @@ function ensureCrmStageCalendars(){
 
 let crmPlanFreezeDirty=false;
 let crmPlanFreezeBypass=false;
+const crmCalendarArchiveVisible={ exceptions:false, reserve:false };
 
 function markCrmPlanFreezeDirty(){
   crmPlanFreezeDirty=true;
@@ -9986,10 +10127,43 @@ function setCrmStageCalendar(stageKey, payload){
   const calendars=ensureCrmStageCalendars();
   const exceptions=payload&&payload.exceptions?entriesFromAny(payload.exceptions):[];
   const reserves=payload&&payload.reserves?entriesFromAny(payload.reserves):[];
+  const history=payload&&payload.history?sanitizeCrmCalendarHistory(payload.history):calendars[stageKey]?.history||[];
   calendars[stageKey]={
     exceptions:sanitizeCrmCalendarEntries(exceptions, true),
-    reserves:sanitizeCrmCalendarEntries(reserves, false)
+    reserves:sanitizeCrmCalendarEntries(reserves, false),
+    history
   };
+}
+
+function getCrmStageCalendarEntryList(stageKey, kind){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  const list=Array.isArray(entry[kind])?entry[kind]:[];
+  return list;
+}
+
+function writeCrmStageCalendarEntries(stageKey, kind, entries){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  entry[kind]=sanitizeCrmCalendarEntries(entries, kind==='exception');
+  calendars[stageKey]=entry;
+}
+
+function pushCrmCalendarHistory(stageKey, kind, action, data){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  const history=Array.isArray(entry.history)?entry.history:[];
+  history.unshift({
+    kind,
+    action,
+    iso:data?.iso||null,
+    value:typeof data?.value==='number'?data.value:null,
+    time:data?.time||'',
+    comment:data?.comment||'',
+    at:new Date().toISOString()
+  });
+  entry.history=sanitizeCrmCalendarHistory(history);
+  calendars[stageKey]=entry;
 }
 
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
@@ -10061,16 +10235,32 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteDialogContent=$('#crmStageRouteDlgContent'),
       crmStageRouteDialogClose=$('#crmStageRouteDlgClose'),
       crmStageExceptionsDlg=$('#crmStageExceptionsDlg'),
-      crmStageExceptionsInput=$('#crmStageExceptionsInput'),
+      crmStageExceptionsList=$('#crmStageExceptionsList'),
+      crmStageExceptionsArchive=$('#crmStageExceptionsArchive'),
+      crmStageExceptionsHistory=$('#crmStageExceptionsHistory'),
+      crmStageExceptionsAdd=$('#crmStageExceptionsAdd'),
+      crmStageExceptionsArchiveToggle=$('#crmStageExceptionsArchiveToggle'),
       crmStageExceptionsClose=$('#crmStageExceptionsClose'),
       crmStageExceptionsCancel=$('#crmStageExceptionsCancel'),
-      crmStageExceptionsApply=$('#crmStageExceptionsApply'),
       crmStageReserveDlg=$('#crmStageReserveDlg'),
-      crmStageReserveInput=$('#crmStageReserveInput'),
+      crmStageReserveList=$('#crmStageReserveList'),
+      crmStageReserveArchive=$('#crmStageReserveArchive'),
       crmStageReserveDiag=$('#crmStageReserveDiag'),
+      crmStageReserveHistory=$('#crmStageReserveHistory'),
+      crmStageReserveAdd=$('#crmStageReserveAdd'),
+      crmStageReserveArchiveToggle=$('#crmStageReserveArchiveToggle'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
-      crmStageReserveApply=$('#crmStageReserveApply'),
+      crmCalendarEntryDlg=$('#crmCalendarEntryDlg'),
+      crmCalendarEntryTitle=$('#crmCalendarEntryTitle'),
+      crmCalendarEntryForm=$('#crmCalendarEntryForm'),
+      crmCalendarEntryDate=$('#crmCalendarEntryDate'),
+      crmCalendarEntryTime=$('#crmCalendarEntryTime'),
+      crmCalendarEntryHours=$('#crmCalendarEntryHours'),
+      crmCalendarEntryComment=$('#crmCalendarEntryComment'),
+      crmCalendarEntryCancel=$('#crmCalendarEntryCancel'),
+      crmCalendarEntryApply=$('#crmCalendarEntryApply'),
+      crmCalendarEntryClose=$('#crmCalendarEntryClose'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
       crmOptimizeForm=$('#crmOptimizeForm'),
       crmOptimizeList=$('#crmOptimizeList'),
@@ -14070,7 +14260,7 @@ function formatCrmCalendarLines(map, mode){
   }).join('\n');
 }
 
-function renderCrmStageReserveDiag(text, stageKey){
+function renderCrmStageReserveDiag(stageKey){
   if(!crmStageReserveDiag) return;
   const key=stageKey||crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
   if(CRM_NOHOUR_STAGES.has(key)){
@@ -14079,19 +14269,14 @@ function renderCrmStageReserveDiag(text, stageKey){
   }
   const base=Math.max(0, getCrmStageCapacity(key));
   const { exceptions }=getCrmStageCalendar(key);
-  const entries=[];
-  String(text||'').split(/\r?\n/).map(line=>line.trim()).filter(Boolean).forEach(line=>{
-    const match=/^(\d{2}[.\/-]\d{2}[.\/-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(line);
-    if(!match) return;
-    const iso=parseCalendarInputDate(match[1]);
-    if(!iso) return;
-    const want=Number(match[2].replace(',', '.'));
-    if(!Number.isFinite(want) || want<=0) return;
-    const capDay=exceptions.has(iso)?Math.max(0, Number(exceptions.get(iso))||0):base;
+  const reserveEntries=getCrmStageCalendarEntryList(key,'reserves');
+  const entries=reserveEntries.map(item=>{
+    const capDay=exceptions.has(item.iso)?Math.max(0, Number(exceptions.get(item.iso))||0):base;
+    const want=Number(item.value)||0;
     const will=Math.min(want, capDay);
     const excluded=Math.max(0, base-capDay);
-    entries.push({ iso, want, will, excluded, capDay });
-  });
+    return { iso:item.iso, want, will, excluded, capDay };
+  }).filter(item=>item.want>0);
   if(!entries.length){
     crmStageReserveDiag.textContent='';
     return;
@@ -14099,6 +14284,79 @@ function renderCrmStageReserveDiag(text, stageKey){
   crmStageReserveDiag.innerHTML=entries.map(entry=>{
     return `${formatCalendarIso(entry.iso)}: Будет применено <b>${formatHoursRu(entry.will)}</b> ч (из ${formatHoursRu(entry.want)}), исключение: ${formatHoursRu(entry.excluded)} ч, ёмкость: ${formatHoursRu(entry.capDay)} ч`;
   }).map(html=>`<div>${html}</div>`).join('');
+}
+
+function splitCrmCalendarEntries(stageKey, kind){
+  const list=getCrmStageCalendarEntryList(stageKey, kind);
+  const todayIso=fmtDateISO(today0());
+  const upcoming=[];
+  const archived=[];
+  list.forEach(item=>{
+    if(item.iso && item.iso>=todayIso){
+      upcoming.push(item);
+    }else{
+      archived.push(item);
+    }
+  });
+  return { upcoming, archived };
+}
+
+function formatCrmCalendarRow(item, kind){
+  const metaParts=[formatCalendarIso(item.iso)];
+  if(item.time) metaParts.push(item.time);
+  if(typeof item.value==='number') metaParts.push(`${formatHoursRu(item.value)} ч`);
+  const meta=`<div class="crm-calendar-row__meta">${metaParts.map(part=>`<span>${escapeHtml(part)}</span>`).join('')}</div>`;
+  const comment=item.comment?`<div class="crm-calendar-row__comment">${escapeHtml(item.comment)}</div>`:'';
+  return `<div class="crm-calendar-row${kind==='archived'?' crm-calendar-row--archived':''}" data-iso="${item.iso}">
+    <div>${meta}${comment}</div>
+    <div class="crm-calendar-row__actions">
+      <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-action="edit" data-kind="${kind}">Редактировать</button>
+      <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-action="delete" data-kind="${kind}">Удалить</button>
+    </div>
+  </div>`;
+}
+
+function renderCrmCalendarList(stageKey, mode){
+  const listEl=mode==='exception'?crmStageExceptionsList:crmStageReserveList;
+  const archiveEl=mode==='exception'?crmStageExceptionsArchive:crmStageReserveArchive;
+  if(!listEl||!archiveEl) return;
+  const { upcoming, archived }=splitCrmCalendarEntries(stageKey, mode==='exception'?'exceptions':'reserves');
+  listEl.innerHTML=upcoming.length?upcoming.map(item=>formatCrmCalendarRow(item,'active')).join(''):'<div class="muted">Нет актуальных записей</div>';
+  archiveEl.innerHTML=archived.length?archived.map(item=>formatCrmCalendarRow(item,'archived')).join(''):'<div class="muted">Архив пуст</div>';
+}
+
+function formatDateTimeSafe(value){
+  if(!value) return 'время не указано';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return 'время не указано';
+  try{
+    return date.toLocaleString('ru-RU',{ dateStyle:'short', timeStyle:'short' });
+  }catch(_err){
+    return value;
+  }
+}
+
+function renderCrmCalendarHistory(stageKey, mode){
+  const container=mode==='exception'?crmStageExceptionsHistory:crmStageReserveHistory;
+  if(!container) return;
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey];
+  const history=entry&&Array.isArray(entry.history)?entry.history.filter(h=>h.kind===mode):[];
+  if(!history.length){
+    container.hidden=true;
+    container.innerHTML='';
+    return;
+  }
+  container.hidden=false;
+  container.innerHTML=history.slice(0,10).map(item=>{
+    const when=formatDateTimeSafe(item.at||'');
+    const dateLabel=item.iso?formatCalendarIso(item.iso):'Дата не указана';
+    const amount=typeof item.value==='number'?` · ${formatHoursRu(item.value)} ч`:'';
+    const timeLabel=item.time?` · ${escapeHtml(item.time)}`:'';
+    const comment=item.comment?` · ${escapeHtml(item.comment)}`:'';
+    const verb=item.action==='delete'?'удалено':'изменено';
+    return `<div class="crm-calendar-history__item"><strong>${dateLabel}</strong>${amount}${timeLabel}${comment} — ${verb} ${escapeHtml(when)}</div>`;
+  }).join('');
 }
 
 function openCrmStageExceptionsDialog(){
@@ -14109,10 +14367,9 @@ function openCrmStageExceptionsDialog(){
     return;
   }
   crmStageExceptionsDlg.dataset.stage=stageKey;
-  if(crmStageExceptionsInput){
-    const { exceptions }=getCrmStageCalendar(stageKey);
-    crmStageExceptionsInput.value=formatCrmCalendarLines(exceptions,'exception');
-  }
+  toggleCrmCalendarArchive('exception', false);
+  renderCrmCalendarList(stageKey,'exception');
+  renderCrmCalendarHistory(stageKey,'exception');
   try{ crmStageExceptionsDlg.showModal(); }
   catch(_err){ crmStageExceptionsDlg.open=true; }
 }
@@ -14124,22 +14381,6 @@ function closeCrmStageExceptionsDialog(){
   catch(_err){ crmStageExceptionsDlg.open=false; }
 }
 
-function applyCrmStageExceptions(){
-  if(!crmStageExceptionsDlg) return;
-  const stageKey=crmStageExceptionsDlg.dataset.stage||crmStageSelect?.value||'draw';
-  if(!crmCanManageStage(stageKey)){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений этого передела.', tone:'warn' });
-    return;
-  }
-  const parsed=parseCrmCalendarLines(crmStageExceptionsInput?.value,'exception');
-  const current=getCrmStageCalendar(stageKey);
-  setCrmStageCalendar(stageKey,{ exceptions:parsed, reserves:current.reserves });
-  save('Обновление исключений передела');
-  updateCrmCalendarButtons(stageKey);
-  closeCrmStageExceptionsDialog();
-  renderCurrentView();
-}
-
 function openCrmStageReserveDialog(){
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
@@ -14148,11 +14389,10 @@ function openCrmStageReserveDialog(){
     return;
   }
   crmStageReserveDlg.dataset.stage=stageKey;
-  if(crmStageReserveInput){
-    const { reserves }=getCrmStageCalendar(stageKey);
-    crmStageReserveInput.value=formatCrmCalendarLines(reserves,'reserve');
-    renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
-  }
+  toggleCrmCalendarArchive('reserve', false);
+  renderCrmCalendarList(stageKey,'reserve');
+  renderCrmStageReserveDiag(stageKey);
+  renderCrmCalendarHistory(stageKey,'reserve');
   try{ crmStageReserveDlg.showModal(); }
   catch(_err){ crmStageReserveDlg.open=true; }
 }
@@ -14165,20 +14405,150 @@ function closeCrmStageReserveDialog(){
   catch(_err){ crmStageReserveDlg.open=false; }
 }
 
-function applyCrmStageReserve(){
-  if(!crmStageReserveDlg) return;
-  const stageKey=crmStageReserveDlg.dataset.stage||crmStageSelect?.value||'draw';
-  if(!crmCanManageStage(stageKey)){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения брони этого передела.', tone:'warn' });
+function resetCrmCalendarEntryForm(){
+  if(crmCalendarEntryForm) crmCalendarEntryForm.reset();
+  if(crmCalendarEntryDlg){
+    delete crmCalendarEntryDlg.dataset.mode;
+    delete crmCalendarEntryDlg.dataset.stage;
+    delete crmCalendarEntryDlg.dataset.targetIso;
+  }
+}
+
+function openCrmCalendarEntryDialog(mode, stageKey, existing){
+  if(!crmCalendarEntryDlg) return;
+  const normalizedMode=mode==='reserve'?'reserve':'exception';
+  crmCalendarEntryDlg.dataset.mode=normalizedMode;
+  crmCalendarEntryDlg.dataset.stage=stageKey;
+  crmCalendarEntryDlg.dataset.targetIso=existing?.iso||'';
+  if(crmCalendarEntryTitle){
+    crmCalendarEntryTitle.textContent=normalizedMode==='reserve'?'Добавить бронь':'Добавить исключение';
+  }
+  const iso=existing?.iso||fmtDateISO(today0());
+  if(crmCalendarEntryDate) crmCalendarEntryDate.value=iso;
+  if(crmCalendarEntryTime) crmCalendarEntryTime.value=existing?.time||'';
+  if(crmCalendarEntryHours){
+    crmCalendarEntryHours.min=normalizedMode==='reserve'?'0.25':'0';
+    crmCalendarEntryHours.value=existing?.value??'';
+    crmCalendarEntryHours.required=normalizedMode==='reserve';
+  }
+  if(crmCalendarEntryComment) crmCalendarEntryComment.value=existing?.comment||'';
+  try{ crmCalendarEntryDlg.showModal(); }
+  catch(_err){ crmCalendarEntryDlg.open=true; }
+}
+
+function closeCrmCalendarEntryDialog(){
+  if(!crmCalendarEntryDlg) return;
+  resetCrmCalendarEntryForm();
+  try{ crmCalendarEntryDlg.close(); }
+  catch(_err){ crmCalendarEntryDlg.open=false; }
+}
+
+function persistCrmCalendarEntries(stageKey, storageKind, entries, historyKind, historyAction, historyPayload){
+  writeCrmStageCalendarEntries(stageKey, storageKind, entries);
+  pushCrmCalendarHistory(stageKey, historyKind, historyAction, historyPayload);
+  save(storageKind==='exceptions'?'Обновление исключений передела':'Обновление брони передела');
+  updateCrmCalendarButtons(stageKey);
+  renderCrmCalendarList(stageKey, historyKind);
+  renderCrmCalendarHistory(stageKey, historyKind);
+  if(historyKind==='reserve'){
+    renderCrmStageReserveDiag(stageKey);
+  }
+  renderCurrentView();
+}
+
+function submitCrmCalendarEntry(event){
+  event.preventDefault();
+  if(!crmCalendarEntryDlg) return;
+  const mode=crmCalendarEntryDlg.dataset.mode||'exception';
+  const storageKind=mode==='reserve'?'reserves':'exceptions';
+  const historyKind=mode==='reserve'?'reserve':'exception';
+  const stageKey=crmCalendarEntryDlg.dataset.stage||crmStageSelect?.value||'draw';
+  if(mode==='reserve' && CRM_NOHOUR_STAGES.has(stageKey)){
+    showToast({ title:'CRM', message:'Бронь доступна только для часовых переделов.', tone:'warn' });
     return;
   }
-  const parsed=parseCrmCalendarLines(crmStageReserveInput?.value,'reserve');
-  const current=getCrmStageCalendar(stageKey);
-  setCrmStageCalendar(stageKey,{ exceptions:current.exceptions, reserves:parsed });
-  save('Обновление брони передела');
-  updateCrmCalendarButtons(stageKey);
-  closeCrmStageReserveDialog();
-  renderCurrentView();
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения календаря этого передела.', tone:'warn' });
+    return;
+  }
+  const iso=coerceCalendarIso(crmCalendarEntryDate?.value||null);
+  if(!iso){
+    showToast({ title:'CRM', message:'Укажите корректную дату.', tone:'error' });
+    return;
+  }
+  const hoursRaw=crmCalendarEntryHours?.value;
+  const parsed=hoursRaw===undefined||hoursRaw===null||hoursRaw===''
+    ? null
+    : Number(String(hoursRaw).replace(',','.'));
+  if(mode==='reserve' && (!Number.isFinite(parsed) || parsed<=0)){
+    showToast({ title:'CRM', message:'Для брони нужно указать положительное количество часов.', tone:'error' });
+    return;
+  }
+  const hours=Number.isFinite(parsed)?Math.max(0, Math.round(parsed*100)/100):0;
+  const time=crmCalendarEntryTime?.value?crmCalendarEntryTime.value.trim():'';
+  const comment=crmCalendarEntryComment?.value?crmCalendarEntryComment.value.trim():'';
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const targetIso=crmCalendarEntryDlg.dataset.targetIso||'';
+  const retained=list.filter(item=>item.iso!==targetIso && item.iso!==iso);
+  const existing=list.find(item=>item.iso===targetIso)||list.find(item=>item.iso===iso);
+  const payload={
+    iso,
+    value:hours,
+    time,
+    comment,
+    createdAt:existing?.createdAt||new Date().toISOString(),
+    updatedAt:new Date().toISOString()
+  };
+  retained.push(payload);
+  persistCrmCalendarEntries(stageKey, storageKind, retained, historyKind, 'update', payload);
+  closeCrmCalendarEntryDialog();
+}
+
+function deleteCrmCalendarEntry(stageKey, storageKind, iso){
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения календаря этого передела.', tone:'warn' });
+    return;
+  }
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const next=list.filter(item=>item.iso!==iso);
+  const historyKind=storageKind==='reserves'?'reserve':'exception';
+  persistCrmCalendarEntries(stageKey, storageKind, next, historyKind, 'delete', { iso });
+}
+
+function toggleCrmCalendarArchive(mode, force){
+  const key=mode==='reserve'?'reserve':'exceptions';
+  const listEl=mode==='reserve'?crmStageReserveArchive:crmStageExceptionsArchive;
+  const btn=mode==='reserve'?crmStageReserveArchiveToggle:crmStageExceptionsArchiveToggle;
+  if(!listEl || !btn) return;
+  const next=force!=null?!!force:!crmCalendarArchiveVisible[key];
+  crmCalendarArchiveVisible[key]=next;
+  listEl.hidden=!next;
+  btn.textContent=next?'Скрыть архив':'Показать архив';
+}
+
+function handleCrmCalendarListClick(event, mode){
+  const btn=event.target.closest('button[data-action]');
+  if(!btn) return;
+  const row=btn.closest('[data-iso]');
+  if(!row) return;
+  const iso=row.dataset.iso;
+  const stageKey=mode==='reserve'
+    ? crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw'
+    : crmStageExceptionsDlg?.dataset.stage||crmStageSelect?.value||'draw';
+  const storageKind=mode==='reserve'?'reserves':'exceptions';
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const entry=list.find(item=>item.iso===iso);
+  if(btn.dataset.action==='edit'){
+    openCrmCalendarEntryDialog(mode, stageKey, entry);
+    return;
+  }
+  if(btn.dataset.action==='delete'){
+    const label=entry?.comment?` (${entry.comment})`:'';
+    const confirmed=confirm(`Удалить запись ${formatCalendarIso(iso)}${label}?`);
+    if(confirmed){
+      deleteCrmCalendarEntry(stageKey, storageKind, iso);
+    }
+  }
 }
 
 function updateCrmRouteStageVisibility(stageKey, isVisible){
@@ -22442,14 +22812,26 @@ if(crmStageExceptionsClose){
 if(crmStageExceptionsCancel){
   crmStageExceptionsCancel.addEventListener('click',()=>closeCrmStageExceptionsDialog());
 }
-if(crmStageExceptionsApply){
-  crmStageExceptionsApply.addEventListener('click',()=>applyCrmStageExceptions());
+if(crmStageExceptionsAdd){
+  crmStageExceptionsAdd.addEventListener('click',()=>{
+    const stageKey=crmStageExceptionsDlg?.dataset.stage||crmStageSelect?.value||'draw';
+    openCrmCalendarEntryDialog('exception', stageKey);
+  });
+}
+if(crmStageExceptionsArchiveToggle){
+  crmStageExceptionsArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('exception'));
 }
 if(crmStageExceptionsDlg){
   crmStageExceptionsDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
     closeCrmStageExceptionsDialog();
   });
+}
+if(crmStageExceptionsList){
+  crmStageExceptionsList.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'exception'));
+}
+if(crmStageExceptionsArchive){
+  crmStageExceptionsArchive.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'exception'));
 }
 
 if(crmStageReserveBtn){
@@ -22464,8 +22846,14 @@ if(crmStageReserveClose){
 if(crmStageReserveCancel){
   crmStageReserveCancel.addEventListener('click',()=>closeCrmStageReserveDialog());
 }
-if(crmStageReserveApply){
-  crmStageReserveApply.addEventListener('click',()=>applyCrmStageReserve());
+if(crmStageReserveAdd){
+  crmStageReserveAdd.addEventListener('click',()=>{
+    const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
+    openCrmCalendarEntryDialog('reserve', stageKey);
+  });
+}
+if(crmStageReserveArchiveToggle){
+  crmStageReserveArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('reserve'));
 }
 if(crmStageReserveDlg){
   crmStageReserveDlg.addEventListener('cancel',evt=>{
@@ -22473,10 +22861,25 @@ if(crmStageReserveDlg){
     closeCrmStageReserveDialog();
   });
 }
-if(crmStageReserveInput){
-  crmStageReserveInput.addEventListener('input',()=>{
-    const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
-    renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
+if(crmStageReserveList){
+  crmStageReserveList.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'reserve'));
+}
+if(crmStageReserveArchive){
+  crmStageReserveArchive.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'reserve'));
+}
+if(crmCalendarEntryForm){
+  crmCalendarEntryForm.addEventListener('submit',submitCrmCalendarEntry);
+}
+if(crmCalendarEntryCancel){
+  crmCalendarEntryCancel.addEventListener('click',()=>closeCrmCalendarEntryDialog());
+}
+if(crmCalendarEntryClose){
+  crmCalendarEntryClose.addEventListener('click',()=>closeCrmCalendarEntryDialog());
+}
+if(crmCalendarEntryDlg){
+  crmCalendarEntryDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmCalendarEntryDialog();
   });
 }
 if(crmOptimizeForm){
