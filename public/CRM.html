@@ -1549,6 +1549,22 @@
     align-items: stretch;
   }
 
+  .crm-stage-tab__content {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .crm-stage-tab__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 14px;
+    line-height: 1;
+  }
+
   .crm-stage-nav__dropdown {
     position: absolute;
     top: calc(100% + 6px);
@@ -2272,9 +2288,17 @@
   }
 
   .crm-stage-select-display {
-    position: relative;
-    justify-content: space-between;
-    gap: 12px;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .crm-stage-select-display__main {
@@ -2303,10 +2327,7 @@
   }
 
   .crm-stage-select-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
+    position: relative;
     z-index: 42;
     border-radius: var(--pc-radius-sm);
     border: 1px solid color-mix(in srgb, var(--pc-border) 75%, transparent);
@@ -2315,8 +2336,8 @@
     padding: 6px;
     display: grid;
     gap: 4px;
-    max-height: 320px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .crm-stage-select-option {
@@ -10754,6 +10775,30 @@ function updateCrmStageSelectDisplay(){
   }
 }
 
+function renderCrmStageTabLabel(stageKey){
+  if(!crmStageTabBtn) return;
+  const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
+  const iconSymbol=stageIconForKey(stageKey)||stageLetterForKey(stageKey)||'';
+  const hasIcon=Boolean(iconSymbol);
+  crmStageTabBtn.innerHTML='';
+  const content=document.createElement('span');
+  content.className='crm-stage-tab__content';
+  if(hasIcon){
+    const icon=document.createElement('span');
+    icon.className='crm-stage-tab__icon crm-stage-route-label__icon';
+    if(!stageIconForKey(stageKey)){
+      icon.classList.add('crm-stage-route-label__icon--fallback');
+    }
+    icon.textContent=iconSymbol;
+    content.appendChild(icon);
+  }
+  const text=document.createElement('span');
+  text.className='crm-stage-tab__label';
+  text.textContent=label?`Переделы (${label})`:'Переделы';
+  content.appendChild(text);
+  crmStageTabBtn.appendChild(content);
+}
+
 function updateCrmStageSelectMenuSelection(){
   if(!crmStageSelectMenuItems.length) return;
   const current=crmStageSelect?.value||'';
@@ -10780,6 +10825,7 @@ function openCrmStageSelectMenu(){
     crmStageSelectDisplay.setAttribute('aria-expanded','true');
   }
   focusCrmStageSelectMenuValue(crmStageSelect?.value||'');
+  requestAnimationFrame(updateCrmStageDropdownHeight);
 }
 
 function closeCrmStageSelectMenu(focusDisplay=true){
@@ -10794,6 +10840,19 @@ function closeCrmStageSelectMenu(focusDisplay=true){
   }
 }
 
+function updateCrmStageDropdownHeight(){
+  if(!crmStageSelectMenu || !crmStageNavDropdown || crmStageNavDropdown.hidden) return;
+  crmStageSelectMenu.style.maxHeight='';
+  crmStageSelectMenu.style.overflowY='visible';
+  const menuHeight=crmStageSelectMenu.scrollHeight;
+  const dropdownRect=crmStageNavDropdown.getBoundingClientRect();
+  const available=Math.max(0, window.innerHeight - dropdownRect.top - 24);
+  if(available>0 && menuHeight>available){
+    crmStageSelectMenu.style.maxHeight=`${available}px`;
+    crmStageSelectMenu.style.overflowY='auto';
+  }
+}
+
 function setStageNavDropdown(open){
   if(!crmStageNavDropdown) return;
   crmStageNavDropdown.hidden=!open;
@@ -10802,6 +10861,7 @@ function setStageNavDropdown(open){
   }
   if(open){
     openCrmStageSelectMenu();
+    requestAnimationFrame(updateCrmStageDropdownHeight);
   }else{
     closeCrmStageSelectMenu(false);
   }
@@ -16292,10 +16352,7 @@ function renderCrmStageTable(){
   const stageKey=crmStageSelect?.value || 'draw';
   updateCrmCalendarButtons(stageKey);
   const activeFilter=getCrmStageFilter(stageKey);
-  if(crmStageTabBtn && currentCrmView==='stage'){
-    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    crmStageTabBtn.textContent=`Переделы (${label})`;
-  }
+  renderCrmStageTabLabel(stageKey);
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
@@ -16987,13 +17044,7 @@ function updateCrmOrdersTabUi(){
   if(crmStageTabBtn){
     crmStageTabBtn.classList.toggle('pc-nav__link--active',inStage);
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
-    if(inStage){
-      const stageKey=crmStageSelect?.value||'draw';
-      const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-      crmStageTabBtn.textContent=`Переделы (${label})`;
-    }else{
-      crmStageTabBtn.textContent='Переделы';
-    }
+    renderCrmStageTabLabel(crmStageSelect?.value||'draw');
   }
   if(crmStageControls){
     crmStageControls.hidden=!inStage;
@@ -22690,6 +22741,10 @@ if(crmStageNavDropdown){
     if(crmStageNavItem && crmStageNavItem.contains(event.target)) return;
     setStageNavDropdown(false);
   });
+  window.addEventListener('resize',()=>{
+    if(crmStageNavDropdown.hidden) return;
+    updateCrmStageDropdownHeight();
+  });
 }
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
@@ -22703,10 +22758,7 @@ if(crmStageSelect){
     if(crmStageFilter && crmStageFilter.value!==filter){
       crmStageFilter.value=filter;
     }
-    if(crmStageTabBtn && currentCrmView==='stage'){
-      const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-      crmStageTabBtn.textContent=`Переделы (${label})`;
-    }
+    renderCrmStageTabLabel(stageKey);
     setStageNavDropdown(false);
     if(currentCrmView==='stage'){
       renderCrmStageTable();
