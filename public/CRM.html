@@ -17408,6 +17408,8 @@ const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
+let orderDraftBaseline=null;
+let orderDialogClosing=false;
 
 if(orderForm){
   const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
@@ -18466,15 +18468,22 @@ function openOrder(id=null){
   }
   setOrderFormReadOnly(!canEdit);
   refreshOrderHistoryButton(editingOrderId);
+  resetOrderDraftBaseline();
   orderDlg.showModal();
 }
-function closeOrder(){orderDlg.close()}
+function closeOrder(){attemptCloseOrderDialog()}
 
 if(orderDlg){
+  orderDlg.addEventListener('cancel',event=>{
+    event.preventDefault();
+    attemptCloseOrderDialog();
+  });
   orderDlg.addEventListener('close',()=>{
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
+    orderDraftBaseline=null;
+    orderDialogClosing=false;
     if(dlgTitleMeta){
       dlgTitleMeta.textContent='';
     }
@@ -19141,6 +19150,76 @@ function readStages(){
     .filter(Boolean);
 }
 
+function captureOrderDraftSnapshot(){
+  if(!orderForm) return null;
+  const formValues={};
+  const elements=Array.from(orderForm.elements||[]).filter(el=>el && el.name);
+  elements.forEach(el=>{
+    if(el.type==='checkbox'){
+      formValues[el.name]=!!el.checked;
+    }else{
+      formValues[el.name]=typeof el.value==='string'?el.value:'';
+    }
+  });
+  formValues.orderDone=!!orderDone?.checked;
+  const stages=readStages().map(stage=>({
+    id:stage.crmStageId||stage.id||'',
+    name:stage.name||'',
+    done:!!stage.done,
+    progress:normalizeStageProgress(stage.progress||0),
+    start:stage.start||'',
+    end:stage.end||'',
+    value:stage.value||'',
+    doneAt:stage.doneAt||'',
+    delayReason:stage.delayReason||'',
+    completedLate:!!stage.completedLate
+  }));
+  const comments=orderCommentsDraft.map(comment=>({
+    id:comment?.id||'',
+    text:comment?.text||'',
+    author:comment?.author||'',
+    updatedAt:comment?.updatedAt||''
+  }));
+  const hiddenNote=typeof orderNotesHidden?.value==='string'?orderNotesHidden.value:'';
+  return { formValues, stages, comments, hiddenNote };
+}
+
+function resetOrderDraftBaseline(){
+  orderDraftBaseline=captureOrderDraftSnapshot();
+}
+
+function hasOrderDraftChanges(){
+  if(!orderForm) return false;
+  if(!orderDraftBaseline) return false;
+  const current=captureOrderDraftSnapshot();
+  return JSON.stringify(current)!==JSON.stringify(orderDraftBaseline);
+}
+
+function attemptCloseOrderDialog(){
+  if(!orderDlg || !orderDlg.open) return;
+  if(orderDialogClosing){
+    orderDlg.close();
+    return;
+  }
+  if(hasOrderDraftChanges()){
+    const saveNow=window.confirm('Есть несохранённые изменения. Сохранить перед закрытием?');
+    if(saveNow){
+      orderDialogClosing=true;
+      if(typeof orderForm.requestSubmit==='function'){
+        orderForm.requestSubmit();
+      }else{
+        orderForm.dispatchEvent(new Event('submit', { cancelable:true, bubbles:true }));
+      }
+      return;
+    }
+    const discard=window.confirm('Закрыть без сохранения? Все несохранённые изменения будут потеряны.');
+    if(!discard){
+      return;
+    }
+  }
+  orderDlg.close();
+}
+
 function calcAutoProgress(stages){
   const s=stages||[];
   if(!s.length)return 0;
@@ -19194,6 +19273,7 @@ function syncAutoDates(){
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
+  orderDialogClosing=false;
   if(!crmCanManageOrders()){
     showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
     return;
@@ -22220,6 +22300,13 @@ if(crmStageNavItem && crmStageNavDropdown){
     crmStageTabBtn.addEventListener('focus', openStageDropdown);
     crmStageTabBtn.addEventListener('blur', closeStageDropdown);
   }
+}
+if(crmStageNavDropdown){
+  document.addEventListener('pointerdown',event=>{
+    if(crmStageNavDropdown.hidden) return;
+    if(crmStageNavItem && crmStageNavItem.contains(event.target)) return;
+    setStageNavDropdown(false);
+  });
 }
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
