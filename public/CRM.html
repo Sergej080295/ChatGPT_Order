@@ -2815,6 +2815,12 @@
     width: 100%;
   }
 
+  .crm-stage-secondary .crm-stage-gantt-card,
+  .crm-stage-secondary .crm-stage-route-card {
+    width: calc(100% + 12px);
+    margin-inline: -6px;
+  }
+
   .crm-stage-secondary > * {
     flex: 0 0 auto;
   }
@@ -2850,6 +2856,46 @@
 
   .crm-stage-route-actions .pc-switch {
     margin: 0;
+  }
+
+  .crm-unaccounted-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-unaccounted-filter-label {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-unaccounted-filter-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .crm-unaccounted-filter-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+    border-radius: var(--pc-radius-pill, 999px);
+    background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    font-size: 12px;
+  }
+
+  .crm-unaccounted-filter-item input {
+    margin: 0;
+  }
+
+  .crm-unaccounted-filter-item.is-muted {
+    color: var(--pc-text-muted);
+    background: color-mix(in srgb, var(--pc-border) 8%, transparent);
+    border-style: dashed;
   }
 
   .crm-stage-gantt-header h3,
@@ -3073,11 +3119,14 @@
 
     .crm-stage-gantt-row--total {
       border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+      background: color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface));
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--pc-primary) 15%, transparent);
     }
 
     .crm-stage-gantt-left-row--total {
       font-weight: var(--pc-font-weight-semibold);
       border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+      background: color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface));
     }
 
   .crm-stage-route {
@@ -6460,6 +6509,7 @@
                   <div class="crm-settings-control">
                     <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
                     <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                    <span id="crmUnaccountedFilterSummary" class="crm-settings-summary muted">В «Не учтённых» показываются все</span>
                   </div>
                 </div>
               </div>
@@ -6479,6 +6529,7 @@
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
     <input type="hidden" name="unaccountedStatuses" id="crmUnaccountedHidden" />
+    <input type="hidden" name="unaccountedHiddenStatuses" id="crmUnaccountedHiddenFilter" />
     <input type="hidden" name="id" />
   </form>
 </dialog>
@@ -6514,6 +6565,10 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmUnaccountedClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
+    <div class="crm-unaccounted-filters" id="crmUnaccountedFilters">
+      <span class="crm-unaccounted-filter-label">Показывать состояния:</span>
+      <div class="crm-unaccounted-filter-list" id="crmUnaccountedFilter"></div>
+    </div>
     <div class="crm-table-wrap">
       <table class="crm-modal-table" id="crmUnaccountedTable">
         <thead>
@@ -7296,14 +7351,12 @@ function sanitizeCrmPlanFreeze(raw){
   return { stages, taskPins };
 }
 
-function sanitizeCrmSettings(raw){
-  const base=raw&&typeof raw==='object'?raw:{};
-  const statusesSource=base.unaccountedStatuses;
+function sanitizeCrmStatusListRaw(source){
   let statuses=[];
-  if(Array.isArray(statusesSource)){
-    statuses=statusesSource.map(item=>String(item??'').trim());
-  }else if(typeof statusesSource==='string'){
-    statuses=statusesSource.split(/[\n,;]+/).map(part=>part.trim());
+  if(Array.isArray(source)){
+    statuses=source.map(item=>String(item??'').trim());
+  }else if(typeof source==='string'){
+    statuses=source.split(/[\n,;]+/).map(part=>part.trim());
   }
   const uniqueStatuses=[];
   const seen=new Set();
@@ -7313,6 +7366,13 @@ function sanitizeCrmSettings(raw){
     seen.add(key);
     uniqueStatuses.push(status);
   });
+  return uniqueStatuses;
+}
+
+function sanitizeCrmSettings(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  const uniqueStatuses=sanitizeCrmStatusListRaw(base.unaccountedStatuses);
+  const hiddenStatuses=sanitizeCrmStatusListRaw(base.unaccountedHiddenStatuses);
   const retentionSource=base.trashRetention&&typeof base.trashRetention==='object'?base.trashRetention:{};
   const mode=retentionSource.mode==='count'?'count':'days';
   let valueRaw=Number(retentionSource.value);
@@ -7329,7 +7389,7 @@ function sanitizeCrmSettings(raw){
   const journalRetention={mode:journalMode,value:Math.max(1,Math.round(journalValue))};
   const result={};
   Object.keys(base).forEach(key=>{
-    if(key==='unaccountedStatuses'||key==='trashRetention'||key==='journalRetention') return;
+    if(key==='unaccountedStatuses'||key==='unaccountedHiddenStatuses'||key==='trashRetention'||key==='journalRetention') return;
     result[key]=base[key];
   });
   const extraSource=base.extraTime&&typeof base.extraTime==='object'?base.extraTime:{};
@@ -7344,6 +7404,7 @@ function sanitizeCrmSettings(raw){
   result.mapping=sanitizeCrmStageMapping(base.mapping);
   result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
+  result.unaccountedHiddenStatuses=hiddenStatuses.filter(status=>!uniqueStatuses.length || uniqueStatuses.some(baseStatus=>normalizeStatusKey(baseStatus)===normalizeStatusKey(status)));
   result.trashRetention=retention;
   result.journalRetention=journalRetention;
   result.planFreezeDays=sanitizePlanFreezeDays(base.planFreezeDays);
@@ -11612,6 +11673,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.unaccountedStatuses)!==JSON.stringify(nextSanitized.unaccountedStatuses)){
     sections.push('Не учитывать состояния');
   }
+  if(JSON.stringify(prevSanitized.unaccountedHiddenStatuses)!==JSON.stringify(nextSanitized.unaccountedHiddenStatuses)){
+    sections.push('Фильтр «Не учтённые»');
+  }
   if(JSON.stringify(prevSanitized.extraTime)!==JSON.stringify(nextSanitized.extraTime)){
     sections.push('Автодовес');
   }
@@ -11735,13 +11799,16 @@ function collectCrmUnaccountedOrders(){
   const board=currentBoard();
   if(!board) return [];
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
+  const hidden=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
   if(!statuses.length) return [];
   const statusSet=new Set(statuses.map(normalizeStatusKey).filter(Boolean));
+  const hiddenSet=new Set(hidden.map(normalizeStatusKey).filter(Boolean));
   if(!statusSet.size) return [];
   const rows=[];
   board.orders.forEach((order,index)=>{
     const statusKey=normalizeStatusKey(order?.status||'');
     if(!statusKey||!statusSet.has(statusKey)) return;
+    if(hiddenSet.size && hiddenSet.has(statusKey)) return;
     rows.push({
       order,
       originalIndex:index,
@@ -15240,9 +15307,12 @@ async function handleCrmLogout(){
 }
 
 function renderCrmUnaccounted(){
+  setCrmUnaccountedDraft(state.settings?.unaccountedStatuses||[],{ render:false });
+  setCrmUnaccountedHiddenDraft(state.settings?.unaccountedHiddenStatuses||[],{ render:false });
   const tbody=document.querySelector('#crmUnaccountedTable tbody');
   if(!tbody) return;
   tbody.innerHTML='';
+  renderCrmUnaccountedFilterOptions();
   const rows=collectCrmUnaccountedOrders();
   if(!rows.length){
     const tr=document.createElement('tr');
@@ -19084,7 +19154,9 @@ orderForm.addEventListener('submit',e=>{
 /* Настройки доски */
 const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
 const crmUnaccountedHidden=$('#crmUnaccountedHidden');
+const crmUnaccountedHiddenFilters=$('#crmUnaccountedHiddenFilter');
 const crmUnaccountedSummary=$('#crmUnaccountedSummary');
+const crmUnaccountedFilterSummary=$('#crmUnaccountedFilterSummary');
 const crmUnaccountedEditBtn=$('#crmUnaccountedEdit');
 const crmUnaccountedSettingsDlg=$('#crmUnaccountedSettingsDlg');
 const crmUnaccountedList=$('#crmUnaccountedList');
@@ -19092,6 +19164,7 @@ const crmUnaccountedInput=$('#crmUnaccountedNew');
 const crmUnaccountedAddBtn=$('#crmUnaccountedAdd');
 const crmUnaccountedEditorClose=$('#crmUnaccountedEditorClose');
 const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
+const crmUnaccountedFilterBox=$('#crmUnaccountedFilter');
 const crmPlanFreezeInput=boardForm?.querySelector('input[name="planFreezeDays"]')||null;
 const crmAutoPinInput=boardForm?.querySelector('input[name="autoPinOrders"]')||null;
 const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]')||null;
@@ -19153,6 +19226,7 @@ if(crmLaneVisibilityChips){
   });
 }
 let crmUnaccountedDraft=[];
+let crmUnaccountedHiddenDraft=[];
 let crmStageScheduleDrafts={};
 let crmStageScheduleActiveStage=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'';
 let crmStageScheduleStageSelect=null;
@@ -20046,13 +20120,19 @@ function recalcCrmMappingAlert(){
 }
 
 function sanitizeCrmStatusList(list){
-  const sanitized=sanitizeCrmSettings({unaccountedStatuses:list}).unaccountedStatuses;
+  const sanitized=sanitizeCrmStatusListRaw(list);
   return Array.isArray(sanitized)?sanitized:[];
 }
 
 function updateCrmUnaccountedHidden(){
   if(crmUnaccountedHidden){
     crmUnaccountedHidden.value=crmUnaccountedDraft.join('\n');
+  }
+}
+
+function updateCrmUnaccountedHiddenFilters(){
+  if(crmUnaccountedHiddenFilters){
+    crmUnaccountedHiddenFilters.value=crmUnaccountedHiddenDraft.join('\n');
   }
 }
 
@@ -20069,6 +20149,19 @@ function updateCrmUnaccountedSummary(){
   crmUnaccountedSummary.textContent=`Не учитывать ${crmUnaccountedDraft.length} состояний`;
 }
 
+function updateCrmUnaccountedFilterSummary(){
+  if(!crmUnaccountedFilterSummary) return;
+  if(!crmUnaccountedHiddenDraft.length){
+    crmUnaccountedFilterSummary.textContent='В «Не учтённых» показываются все';
+    return;
+  }
+  if(crmUnaccountedHiddenDraft.length<=3){
+    crmUnaccountedFilterSummary.textContent=`Скрывать в «Не учтённых»: ${crmUnaccountedHiddenDraft.join(', ')}`;
+    return;
+  }
+  crmUnaccountedFilterSummary.textContent=`Скрывать ${crmUnaccountedHiddenDraft.length} состояний в разделе`;
+}
+
 function renderCrmUnaccountedEditorList(){
   if(!crmUnaccountedList) return;
   crmUnaccountedList.innerHTML='';
@@ -20077,6 +20170,7 @@ function renderCrmUnaccountedEditorList(){
     empty.className='crm-modal-empty';
     empty.textContent='Все состояния учитываются';
     crmUnaccountedList.appendChild(empty);
+    renderCrmUnaccountedFilterOptions();
     return;
   }
   crmUnaccountedDraft.forEach(status=>{
@@ -20091,15 +20185,73 @@ function renderCrmUnaccountedEditorList(){
     chip.appendChild(btn);
     crmUnaccountedList.appendChild(chip);
   });
+  renderCrmUnaccountedFilterOptions();
 }
 
 function setCrmUnaccountedDraft(list,options={}){
   crmUnaccountedDraft=sanitizeCrmStatusList(list);
   updateCrmUnaccountedHidden();
   updateCrmUnaccountedSummary();
+  setCrmUnaccountedHiddenDraft(crmUnaccountedHiddenDraft,{ render:false });
   if(options.render!==false){
     renderCrmUnaccountedEditorList();
   }
+}
+
+function setCrmUnaccountedHiddenDraft(list, options={}){
+  const allowed=new Set(crmUnaccountedDraft.map(normalizeStatusKey).filter(Boolean));
+  const sanitized=sanitizeCrmStatusList(list);
+  const filtered=sanitized.filter(status=>!allowed.size || allowed.has(normalizeStatusKey(status)));
+  crmUnaccountedHiddenDraft=filtered;
+  updateCrmUnaccountedHiddenFilters();
+  updateCrmUnaccountedFilterSummary();
+  if(options.render!==false){
+    renderCrmUnaccountedFilterOptions();
+  }
+}
+
+function renderCrmUnaccountedFilterOptions(){
+  if(!crmUnaccountedFilterBox) return;
+  crmUnaccountedFilterBox.innerHTML='';
+  if(!crmUnaccountedDraft.length){
+    const empty=document.createElement('span');
+    empty.className='crm-unaccounted-filter-label';
+    empty.textContent='Нет выбранных состояний';
+    crmUnaccountedFilterBox.appendChild(empty);
+    return;
+  }
+  const hiddenSet=new Set(crmUnaccountedHiddenDraft.map(normalizeStatusKey).filter(Boolean));
+  crmUnaccountedDraft.forEach(status=>{
+    const norm=normalizeStatusKey(status);
+    const wrapper=document.createElement('label');
+    const isShown=!hiddenSet.has(norm);
+    wrapper.className=`crm-unaccounted-filter-item${isShown?'':' is-muted'}`;
+    const input=document.createElement('input');
+    input.type='checkbox';
+    input.checked=isShown;
+    input.addEventListener('change',()=>toggleCrmUnaccountedFilter(status, input.checked));
+    const text=document.createElement('span');
+    text.textContent=status||'—';
+    wrapper.appendChild(input);
+    wrapper.appendChild(text);
+    crmUnaccountedFilterBox.appendChild(wrapper);
+  });
+}
+
+function toggleCrmUnaccountedFilter(status, visible){
+  const norm=normalizeStatusKey(status);
+  if(!norm) return;
+  let next=[...crmUnaccountedHiddenDraft];
+  if(visible){
+    next=next.filter(item=>normalizeStatusKey(item)!==norm);
+  }else if(!next.some(item=>normalizeStatusKey(item)===norm)){
+    next.push(status);
+  }
+  setCrmUnaccountedHiddenDraft(next);
+  state.settings.unaccountedHiddenStatuses=sanitizeCrmStatusList(next);
+  save('Фильтр «Не учтённые» обновлён');
+  updateCrmAuxButtons();
+  renderCrmUnaccounted();
 }
 
 function addCrmUnaccountedStatus(raw){
@@ -20173,6 +20325,8 @@ function openBoard(){
   crmMappingRemovedDraft=new Set();
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
   setCrmUnaccountedDraft(statuses,{render:false});
+  const hiddenStatuses=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
+  setCrmUnaccountedHiddenDraft(hiddenStatuses,{render:false});
   const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
@@ -20214,6 +20368,11 @@ boardForm.addEventListener('submit',e=>{
   const sanitizedStatuses=sanitizeCrmStatusList(crmUnaccountedDraft);
   state.settings.unaccountedStatuses=sanitizedStatuses;
   setCrmUnaccountedDraft(sanitizedStatuses,{render:false});
+  const sanitizedHidden=sanitizeCrmStatusList(crmUnaccountedHiddenDraft);
+  state.settings.unaccountedHiddenStatuses=sanitizeCrmStatusList(
+    sanitizedHidden.filter(status=>crmUnaccountedDraft.some(base=>normalizeStatusKey(base)===normalizeStatusKey(status)))
+  );
+  setCrmUnaccountedHiddenDraft(state.settings.unaccountedHiddenStatuses,{render:false});
   const modeRaw=boardForm.trashRetentionMode.value==='count'?'count':'days';
   let retentionValue=Number(boardForm.trashRetentionValue.value);
   if(!Number.isFinite(retentionValue)||retentionValue<=0){
