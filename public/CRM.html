@@ -3004,7 +3004,7 @@
     }
 
     .crm-stage-gantt-cell--total {
-      background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+      background: none;
     }
 
   .crm-stage-gantt-cell.weekend {
@@ -3065,8 +3065,10 @@
     }
 
     .crm-stage-gantt-fill--total {
-      background: color-mix(in srgb, var(--pc-info, #228be6) 22%, transparent);
+      background: none;
       font-size: 12px;
+      font-weight: var(--pc-font-weight-semibold);
+      color: var(--pc-text);
     }
 
     .crm-stage-gantt-row--total {
@@ -5573,6 +5575,28 @@
     align-items: center;
     gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
+  }
+
+  .stage-date-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .stage-date-cell input[type="date"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .stage-date-dow {
+    width: 34px;
+    text-align: right;
+    color: var(--pc-text-muted);
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
 
   .crm-stage-date-tools {
@@ -12933,25 +12957,16 @@ function renderCrmStageGantt(rows, schedule){
         }
         const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
         const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
-        const usedHours=Math.max(0, Number(capacityInfo.used)||0);
-        const freeHours=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-usedHours);
-        const showFreeLabel=isHourly && filterValue==='free';
-        if(total>0 || showFreeLabel){
+        const totalsOnlyFree=isHourly && filterValue==='free';
+        if(total>0){
           const fill=document.createElement('div');
           fill.className='crm-stage-gantt-fill';
-          if(showFreeLabel && isHourly){
-            const freeLabel=formatStageWorkload(freeHours,{ hourless:false });
-            const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
-            fill.textContent=freeLabel;
-            fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
-            fill.classList.add('status-free');
-          }else if(total>0){
-            if(isHourly){
-              const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
-              const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
-              const plannedLabel=formatStageWorkload(total,{ hourless:false });
-              fill.textContent=`${plannedLabel} / ${capLabel}`;
-              fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+          if(isHourly){
+            const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
+            const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
+            const plannedLabel=formatStageWorkload(total,{ hourless:false });
+            fill.textContent=`${plannedLabel} / ${capLabel}`;
+            fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
             dayResidualMap.set(key, Math.max(0, residualBefore-total));
           }else{
             fill.textContent=formatStageWorkload(total,{ hourless:true });
@@ -12961,13 +12976,16 @@ function renderCrmStageGantt(rows, schedule){
           if(shipLate){
             fill.classList.add('late');
           }
-        }else{
+          cell.appendChild(fill);
+        }else if(!totalsOnlyFree){
+          const fill=document.createElement('div');
+          fill.className='crm-stage-gantt-fill';
           fill.classList.add(fillStatusClass);
           if(shipLate){
             fill.classList.add('late');
           }
+          cell.appendChild(fill);
         }
-        cell.appendChild(fill);
       }
       rowEl.appendChild(cell);
     });
@@ -13016,14 +13034,13 @@ function renderCrmStageGantt(rows, schedule){
         fill.className='crm-stage-gantt-fill crm-stage-gantt-fill--total';
         if(filterValue==='free'){
           const freeLabel=formatStageWorkload(freeValue,{ hourless:false });
-          const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
           fill.textContent=freeLabel;
-          fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
+          fill.title=`Свободно: ${freeLabel}`;
         }else{
           const usedLabel=formatStageWorkload(used,{ hourless:false });
-          const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
-          fill.textContent=`${usedLabel} / ${capLabel}`;
-          fill.title=`Использовано: ${usedLabel} из ${capLabel}`;
+          const remainingLabel=formatStageWorkload(freeValue,{ hourless:false });
+          fill.textContent=`${usedLabel} / ${remainingLabel}`;
+          fill.title=`Использовано: ${usedLabel}, осталось: ${remainingLabel}`;
         }
         cell.appendChild(fill);
         totalRow.appendChild(cell);
