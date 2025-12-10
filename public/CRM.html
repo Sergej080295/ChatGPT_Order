@@ -2995,13 +2995,17 @@
     position: relative;
   }
 
-  .crm-stage-gantt-cell {
-    position: relative;
-    border-right: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-  }
+    .crm-stage-gantt-cell {
+      position: relative;
+      border-right: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+    .crm-stage-gantt-cell--total {
+      background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    }
 
   .crm-stage-gantt-cell.weekend {
     background: color-mix(in srgb, var(--pc-border) 12%, transparent);
@@ -3056,9 +3060,23 @@
     background: color-mix(in srgb, var(--pc-success, #40c057) 26%, transparent);
   }
 
-  .crm-stage-gantt-fill.status-free {
-    background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
-  }
+    .crm-stage-gantt-fill.status-free {
+      background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
+    }
+
+    .crm-stage-gantt-fill--total {
+      background: color-mix(in srgb, var(--pc-info, #228be6) 22%, transparent);
+      font-size: 12px;
+    }
+
+    .crm-stage-gantt-row--total {
+      border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+    }
+
+    .crm-stage-gantt-left-row--total {
+      font-weight: var(--pc-font-weight-semibold);
+      border-top: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+    }
 
   .crm-stage-route {
     display: flex;
@@ -5457,12 +5475,12 @@
     width: 140px;
   }
 
-  #stagesTable th.col-start,
-  #stagesTable td.col-start,
-  #stagesTable th.col-end,
-  #stagesTable td.col-end {
-    width: 122px;
-  }
+    #stagesTable th.col-start,
+    #stagesTable td.col-start,
+    #stagesTable th.col-end,
+    #stagesTable td.col-end {
+      width: 140px;
+    }
 
   #stagesTable th:nth-child(2),
   #stagesTable td:nth-child(2) {
@@ -5474,11 +5492,11 @@
     width: 152px;
   }
 
-  #stagesTable input:not([type="checkbox"]),
-  #stagesTable select {
-    width: 100%;
-    border-radius: var(--pc-radius-sm);
-    border: 1px solid var(--pc-border);
+    #stagesTable input:not([type="checkbox"]),
+    #stagesTable select {
+      width: 100%;
+      border-radius: var(--pc-radius-sm);
+      border: 1px solid var(--pc-border);
     padding: 8px 10px;
     background: var(--pc-surface);
     color: var(--pc-text);
@@ -5696,6 +5714,28 @@
   @media (max-width: 1199px) {
     .crm-toolbar {
       margin: var(--pc-spacing-sm) var(--pc-spacing-md) 0;
+    }
+
+    .stage-date-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+
+    .stage-date-cell input[type="date"] {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .stage-date-dow {
+      width: 34px;
+      text-align: right;
+      color: var(--pc-text-muted);
+      font-size: 12px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
     }
 
     .col {
@@ -12774,16 +12814,17 @@ function renderCrmStageGantt(rows, schedule){
   const widthValue=`${totalWidth}px`;
   const headerTemplate=`repeat(${filteredDays.length}, ${dayWidth}px)`;
   const isHourly=!schedule.isHourless;
-  const dayCapacityMap=new Map(filteredDays.map(({ key, day })=>{
-    const meta=day.meta||{};
-    const capacityRaw=Number(meta.capDay);
-    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
-    const pubRem=Math.max(0, Number(meta.pubRem)||0);
-    const resRem=Math.max(0, Number(meta.resRem)||0);
-    const used=Math.max(0, (Number(meta.pubUsed)||0)+(Number(meta.resUsed)||0));
-    const free=Math.max(0, pubRem+resRem, capacity-used);
-    return [key,{ capacity, free, used }];
-  }));
+    const dayCapacityMap=new Map(filteredDays.map(({ key, day })=>{
+      const meta=day.meta||{};
+      const capacityRaw=Number(meta.capDay);
+      const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
+      const pubRem=Math.max(0, Number(meta.pubRem)||0);
+      const resRem=Math.max(0, Number(meta.resRem)||0);
+      const used=Math.max(0, (Number(meta.pubUsed)||0)+(Number(meta.resUsed)||0));
+      const free=Math.max(0, pubRem+resRem, capacity-used);
+      return [key,{ capacity, free, used }];
+    }));
+    const dayUsageMap=isHourly?new Map(filteredDays.map(({ key })=>[key,0])):null;
   crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
   crmStageGanttHeader.style.minWidth=widthValue;
   crmStageGanttHeader.style.width=widthValue;
@@ -12885,26 +12926,32 @@ function renderCrmStageGantt(rows, schedule){
       if(key===todayKey){
         cell.classList.add('today');
       }
-      const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
-      const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
-      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
-      const showFreeLabel=isHourly && filterValue==='free';
-      if(total>0 || showFreeLabel){
-        const fill=document.createElement('div');
-        fill.className='crm-stage-gantt-fill';
-        if(showFreeLabel && isHourly){
-          const freeLabel=formatStageWorkload(capacityInfo.free,{ hourless:false });
-          const capLabel=formatStageWorkload(capacityInfo.capacity,{ hourless:false });
-          fill.textContent=`${freeLabel} / ${capLabel}`;
-          fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
-          fill.classList.add('status-free');
-        }else if(total>0){
-          if(isHourly){
-            const residualBefore=Math.max(0, dayResidualMap.get(key) ?? capacityInfo.capacity ?? schedule.baseCapacity);
-            const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
-            const plannedLabel=formatStageWorkload(total,{ hourless:false });
-            fill.textContent=`${plannedLabel} / ${capLabel}`;
-            fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+        const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
+        const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
+        if(isHourly && dayUsageMap){
+          dayUsageMap.set(key, (dayUsageMap.get(key)||0)+total);
+        }
+        const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+        const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+        const usedHours=Math.max(0, Number(capacityInfo.used)||0);
+        const freeHours=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-usedHours);
+        const showFreeLabel=isHourly && filterValue==='free';
+        if(total>0 || showFreeLabel){
+          const fill=document.createElement('div');
+          fill.className='crm-stage-gantt-fill';
+          if(showFreeLabel && isHourly){
+            const freeLabel=formatStageWorkload(freeHours,{ hourless:false });
+            const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
+            fill.textContent=freeLabel;
+            fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
+            fill.classList.add('status-free');
+          }else if(total>0){
+            if(isHourly){
+              const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
+              const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
+              const plannedLabel=formatStageWorkload(total,{ hourless:false });
+              fill.textContent=`${plannedLabel} / ${capLabel}`;
+              fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
             dayResidualMap.set(key, Math.max(0, residualBefore-total));
           }else{
             fill.textContent=formatStageWorkload(total,{ hourless:true });
@@ -12924,19 +12971,67 @@ function renderCrmStageGantt(rows, schedule){
       }
       rowEl.appendChild(cell);
     });
-    if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
-      const range=document.createElement('div');
-      range.className='crm-stage-gantt-range';
-      const left=(rangeStartIdx*dayWidth)+2;
-      const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
-      range.style.left=`${left}px`;
-      range.style.width=`${width}px`;
-      rowEl.appendChild(range);
+      if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
+        const range=document.createElement('div');
+        range.className='crm-stage-gantt-range';
+        const left=(rangeStartIdx*dayWidth)+2;
+        const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
+        range.style.left=`${left}px`;
+        range.style.width=`${width}px`;
+        rowEl.appendChild(range);
+      }
+      fragmentBody.appendChild(rowEl);
+    });
+    if(isHourly && dayUsageMap){
+      const totalLabel=document.createElement('div');
+      totalLabel.className='crm-stage-gantt-left-row crm-stage-gantt-left-row--total';
+      totalLabel.textContent='Итого';
+      fragmentLeft.appendChild(totalLabel);
+
+      const totalRow=document.createElement('div');
+      totalRow.className='crm-stage-gantt-row crm-stage-gantt-row--total';
+      totalRow.style.gridTemplateColumns=headerTemplate;
+      totalRow.style.minWidth=widthValue;
+      totalRow.style.width=widthValue;
+
+      filteredDays.forEach(({ key, day })=>{
+        const cell=document.createElement('div');
+        cell.className='crm-stage-gantt-cell crm-stage-gantt-cell--total';
+        const isOffDay=!!(day.meta && day.meta.patternOff);
+        if(isOffDay){
+          cell.classList.add('offday');
+        }
+        if([0,6].includes(day.date.getDay())){
+          cell.classList.add('weekend');
+        }
+        if(key===todayKey){
+          cell.classList.add('today');
+        }
+
+        const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+        const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+        const used=Math.max(0, dayUsageMap.get(key)||Number(capacityInfo.used)||0);
+        const freeValue=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-used);
+        const fill=document.createElement('div');
+        fill.className='crm-stage-gantt-fill crm-stage-gantt-fill--total';
+        if(filterValue==='free'){
+          const freeLabel=formatStageWorkload(freeValue,{ hourless:false });
+          const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
+          fill.textContent=freeLabel;
+          fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
+        }else{
+          const usedLabel=formatStageWorkload(used,{ hourless:false });
+          const capLabel=formatStageWorkload(baseCapacity,{ hourless:false });
+          fill.textContent=`${usedLabel} / ${capLabel}`;
+          fill.title=`Использовано: ${usedLabel} из ${capLabel}`;
+        }
+        cell.appendChild(fill);
+        totalRow.appendChild(cell);
+      });
+      fragmentBody.appendChild(totalRow);
     }
-    fragmentBody.appendChild(rowEl);
-  });
-  crmStageGanttLeft.appendChild(fragmentLeft);
-  crmStageGanttBody.appendChild(fragmentBody);
+    crmStageGanttLeft.appendChild(fragmentLeft);
+    crmStageGanttBody.appendChild(fragmentBody);
   let syncLock=false;
   const scrollEl=crmStageGanttScroll||crmStageGanttBody;
   if(scrollEl){
@@ -17482,18 +17577,20 @@ function handleDateTodayChange(){
   if(!dateTodayChk || !dateTodayChk.checked) return;
   if(!stagesTableBody) return;
   const today=fmtDateISO(new Date());
-  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
-    const s=tr.querySelector('[data-k="start"]');
-    const e=tr.querySelector('[data-k="end"]');
-    if(s && !s.value){
-      s.value=today;
-      applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');
-    }
-    if(e && !e.value){
-      e.value=today;
-      applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');
-    }
-  });
+    stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+      const s=tr.querySelector('[data-k="start"]');
+      const e=tr.querySelector('[data-k="end"]');
+      if(s && !s.value){
+        s.value=today;
+        applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(s);
+      }
+      if(e && !e.value){
+        e.value=today;
+        applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(e);
+      }
+    });
   syncAutoDates();
   updateAllStageExpectations();
 }
@@ -17509,37 +17606,41 @@ function deriveEditingOrderTitle(){
 
 function applyStageAutoDatesToRow(tr,startIso,endIso){
   if(!tr) return;
-  const startInput=tr.querySelector('[data-k="start"]');
-  if(startInput){
-    startInput.value=startIso||'';
-    startInput.dataset.lastAccepted=startIso||'';
-    applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+    const startInput=tr.querySelector('[data-k="start"]');
+    if(startInput){
+      startInput.value=startIso||'';
+      startInput.dataset.lastAccepted=startIso||'';
+      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+      updateStageDateWeekday(startInput);
+    }
+    const endInput=tr.querySelector('[data-k="end"]');
+    if(endInput){
+      endInput.value=endIso||'';
+      endInput.dataset.lastAccepted=endIso||'';
+      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+      updateStageDateWeekday(endInput);
+    }
+    updateStageRowExpectation(tr);
   }
-  const endInput=tr.querySelector('[data-k="end"]');
-  if(endInput){
-    endInput.value=endIso||'';
-    endInput.dataset.lastAccepted=endIso||'';
-    applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-  }
-  updateStageRowExpectation(tr);
-}
 
 function handleClearStageDates(){
   if(!stagesTableBody) return;
   stagesTableBody.querySelectorAll('tr').forEach(tr=>{
     const startInput=tr.querySelector('[data-k="start"]');
     const endInput=tr.querySelector('[data-k="end"]');
-    if(startInput){
-      startInput.value='';
-      startInput.dataset.lastAccepted='';
-      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
-    }
-    if(endInput){
-      endInput.value='';
-      endInput.dataset.lastAccepted='';
-      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-    }
-  });
+      if(startInput){
+        startInput.value='';
+        startInput.dataset.lastAccepted='';
+        applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(startInput);
+      }
+      if(endInput){
+        endInput.value='';
+        endInput.dataset.lastAccepted='';
+        applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(endInput);
+      }
+    });
   syncAutoDates();
   updateAllStageExpectations();
   showToast({ title:'PlaneCore', message:'Даты переделов очищены.', tone:'info', autoClose:3500 });
@@ -18530,11 +18631,32 @@ function moveStageRow(tr,direction){
   refreshStageReorderControls();
 }
 
-/* формат суммы */
-(function(){const inp=$('#orderForm input[name="serviceTotal"]');function parseMoney(s){if(s==null)return'';s=String(s).replace(/\s+/g,'').replace(',', '.');const n=Number(s);return Number.isFinite(n)?n:''}function fmt(n){return(n===''?'':Number(n).toLocaleString('ru-RU'))}
-if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
+  /* формат суммы */
+  (function(){const inp=$('#orderForm input[name="serviceTotal"]');function parseMoney(s){if(s==null)return'';s=String(s).replace(/\s+/g,'').replace(',', '.');const n=Number(s);return Number.isFinite(n)?n:''}function fmt(n){return(n===''?'':Number(n).toLocaleString('ru-RU'))}
+  if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
 
-function appendStageRow(st){
+  function updateStageDateWeekday(input){
+    if(!input) return;
+    const container=input.closest('.stage-date-cell');
+    const label=container?.querySelector('[data-dow]');
+    if(!label) return;
+    const raw=(input.value||'').trim();
+    if(!raw){
+      label.textContent='';
+      label.hidden=true;
+      return;
+    }
+    const date=parseDateInputValue(raw);
+    if(!(date instanceof Date) || Number.isNaN(date.getTime())){
+      label.textContent='';
+      label.hidden=true;
+      return;
+    }
+    label.textContent=(weekdayShort(date)||'').toUpperCase();
+    label.hidden=false;
+  }
+
+  function appendStageRow(st){
   const nmRaw=(st.name||'').trim();
   const nmNormalized=normalizeStageName(st.name);
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
@@ -18557,14 +18679,14 @@ function appendStageRow(st){
   }else if(st.completedLate===false){
     tr.dataset.completedLate='false';
   }
-  tr.innerHTML=`
-    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
-    <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
-    <td class="col-start"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
-    <td class="col-end"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
-    <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
-    <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
+    tr.innerHTML=`
+      <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
+      <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
+      <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
+      <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-end"><div class="stage-date-cell"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
+      <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
   const reorderCell=document.createElement('td');
   reorderCell.className='reorder';
   reorderCell.innerHTML='<div class="crm-stage-reorder"><button type="button" data-stage-move="up" title="Переместить выше">▲</button><button type="button" data-stage-move="down" title="Переместить ниже">▼</button></div>';
@@ -18645,32 +18767,36 @@ function appendStageRow(st){
   }
   const startInput=tr.querySelector('[data-k="start"]');
   const endInput=tr.querySelector('[data-k="end"]');
-  if(startInput){
-    applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');
-    startInput.dataset.lastAccepted=startInput.value||'';
-    startInput.addEventListener('focus',()=>{
-      startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
-    });
-    startInput.addEventListener('change',()=>{
-      enforceStageDateConstraints(tr, startInput);
-      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
-    });
-  }
-  if(endInput){
-    applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');
-    endInput.dataset.lastAccepted=endInput.value||'';
-    endInput.addEventListener('focus',()=>{
-      endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
-    });
-    endInput.addEventListener('change',()=>{
-      enforceStageDateConstraints(tr, endInput);
-      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
-    });
-  }
+    if(startInput){
+      applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');
+      startInput.dataset.lastAccepted=startInput.value||'';
+      updateStageDateWeekday(startInput);
+      startInput.addEventListener('focus',()=>{
+        startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
+      });
+      startInput.addEventListener('change',()=>{
+        enforceStageDateConstraints(tr, startInput);
+        applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(startInput);
+        syncAutoDates();
+        updateStageRowExpectation(tr);
+      });
+    }
+    if(endInput){
+      applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');
+      endInput.dataset.lastAccepted=endInput.value||'';
+      updateStageDateWeekday(endInput);
+      endInput.addEventListener('focus',()=>{
+        endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
+      });
+      endInput.addEventListener('change',()=>{
+        enforceStageDateConstraints(tr, endInput);
+        applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(endInput);
+        syncAutoDates();
+        updateStageRowExpectation(tr);
+      });
+    }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
   return tr;
 }
