@@ -14360,7 +14360,12 @@ function renderCrmStageReserveDiag(stageKey){
     crmStageReserveDiag.textContent='';
     return;
   }
-  crmStageReserveDiag.innerHTML=entries.map(entry=>{
+  const impactfulEntries=entries.filter(entry=>entry.will<entry.want || entry.excluded>0);
+  if(!impactfulEntries.length){
+    crmStageReserveDiag.textContent='';
+    return;
+  }
+  crmStageReserveDiag.innerHTML=impactfulEntries.map(entry=>{
     return `${formatCalendarIso(entry.iso)}: Будет применено <b>${formatHoursRu(entry.will)}</b> ч (из ${formatHoursRu(entry.want)}), исключение: ${formatHoursRu(entry.excluded)} ч, ёмкость: ${formatHoursRu(entry.capDay)} ч`;
   }).map(html=>`<div>${html}</div>`).join('');
 }
