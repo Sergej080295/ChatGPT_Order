@@ -5384,6 +5384,20 @@
     width: min(440px, 92vw);
   }
 
+  #crmStageExceptionsDlg,
+  #crmStageReserveDlg,
+  #boardDlg,
+  #crmJournalDlg,
+  #crmUnaccountedDlg {
+    border-radius: var(--pc-radius-xl);
+    overflow: hidden;
+  }
+
+  #crmAdminDlg {
+    border-radius: 32px;
+    overflow: hidden;
+  }
+
   dialog#orderDlg {
     width: min(1240px, 98vw);
     border-radius: var(--pc-radius-xxl, 32px);
@@ -6321,8 +6335,8 @@
               <span>С сегодняшнего дня</span>
             </label>
             <div class="crm-route-toggle" role="tablist">
-              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
-              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="false">Подробно</button>
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="true">Сжато</button>
             </div>
             <button type="button" class="crm-section-toggle" id="crmStageRouteToggle" data-collapse-toggle="route" aria-expanded="true" aria-controls="crmStageRouteBodyWrap">
               <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
@@ -6398,6 +6412,7 @@
     <div class="crm-calendar-actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmStageExceptionsAdd">Добавить исключение</button>
       <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageExceptionsHistoryToggle">Показать историю</button>
         <button class="pc-btn pc-btn--ghost" type="button" id="crmStageExceptionsArchiveToggle">Показать архив</button>
       </div>
     </div>
@@ -6419,6 +6434,7 @@
     <div class="crm-calendar-actions">
       <button class="pc-btn pc-btn--secondary" type="button" id="crmStageReserveAdd">Добавить бронь</button>
       <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageReserveHistoryToggle">Показать историю</button>
         <button class="pc-btn pc-btn--ghost" type="button" id="crmStageReserveArchiveToggle">Показать архив</button>
       </div>
     </div>
@@ -9155,6 +9171,7 @@ function ensureCrmStageCalendars(){
 let crmPlanFreezeDirty=false;
 let crmPlanFreezeBypass=false;
 const crmCalendarArchiveVisible={ exceptions:false, reserve:false };
+const crmCalendarHistoryVisible={ exceptions:false, reserve:false };
 
 function markCrmPlanFreezeDirty(){
   crmPlanFreezeDirty=true;
@@ -10259,6 +10276,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageExceptionsList=$('#crmStageExceptionsList'),
       crmStageExceptionsArchive=$('#crmStageExceptionsArchive'),
       crmStageExceptionsHistory=$('#crmStageExceptionsHistory'),
+      crmStageExceptionsHistoryToggle=$('#crmStageExceptionsHistoryToggle'),
       crmStageExceptionsAdd=$('#crmStageExceptionsAdd'),
       crmStageExceptionsArchiveToggle=$('#crmStageExceptionsArchiveToggle'),
       crmStageExceptionsClose=$('#crmStageExceptionsClose'),
@@ -10268,6 +10286,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageReserveArchive=$('#crmStageReserveArchive'),
       crmStageReserveDiag=$('#crmStageReserveDiag'),
       crmStageReserveHistory=$('#crmStageReserveHistory'),
+      crmStageReserveHistoryToggle=$('#crmStageReserveHistoryToggle'),
       crmStageReserveAdd=$('#crmStageReserveAdd'),
       crmStageReserveArchiveToggle=$('#crmStageReserveArchiveToggle'),
       crmStageReserveClose=$('#crmStageReserveClose'),
@@ -10506,7 +10525,7 @@ if(document.body){
 persistCrmSessionView();
 persistCrmSessionStage(initialStageViewKey);
 let currentCrmTrashFilter='all';
-let crmStageRouteMode='detailed';
+let crmStageRouteMode='compact';
 let crmRouteDayFilter='all';
 let crmRouteFromToday=CRM_ROUTE_FROM_TODAY_DEFAULT;
 let crmStageCollapseState=readCrmStageCollapseState();
@@ -14398,16 +14417,27 @@ function formatDateTimeSafe(value){
 
 function renderCrmCalendarHistory(stageKey, mode){
   const container=mode==='exception'?crmStageExceptionsHistory:crmStageReserveHistory;
+  const toggleBtn=mode==='exception'?crmStageExceptionsHistoryToggle:crmStageReserveHistoryToggle;
+  const key=mode==='reserve'?'reserve':'exceptions';
   if(!container) return;
   const calendars=ensureCrmStageCalendars();
   const entry=calendars[stageKey];
   const history=entry&&Array.isArray(entry.history)?entry.history.filter(h=>h.kind===mode):[];
   if(!history.length){
+    if(toggleBtn){
+      toggleBtn.disabled=true;
+      toggleBtn.textContent='История пуста';
+    }
     container.hidden=true;
     container.innerHTML='';
     return;
   }
-  container.hidden=false;
+  const visible=!!crmCalendarHistoryVisible[key];
+  container.hidden=!visible;
+  if(toggleBtn){
+    toggleBtn.disabled=false;
+    toggleBtn.textContent=visible?'Скрыть историю':'Показать историю';
+  }
   container.innerHTML=history.slice(0,10).map(item=>{
     const when=formatDateTimeSafe(item.at||'');
     const dateLabel=item.iso?formatCalendarIso(item.iso):'Дата не указана';
@@ -14428,6 +14458,7 @@ function openCrmStageExceptionsDialog(){
   }
   crmStageExceptionsDlg.dataset.stage=stageKey;
   toggleCrmCalendarArchive('exception', false);
+  crmCalendarHistoryVisible.exceptions=false;
   renderCrmCalendarList(stageKey,'exception');
   renderCrmCalendarHistory(stageKey,'exception');
   try{ crmStageExceptionsDlg.showModal(); }
@@ -14450,6 +14481,7 @@ function openCrmStageReserveDialog(){
   }
   crmStageReserveDlg.dataset.stage=stageKey;
   toggleCrmCalendarArchive('reserve', false);
+  crmCalendarHistoryVisible.reserve=false;
   renderCrmCalendarList(stageKey,'reserve');
   renderCrmStageReserveDiag(stageKey);
   renderCrmCalendarHistory(stageKey,'reserve');
@@ -14584,6 +14616,15 @@ function toggleCrmCalendarArchive(mode, force){
   crmCalendarArchiveVisible[key]=next;
   listEl.hidden=!next;
   btn.textContent=next?'Скрыть архив':'Показать архив';
+}
+
+function toggleCrmCalendarHistory(mode, force){
+  const key=mode==='reserve'?'reserve':'exceptions';
+  const dialog=mode==='reserve'?crmStageReserveDlg:crmStageExceptionsDlg;
+  const stageKey=dialog?.dataset.stage||crmStageSelect?.value||'draw';
+  const next=force!=null?!!force:!crmCalendarHistoryVisible[key];
+  crmCalendarHistoryVisible[key]=next;
+  renderCrmCalendarHistory(stageKey, mode==='reserve'?'reserve':'exception');
 }
 
 function handleCrmCalendarListClick(event, mode){
@@ -22802,14 +22843,21 @@ if(crmStageRouteToggle){
 }
 applyAllCrmSectionCollapse();
 
+const applyCrmRouteToggleState=()=>{
+  document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
+    const active=btn.dataset.routeMode===crmStageRouteMode;
+    btn.setAttribute('aria-pressed', active?'true':'false');
+  });
+};
+
+applyCrmRouteToggleState();
+
 document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     const mode=btn.dataset.routeMode==='compact'?'compact':'detailed';
     if(crmStageRouteMode===mode) return;
     crmStageRouteMode=mode;
-    document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(other=>{
-      other.setAttribute('aria-pressed', other===btn?'true':'false');
-    });
+    applyCrmRouteToggleState();
     renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
   });
 });
@@ -22873,6 +22921,9 @@ if(crmStageExceptionsAdd){
 if(crmStageExceptionsArchiveToggle){
   crmStageExceptionsArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('exception'));
 }
+if(crmStageExceptionsHistoryToggle){
+  crmStageExceptionsHistoryToggle.addEventListener('click',()=>toggleCrmCalendarHistory('exception'));
+}
 if(crmStageExceptionsDlg){
   crmStageExceptionsDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
@@ -22906,6 +22957,9 @@ if(crmStageReserveAdd){
 }
 if(crmStageReserveArchiveToggle){
   crmStageReserveArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('reserve'));
+}
+if(crmStageReserveHistoryToggle){
+  crmStageReserveHistoryToggle.addEventListener('click',()=>toggleCrmCalendarHistory('reserve'));
 }
 if(crmStageReserveDlg){
   crmStageReserveDlg.addEventListener('cancel',evt=>{
