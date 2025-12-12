@@ -5999,6 +5999,7 @@
   <nav class="pc-nav" aria-label="Основные разделы">
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmReportsTabBtn" data-view="reports" data-tooltip-primary="Конструктор" data-tooltip-secondary="Шаблоны страниц с настраиваемыми таблицами и диаграммами.">Конструктор</button>
     <div class="pc-nav__item crm-stage-nav" id="crmStageNavItem">
       <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" aria-haspopup="true" aria-expanded="false">Переделы</button>
       <div class="crm-stage-nav__dropdown" id="crmStageNavDropdown" hidden>
@@ -6209,6 +6210,35 @@
           </tr>
         </tbody>
       </table>
+    </div>
+  </div>
+  <div id="crmReportView" class="crm-report-view" hidden>
+    <div class="crm-report-toolbar">
+      <div class="crm-report-toolbar__group">
+        <label class="crm-report-field">Шаблон
+          <select id="crmReportTemplate" class="pc-select"></select>
+        </label>
+        <label class="crm-report-field">Фильтр
+          <select id="crmReportFilter" class="pc-select">
+            <option value="current">Текущие</option>
+            <option value="all">Все</option>
+            <option value="done">Готовые</option>
+            <option value="late">С опозданием</option>
+          </select>
+        </label>
+      </div>
+      <div class="crm-report-toolbar__actions">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmReportManageBtn">Управление шаблонами</button>
+        <button class="pc-btn pc-btn--primary" type="button" id="crmReportCreateBtn">+ Новая страница</button>
+      </div>
+    </div>
+    <div class="crm-report-panel" id="crmReportPanel">
+      <table id="crmReportTable" class="crm-report-table">
+        <thead></thead>
+        <tbody></tbody>
+        <tfoot></tfoot>
+      </table>
+      <div class="crm-report-empty" id="crmReportEmpty" hidden>Нет данных для отображения</div>
     </div>
   </div>
   <div id="crmStageView" class="crm-stage-view" hidden>
@@ -6737,6 +6767,21 @@
   </form>
 </dialog>
 
+<dialog id="crmReportTemplatesDlg" class="pc-modal pc-modal--lg">
+  <div class="dlg-head">
+    <strong>Шаблоны страниц</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmReportTemplatesClose" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body crm-report-dlg">
+    <div class="crm-report-dlg__intro">Создавайте наборы столбцов, диаграммы и фильтры. Включайте только нужные страницы для себя или всей команды.</div>
+    <div id="crmReportTemplateList" class="crm-report-template-list"></div>
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmReportTemplateAdd">+ Добавить шаблон</button>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--primary" id="crmReportTemplatesSave">Сохранить</button>
+  </div>
+</dialog>
+
 <!-- Диалог настройки состояний -->
 <dialog id="crmUnaccountedSettingsDlg" class="pc-modal pc-modal--sm">
   <div class="dlg-head">
@@ -7231,10 +7276,77 @@ const CRM_DEFAULT_PREFERENCES={
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
   laneVisibility:{ autoHideEmpty:false, hiddenByBoard:{} },
-  ganttRangeHints:false
+  ganttRangeHints:false,
+  reportPresets:{ enabled:[], favorite:'' }
 };
 const CRM_DEFAULT_START_VIEW='kanban';
-const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
+const CRM_START_VIEW_VALUES=new Set(['kanban','orders','reports',...CRM_STAGE_KEYS]);
+const CRM_REPORT_TYPES=new Set(['table','gantt']);
+const CRM_REPORT_COLUMNS={
+  index:{ key:'index', label:'№', type:'number', render:(entry)=>entry.displayIndex??0, sortable:true },
+  order:{ key:'order', label:'Заказ', type:'text', render:(entry)=>escapeHtml(buildCrmOrderTitle(entry.order)), sortable:true, value:(entry)=>buildCrmOrderTitle(entry.order) },
+  orderNo:{ key:'orderNo', label:'Номер заказа', type:'text', render:(entry)=>escapeHtml(entry.order?.orderNo||'—'), sortable:true, value:(entry)=>entry.order?.orderNo||'' },
+  customer:{ key:'customer', label:'Клиент', type:'text', render:(entry)=>escapeHtml(entry.order?.customer||'—'), sortable:true, value:(entry)=>entry.order?.customer||'' },
+  status:{ key:'status', label:'Статус', type:'text', render:(entry)=>escapeHtml(entry.order?.status||'—'), sortable:true, value:(entry)=>entry.order?.status||'' },
+  readiness:{ key:'readiness', label:'Готовность, %', type:'number', render:(entry)=>`${Math.round(entry.snapshotSummary.progress)}%`, sortable:true, value:(entry)=>entry.snapshotSummary.progress },
+  overdue:{ key:'overdue', label:'Просрок', type:'text', render:(entry)=>entry.snapshotSummary.overdueLabel, sortable:true, value:(entry)=>entry.snapshotSummary.overdueScore },
+  serviceTotal:{ key:'serviceTotal', label:'Сумма услуг', type:'number', render:(entry)=>{
+    const numeric=normalizeServiceTotalValue(entry.order?.serviceTotal);
+    if(numeric==null||Number.isNaN(numeric)) return '—';
+    return `${numeric.toLocaleString('ru-RU')} ₽`;
+  }, sortable:true, value:(entry)=>normalizeServiceTotalValue(entry.order?.serviceTotal)||0, total:(list)=>list.reduce((acc,entry)=>acc+(normalizeServiceTotalValue(entry.order?.serviceTotal)||0),0) },
+  route:{ key:'route', label:'Маршрут', type:'html', render:(entry)=>renderOrderRouteCell(entry.order), sortable:false },
+  comments:{ key:'comments', label:'Комментарии', type:'text', render:(entry)=>{
+    const count=Array.isArray(entry.order?.comments)?entry.order.comments.length:0;
+    const hasNotes=entry.order?.notes&&String(entry.order.notes).trim();
+    if(count<=0 && !hasNotes) return '—';
+    const parts=[];
+    if(count>0) parts.push(`Комментарии: ${count}`);
+    if(hasNotes) parts.push('Есть скрытая запись');
+    return parts.join(' · ');
+  }, sortable:true, value:(entry)=>{
+    const count=Array.isArray(entry.order?.comments)?entry.order.comments.length:0;
+    const hasNotes=entry.order?.notes&&String(entry.order.notes).trim()?1:0;
+    return count*10+hasNotes;
+  }},
+  drawHours:{ key:'drawHours', label:'Подготовка, ч', type:'number', render:(entry)=>formatCrmStageHoursWithDays(entry.snapshot.progress.draw?.hours||0), sortable:true, value:(entry)=>entry.snapshot.progress.draw?.hours||0, total:(list)=>list.reduce((acc,item)=>acc+(item.snapshot.progress.draw?.hours||0),0) },
+  laserHours:{ key:'laserHours', label:'Лазер, ч', type:'number', render:(entry)=>formatCrmStageHoursWithDays(entry.snapshot.progress.laser?.hours||0), sortable:true, value:(entry)=>entry.snapshot.progress.laser?.hours||0, total:(list)=>list.reduce((acc,item)=>acc+(item.snapshot.progress.laser?.hours||0),0) },
+  bendHours:{ key:'bendHours', label:'Гибка, ч', type:'number', render:(entry)=>formatCrmStageHoursWithDays(entry.snapshot.progress.bend?.hours||0), sortable:true, value:(entry)=>entry.snapshot.progress.bend?.hours||0, total:(list)=>list.reduce((acc,item)=>acc+(item.snapshot.progress.bend?.hours||0),0) },
+  weldHours:{ key:'weldHours', label:'Сварка, ч', type:'number', render:(entry)=>formatCrmStageHoursWithDays(entry.snapshot.progress.weld?.hours||0), sortable:true, value:(entry)=>entry.snapshot.progress.weld?.hours||0, total:(list)=>list.reduce((acc,item)=>acc+(item.snapshot.progress.weld?.hours||0),0) },
+  mechHours:{ key:'mechHours', label:'Мехобр., ч', type:'number', render:(entry)=>formatCrmStageHoursWithDays(entry.snapshot.progress.mech?.hours||0), sortable:true, value:(entry)=>entry.snapshot.progress.mech?.hours||0, total:(list)=>list.reduce((acc,item)=>acc+(item.snapshot.progress.mech?.hours||0),0) },
+  proc:{ key:'proc', label:'Закупка', type:'html', render:(entry)=>renderIndicatorCell(entry.snapshot.indicator.proc), sortable:true, value:(entry)=>entry.snapshot.indicator.proc?.state==='done'?2:entry.snapshot.indicator.proc?.state==='pending'?1:0 },
+  shear:{ key:'shear', label:'Рубка', type:'html', render:(entry)=>renderIndicatorCell(entry.snapshot.indicator.shear), sortable:true, value:(entry)=>entry.snapshot.indicator.shear?.state==='done'?2:entry.snapshot.indicator.shear?.state==='pending'?1:0 },
+  coop:{ key:'coop', label:'Кооперация', type:'html', render:(entry)=>renderIndicatorCell(entry.snapshot.indicator.coop), sortable:true, value:(entry)=>entry.snapshot.indicator.coop?.state==='done'?2:entry.snapshot.indicator.coop?.state==='pending'?1:0 },
+  pack:{ key:'pack', label:'Упаковка', type:'html', render:(entry)=>renderIndicatorCell(entry.snapshot.indicator.pack), sortable:true, value:(entry)=>entry.snapshot.indicator.pack?.state==='done'?2:entry.snapshot.indicator.pack?.state==='pending'?1:0 },
+  ship:{ key:'ship', label:'Отгрузка', type:'html', render:(entry)=>renderIndicatorCell(entry.snapshot.indicator.ship), sortable:true, value:(entry)=>entry.snapshot.indicator.ship?.state==='done'?2:entry.snapshot.indicator.ship?.state==='pending'?1:0 }
+};
+const CRM_DEFAULT_REPORT_TEMPLATES=[
+  {
+    id:'report-orders-basic',
+    name:'Список заказов',
+    description:'Быстрый табличный обзор с маршрутами и статусами.',
+    type:'table',
+    columns:['index','order','route','proc','shear','drawHours','laserHours','bendHours','weldHours','mechHours','coop','pack','ship'],
+    filter:'current',
+    enabled:true,
+    personal:true,
+    sort:{ key:'orderNo', direction:'asc' },
+    showTotals:true
+  },
+  {
+    id:'report-finance',
+    name:'Финансы и готовность',
+    description:'Оценка суммы услуг, просрочек и средней готовности.',
+    type:'table',
+    columns:['index','orderNo','customer','serviceTotal','readiness','overdue','comments'],
+    filter:'all',
+    enabled:true,
+    personal:false,
+    sort:{ key:'serviceTotal', direction:'desc' },
+    showTotals:true
+  }
+];
+const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
@@ -7601,6 +7713,7 @@ function sanitizeCrmSettings(raw){
   result.capacity=normalizeCapacityMap(base.capacity, CRM_DEFAULT_CAPACITY);
   result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
   result.preferences=sanitizeCrmPreferences(base.preferences);
+  result.reportTemplates=sanitizeCrmReportTemplates(base.reportTemplates);
   result.startView=sanitizeCrmStartView(base.startView);
   result.mapping=sanitizeCrmStageMapping(base.mapping);
   result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
@@ -7666,6 +7779,10 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
     autoHideEmpty:preferredVisibility.autoHideEmpty===true || fallbackVisibility.autoHideEmpty===true,
     hiddenByBoard:{ ...fallbackVisibility.hiddenByBoard, ...preferredVisibility.hiddenByBoard }
   };
+  const mergedTemplates=new Map();
+  sanitizeCrmReportTemplates(fallback.reportTemplates).forEach(template=>{ mergedTemplates.set(template.id, template); });
+  sanitizeCrmReportTemplates(preferred.reportTemplates).forEach(template=>{ mergedTemplates.set(template.id, template); });
+  result.reportTemplates=Array.from(mergedTemplates.values());
   result.startView=preferred.startView||fallback.startView;
 
   const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
@@ -8002,6 +8119,53 @@ function sanitizeLaneVisibility(raw){
   return result;
 }
 
+function sanitizeCrmReportPreferences(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  const enabled=Array.isArray(base.enabled)?base.enabled:[];
+  const unique=new Set();
+  const enabledIds=[];
+  enabled.forEach(id=>{
+    const key=typeof id==='string'?id.trim():'';
+    if(!key || unique.has(key)) return;
+    unique.add(key);
+    enabledIds.push(key);
+  });
+  const favorite=typeof base.favorite==='string'?base.favorite.trim():'';
+  return { enabled:enabledIds, favorite:favorite&&unique.has(favorite)?favorite:'' };
+}
+
+function sanitizeCrmReportTemplate(raw, fallbackId='report'){
+  const base=raw&&typeof raw==='object'?raw:{};
+  const idRaw=typeof base.id==='string'?base.id.trim():'';
+  const id=idRaw||`report-${Math.random().toString(16).slice(2,8)}`;
+  const name=typeof base.name==='string'&&base.name.trim()?base.name.trim():'Шаблон';
+  const description=typeof base.description==='string'?base.description.trim():'';
+  const type=CRM_REPORT_TYPES.has(base.type)?base.type:'table';
+  const filter=CRM_ORDER_FILTERS.has(base.filter)?base.filter:'current';
+  const columns=Array.isArray(base.columns)?base.columns.map(col=>CRM_REPORT_COLUMNS[col]?.key||'').filter(Boolean):[];
+  const columnSet=new Set();
+  const uniqueColumns=[];
+  columns.forEach(col=>{ if(!col||columnSet.has(col)) return; columnSet.add(col); uniqueColumns.push(col); });
+  const sortKey=typeof base.sort?.key==='string'&&base.sort.key.trim()?base.sort.key.trim():'';
+  const normalizedSortKey=CRM_REPORT_COLUMNS[sortKey]?sortKey:(uniqueColumns[0]||'order');
+  const directionRaw=typeof base.sort?.direction==='string'?base.sort.direction.trim().toLowerCase():'';
+  const direction=directionRaw==='desc'?'desc':'asc';
+  const showTotals=base.showTotals!==false;
+  const personal=base.personal===true || base.personal===undefined;
+  const enabled=base.enabled!==false;
+  return { id:id||fallbackId, name, description, type, columns:uniqueColumns.length?uniqueColumns:Object.keys(CRM_REPORT_COLUMNS), filter, enabled, personal, sort:{ key:normalizedSortKey, direction }, showTotals };
+}
+
+function sanitizeCrmReportTemplates(raw){
+  const list=Array.isArray(raw)&&raw.length?raw:CRM_DEFAULT_REPORT_TEMPLATES;
+  const byId=new Map();
+  list.forEach(item=>{
+    const template=sanitizeCrmReportTemplate(item);
+    byId.set(template.id, template);
+  });
+  return Array.from(byId.values());
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -8038,6 +8202,7 @@ function sanitizeCrmPreferences(raw){
     if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
       result.ganttRangeHints=raw.ganttRangeHints===true;
     }
+    result.reportPresets=sanitizeCrmReportPreferences(raw.reportPresets||raw.reportTemplates);
   }
   return result;
 }
@@ -8139,6 +8304,21 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getCrmReportTemplates(){
+  return sanitizeCrmReportTemplates(state?.settings?.reportTemplates);
+}
+
+function getVisibleCrmReportTemplates(){
+  const templates=getCrmReportTemplates();
+  const prefs=sanitizeCrmReportPreferences(getCrmPreferences()?.reportPresets);
+  const enabledSet=new Set(prefs.enabled||[]);
+  return templates.filter(template=>{
+    if(!template.enabled) return false;
+    if(enabledSet.size) return enabledSet.has(template.id);
+    return template.personal!==false;
+  });
 }
 
 function getCrmLaneVisibilityPrefs(){
@@ -10217,6 +10397,22 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOrdersTotalsBox=$('#crmOrdersTotals'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
+      crmReportsTabBtn=$('#crmReportsTabBtn'),
+      crmReportViewEl=$('#crmReportView'),
+      crmReportTable=$('#crmReportTable'),
+      crmReportTableHead=$('#crmReportTable thead'),
+      crmReportTableBody=$('#crmReportTable tbody'),
+      crmReportTableFoot=$('#crmReportTable tfoot'),
+      crmReportTemplateSelect=$('#crmReportTemplate'),
+      crmReportFilterSelect=$('#crmReportFilter'),
+      crmReportManageBtn=$('#crmReportManageBtn'),
+      crmReportCreateBtn=$('#crmReportCreateBtn'),
+      crmReportEmpty=$('#crmReportEmpty'),
+      crmReportTemplatesDlg=$('#crmReportTemplatesDlg'),
+      crmReportTemplatesClose=$('#crmReportTemplatesClose'),
+      crmReportTemplateList=$('#crmReportTemplateList'),
+      crmReportTemplateAdd=$('#crmReportTemplateAdd'),
+      crmReportTemplatesSave=$('#crmReportTemplatesSave'),
       crmStageTabBtn=$('#crmStageTabBtn'),
       crmStageNavItem=$('#crmStageNavItem'),
       crmStageNavDropdown=$('#crmStageNavDropdown'),
@@ -10414,8 +10610,11 @@ let crmOrderHistoryCachedOrderId='';
 let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
+let crmReportSelectionId=null;
+let crmReportSortOverride=null;
+let crmReportFilterMode='current';
 const crmStartViewMode=getCrmStartViewSetting();
-const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
+const CRM_VIEW_MODES=new Set(['kanban','orders','reports','stage']);
 let currentCrmView='kanban';
 let initialStageViewKey='draw';
 const storedViewRaw=readCrmSessionValue(CRM_SESSION_VIEW_KEY);
@@ -10439,7 +10638,6 @@ if(!CRM_VIEW_MODES.has(storedView)){
   initialStageViewKey=crmStartViewMode;
 }
 const CRM_PROGRESS_STAGES=['draw','laser','bend','weld','mech'];
-const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
 const CRM_STAGE_LABELS={
   draw:'Подготовка в работу',
   proc:'Закупка',
@@ -12043,6 +12241,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.preferences)!==JSON.stringify(nextSanitized.preferences)){
     sections.push('Настройки оптимизации');
   }
+  if(JSON.stringify(prevSanitized.reportTemplates)!==JSON.stringify(nextSanitized.reportTemplates)){
+    sections.push('Шаблоны отчётов');
+  }
   if(prevSanitized.autoPinOrders!==nextSanitized.autoPinOrders){
     sections.push('Автозакрепление заказов');
   }
@@ -12148,6 +12349,29 @@ function collectCrmOrdersForList(filterMode){
     });
   });
   return { rows, totals, meta };
+}
+
+function summarizeCrmReportEntry(entry){
+  const progressEntries=Object.values(entry?.snapshot?.progress||{});
+  const avgProgress=progressEntries.length
+    ? progressEntries.reduce((acc,item)=>acc+(Number(item?.pct)||0),0)/progressEntries.length
+    : 0;
+  const overdue=getOrderOverdueFlags(entry.order);
+  let overdueLabel='В срок';
+  if(overdue.orderLate && overdue.shipLate){
+    overdueLabel='Просрочка и отгрузка';
+  }else if(overdue.orderLate){
+    overdueLabel='Просрочка';
+  }else if(overdue.shipLate){
+    overdueLabel='Просрок отгрузки';
+  }
+  const overdueScore=(overdue.orderLate?2:0)+(overdue.shipLate?1:0);
+  return { progress:Math.max(0,Math.min(100,avgProgress)), overdueScore, overdueLabel };
+}
+
+function collectCrmReportRows(filterMode){
+  const { rows }=collectCrmOrdersForList(filterMode);
+  return rows.map(entry=>({ ...entry, snapshotSummary:summarizeCrmReportEntry(entry) }));
 }
 
 function collectCrmUnaccountedOrders(){
@@ -16305,6 +16529,371 @@ function renderOrdersTable(){
   updateCrmAuxButtons();
 }
 
+function resolveCrmReportSelection(){
+  const visible=getVisibleCrmReportTemplates();
+  if(!visible.length){
+    crmReportSelectionId=null;
+    return null;
+  }
+  const prefs=sanitizeCrmReportPreferences(getCrmPreferences()?.reportPresets);
+  const preferred=crmReportSelectionId||prefs.favorite||'';
+  const found=visible.find(t=>t.id===preferred) || visible[0];
+  crmReportSelectionId=found.id;
+  return found;
+}
+
+function resolveCrmReportSort(template){
+  if(!template) return { key:'order', direction:'asc' };
+  const baseKey=template.sort?.key && CRM_REPORT_COLUMNS[template.sort.key] ? template.sort.key : (template.columns[0]||'order');
+  const baseDirection=template.sort?.direction==='desc'?'desc':'asc';
+  if(crmReportSortOverride && CRM_REPORT_COLUMNS[crmReportSortOverride.key]){
+    return { key:crmReportSortOverride.key, direction:crmReportSortOverride.direction==='desc'?'desc':'asc' };
+  }
+  return { key:baseKey, direction:baseDirection };
+}
+
+function renderCrmReportSelector(){
+  if(!crmReportTemplateSelect) return;
+  const visible=getVisibleCrmReportTemplates();
+  crmReportTemplateSelect.innerHTML='';
+  visible.forEach(template=>{
+    const opt=new Option(template.name, template.id);
+    opt.title=template.description||'';
+    crmReportTemplateSelect.appendChild(opt);
+  });
+  const active=resolveCrmReportSelection();
+  if(active){
+    crmReportTemplateSelect.value=active.id;
+  }
+  if(crmReportFilterSelect){
+    const fallback=active?.filter||'current';
+    const normalized=CRM_ORDER_FILTERS.has(crmReportFilterSelect.value)?crmReportFilterSelect.value:fallback;
+    crmReportFilterMode=normalized;
+    crmReportFilterSelect.value=normalized;
+  }
+}
+
+function applyCrmReportSort(key){
+  if(!CRM_REPORT_COLUMNS[key]) return;
+  if(crmReportSortOverride && crmReportSortOverride.key===key){
+    crmReportSortOverride={ key, direction:crmReportSortOverride.direction==='desc'?'asc':'desc' };
+  }else{
+    crmReportSortOverride={ key, direction:'asc' };
+  }
+  renderCrmReportView();
+}
+
+function sortCrmReportRows(rows, sort){
+  if(!rows || !rows.length) return rows||[];
+  const { key, direction }=sort;
+  const col=CRM_REPORT_COLUMNS[key]||CRM_REPORT_COLUMNS.order;
+  const dir=direction==='desc'?-1:1;
+  const valueFn=col.value || col.render;
+  return rows.slice().sort((a,b)=>{
+    const av=valueFn?valueFn(a):'';
+    const bv=valueFn?valueFn(b):'';
+    if(typeof av==='number' && typeof bv==='number'){
+      return (av-bv)*dir;
+    }
+    return String(av||'').localeCompare(String(bv||''),'ru',{ numeric:true })*dir;
+  });
+}
+
+function renderCrmReportTable(template){
+  if(!template || !crmReportTableHead || !crmReportTableBody || !crmReportTableFoot) return;
+  const rows=sortCrmReportRows(collectCrmReportRows(crmReportFilterMode), resolveCrmReportSort(template));
+  crmReportTableHead.innerHTML='';
+  crmReportTableBody.innerHTML='';
+  crmReportTableFoot.innerHTML='';
+  const headerRow=document.createElement('tr');
+  const sortState=resolveCrmReportSort(template);
+  template.columns.forEach(key=>{
+    const col=CRM_REPORT_COLUMNS[key];
+    if(!col) return;
+    const th=document.createElement('th');
+    if(col.sortable!==false){
+      const btn=document.createElement('button');
+      btn.type='button';
+      btn.dataset.column=key;
+      btn.innerHTML=`${escapeHtml(col.label)} <span class="crm-report-sort">${sortState.key===key?(sortState.direction==='desc'?'↓':'↑'):'↕'}</span>`;
+      btn.addEventListener('click',()=>applyCrmReportSort(key));
+      th.appendChild(btn);
+    }else{
+      th.textContent=col.label;
+    }
+    headerRow.appendChild(th);
+  });
+  crmReportTableHead.appendChild(headerRow);
+
+  if(!rows.length){
+    if(crmReportEmpty){
+      crmReportEmpty.hidden=false;
+    }
+    return;
+  }
+  if(crmReportEmpty){
+    crmReportEmpty.hidden=true;
+  }
+
+  rows.forEach(entry=>{
+    const tr=document.createElement('tr');
+    tr.dataset.orderId=entry.order?.id||'';
+    tr.addEventListener('dblclick',()=>{ if(entry.order?.id){ openOrder(entry.order.id); } });
+    template.columns.forEach(key=>{
+      const col=CRM_REPORT_COLUMNS[key];
+      if(!col) return;
+      const td=document.createElement('td');
+      const value=col.render?col.render(entry):'';
+      if(col.type==='html'){
+        td.innerHTML=value||'';
+      }else{
+        td.textContent=value===''?'—':value;
+      }
+      tr.appendChild(td);
+    });
+    crmReportTableBody.appendChild(tr);
+  });
+
+  const totalsRow=document.createElement('tr');
+  let hasTotals=false;
+  template.columns.forEach((key,idx)=>{
+    const col=CRM_REPORT_COLUMNS[key];
+    const td=document.createElement('td');
+    if(col?.total){
+      const value=col.total(rows)||0;
+      td.textContent=col.type==='number'?value.toLocaleString('ru-RU',{ maximumFractionDigits:2 }):String(value);
+      hasTotals=true;
+    }else if(idx===0){
+      td.textContent='Итого';
+    }
+    totalsRow.appendChild(td);
+  });
+  if(hasTotals){
+    crmReportTableFoot.appendChild(totalsRow);
+  }
+}
+
+function renderCrmReportView(){
+  renderCrmReportSelector();
+  const template=resolveCrmReportSelection();
+  if(!template){
+    if(crmReportTableHead) crmReportTableHead.innerHTML='';
+    if(crmReportTableBody) crmReportTableBody.innerHTML='';
+    if(crmReportTableFoot) crmReportTableFoot.innerHTML='';
+    if(crmReportEmpty){
+      crmReportEmpty.hidden=false;
+      crmReportEmpty.textContent='Нет активных шаблонов для отображения';
+    }
+    return;
+  }
+  if(crmReportFilterSelect && !CRM_ORDER_FILTERS.has(crmReportFilterSelect.value)){
+    crmReportFilterSelect.value=template.filter;
+    crmReportFilterMode=template.filter;
+  }
+  renderCrmReportTable(template);
+}
+
+function createCrmReportTemplateCard(template, userEnabledSet){
+  const card=document.createElement('div');
+  card.className='crm-report-template-card';
+  card.dataset.templateId=template.id;
+  const header=document.createElement('div');
+  header.className='crm-report-template-header';
+  const title=document.createElement('h4');
+  title.textContent=template.name||'Шаблон';
+  const removeBtn=document.createElement('button');
+  removeBtn.type='button';
+  removeBtn.className='pc-btn pc-btn--ghost';
+  removeBtn.textContent='Удалить';
+  removeBtn.addEventListener('click',()=>card.remove());
+  header.append(title, removeBtn);
+
+  const grid=document.createElement('div');
+  grid.className='crm-report-template-grid';
+
+  const nameField=document.createElement('label');
+  nameField.className='crm-field';
+  nameField.innerHTML='<span class="crm-field__label">Название</span>';
+  const nameInput=document.createElement('input');
+  nameInput.className='pc-input';
+  nameInput.value=template.name||'';
+  nameInput.dataset.field='name';
+  nameField.appendChild(nameInput);
+
+  const descField=document.createElement('label');
+  descField.className='crm-field';
+  descField.innerHTML='<span class="crm-field__label">Описание</span>';
+  const descInput=document.createElement('textarea');
+  descInput.rows=2;
+  descInput.dataset.field='description';
+  descInput.textContent=template.description||'';
+  descField.appendChild(descInput);
+
+  const typeField=document.createElement('label');
+  typeField.className='crm-field';
+  typeField.innerHTML='<span class="crm-field__label">Тип</span>';
+  const typeSelect=document.createElement('select');
+  typeSelect.className='pc-select';
+  typeSelect.dataset.field='type';
+  ['table','gantt'].forEach(value=>typeSelect.appendChild(new Option(value==='table'?'Таблица':'Гант', value)));
+  typeSelect.value=CRM_REPORT_TYPES.has(template.type)?template.type:'table';
+  typeField.appendChild(typeSelect);
+
+  const filterField=document.createElement('label');
+  filterField.className='crm-field';
+  filterField.innerHTML='<span class="crm-field__label">Фильтр заказов</span>';
+  const filterSelect=document.createElement('select');
+  filterSelect.className='pc-select';
+  filterSelect.dataset.field='filter';
+  ['current','all','done','late'].forEach(value=>filterSelect.appendChild(new Option({current:'Текущие',all:'Все',done:'Готовые',late:'С опозданием'}[value], value)));
+  filterSelect.value=CRM_ORDER_FILTERS.has(template.filter)?template.filter:'current';
+  filterField.appendChild(filterSelect);
+
+  const sortField=document.createElement('label');
+  sortField.className='crm-field';
+  sortField.innerHTML='<span class="crm-field__label">Сортировка</span>';
+  const sortSelect=document.createElement('select');
+  sortSelect.className='pc-select';
+  sortSelect.dataset.field='sortKey';
+  Object.values(CRM_REPORT_COLUMNS).forEach(col=>{
+    const opt=new Option(col.label, col.key);
+    sortSelect.appendChild(opt);
+  });
+  sortSelect.value=template.sort?.key && CRM_REPORT_COLUMNS[template.sort.key] ? template.sort.key : (template.columns[0]||'order');
+  const sortDir=document.createElement('select');
+  sortDir.className='pc-select';
+  sortDir.dataset.field='sortDir';
+  sortDir.append(new Option('По возрастанию','asc'), new Option('По убыванию','desc'));
+  sortDir.value=template.sort?.direction==='desc'?'desc':'asc';
+  const sortWrap=document.createElement('div');
+  sortWrap.className='crm-settings-inline';
+  sortWrap.append(sortSelect, sortDir);
+  sortField.appendChild(sortWrap);
+
+  const flags=document.createElement('div');
+  flags.className='crm-report-template-footer';
+  const enabledLabel=document.createElement('label');
+  enabledLabel.className='crm-settings-checkbox';
+  const enabledInput=document.createElement('input');
+  enabledInput.type='checkbox';
+  enabledInput.dataset.field='enabled';
+  enabledInput.checked=template.enabled!==false;
+  enabledLabel.append(enabledInput, document.createTextNode('Доступно всем'));
+
+  const personalLabel=document.createElement('label');
+  personalLabel.className='crm-settings-checkbox';
+  const personalInput=document.createElement('input');
+  personalInput.type='checkbox';
+  personalInput.dataset.field='personal';
+  personalInput.checked=template.personal!==false;
+  personalLabel.append(personalInput, document.createTextNode('Добавлять по умолчанию'));
+
+  const totalsLabel=document.createElement('label');
+  totalsLabel.className='crm-settings-checkbox';
+  const totalsInput=document.createElement('input');
+  totalsInput.type='checkbox';
+  totalsInput.dataset.field='totals';
+  totalsInput.checked=template.showTotals!==false;
+  totalsLabel.append(totalsInput, document.createTextNode('Итоги по числовым полям'));
+
+  const mineLabel=document.createElement('label');
+  mineLabel.className='crm-settings-checkbox';
+  const mineInput=document.createElement('input');
+  mineInput.type='checkbox';
+  mineInput.dataset.field='mine';
+  mineInput.checked=userEnabledSet.has(template.id) || (!userEnabledSet.size && template.personal!==false);
+  mineLabel.append(mineInput, document.createTextNode('Показывать у меня'));
+
+  flags.append(enabledLabel, personalLabel, totalsLabel, mineLabel);
+
+  const columnsWrap=document.createElement('div');
+  columnsWrap.className='crm-report-columns';
+  columnsWrap.dataset.field='columns';
+  const columnSet=new Set(template.columns||[]);
+  Object.values(CRM_REPORT_COLUMNS).forEach(col=>{
+    const label=document.createElement('label');
+    const checkbox=document.createElement('input');
+    checkbox.type='checkbox';
+    checkbox.value=col.key;
+    checkbox.checked=columnSet.size?columnSet.has(col.key):true;
+    label.append(checkbox, document.createTextNode(col.label));
+    columnsWrap.appendChild(label);
+  });
+
+  grid.append(nameField, descField, typeField, filterField, sortField);
+  card.append(header, grid, columnsWrap, flags);
+  return card;
+}
+
+function collectCrmReportTemplateDrafts(){
+  if(!crmReportTemplateList) return { templates:[], enabled:[] };
+  const templates=[];
+  const enabledForUser=new Set();
+  crmReportTemplateList.querySelectorAll('.crm-report-template-card').forEach(card=>{
+    const idRaw=card.dataset.templateId||safeRandomUUID();
+    const name=card.querySelector('[data-field="name"]')?.value?.trim()||'Шаблон';
+    const description=card.querySelector('[data-field="description"]')?.value?.trim()||'';
+    const type=card.querySelector('[data-field="type"]')?.value||'table';
+    const filter=card.querySelector('[data-field="filter"]')?.value||'current';
+    const sortKey=card.querySelector('[data-field="sortKey"]')?.value||'order';
+    const sortDir=card.querySelector('[data-field="sortDir"]')?.value||'asc';
+    const enabled=!!card.querySelector('[data-field="enabled"]')?.checked;
+    const personal=!!card.querySelector('[data-field="personal"]')?.checked;
+    const showTotals=!!card.querySelector('[data-field="totals"]')?.checked;
+    const mineChecked=!!card.querySelector('[data-field="mine"]')?.checked;
+    const columns=[];
+    card.querySelectorAll('[data-field="columns"] input[type="checkbox"]').forEach(input=>{
+      if(input.checked && CRM_REPORT_COLUMNS[input.value]) columns.push(input.value);
+    });
+    const template=sanitizeCrmReportTemplate({ id:idRaw, name, description, type, filter, columns, enabled, personal, sort:{ key:sortKey, direction:sortDir }, showTotals });
+    templates.push(template);
+    if(mineChecked){
+      enabledForUser.add(template.id);
+    }
+  });
+  return { templates, enabled:Array.from(enabledForUser) };
+}
+
+function renderCrmReportTemplatesEditor(addNew=false){
+  if(!crmReportTemplateList) return;
+  const prefs=sanitizeCrmReportPreferences(getCrmPreferences()?.reportPresets);
+  let templates=getCrmReportTemplates();
+  if(addNew){
+    const seed=CRM_DEFAULT_REPORT_TEMPLATES[0]||{};
+    const draft=sanitizeCrmReportTemplate({ ...seed, id:safeRandomUUID(), name:'Новая страница', enabled:true, personal:true });
+    templates=[...templates, draft];
+  }
+  crmReportTemplateList.innerHTML='';
+  const userEnabledSet=new Set(prefs.enabled||[]);
+  templates.forEach(template=>{
+    const card=createCrmReportTemplateCard(template, userEnabledSet);
+    if(card) crmReportTemplateList.appendChild(card);
+  });
+}
+
+function openCrmReportTemplatesDialog({ addNew=false }={}){
+  renderCrmReportTemplatesEditor(addNew);
+  if(crmReportTemplatesDlg && typeof crmReportTemplatesDlg.showModal==='function'){
+    crmReportTemplatesDlg.showModal();
+  }
+}
+
+function closeCrmReportTemplatesDialog(){
+  if(crmReportTemplatesDlg && typeof crmReportTemplatesDlg.close==='function'){
+    crmReportTemplatesDlg.close();
+  }
+}
+
+function saveCrmReportTemplatesFromUi(){
+  const draft=collectCrmReportTemplateDrafts();
+  state.settings.reportTemplates=sanitizeCrmReportTemplates(draft.templates);
+  const mergedPrefs={ ...getCrmPreferences(), reportPresets:sanitizeCrmReportPreferences({ enabled:draft.enabled, favorite:crmReportSelectionId }) };
+  state.settings.preferences=sanitizeCrmPreferences(mergedPrefs);
+  save('Шаблоны отчётов');
+  renderAll();
+  closeCrmReportTemplatesDialog();
+}
+
 function computeCrmStageStatus(entry,schedule){
   if(!entry) return { label:'—', className:'', title:'', lateDays:0, plannedEnd:null, scheduledEnd:null };
   let plannedEnd=null;
@@ -17079,6 +17668,7 @@ function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
   const inKanban=currentCrmView==='kanban';
+  const inReports=currentCrmView==='reports';
   if(crmNavKanbanBtn){
     crmNavKanbanBtn.classList.toggle('pc-nav__link--active',inKanban);
     crmNavKanbanBtn.setAttribute('aria-pressed',inKanban?'true':'false');
@@ -17086,6 +17676,10 @@ function updateCrmOrdersTabUi(){
   if(crmOrdersTabBtn){
     crmOrdersTabBtn.classList.toggle('pc-nav__link--active',inOrders);
     crmOrdersTabBtn.setAttribute('aria-pressed',inOrders?'true':'false');
+  }
+  if(crmReportsTabBtn){
+    crmReportsTabBtn.classList.toggle('pc-nav__link--active',inReports);
+    crmReportsTabBtn.setAttribute('aria-pressed',inReports?'true':'false');
   }
   if(crmStageTabBtn){
     crmStageTabBtn.classList.toggle('pc-nav__link--active',inStage);
@@ -17099,6 +17693,10 @@ function updateCrmOrdersTabUi(){
   if(crmOrdersViewEl){
     crmOrdersViewEl.hidden=!inOrders;
     crmOrdersViewEl.setAttribute('aria-hidden',inOrders?'false':'true');
+  }
+  if(crmReportViewEl){
+    crmReportViewEl.hidden=!inReports;
+    crmReportViewEl.setAttribute('aria-hidden',inReports?'false':'true');
   }
   if(crmStageViewEl){
     crmStageViewEl.hidden=!inStage;
@@ -17127,6 +17725,8 @@ function setCrmView(view){
   if(currentCrmView==='orders'){
     renderOrdersTable();
     syncCrmOrdersTotals();
+  }else if(currentCrmView==='reports'){
+    renderCrmReportView();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
   }else{
@@ -17137,6 +17737,8 @@ function setCrmView(view){
 function renderCurrentView(){
   if(currentCrmView==='orders'){
     renderOrdersTable();
+  }else if(currentCrmView==='reports'){
+    renderCrmReportView();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
   }else{
@@ -20482,7 +21084,8 @@ function renderCrmStartViewSettingsUI(){
   select.name='startView';
   const optionKanban=new Option('Канбан', 'kanban');
   const optionOrders=new Option('Общий список заказов', 'orders');
-  select.append(optionKanban, optionOrders);
+  const optionReports=new Option('Конструктор страниц', 'reports');
+  select.append(optionKanban, optionOrders, optionReports);
   const group=document.createElement('optgroup');
   group.label='Переделы';
   CRM_STAGE_SEQUENCE.forEach(stage=>{
@@ -22755,8 +23358,49 @@ if(crmNavKanbanBtn){
 if(crmOrdersTabBtn){
   crmOrdersTabBtn.addEventListener('click',()=>setCrmView('orders'));
 }
+if(crmReportsTabBtn){
+  crmReportsTabBtn.addEventListener('click',()=>setCrmView('reports'));
+}
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
+}
+if(crmReportTemplateSelect){
+  crmReportTemplateSelect.addEventListener('change',()=>{
+    crmReportSelectionId=crmReportTemplateSelect.value||null;
+    crmReportSortOverride=null;
+    const template=resolveCrmReportSelection();
+    const nextFilter=template?.filter||crmReportFilterMode||'current';
+    crmReportFilterMode=nextFilter;
+    if(crmReportFilterSelect){
+      crmReportFilterSelect.value=nextFilter;
+    }
+    renderCrmReportView();
+  });
+}
+if(crmReportFilterSelect){
+  crmReportFilterSelect.addEventListener('change',()=>{
+    const value=CRM_ORDER_FILTERS.has(crmReportFilterSelect.value)?crmReportFilterSelect.value:'current';
+    crmReportFilterMode=value;
+    renderCrmReportView();
+  });
+}
+if(crmReportManageBtn){
+  crmReportManageBtn.addEventListener('click',()=>openCrmReportTemplatesDialog());
+}
+if(crmReportCreateBtn){
+  crmReportCreateBtn.addEventListener('click',()=>openCrmReportTemplatesDialog({ addNew:true }));
+}
+if(crmReportTemplatesClose){
+  crmReportTemplatesClose.addEventListener('click',()=>closeCrmReportTemplatesDialog());
+}
+if(crmReportTemplatesDlg){
+  crmReportTemplatesDlg.addEventListener('cancel',event=>{ event.preventDefault(); closeCrmReportTemplatesDialog(); });
+}
+if(crmReportTemplateAdd){
+  crmReportTemplateAdd.addEventListener('click',()=>renderCrmReportTemplatesEditor(true));
+}
+if(crmReportTemplatesSave){
+  crmReportTemplatesSave.addEventListener('click',saveCrmReportTemplatesFromUi);
 }
 if(crmStageNavItem && crmStageNavDropdown){
   const openStageDropdown=()=>{
