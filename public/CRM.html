@@ -1543,6 +1543,52 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-danger) 25%, transparent);
   }
 
+  .pc-nav__item {
+    position: relative;
+    display: inline-flex;
+    align-items: stretch;
+  }
+
+  .crm-stage-tab__content {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .crm-stage-tab__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .crm-stage-nav__dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 12;
+    min-width: 240px;
+    background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.22);
+    border-radius: var(--pc-radius-xl);
+    padding: var(--pc-spacing-sm);
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+  }
+
+  .crm-stage-nav__dropdown-inner {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-stage-nav__dropdown .crm-stage-select-shell {
+    width: 100%;
+    min-width: 220px;
+  }
+
   .pc-nav__badge {
     display: inline-flex;
     align-items: center;
@@ -2242,9 +2288,17 @@
   }
 
   .crm-stage-select-display {
-    position: relative;
-    justify-content: space-between;
-    gap: 12px;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .crm-stage-select-display__main {
@@ -2273,10 +2327,7 @@
   }
 
   .crm-stage-select-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
+    position: relative;
     z-index: 42;
     border-radius: var(--pc-radius-sm);
     border: 1px solid color-mix(in srgb, var(--pc-border) 75%, transparent);
@@ -2285,8 +2336,8 @@
     padding: 6px;
     display: grid;
     gap: 4px;
-    max-height: 320px;
-    overflow-y: auto;
+    max-height: none;
+    overflow: visible;
   }
 
   .crm-stage-select-option {
@@ -2815,6 +2866,20 @@
     width: 100%;
   }
 
+  .crm-stage-secondary .crm-stage-gantt-card,
+  .crm-stage-secondary .crm-stage-route-card {
+    width: calc(100% + 24px);
+    margin-inline: -12px;
+  }
+
+  @media (max-width: 900px) {
+    .crm-stage-secondary .crm-stage-gantt-card,
+    .crm-stage-secondary .crm-stage-route-card {
+      width: 100%;
+      margin-inline: 0;
+    }
+  }
+
   .crm-stage-secondary > * {
     flex: 0 0 auto;
   }
@@ -2850,6 +2915,46 @@
 
   .crm-stage-route-actions .pc-switch {
     margin: 0;
+  }
+
+  .crm-unaccounted-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-unaccounted-filter-label {
+    font-size: 12px;
+    color: var(--pc-text-muted);
+  }
+
+  .crm-unaccounted-filter-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .crm-unaccounted-filter-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 50%, transparent);
+    border-radius: var(--pc-radius-pill, 999px);
+    background: color-mix(in srgb, var(--pc-border) 12%, transparent);
+    font-size: 12px;
+  }
+
+  .crm-unaccounted-filter-item input {
+    margin: 0;
+  }
+
+  .crm-unaccounted-filter-item.is-muted {
+    color: var(--pc-text-muted);
+    background: color-mix(in srgb, var(--pc-border) 8%, transparent);
+    border-style: dashed;
   }
 
   .crm-stage-gantt-header h3,
@@ -2995,12 +3100,17 @@
     position: relative;
   }
 
-  .crm-stage-gantt-cell {
-    position: relative;
-    border-right: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
+    .crm-stage-gantt-cell {
+      position: relative;
+      border-right: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+    }
+
+  .crm-stage-gantt-cell--total {
+    background: none;
+    padding: 6px 4px;
   }
 
   .crm-stage-gantt-cell.weekend {
@@ -3058,6 +3168,33 @@
 
   .crm-stage-gantt-fill.status-free {
     background: color-mix(in srgb, var(--pc-info, #228be6) 18%, transparent);
+  }
+
+  .crm-stage-gantt-fill--total {
+    background: none;
+    font-size: 12px;
+    font-weight: var(--pc-font-weight-semibold);
+    color: var(--pc-text);
+    letter-spacing: 0.01em;
+  }
+
+  .crm-stage-gantt-row--total {
+    margin-top: var(--pc-spacing-sm);
+    border-top: none;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--pc-primary) 8%, var(--pc-surface)) 0%, color-mix(in srgb, var(--pc-primary) 4%, var(--pc-surface)) 100%);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--pc-primary) 16%, transparent);
+    border-radius: var(--pc-radius-sm);
+  }
+
+  .crm-stage-gantt-left-row--total {
+    font-weight: var(--pc-font-weight-semibold);
+    margin-top: var(--pc-spacing-sm);
+    border-top: none;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--pc-primary) 10%, var(--pc-surface)) 0%, color-mix(in srgb, var(--pc-primary) 6%, var(--pc-surface)) 100%);
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--pc-primary) 16%, transparent);
+    border-radius: var(--pc-radius-sm);
+    padding-block: 6px;
+    padding-inline: 8px;
   }
 
   .crm-stage-route {
@@ -4114,6 +4251,72 @@
     color: var(--pc-text-muted);
   }
 
+  .crm-calendar-list {
+    display: grid;
+    gap: var(--pc-spacing-xs);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-surface) 90%, var(--pc-border) 10%);
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-row__meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .crm-calendar-row__comment {
+    color: var(--pc-text-muted);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+
+  .crm-calendar-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--pc-spacing-sm);
+    margin-bottom: var(--pc-spacing-sm);
+  }
+
+  .crm-calendar-actions__right {
+    display: flex;
+    gap: var(--pc-spacing-xs);
+  }
+
+  .crm-calendar-history {
+    border-top: 1px dashed var(--pc-border);
+    padding-top: var(--pc-spacing-sm);
+    margin-top: var(--pc-spacing-md);
+    font-size: 13px;
+    color: var(--pc-text-muted);
+    display: grid;
+    gap: 6px;
+  }
+
+  .crm-calendar-history__item strong {
+    color: var(--pc-text);
+  }
+
+  .crm-calendar-row--archived {
+    opacity: 0.75;
+    background: color-mix(in srgb, var(--pc-surface) 80%, var(--pc-border) 20%);
+  }
+
+  .crm-calendar-row__actions {
+    display: flex;
+    gap: 6px;
+  }
+
   .crm-modal-hint code {
     background: color-mix(in srgb, var(--pc-border) 18%, transparent);
     padding: 0 4px;
@@ -5132,7 +5335,7 @@
 
   .pc-modal {
     border: none;
-    border-radius: var(--pc-radius-xl);
+    border-radius: var(--pc-radius-xl, 24px);
     background: var(--pc-surface);
     color: var(--pc-text);
     padding: 0;
@@ -5179,6 +5382,20 @@
 
   .pc-modal--sm {
     width: min(440px, 92vw);
+  }
+
+  #crmStageExceptionsDlg,
+  #crmStageReserveDlg,
+  #boardDlg,
+  #crmJournalDlg,
+  #crmUnaccountedDlg {
+    border-radius: var(--pc-radius-xl, 24px);
+    overflow: hidden;
+  }
+
+  #crmAdminDlg {
+    border-radius: 32px;
+    overflow: hidden;
   }
 
   dialog#orderDlg {
@@ -5457,12 +5674,12 @@
     width: 140px;
   }
 
-  #stagesTable th.col-start,
-  #stagesTable td.col-start,
-  #stagesTable th.col-end,
-  #stagesTable td.col-end {
-    width: 122px;
-  }
+    #stagesTable th.col-start,
+    #stagesTable td.col-start,
+    #stagesTable th.col-end,
+    #stagesTable td.col-end {
+      width: 140px;
+    }
 
   #stagesTable th:nth-child(2),
   #stagesTable td:nth-child(2) {
@@ -5474,11 +5691,11 @@
     width: 152px;
   }
 
-  #stagesTable input:not([type="checkbox"]),
-  #stagesTable select {
-    width: 100%;
-    border-radius: var(--pc-radius-sm);
-    border: 1px solid var(--pc-border);
+    #stagesTable input:not([type="checkbox"]),
+    #stagesTable select {
+      width: 100%;
+      border-radius: var(--pc-radius-sm);
+      border: 1px solid var(--pc-border);
     padding: 8px 10px;
     background: var(--pc-surface);
     color: var(--pc-text);
@@ -5555,6 +5772,28 @@
     align-items: center;
     gap: var(--pc-spacing-sm);
     flex-wrap: wrap;
+  }
+
+  .stage-date-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .stage-date-cell input[type="date"] {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .stage-date-dow {
+    width: 34px;
+    text-align: right;
+    color: var(--pc-text-muted);
+    font-size: 12px;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    white-space: nowrap;
   }
 
   .crm-stage-date-tools {
@@ -5698,6 +5937,28 @@
       margin: var(--pc-spacing-sm) var(--pc-spacing-md) 0;
     }
 
+    .stage-date-cell {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+
+    .stage-date-cell input[type="date"] {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .stage-date-dow {
+      width: 34px;
+      text-align: right;
+      color: var(--pc-text-muted);
+      font-size: 12px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
     .col {
       max-height: none;
     }
@@ -5738,7 +5999,27 @@
   <nav class="pc-nav" aria-label="Основные разделы">
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
-    <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" data-tooltip-primary="Переделы" data-tooltip-secondary="Распределение по переделам, исключения/бронь и маршрут заказа.">Переделы</button>
+    <div class="pc-nav__item crm-stage-nav" id="crmStageNavItem">
+      <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" aria-haspopup="true" aria-expanded="false">Переделы</button>
+      <div class="crm-stage-nav__dropdown" id="crmStageNavDropdown" hidden>
+        <div class="crm-stage-nav__dropdown-inner">
+          <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
+            <select id="crmStageSelect" class="pc-select">
+            <option value="draw">📐 Подготовка в работу</option>
+            <option value="proc">🛒 Закупка</option>
+            <option value="shear">✂️ Рубка</option>
+            <option value="laser">🔦 Лазер</option>
+            <option value="bend">🗜️ Гибка</option>
+            <option value="weld">🔩 Сварка</option>
+            <option value="mech">⚙️ Мехобработка</option>
+            <option value="coop">🤝 Кооперация</option>
+            <option value="pack">📦 Упаковка</option>
+            <option value="ship">🚚 Отгрузка</option>
+            </select>
+          </span>
+        </div>
+      </div>
+    </div>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
@@ -5790,22 +6071,6 @@
     <div class="crm-toolbar__row">
       <div class="crm-toolbar__left">
         <div class="crm-toolbar__stage-controls" id="crmStageControls" hidden>
-          <label class="crm-toolbar__stage-field" for="crmStageSelect">Передел
-            <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
-              <select id="crmStageSelect" class="pc-select">
-              <option value="draw">📐 Подготовка в работу</option>
-              <option value="proc">🛒 Закупка</option>
-              <option value="shear">✂️ Рубка</option>
-              <option value="laser">🔦 Лазер</option>
-              <option value="bend">🗜️ Гибка</option>
-              <option value="weld">🔩 Сварка</option>
-              <option value="mech">⚙️ Мехобработка</option>
-              <option value="coop">🤝 Кооперация</option>
-              <option value="pack">📦 Упаковка</option>
-              <option value="ship">🚚 Отгрузка</option>
-              </select>
-            </span>
-          </label>
           <label class="crm-toolbar__stage-field" for="crmStageFilter">Фильтр
             <select id="crmStageFilter" class="pc-select">
               <option value="current">Текущие</option>
@@ -6070,8 +6335,8 @@
               <span>С сегодняшнего дня</span>
             </label>
             <div class="crm-route-toggle" role="tablist">
-              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="true">Подробно</button>
-              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="false">Сжато</button>
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="detailed" aria-pressed="false">Подробно</button>
+              <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-route-mode="compact" aria-pressed="true">Сжато</button>
             </div>
             <button type="button" class="crm-section-toggle" id="crmStageRouteToggle" data-collapse-toggle="route" aria-expanded="true" aria-controls="crmStageRouteBodyWrap">
               <span class="crm-section-toggle__icon" aria-hidden="true">▾</span>
@@ -6144,12 +6409,19 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageExceptionsClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="crm-modal-hint">Каждая строка: <code>ДД.ММ.ГГГГ</code> или <code>ДД.ММ.ГГГГ (часы)</code>. Если часы не указаны, день считается выходным.</p>
-    <textarea id="crmStageExceptionsInput" class="crm-modal-textarea" placeholder="12.09.2025&#10;15.09.2025 (18)"></textarea>
+    <div class="crm-calendar-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmStageExceptionsAdd">Добавить исключение</button>
+      <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageExceptionsHistoryToggle">Показать историю</button>
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageExceptionsArchiveToggle">Показать архив</button>
+      </div>
+    </div>
+    <div id="crmStageExceptionsList" class="crm-calendar-list"></div>
+    <div id="crmStageExceptionsArchive" class="crm-calendar-list" hidden></div>
+    <div id="crmStageExceptionsHistory" class="crm-calendar-history" hidden></div>
   </div>
   <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageExceptionsCancel">Отмена</button>
-    <button type="button" class="pc-btn pc-btn--primary" id="crmStageExceptionsApply">Применить</button>
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageExceptionsCancel">Закрыть</button>
   </div>
 </dialog>
 
@@ -6159,14 +6431,51 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmStageReserveClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="crm-modal-hint">Каждая строка: <code>ДД.ММ.ГГГГ (часы)</code>. Эти часы будут зарезервированы и не попадут в основную ёмкость.</p>
-    <textarea id="crmStageReserveInput" class="crm-modal-textarea" placeholder="20.09.2025 (10)
-21.09.2025 (5)"></textarea>
+    <div class="crm-calendar-actions">
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmStageReserveAdd">Добавить бронь</button>
+      <div class="crm-calendar-actions__right">
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageReserveHistoryToggle">Показать историю</button>
+        <button class="pc-btn pc-btn--ghost" type="button" id="crmStageReserveArchiveToggle">Показать архив</button>
+      </div>
+    </div>
+    <div id="crmStageReserveList" class="crm-calendar-list"></div>
+    <div id="crmStageReserveArchive" class="crm-calendar-list" hidden></div>
     <div id="crmStageReserveDiag" class="crm-modal-diag muted"></div>
+    <div id="crmStageReserveHistory" class="crm-calendar-history" hidden></div>
   </div>
   <div class="dlg-footer">
-    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageReserveCancel">Отмена</button>
-    <button type="button" class="pc-btn pc-btn--primary" id="crmStageReserveApply">Применить</button>
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmStageReserveCancel">Закрыть</button>
+  </div>
+</dialog>
+
+<dialog id="crmCalendarEntryDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong id="crmCalendarEntryTitle"></strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmCalendarEntryClose" aria-label="Закрыть">✖</button>
+  </div>
+  <form class="dlg-body" id="crmCalendarEntryForm">
+    <div class="row">
+      <label class="pc-input">
+        <span>Дата</span>
+        <input type="date" id="crmCalendarEntryDate" required />
+      </label>
+      <label class="pc-input">
+        <span>Время</span>
+        <input type="time" id="crmCalendarEntryTime" />
+      </label>
+    </div>
+    <label class="pc-input">
+      <span>Часы</span>
+      <input type="number" step="0.25" min="0" id="crmCalendarEntryHours" />
+    </label>
+    <label class="pc-input">
+      <span>Комментарий</span>
+      <textarea id="crmCalendarEntryComment" rows="2"></textarea>
+    </label>
+  </form>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmCalendarEntryCancel">Отмена</button>
+    <button type="submit" form="crmCalendarEntryForm" class="pc-btn pc-btn--primary" id="crmCalendarEntryApply">Сохранить</button>
   </div>
 </dialog>
 
@@ -6221,7 +6530,7 @@
       <div class="section-body">
         <div class="list">
           <table id="stagesTable">
-            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-link" title="Связь с предыдущим переделом">⛓</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
+            <thead><tr><th class="col-reorder" title="Очередность">↕</th><th>Передел</th><th>Готово</th><th class="col-progress">Прогресс, %</th><th class="col-start">Начало</th><th class="col-end">Конец</th><th class="col-rate">Руб/часов</th><th></th></tr></thead>
             <tbody></tbody></table>
 
           <div class="section-toolbar">
@@ -6391,11 +6700,19 @@
             <details class="crm-settings-group" open>
               <summary>Фильтры и статусы</summary>
               <div class="crm-settings-fields">
-                <div class="crm-settings-row">
-                  <div class="crm-settings-label">Не учитывать состояния</div>
-                  <div class="crm-settings-control">
-                    <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
-                    <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                <div class="crm-settings-row crm-settings-row--stack">
+                  <div class="crm-settings-label">Состояния</div>
+                  <div class="crm-settings-control crm-settings-control--column">
+                    <div class="crm-settings-control">
+                      <button type="button" class="pc-btn pc-btn--ghost" id="crmUnaccountedEdit">Настроить…</button>
+                      <span id="crmUnaccountedSummary" class="crm-settings-summary muted">Все состояния учитываются</span>
+                      <span id="crmUnaccountedFilterSummary" class="crm-settings-summary muted">В «Не учтённых» показываются все</span>
+                    </div>
+                    <div class="crm-unaccounted-filters" id="crmUnaccountedFilters">
+                      <span class="crm-unaccounted-filter-label">Показывать в «Не учтённых»:</span>
+                      <div class="crm-unaccounted-filter-list" id="crmUnaccountedFilter"></div>
+                    </div>
+                    <div class="crm-field__hint muted">Фильтр раздела «Не учтённые» общий для всех пользователей.</div>
                   </div>
                 </div>
               </div>
@@ -6415,6 +6732,7 @@
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
     <input type="hidden" name="unaccountedStatuses" id="crmUnaccountedHidden" />
+    <input type="hidden" name="unaccountedHiddenStatuses" id="crmUnaccountedHiddenFilter" />
     <input type="hidden" name="id" />
   </form>
 </dialog>
@@ -6450,6 +6768,7 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmUnaccountedClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
+    <p class="crm-modal-empty muted">Настройки отображения состояний задаются в настройках доски.</p>
     <div class="crm-table-wrap">
       <table class="crm-modal-table" id="crmUnaccountedTable">
         <thead>
@@ -6589,7 +6908,7 @@
     <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmLateReasonClose" aria-label="Закрыть">✖</button>
   </div>
   <div class="dlg-body">
-    <p class="pc-muted">Укажите причину просрочки или отметьте выполнение вчера.</p>
+    <p class="pc-muted">Укажите причину просрочки или отметьте выполнение вчера/до выходных.</p>
     <label class="pc-field">
       <span class="pc-field__label">Причина</span>
       <textarea id="crmLateReasonInput" class="pc-textarea" rows="6" style="min-height:160px" placeholder="Например: ожидали заготовки"></textarea>
@@ -6599,6 +6918,7 @@
   <div class="dlg-footer">
     <button class="pc-btn pc-btn--secondary" type="button" id="crmLateReasonCancel">Отмена</button>
     <button class="pc-btn" type="button" id="crmLateReasonSave">Сохранить</button>
+    <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonWeekend">До выходных</button>
     <button class="pc-btn pc-btn--ghost" type="button" id="crmLateReasonYesterday">Выполнено вчера</button>
   </div>
 </dialog>
@@ -6896,7 +7216,6 @@ const CRM_MIN_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
-const CRM_STAGE_LINK_MAX_GAP_DAYS=180;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
@@ -6908,8 +7227,6 @@ const CRM_DEFAULT_PREFERENCES={
   showLateTips:true,
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
-  linkedStagesEnabled:true,
-  linkedStageGapDays:0,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
@@ -7235,14 +7552,12 @@ function sanitizeCrmPlanFreeze(raw){
   return { stages, taskPins };
 }
 
-function sanitizeCrmSettings(raw){
-  const base=raw&&typeof raw==='object'?raw:{};
-  const statusesSource=base.unaccountedStatuses;
+function sanitizeCrmStatusListRaw(source){
   let statuses=[];
-  if(Array.isArray(statusesSource)){
-    statuses=statusesSource.map(item=>String(item??'').trim());
-  }else if(typeof statusesSource==='string'){
-    statuses=statusesSource.split(/[\n,;]+/).map(part=>part.trim());
+  if(Array.isArray(source)){
+    statuses=source.map(item=>String(item??'').trim());
+  }else if(typeof source==='string'){
+    statuses=source.split(/[\n,;]+/).map(part=>part.trim());
   }
   const uniqueStatuses=[];
   const seen=new Set();
@@ -7252,6 +7567,13 @@ function sanitizeCrmSettings(raw){
     seen.add(key);
     uniqueStatuses.push(status);
   });
+  return uniqueStatuses;
+}
+
+function sanitizeCrmSettings(raw){
+  const base=raw&&typeof raw==='object'?raw:{};
+  const uniqueStatuses=sanitizeCrmStatusListRaw(base.unaccountedStatuses);
+  const hiddenStatuses=sanitizeCrmStatusListRaw(base.unaccountedHiddenStatuses);
   const retentionSource=base.trashRetention&&typeof base.trashRetention==='object'?base.trashRetention:{};
   const mode=retentionSource.mode==='count'?'count':'days';
   let valueRaw=Number(retentionSource.value);
@@ -7268,7 +7590,7 @@ function sanitizeCrmSettings(raw){
   const journalRetention={mode:journalMode,value:Math.max(1,Math.round(journalValue))};
   const result={};
   Object.keys(base).forEach(key=>{
-    if(key==='unaccountedStatuses'||key==='trashRetention'||key==='journalRetention') return;
+    if(key==='unaccountedStatuses'||key==='unaccountedHiddenStatuses'||key==='trashRetention'||key==='journalRetention') return;
     result[key]=base[key];
   });
   const extraSource=base.extraTime&&typeof base.extraTime==='object'?base.extraTime:{};
@@ -7283,6 +7605,7 @@ function sanitizeCrmSettings(raw){
   result.mapping=sanitizeCrmStageMapping(base.mapping);
   result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
+  result.unaccountedHiddenStatuses=hiddenStatuses.filter(status=>!uniqueStatuses.length || uniqueStatuses.some(baseStatus=>normalizeStatusKey(baseStatus)===normalizeStatusKey(status)));
   result.trashRetention=retention;
   result.journalRetention=journalRetention;
   result.planFreezeDays=sanitizePlanFreezeDays(base.planFreezeDays);
@@ -7442,9 +7765,15 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       : [];
   const result=[];
   const seen=new Set();
+  const normalizeText=v=>typeof v==='string'?v.trim():'';
+  const nowIso=new Date().toISOString();
   source.forEach(item=>{
     let dateRaw=null;
     let valueRaw=null;
+    let timeRaw='';
+    let commentRaw='';
+    let createdRaw=null;
+    let updatedRaw=null;
     if(Array.isArray(item)){
       [dateRaw, valueRaw]=item;
     }else if(item && typeof item==='object'){
@@ -7457,6 +7786,10 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       else if(Object.prototype.hasOwnProperty.call(item,'capacity')) valueRaw=item.capacity;
       else if(Object.prototype.hasOwnProperty.call(item,'amount')) valueRaw=item.amount;
       else if(Object.prototype.hasOwnProperty.call(item,1)) valueRaw=item[1];
+      timeRaw=item.time||item.timeLabel||item.when||'';
+      commentRaw=item.comment||item.note||item.reason||'';
+      createdRaw=item.createdAt||item.created||null;
+      updatedRaw=item.updatedAt||item.updated||null;
     }
     const iso=coerceCalendarIso(dateRaw);
     if(!iso || seen.has(iso)) return;
@@ -7488,11 +7821,33 @@ function sanitizeCrmCalendarEntries(list, allowZero){
       return;
     }
     const final=Math.round(numeric*100)/100;
-    result.push([iso, final]);
+    const timeLabel=normalizeText(timeRaw).slice(0, 32);
+    const comment=normalizeText(commentRaw).slice(0, 240);
+    const createdAt=(typeof createdRaw==='string'&&createdRaw.includes('T'))?createdRaw:nowIso;
+    const updatedAt=(typeof updatedRaw==='string'&&updatedRaw.includes('T'))?updatedRaw:nowIso;
+    result.push({ iso, value:final, time:timeLabel, comment, createdAt, updatedAt });
     seen.add(iso);
   });
-  result.sort((a,b)=>a[0].localeCompare(b[0]));
+  result.sort((a,b)=>a.iso.localeCompare(b.iso));
   return result;
+}
+
+function sanitizeCrmCalendarHistory(list){
+  if(!Array.isArray(list)) return [];
+  const normalized=list.map(entry=>{
+    const iso=coerceCalendarIso(entry.iso||entry.date||entry.day||null);
+    return {
+      kind:entry.kind==='reserve'?'reserve':'exception',
+      iso,
+      value:typeof entry.value==='number'?entry.value:null,
+      time:typeof entry.time==='string'?entry.time.trim().slice(0,32):'',
+      comment:typeof entry.comment==='string'?entry.comment.trim().slice(0,240):'',
+      action:entry.action==='delete'?'delete':'update',
+      at:(typeof entry.at==='string'&&entry.at.includes('T'))?entry.at:new Date().toISOString(),
+    };
+  }).filter(Boolean);
+  normalized.sort((a,b)=>b.at.localeCompare(a.at));
+  return normalized.slice(0,100);
 }
 
 function sanitizeCrmStageCalendars(source){
@@ -7509,9 +7864,11 @@ function sanitizeCrmStageCalendars(source){
     }
     const exceptionsSource=entry&&typeof entry==='object'?entry.exceptions:[];
     const reservesSource=entry&&typeof entry==='object'?entry.reserves:[];
+    const historySource=entry&&typeof entry==='object'?entry.history:[];
     result[stage]={
       exceptions:sanitizeCrmCalendarEntries(exceptionsSource, true),
-      reserves:sanitizeCrmCalendarEntries(reservesSource, false)
+      reserves:sanitizeCrmCalendarEntries(reservesSource, false),
+      history:sanitizeCrmCalendarHistory(historySource)
     };
   });
   return result;
@@ -7572,26 +7929,6 @@ function normalizeRouteHorizonDays(value){
   if(num===null || !Number.isFinite(num)) return null;
   if(num<=0) return 0;
   return Math.max(0, Math.min(CRM_MAX_ROUTE_HORIZON_DAYS, Math.round(num)));
-}
-
-function normalizeStageLinkGapDays(value){
-  if(value===null||value===undefined||value==='') return 0;
-  let num=null;
-  if(typeof value==='number'){
-    if(!Number.isFinite(value)) return 0;
-    num=value;
-  }else if(typeof value==='string'){
-    const trimmed=value.trim();
-    if(!trimmed) return 0;
-    const normalized=trimmed.replace(',', '.');
-    const direct=Number(normalized);
-    if(!Number.isFinite(direct)) return 0;
-    num=direct;
-  }else{
-    return 0;
-  }
-  if(num===null || !Number.isFinite(num) || num<=0) return 0;
-  return Math.max(0, Math.min(CRM_STAGE_LINK_MAX_GAP_DAYS, Math.round(num)));
 }
 
 function sanitizeCrmHintPreferences(raw){
@@ -7697,15 +8034,6 @@ function sanitizeCrmPreferences(raw){
       if(normalized===null) continue;
       result.routeHorizonDays=normalized;
       break;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStagesEnabled')){
-      result.linkedStagesEnabled=raw.linkedStagesEnabled!==false;
-    }
-    if(Object.prototype.hasOwnProperty.call(raw,'linkedStageGapDays')){
-      const normalized=normalizeStageLinkGapDays(raw.linkedStageGapDays);
-      if(normalized!==null){
-        result.linkedStageGapDays=normalized;
-      }
     }
     if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
       result.ganttRangeHints=raw.ganttRangeHints===true;
@@ -7897,18 +8225,6 @@ function setGanttRangeHintsEnabled(enabled){
   prefs.ganttRangeHints=normalized;
   state.settings.preferences=prefs;
   persistStoredCrmSettings(state.settings);
-}
-
-function isStageLinkEnabledByDefault(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return true;
-  return prefs.linkedStagesEnabled!==false;
-}
-
-function getCrmStageLinkGapDays(){
-  const prefs=getCrmPreferences();
-  if(!prefs) return 0;
-  return normalizeStageLinkGapDays(prefs.linkedStageGapDays);
 }
 
 function getPreferredAutoRefreshIntervalMs(){
@@ -8339,8 +8655,6 @@ const applyCrmWriteAccess=()=>{
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
   if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
-  if(crmStageExceptionsApply){ crmStageExceptionsApply.disabled=!canSelectedStage; }
-  if(crmStageReserveApply){ crmStageReserveApply.disabled=!canSelectedStage; }
   if(addStageBtn){
     addStageBtn.hidden=!canAddStages;
     addStageBtn.disabled=!canAddStages;
@@ -8856,6 +9170,8 @@ function ensureCrmStageCalendars(){
 
 let crmPlanFreezeDirty=false;
 let crmPlanFreezeBypass=false;
+const crmCalendarArchiveVisible={ exceptions:false, reserve:false };
+const crmCalendarHistoryVisible={ exceptions:false, reserve:false };
 
 function markCrmPlanFreezeDirty(){
   crmPlanFreezeDirty=true;
@@ -9849,10 +10165,43 @@ function setCrmStageCalendar(stageKey, payload){
   const calendars=ensureCrmStageCalendars();
   const exceptions=payload&&payload.exceptions?entriesFromAny(payload.exceptions):[];
   const reserves=payload&&payload.reserves?entriesFromAny(payload.reserves):[];
+  const history=payload&&payload.history?sanitizeCrmCalendarHistory(payload.history):calendars[stageKey]?.history||[];
   calendars[stageKey]={
     exceptions:sanitizeCrmCalendarEntries(exceptions, true),
-    reserves:sanitizeCrmCalendarEntries(reserves, false)
+    reserves:sanitizeCrmCalendarEntries(reserves, false),
+    history
   };
+}
+
+function getCrmStageCalendarEntryList(stageKey, kind){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  const list=Array.isArray(entry[kind])?entry[kind]:[];
+  return list;
+}
+
+function writeCrmStageCalendarEntries(stageKey, kind, entries){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  entry[kind]=sanitizeCrmCalendarEntries(entries, kind==='exception');
+  calendars[stageKey]=entry;
+}
+
+function pushCrmCalendarHistory(stageKey, kind, action, data){
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
+  const history=Array.isArray(entry.history)?entry.history:[];
+  history.unshift({
+    kind,
+    action,
+    iso:data?.iso||null,
+    value:typeof data?.value==='number'?data.value:null,
+    time:data?.time||'',
+    comment:data?.comment||'',
+    at:new Date().toISOString()
+  });
+  entry.history=sanitizeCrmCalendarHistory(history);
+  calendars[stageKey]=entry;
 }
 
 function spanMuted(t){const s=document.createElement('span');s.className='muted';s.textContent=t;return s}
@@ -9869,6 +10218,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
+      crmStageNavItem=$('#crmStageNavItem'),
+      crmStageNavDropdown=$('#crmStageNavDropdown'),
       crmStageControls=$('#crmStageControls'),
       crmOrdersFilter=$('#crmOrdersFilter'),
       crmStageViewEl=$('#crmStageView'),
@@ -9922,16 +10273,34 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteDialogContent=$('#crmStageRouteDlgContent'),
       crmStageRouteDialogClose=$('#crmStageRouteDlgClose'),
       crmStageExceptionsDlg=$('#crmStageExceptionsDlg'),
-      crmStageExceptionsInput=$('#crmStageExceptionsInput'),
+      crmStageExceptionsList=$('#crmStageExceptionsList'),
+      crmStageExceptionsArchive=$('#crmStageExceptionsArchive'),
+      crmStageExceptionsHistory=$('#crmStageExceptionsHistory'),
+      crmStageExceptionsHistoryToggle=$('#crmStageExceptionsHistoryToggle'),
+      crmStageExceptionsAdd=$('#crmStageExceptionsAdd'),
+      crmStageExceptionsArchiveToggle=$('#crmStageExceptionsArchiveToggle'),
       crmStageExceptionsClose=$('#crmStageExceptionsClose'),
       crmStageExceptionsCancel=$('#crmStageExceptionsCancel'),
-      crmStageExceptionsApply=$('#crmStageExceptionsApply'),
       crmStageReserveDlg=$('#crmStageReserveDlg'),
-      crmStageReserveInput=$('#crmStageReserveInput'),
+      crmStageReserveList=$('#crmStageReserveList'),
+      crmStageReserveArchive=$('#crmStageReserveArchive'),
       crmStageReserveDiag=$('#crmStageReserveDiag'),
+      crmStageReserveHistory=$('#crmStageReserveHistory'),
+      crmStageReserveHistoryToggle=$('#crmStageReserveHistoryToggle'),
+      crmStageReserveAdd=$('#crmStageReserveAdd'),
+      crmStageReserveArchiveToggle=$('#crmStageReserveArchiveToggle'),
       crmStageReserveClose=$('#crmStageReserveClose'),
       crmStageReserveCancel=$('#crmStageReserveCancel'),
-      crmStageReserveApply=$('#crmStageReserveApply'),
+      crmCalendarEntryDlg=$('#crmCalendarEntryDlg'),
+      crmCalendarEntryTitle=$('#crmCalendarEntryTitle'),
+      crmCalendarEntryForm=$('#crmCalendarEntryForm'),
+      crmCalendarEntryDate=$('#crmCalendarEntryDate'),
+      crmCalendarEntryTime=$('#crmCalendarEntryTime'),
+      crmCalendarEntryHours=$('#crmCalendarEntryHours'),
+      crmCalendarEntryComment=$('#crmCalendarEntryComment'),
+      crmCalendarEntryCancel=$('#crmCalendarEntryCancel'),
+      crmCalendarEntryApply=$('#crmCalendarEntryApply'),
+      crmCalendarEntryClose=$('#crmCalendarEntryClose'),
       crmOptimizeDlg=$('#crmOptimizeDlg'),
       crmOptimizeForm=$('#crmOptimizeForm'),
       crmOptimizeList=$('#crmOptimizeList'),
@@ -9959,6 +10328,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmLateReasonSave=$('#crmLateReasonSave'),
       crmLateReasonCancel=$('#crmLateReasonCancel'),
       crmLateReasonClose=$('#crmLateReasonClose'),
+      crmLateReasonWeekend=$('#crmLateReasonWeekend'),
       crmLateReasonYesterday=$('#crmLateReasonYesterday'),
       crmAdminNavBtn=$('#crmAdminNavBtn'),
       crmSettingsNavBtn=$('#crmSettingsNavBtn'),
@@ -10134,6 +10504,7 @@ let crmStageSelectMenu=null;
 let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
+let crmStageNavHoverTimeout=null;
 let crmMappingRemovedDraft=new Set();
 
 if(crmStageSelect){
@@ -10154,7 +10525,7 @@ if(document.body){
 persistCrmSessionView();
 persistCrmSessionStage(initialStageViewKey);
 let currentCrmTrashFilter='all';
-let crmStageRouteMode='detailed';
+let crmStageRouteMode='compact';
 let crmRouteDayFilter='all';
 let crmRouteFromToday=CRM_ROUTE_FROM_TODAY_DEFAULT;
 let crmStageCollapseState=readCrmStageCollapseState();
@@ -10423,6 +10794,30 @@ function updateCrmStageSelectDisplay(){
   }
 }
 
+function renderCrmStageTabLabel(stageKey){
+  if(!crmStageTabBtn) return;
+  const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
+  const iconSymbol=stageIconForKey(stageKey)||stageLetterForKey(stageKey)||'';
+  const hasIcon=Boolean(iconSymbol);
+  crmStageTabBtn.innerHTML='';
+  const content=document.createElement('span');
+  content.className='crm-stage-tab__content';
+  if(hasIcon){
+    const icon=document.createElement('span');
+    icon.className='crm-stage-tab__icon crm-stage-route-label__icon';
+    if(!stageIconForKey(stageKey)){
+      icon.classList.add('crm-stage-route-label__icon--fallback');
+    }
+    icon.textContent=iconSymbol;
+    content.appendChild(icon);
+  }
+  const text=document.createElement('span');
+  text.className='crm-stage-tab__label';
+  text.textContent=label?`Переделы (${label})`:'Переделы';
+  content.appendChild(text);
+  crmStageTabBtn.appendChild(content);
+}
+
 function updateCrmStageSelectMenuSelection(){
   if(!crmStageSelectMenuItems.length) return;
   const current=crmStageSelect?.value||'';
@@ -10449,6 +10844,7 @@ function openCrmStageSelectMenu(){
     crmStageSelectDisplay.setAttribute('aria-expanded','true');
   }
   focusCrmStageSelectMenuValue(crmStageSelect?.value||'');
+  requestAnimationFrame(updateCrmStageDropdownHeight);
 }
 
 function closeCrmStageSelectMenu(focusDisplay=true){
@@ -10460,6 +10856,33 @@ function closeCrmStageSelectMenu(focusDisplay=true){
     crmStageSelectDisplay.focus({ preventScroll:true });
   }else if(crmStageSelectDisplay){
     crmStageSelectDisplay.setAttribute('aria-expanded','false');
+  }
+}
+
+function updateCrmStageDropdownHeight(){
+  if(!crmStageSelectMenu || !crmStageNavDropdown || crmStageNavDropdown.hidden) return;
+  crmStageSelectMenu.style.maxHeight='';
+  crmStageSelectMenu.style.overflowY='visible';
+  const menuHeight=crmStageSelectMenu.scrollHeight;
+  const dropdownRect=crmStageNavDropdown.getBoundingClientRect();
+  const available=Math.max(0, window.innerHeight - dropdownRect.top - 24);
+  if(available>0 && menuHeight>available){
+    crmStageSelectMenu.style.maxHeight=`${available}px`;
+    crmStageSelectMenu.style.overflowY='auto';
+  }
+}
+
+function setStageNavDropdown(open){
+  if(!crmStageNavDropdown) return;
+  crmStageNavDropdown.hidden=!open;
+  if(crmStageTabBtn){
+    crmStageTabBtn.setAttribute('aria-expanded', open?'true':'false');
+  }
+  if(open){
+    openCrmStageSelectMenu();
+    requestAnimationFrame(updateCrmStageDropdownHeight);
+  }else{
+    closeCrmStageSelectMenu(false);
   }
 }
 
@@ -10588,6 +11011,19 @@ function resolveCrmStageKey(name){
     if(aliases.includes(normalized)) return key;
   }
   return null;
+}
+
+function resolveCrmStageKeyWithMapping(name){
+  const normalized=normalizeStageName(name||'');
+  if(!normalized) return null;
+  const mappingEntry=getCrmStageMappingEntry(normalized);
+  if(mappingEntry){
+    if(mappingEntry.stage===CRM_STAGE_IGNORE) return null;
+    if(mappingEntry.stage && CRM_STAGE_KEYS.includes(mappingEntry.stage)){
+      return mappingEntry.stage;
+    }
+  }
+  return resolveCrmStageKey(normalized);
 }
 
 function getCrmStageFilter(stageKey){
@@ -10877,7 +11313,7 @@ function isOrderShippingLate(order){
   if(!order||typeof order!=='object') return false;
   if(orderShippingLateCache.has(order)) return orderShippingLateCache.get(order);
   const stages=Array.isArray(order?.stages)?order.stages:[];
-  const shippingStage=stages.find(stage=>resolveCrmStageKey(stage?.name)==='ship');
+  const shippingStage=stages.find(stage=>resolveCrmStageKeyWithMapping(stage?.name)==='ship');
   const late=shippingStage?stageEntryIsLate(shippingStage):false;
   orderShippingLateCache.set(order, late);
   return late;
@@ -10903,7 +11339,7 @@ function orderHasOverdueStageExcludingShipping(order,{ todayTime=today0().getTim
   if(!order||typeof order!=='object') return false;
   const stages=Array.isArray(order.stages)?order.stages:[];
   return stages.some(stage=>{
-    if(resolveCrmStageKey(stage?.name)==='ship') return false;
+    if(resolveCrmStageKeyWithMapping(stage?.name)==='ship') return false;
     return stageEntryIsLate(stage,{ todayTime });
   });
 }
@@ -10979,7 +11415,7 @@ function buildCrmStageSnapshot(order){
   const stages=Array.isArray(order?.stages)?order.stages:[];
   stages.forEach(stage=>{
     if(!stage) return;
-    const key=resolveCrmStageKey(stage.name);
+    const key=resolveCrmStageKeyWithMapping(stage.name);
     if(!key || map.has(key)) return;
     map.set(key,stage);
   });
@@ -11308,7 +11744,7 @@ function refreshOrderHistoryButton(orderId){
 function summarizeStagesForJournal(stages){
   const list=Array.isArray(stages)?stages:[];
   return list.map((stage,index)=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     const label=stage?.name || CRM_STAGE_LABELS[key] || `Передел ${index+1}`;
     const isHourless=key?CRM_NOHOUR_STAGES.has(key):false;
     const hours=isHourless?null:parseStageHours(stage);
@@ -11336,7 +11772,7 @@ function summarizeOrderForJournal(order){
   const stages=Array.isArray(order.stages)?order.stages:[];
   let totalHours=0;
   stages.forEach(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     if(key && !CRM_NOHOUR_STAGES.has(key)){
       const hours=parseStageHours(stage);
       if(Number.isFinite(hours) && hours>0){
@@ -11362,7 +11798,7 @@ function summarizeOrderForJournal(order){
 
 function stageSignatureForJournal(stage){
   if(!stage||typeof stage!=='object') return '';
-  const key=resolveCrmStageKey(stage?.name);
+  const key=resolveCrmStageKeyWithMapping(stage?.name);
   const hourless=key?CRM_NOHOUR_STAGES.has(key):false;
   const hours=hourless?null:roundHours(parseStageHours(stage)||0);
   const snapshot={
@@ -11592,6 +12028,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
   if(JSON.stringify(prevSanitized.unaccountedStatuses)!==JSON.stringify(nextSanitized.unaccountedStatuses)){
     sections.push('Не учитывать состояния');
   }
+  if(JSON.stringify(prevSanitized.unaccountedHiddenStatuses)!==JSON.stringify(nextSanitized.unaccountedHiddenStatuses)){
+    sections.push('Фильтр «Не учтённые»');
+  }
   if(JSON.stringify(prevSanitized.extraTime)!==JSON.stringify(nextSanitized.extraTime)){
     sections.push('Автодовес');
   }
@@ -11715,13 +12154,16 @@ function collectCrmUnaccountedOrders(){
   const board=currentBoard();
   if(!board) return [];
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
+  const hidden=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
   if(!statuses.length) return [];
   const statusSet=new Set(statuses.map(normalizeStatusKey).filter(Boolean));
+  const hiddenSet=new Set(hidden.map(normalizeStatusKey).filter(Boolean));
   if(!statusSet.size) return [];
   const rows=[];
   board.orders.forEach((order,index)=>{
     const statusKey=normalizeStatusKey(order?.status||'');
     if(!statusKey||!statusSet.has(statusKey)) return;
+    if(hiddenSet.size && hiddenSet.has(statusKey)) return;
     rows.push({
       order,
       originalIndex:index,
@@ -11757,7 +12199,7 @@ function collectCrmStageRows(stageKey, options={}){
       .map((stageEntry, stagePosition)=>({
         stageEntry,
         stagePosition,
-        stageKeyResolved:resolveCrmStageKey(stageEntry?.name)
+        stageKeyResolved:resolveCrmStageKeyWithMapping(stageEntry?.name)
       }))
       .filter(entry=>entry.stageKeyResolved===stage);
     if(!matching.length) return;
@@ -12828,6 +13270,8 @@ function renderCrmStageGantt(rows, schedule){
     const free=Math.max(0, pubRem+resRem, capacity-used);
     return [key,{ capacity, free, used }];
   }));
+  const dayUsageMap=isHourly?new Map(filteredDays.map(({ key })=>[key,0])):null;
+  const shouldRenderOrders=!(isHourly && filterValue==='free');
   crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
   crmStageGanttHeader.style.minWidth=widthValue;
   crmStageGanttHeader.style.width=widthValue;
@@ -12859,6 +13303,18 @@ function renderCrmStageGantt(rows, schedule){
   });
   const perTask=schedule.perTask;
   const orderedRows=safeRows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
+  if(isHourly && dayUsageMap){
+    orderedRows.forEach(row=>{
+      const rowSegments=perTask.get(row.identity)?.segments||[];
+      rowSegments.forEach(seg=>{
+        const segKey=fmtDateISO(seg.date);
+        if(!dayUsageMap.has(segKey)) return;
+        const hours=Number(seg.hours)||0;
+        if(hours<=0) return;
+        dayUsageMap.set(segKey, (dayUsageMap.get(segKey)||0)+hours);
+      });
+    });
+  }
   const dayResidualMap=new Map(filteredDays.map(({ key })=>{
     const meta=schedule.perDay.get(key)?.meta||{};
     const capacityRaw=Number(meta.capDay);
@@ -12868,6 +13324,9 @@ function renderCrmStageGantt(rows, schedule){
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach((row,rowIdx)=>{
+    if(!shouldRenderOrders){
+      return;
+    }
     const orderId=row.orderId||row.order?.id||'';
     const displayIndex=Number.isFinite(row.displayIndex)?row.displayIndex:rowIdx+1;
     const label=document.createElement('div');
@@ -12932,37 +13391,25 @@ function renderCrmStageGantt(rows, schedule){
       const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
       const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
-      const showFreeLabel=isHourly && filterValue==='free';
-      if(total>0 || showFreeLabel){
+      const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+      const totalsOnlyFree=isHourly && filterValue==='free';
+      if(total>0){
         const fill=document.createElement('div');
         fill.className='crm-stage-gantt-fill';
-        if(showFreeLabel && isHourly){
-          const freeLabel=formatStageWorkload(capacityInfo.free,{ hourless:false });
-          const capLabel=formatStageWorkload(capacityInfo.capacity,{ hourless:false });
-          fill.textContent=`${freeLabel} / ${capLabel}`;
-          fill.title=`Свободно: ${freeLabel} из ${capLabel}`;
-          fill.classList.add('status-free');
-        }else if(total>0){
-          if(isHourly){
-            const residualBefore=Math.max(0, dayResidualMap.get(key) ?? capacityInfo.capacity ?? schedule.baseCapacity);
-            const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
-            const plannedLabel=formatStageWorkload(total,{ hourless:false });
-            fill.textContent=`${plannedLabel} / ${capLabel}`;
-            fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
-            dayResidualMap.set(key, Math.max(0, residualBefore-total));
-          }else{
-            fill.textContent=formatStageWorkload(total,{ hourless:true });
-            fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
-          }
-          fill.classList.add(fillStatusClass);
-          if(shipLate){
-            fill.classList.add('late');
-          }
+        if(isHourly){
+          const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
+          const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
+          const plannedLabel=formatStageWorkload(total,{ hourless:false });
+          fill.textContent=`${plannedLabel} / ${capLabel}`;
+          fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
+          dayResidualMap.set(key, Math.max(0, residualBefore-total));
         }else{
-          fill.classList.add(fillStatusClass);
-          if(shipLate){
-            fill.classList.add('late');
-          }
+          fill.textContent=formatStageWorkload(total,{ hourless:true });
+          fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
+        }
+        fill.classList.add(fillStatusClass);
+        if(shipLate){
+          fill.classList.add('late');
         }
         cell.appendChild(fill);
       }
@@ -12979,6 +13426,53 @@ function renderCrmStageGantt(rows, schedule){
     }
     fragmentBody.appendChild(rowEl);
   });
+  if(isHourly && dayUsageMap){
+    const totalLabel=document.createElement('div');
+    totalLabel.className='crm-stage-gantt-left-row crm-stage-gantt-left-row--total';
+    totalLabel.textContent='Итого';
+    fragmentLeft.appendChild(totalLabel);
+
+    const totalRow=document.createElement('div');
+    totalRow.className='crm-stage-gantt-row crm-stage-gantt-row--total';
+    totalRow.style.gridTemplateColumns=headerTemplate;
+    totalRow.style.minWidth=widthValue;
+    totalRow.style.width=widthValue;
+
+    filteredDays.forEach(({ key, day })=>{
+      const cell=document.createElement('div');
+      cell.className='crm-stage-gantt-cell crm-stage-gantt-cell--total';
+      const isOffDay=!!(day.meta && day.meta.patternOff);
+      if(isOffDay){
+        cell.classList.add('offday');
+      }
+      if([0,6].includes(day.date.getDay())){
+        cell.classList.add('weekend');
+      }
+      if(key===todayKey){
+        cell.classList.add('today');
+      }
+
+      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
+      const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+      const used=Math.max(0, dayUsageMap.get(key)||Number(capacityInfo.used)||0);
+      const freeValue=Math.max(0, Number.isFinite(capacityInfo.free)?capacityInfo.free:baseCapacity-used);
+      const fill=document.createElement('div');
+      fill.className='crm-stage-gantt-fill crm-stage-gantt-fill--total';
+      if(filterValue==='free'){
+        const freeLabel=formatStageWorkload(freeValue,{ hourless:false });
+        fill.textContent=freeLabel;
+        fill.title=`Свободно: ${freeLabel}`;
+      }else{
+        const usedLabel=formatStageWorkload(used,{ hourless:false });
+        const remainingLabel=formatStageWorkload(freeValue,{ hourless:false });
+        fill.textContent=`${usedLabel} / ${remainingLabel}`;
+        fill.title=`Использовано: ${usedLabel}, осталось: ${remainingLabel}`;
+      }
+      cell.appendChild(fill);
+      totalRow.appendChild(cell);
+    });
+    fragmentBody.appendChild(totalRow);
+  }
   crmStageGanttLeft.appendChild(fragmentLeft);
   crmStageGanttBody.appendChild(fragmentBody);
   let syncLock=false;
@@ -13195,7 +13689,7 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
     const stageInstancesRaw=[];
     stageList.forEach((stage, stageIndex)=>{
       if(!stage||typeof stage!=='object') return;
-      const stageKey=resolveCrmStageKey(stage.name);
+      const stageKey=resolveCrmStageKeyWithMapping(stage.name);
       if(!stageKey) return;
       const start=normalizeDate(stage.start);
       const end=normalizeDate(stage.end);
@@ -13845,7 +14339,7 @@ function formatCrmCalendarLines(map, mode){
   }).join('\n');
 }
 
-function renderCrmStageReserveDiag(text, stageKey){
+function renderCrmStageReserveDiag(stageKey){
   if(!crmStageReserveDiag) return;
   const key=stageKey||crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
   if(CRM_NOHOUR_STAGES.has(key)){
@@ -13854,26 +14348,110 @@ function renderCrmStageReserveDiag(text, stageKey){
   }
   const base=Math.max(0, getCrmStageCapacity(key));
   const { exceptions }=getCrmStageCalendar(key);
-  const entries=[];
-  String(text||'').split(/\r?\n/).map(line=>line.trim()).filter(Boolean).forEach(line=>{
-    const match=/^(\d{2}[.\/-]\d{2}[.\/-]\d{4})\s*\((\d+(?:[.,]\d+)?)\)$/.exec(line);
-    if(!match) return;
-    const iso=parseCalendarInputDate(match[1]);
-    if(!iso) return;
-    const want=Number(match[2].replace(',', '.'));
-    if(!Number.isFinite(want) || want<=0) return;
-    const capDay=exceptions.has(iso)?Math.max(0, Number(exceptions.get(iso))||0):base;
+  const reserveEntries=getCrmStageCalendarEntryList(key,'reserves');
+  const entries=reserveEntries.map(item=>{
+    const capDay=exceptions.has(item.iso)?Math.max(0, Number(exceptions.get(item.iso))||0):base;
+    const want=Number(item.value)||0;
     const will=Math.min(want, capDay);
     const excluded=Math.max(0, base-capDay);
-    entries.push({ iso, want, will, excluded, capDay });
-  });
+    return { iso:item.iso, want, will, excluded, capDay };
+  }).filter(item=>item.want>0);
   if(!entries.length){
     crmStageReserveDiag.textContent='';
     return;
   }
-  crmStageReserveDiag.innerHTML=entries.map(entry=>{
+  const impactfulEntries=entries.filter(entry=>entry.will<entry.want || entry.excluded>0);
+  if(!impactfulEntries.length){
+    crmStageReserveDiag.textContent='';
+    return;
+  }
+  crmStageReserveDiag.innerHTML=impactfulEntries.map(entry=>{
     return `${formatCalendarIso(entry.iso)}: Будет применено <b>${formatHoursRu(entry.will)}</b> ч (из ${formatHoursRu(entry.want)}), исключение: ${formatHoursRu(entry.excluded)} ч, ёмкость: ${formatHoursRu(entry.capDay)} ч`;
   }).map(html=>`<div>${html}</div>`).join('');
+}
+
+function splitCrmCalendarEntries(stageKey, kind){
+  const list=getCrmStageCalendarEntryList(stageKey, kind);
+  const todayIso=fmtDateISO(today0());
+  const upcoming=[];
+  const archived=[];
+  list.forEach(item=>{
+    if(item.iso && item.iso>=todayIso){
+      upcoming.push(item);
+    }else{
+      archived.push(item);
+    }
+  });
+  return { upcoming, archived };
+}
+
+function formatCrmCalendarRow(item, kind){
+  const metaParts=[formatCalendarIso(item.iso)];
+  if(item.time) metaParts.push(item.time);
+  if(typeof item.value==='number') metaParts.push(`${formatHoursRu(item.value)} ч`);
+  const meta=`<div class="crm-calendar-row__meta">${metaParts.map(part=>`<span>${escapeHtml(part)}</span>`).join('')}</div>`;
+  const comment=item.comment?`<div class="crm-calendar-row__comment">${escapeHtml(item.comment)}</div>`:'';
+  return `<div class="crm-calendar-row${kind==='archived'?' crm-calendar-row--archived':''}" data-iso="${item.iso}">
+    <div>${meta}${comment}</div>
+    <div class="crm-calendar-row__actions">
+      <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-action="edit" data-kind="${kind}">Редактировать</button>
+      <button type="button" class="pc-btn pc-btn--ghost pc-btn--xs" data-action="delete" data-kind="${kind}">Удалить</button>
+    </div>
+  </div>`;
+}
+
+function renderCrmCalendarList(stageKey, mode){
+  const listEl=mode==='exception'?crmStageExceptionsList:crmStageReserveList;
+  const archiveEl=mode==='exception'?crmStageExceptionsArchive:crmStageReserveArchive;
+  if(!listEl||!archiveEl) return;
+  const { upcoming, archived }=splitCrmCalendarEntries(stageKey, mode==='exception'?'exceptions':'reserves');
+  listEl.innerHTML=upcoming.length?upcoming.map(item=>formatCrmCalendarRow(item,'active')).join(''):'<div class="muted">Нет актуальных записей</div>';
+  archiveEl.innerHTML=archived.length?archived.map(item=>formatCrmCalendarRow(item,'archived')).join(''):'<div class="muted">Архив пуст</div>';
+}
+
+function formatDateTimeSafe(value){
+  if(!value) return 'время не указано';
+  const date=new Date(value);
+  if(Number.isNaN(date.getTime())) return 'время не указано';
+  try{
+    return date.toLocaleString('ru-RU',{ dateStyle:'short', timeStyle:'short' });
+  }catch(_err){
+    return value;
+  }
+}
+
+function renderCrmCalendarHistory(stageKey, mode){
+  const container=mode==='exception'?crmStageExceptionsHistory:crmStageReserveHistory;
+  const toggleBtn=mode==='exception'?crmStageExceptionsHistoryToggle:crmStageReserveHistoryToggle;
+  const key=mode==='reserve'?'reserve':'exceptions';
+  if(!container) return;
+  const calendars=ensureCrmStageCalendars();
+  const entry=calendars[stageKey];
+  const history=entry&&Array.isArray(entry.history)?entry.history.filter(h=>h.kind===mode):[];
+  if(!history.length){
+    if(toggleBtn){
+      toggleBtn.disabled=true;
+      toggleBtn.textContent='История пуста';
+    }
+    container.hidden=true;
+    container.innerHTML='';
+    return;
+  }
+  const visible=!!crmCalendarHistoryVisible[key];
+  container.hidden=!visible;
+  if(toggleBtn){
+    toggleBtn.disabled=false;
+    toggleBtn.textContent=visible?'Скрыть историю':'Показать историю';
+  }
+  container.innerHTML=history.slice(0,10).map(item=>{
+    const when=formatDateTimeSafe(item.at||'');
+    const dateLabel=item.iso?formatCalendarIso(item.iso):'Дата не указана';
+    const amount=typeof item.value==='number'?` · ${formatHoursRu(item.value)} ч`:'';
+    const timeLabel=item.time?` · ${escapeHtml(item.time)}`:'';
+    const comment=item.comment?` · ${escapeHtml(item.comment)}`:'';
+    const verb=item.action==='delete'?'удалено':'изменено';
+    return `<div class="crm-calendar-history__item"><strong>${dateLabel}</strong>${amount}${timeLabel}${comment} — ${verb} ${escapeHtml(when)}</div>`;
+  }).join('');
 }
 
 function openCrmStageExceptionsDialog(){
@@ -13884,10 +14462,10 @@ function openCrmStageExceptionsDialog(){
     return;
   }
   crmStageExceptionsDlg.dataset.stage=stageKey;
-  if(crmStageExceptionsInput){
-    const { exceptions }=getCrmStageCalendar(stageKey);
-    crmStageExceptionsInput.value=formatCrmCalendarLines(exceptions,'exception');
-  }
+  toggleCrmCalendarArchive('exception', false);
+  crmCalendarHistoryVisible.exceptions=false;
+  renderCrmCalendarList(stageKey,'exception');
+  renderCrmCalendarHistory(stageKey,'exception');
   try{ crmStageExceptionsDlg.showModal(); }
   catch(_err){ crmStageExceptionsDlg.open=true; }
 }
@@ -13899,22 +14477,6 @@ function closeCrmStageExceptionsDialog(){
   catch(_err){ crmStageExceptionsDlg.open=false; }
 }
 
-function applyCrmStageExceptions(){
-  if(!crmStageExceptionsDlg) return;
-  const stageKey=crmStageExceptionsDlg.dataset.stage||crmStageSelect?.value||'draw';
-  if(!crmCanManageStage(stageKey)){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения исключений этого передела.', tone:'warn' });
-    return;
-  }
-  const parsed=parseCrmCalendarLines(crmStageExceptionsInput?.value,'exception');
-  const current=getCrmStageCalendar(stageKey);
-  setCrmStageCalendar(stageKey,{ exceptions:parsed, reserves:current.reserves });
-  save('Обновление исключений передела');
-  updateCrmCalendarButtons(stageKey);
-  closeCrmStageExceptionsDialog();
-  renderCurrentView();
-}
-
 function openCrmStageReserveDialog(){
   if(!crmStageReserveDlg) return;
   const stageKey=crmStageSelect?.value||'draw';
@@ -13923,11 +14485,11 @@ function openCrmStageReserveDialog(){
     return;
   }
   crmStageReserveDlg.dataset.stage=stageKey;
-  if(crmStageReserveInput){
-    const { reserves }=getCrmStageCalendar(stageKey);
-    crmStageReserveInput.value=formatCrmCalendarLines(reserves,'reserve');
-    renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
-  }
+  toggleCrmCalendarArchive('reserve', false);
+  crmCalendarHistoryVisible.reserve=false;
+  renderCrmCalendarList(stageKey,'reserve');
+  renderCrmStageReserveDiag(stageKey);
+  renderCrmCalendarHistory(stageKey,'reserve');
   try{ crmStageReserveDlg.showModal(); }
   catch(_err){ crmStageReserveDlg.open=true; }
 }
@@ -13940,20 +14502,159 @@ function closeCrmStageReserveDialog(){
   catch(_err){ crmStageReserveDlg.open=false; }
 }
 
-function applyCrmStageReserve(){
-  if(!crmStageReserveDlg) return;
-  const stageKey=crmStageReserveDlg.dataset.stage||crmStageSelect?.value||'draw';
-  if(!crmCanManageStage(stageKey)){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения брони этого передела.', tone:'warn' });
+function resetCrmCalendarEntryForm(){
+  if(crmCalendarEntryForm) crmCalendarEntryForm.reset();
+  if(crmCalendarEntryDlg){
+    delete crmCalendarEntryDlg.dataset.mode;
+    delete crmCalendarEntryDlg.dataset.stage;
+    delete crmCalendarEntryDlg.dataset.targetIso;
+  }
+}
+
+function openCrmCalendarEntryDialog(mode, stageKey, existing){
+  if(!crmCalendarEntryDlg) return;
+  const normalizedMode=mode==='reserve'?'reserve':'exception';
+  crmCalendarEntryDlg.dataset.mode=normalizedMode;
+  crmCalendarEntryDlg.dataset.stage=stageKey;
+  crmCalendarEntryDlg.dataset.targetIso=existing?.iso||'';
+  if(crmCalendarEntryTitle){
+    crmCalendarEntryTitle.textContent=normalizedMode==='reserve'?'Добавить бронь':'Добавить исключение';
+  }
+  const iso=existing?.iso||fmtDateISO(today0());
+  if(crmCalendarEntryDate) crmCalendarEntryDate.value=iso;
+  if(crmCalendarEntryTime) crmCalendarEntryTime.value=existing?.time||'';
+  if(crmCalendarEntryHours){
+    crmCalendarEntryHours.min=normalizedMode==='reserve'?'0.25':'0';
+    crmCalendarEntryHours.value=existing?.value??'';
+    crmCalendarEntryHours.required=normalizedMode==='reserve';
+  }
+  if(crmCalendarEntryComment) crmCalendarEntryComment.value=existing?.comment||'';
+  try{ crmCalendarEntryDlg.showModal(); }
+  catch(_err){ crmCalendarEntryDlg.open=true; }
+}
+
+function closeCrmCalendarEntryDialog(){
+  if(!crmCalendarEntryDlg) return;
+  resetCrmCalendarEntryForm();
+  try{ crmCalendarEntryDlg.close(); }
+  catch(_err){ crmCalendarEntryDlg.open=false; }
+}
+
+function persistCrmCalendarEntries(stageKey, storageKind, entries, historyKind, historyAction, historyPayload){
+  writeCrmStageCalendarEntries(stageKey, storageKind, entries);
+  pushCrmCalendarHistory(stageKey, historyKind, historyAction, historyPayload);
+  save(storageKind==='exceptions'?'Обновление исключений передела':'Обновление брони передела');
+  updateCrmCalendarButtons(stageKey);
+  renderCrmCalendarList(stageKey, historyKind);
+  renderCrmCalendarHistory(stageKey, historyKind);
+  if(historyKind==='reserve'){
+    renderCrmStageReserveDiag(stageKey);
+  }
+  renderCurrentView();
+}
+
+function submitCrmCalendarEntry(event){
+  event.preventDefault();
+  if(!crmCalendarEntryDlg) return;
+  const mode=crmCalendarEntryDlg.dataset.mode||'exception';
+  const storageKind=mode==='reserve'?'reserves':'exceptions';
+  const historyKind=mode==='reserve'?'reserve':'exception';
+  const stageKey=crmCalendarEntryDlg.dataset.stage||crmStageSelect?.value||'draw';
+  if(mode==='reserve' && CRM_NOHOUR_STAGES.has(stageKey)){
+    showToast({ title:'CRM', message:'Бронь доступна только для часовых переделов.', tone:'warn' });
     return;
   }
-  const parsed=parseCrmCalendarLines(crmStageReserveInput?.value,'reserve');
-  const current=getCrmStageCalendar(stageKey);
-  setCrmStageCalendar(stageKey,{ exceptions:current.exceptions, reserves:parsed });
-  save('Обновление брони передела');
-  updateCrmCalendarButtons(stageKey);
-  closeCrmStageReserveDialog();
-  renderCurrentView();
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения календаря этого передела.', tone:'warn' });
+    return;
+  }
+  const iso=coerceCalendarIso(crmCalendarEntryDate?.value||null);
+  if(!iso){
+    showToast({ title:'CRM', message:'Укажите корректную дату.', tone:'error' });
+    return;
+  }
+  const hoursRaw=crmCalendarEntryHours?.value;
+  const parsed=hoursRaw===undefined||hoursRaw===null||hoursRaw===''
+    ? null
+    : Number(String(hoursRaw).replace(',','.'));
+  if(mode==='reserve' && (!Number.isFinite(parsed) || parsed<=0)){
+    showToast({ title:'CRM', message:'Для брони нужно указать положительное количество часов.', tone:'error' });
+    return;
+  }
+  const hours=Number.isFinite(parsed)?Math.max(0, Math.round(parsed*100)/100):0;
+  const time=crmCalendarEntryTime?.value?crmCalendarEntryTime.value.trim():'';
+  const comment=crmCalendarEntryComment?.value?crmCalendarEntryComment.value.trim():'';
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const targetIso=crmCalendarEntryDlg.dataset.targetIso||'';
+  const retained=list.filter(item=>item.iso!==targetIso && item.iso!==iso);
+  const existing=list.find(item=>item.iso===targetIso)||list.find(item=>item.iso===iso);
+  const payload={
+    iso,
+    value:hours,
+    time,
+    comment,
+    createdAt:existing?.createdAt||new Date().toISOString(),
+    updatedAt:new Date().toISOString()
+  };
+  retained.push(payload);
+  persistCrmCalendarEntries(stageKey, storageKind, retained, historyKind, 'update', payload);
+  closeCrmCalendarEntryDialog();
+}
+
+function deleteCrmCalendarEntry(stageKey, storageKind, iso){
+  if(!crmCanManageStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для изменения календаря этого передела.', tone:'warn' });
+    return;
+  }
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const next=list.filter(item=>item.iso!==iso);
+  const historyKind=storageKind==='reserves'?'reserve':'exception';
+  persistCrmCalendarEntries(stageKey, storageKind, next, historyKind, 'delete', { iso });
+}
+
+function toggleCrmCalendarArchive(mode, force){
+  const key=mode==='reserve'?'reserve':'exceptions';
+  const listEl=mode==='reserve'?crmStageReserveArchive:crmStageExceptionsArchive;
+  const btn=mode==='reserve'?crmStageReserveArchiveToggle:crmStageExceptionsArchiveToggle;
+  if(!listEl || !btn) return;
+  const next=force!=null?!!force:!crmCalendarArchiveVisible[key];
+  crmCalendarArchiveVisible[key]=next;
+  listEl.hidden=!next;
+  btn.textContent=next?'Скрыть архив':'Показать архив';
+}
+
+function toggleCrmCalendarHistory(mode, force){
+  const key=mode==='reserve'?'reserve':'exceptions';
+  const dialog=mode==='reserve'?crmStageReserveDlg:crmStageExceptionsDlg;
+  const stageKey=dialog?.dataset.stage||crmStageSelect?.value||'draw';
+  const next=force!=null?!!force:!crmCalendarHistoryVisible[key];
+  crmCalendarHistoryVisible[key]=next;
+  renderCrmCalendarHistory(stageKey, mode==='reserve'?'reserve':'exception');
+}
+
+function handleCrmCalendarListClick(event, mode){
+  const btn=event.target.closest('button[data-action]');
+  if(!btn) return;
+  const row=btn.closest('[data-iso]');
+  if(!row) return;
+  const iso=row.dataset.iso;
+  const stageKey=mode==='reserve'
+    ? crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw'
+    : crmStageExceptionsDlg?.dataset.stage||crmStageSelect?.value||'draw';
+  const storageKind=mode==='reserve'?'reserves':'exceptions';
+  const list=getCrmStageCalendarEntryList(stageKey, storageKind);
+  const entry=list.find(item=>item.iso===iso);
+  if(btn.dataset.action==='edit'){
+    openCrmCalendarEntryDialog(mode, stageKey, entry);
+    return;
+  }
+  if(btn.dataset.action==='delete'){
+    const label=entry?.comment?` (${entry.comment})`:'';
+    const confirmed=confirm(`Удалить запись ${formatCalendarIso(iso)}${label}?`);
+    if(confirmed){
+      deleteCrmCalendarEntry(stageKey, storageKind, iso);
+    }
+  }
 }
 
 function updateCrmRouteStageVisibility(stageKey, isVisible){
@@ -14066,7 +14767,7 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, from
 
 function snapshotCrmStageRowForRoute(order, stageKey, stageEntry, stageIndex){
   if(!order||!stageEntry) return null;
-  const resolved=resolveCrmStageKey(stageEntry.name)||stageKey;
+  const resolved=resolveCrmStageKeyWithMapping(stageEntry.name)||stageKey;
   if(!resolved) return null;
   const fallbackIdentity=`${resolveOrderIdentity(order,Number.isInteger(stageIndex)?stageIndex:0,resolved)}:${Number.isInteger(stageIndex)?stageIndex:0}`;
   const stageId=ensureStageIdentity(stageEntry,fallbackIdentity);
@@ -14166,7 +14867,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   const entries=[];
   stages.forEach((stage, stageIndex)=>{
     if(!stage||typeof stage!=='object') return;
-    const key=resolveCrmStageKey(stage.name);
+    const key=resolveCrmStageKeyWithMapping(stage.name);
     if(!key) return;
     const snapshot=snapshotCrmStageRowForRoute(order, key, stage, stageIndex);
     if(!snapshot) return;
@@ -15168,9 +15869,12 @@ async function handleCrmLogout(){
 }
 
 function renderCrmUnaccounted(){
+  setCrmUnaccountedDraft(state.settings?.unaccountedStatuses||[],{ render:false });
+  setCrmUnaccountedHiddenDraft(state.settings?.unaccountedHiddenStatuses||[],{ render:false });
   const tbody=document.querySelector('#crmUnaccountedTable tbody');
   if(!tbody) return;
   tbody.innerHTML='';
+  renderCrmUnaccountedFilterOptions();
   const rows=collectCrmUnaccountedOrders();
   if(!rows.length){
     const tr=document.createElement('tr');
@@ -15399,7 +16103,7 @@ function buildOrderRouteIcons(order){
   const icons=[];
   stages.forEach(stage=>{
     if(!stage||typeof stage!=='object') return;
-    const stageKey=resolveCrmStageKey(stage.name);
+    const stageKey=resolveCrmStageKeyWithMapping(stage.name);
     if(!stageKey||seen.has(stageKey)) return;
     seen.add(stageKey);
     const icon=stageIconForKey(stageKey)||stageLetterForKey(stageKey);
@@ -15694,10 +16398,7 @@ function renderCrmStageTable(){
   const stageKey=crmStageSelect?.value || 'draw';
   updateCrmCalendarButtons(stageKey);
   const activeFilter=getCrmStageFilter(stageKey);
-  if(crmStageTabBtn && currentCrmView==='stage'){
-    const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-    crmStageTabBtn.textContent=`Переделы (${label})`;
-  }
+  renderCrmStageTabLabel(stageKey);
   if(crmStageFilter && crmStageFilter.value!==activeFilter){
     crmStageFilter.value=activeFilter;
   }
@@ -16191,6 +16892,13 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
         if(decision.action==='yesterday'){
           doneAt=new Date(now.getTime()-86400000);
           delayReason='Выполнено вчера';
+        }else if(decision.action==='weekend'){
+          const daysBack=Math.min(3, Math.max(1, decision.daysBack||3));
+          doneAt=new Date(now.getTime()-(daysBack*86400000));
+          const dayLabel=typeof decision.dayLabel==='string' && decision.dayLabel.trim()
+            ? decision.dayLabel.trim()
+            : 'в выходные';
+          delayReason=`Выполнено ${dayLabel}`;
         }else if(decision.reason){
           delayReason=decision.reason;
         }
@@ -16382,13 +17090,7 @@ function updateCrmOrdersTabUi(){
   if(crmStageTabBtn){
     crmStageTabBtn.classList.toggle('pc-nav__link--active',inStage);
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
-    if(inStage){
-      const stageKey=crmStageSelect?.value||'draw';
-      const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-      crmStageTabBtn.textContent=`Переделы (${label})`;
-    }else{
-      crmStageTabBtn.textContent='Переделы';
-    }
+    renderCrmStageTabLabel(crmStageSelect?.value||'draw');
   }
   if(crmStageControls){
     crmStageControls.hidden=!inStage;
@@ -17186,6 +17888,8 @@ const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
+let orderDraftBaseline=null;
+let orderDialogClosing=false;
 
 if(orderForm){
   const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
@@ -17526,18 +18230,20 @@ function handleDateTodayChange(){
   if(!dateTodayChk || !dateTodayChk.checked) return;
   if(!stagesTableBody) return;
   const today=fmtDateISO(new Date());
-  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
-    const s=tr.querySelector('[data-k="start"]');
-    const e=tr.querySelector('[data-k="end"]');
-    if(s && !s.value){
-      s.value=today;
-      applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');
-    }
-    if(e && !e.value){
-      e.value=today;
-      applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');
-    }
-  });
+    stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+      const s=tr.querySelector('[data-k="start"]');
+      const e=tr.querySelector('[data-k="end"]');
+      if(s && !s.value){
+        s.value=today;
+        applyStageDateHighlight(s,s.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(s);
+      }
+      if(e && !e.value){
+        e.value=today;
+        applyStageDateHighlight(e,e.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(e);
+      }
+    });
   syncAutoDates();
   updateAllStageExpectations();
 }
@@ -17553,38 +18259,41 @@ function deriveEditingOrderTitle(){
 
 function applyStageAutoDatesToRow(tr,startIso,endIso){
   if(!tr) return;
-  const startInput=tr.querySelector('[data-k="start"]');
-  if(startInput){
-    startInput.value=startIso||'';
-    startInput.dataset.lastAccepted=startIso||'';
-    applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+    const startInput=tr.querySelector('[data-k="start"]');
+    if(startInput){
+      startInput.value=startIso||'';
+      startInput.dataset.lastAccepted=startIso||'';
+      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+      updateStageDateWeekday(startInput);
+    }
+    const endInput=tr.querySelector('[data-k="end"]');
+    if(endInput){
+      endInput.value=endIso||'';
+      endInput.dataset.lastAccepted=endIso||'';
+      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+      updateStageDateWeekday(endInput);
+    }
+    updateStageRowExpectation(tr);
   }
-  const endInput=tr.querySelector('[data-k="end"]');
-  if(endInput){
-    endInput.value=endIso||'';
-    endInput.dataset.lastAccepted=endIso||'';
-    applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-  }
-  updateStageRowExpectation(tr);
-}
 
 function handleClearStageDates(){
   if(!stagesTableBody) return;
   stagesTableBody.querySelectorAll('tr').forEach(tr=>{
     const startInput=tr.querySelector('[data-k="start"]');
     const endInput=tr.querySelector('[data-k="end"]');
-    if(startInput){
-      startInput.value='';
-      startInput.dataset.lastAccepted='';
-      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
-    }
-    if(endInput){
-      endInput.value='';
-      endInput.dataset.lastAccepted='';
-      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-    }
-    resetStageLinkOverride(tr);
-  });
+      if(startInput){
+        startInput.value='';
+        startInput.dataset.lastAccepted='';
+        applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(startInput);
+      }
+      if(endInput){
+        endInput.value='';
+        endInput.dataset.lastAccepted='';
+        applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(endInput);
+      }
+    });
   syncAutoDates();
   updateAllStageExpectations();
   showToast({ title:'PlaneCore', message:'Даты переделов очищены.', tone:'info', autoClose:3500 });
@@ -17618,7 +18327,7 @@ function calculateOrderStageDates(options={}){
     if(!stageDraft) return;
     const manualStart=(stageDraft.start||'').trim();
     const manualEnd=(stageDraft.end||'').trim();
-    const stageKey=resolveCrmStageKey(stageDraft.name);
+    const stageKey=resolveCrmStageKeyWithMapping(stageDraft.name);
     if(!stageKey){
       return;
     }
@@ -17628,7 +18337,7 @@ function calculateOrderStageDates(options={}){
       if(manualEndDate) previousEndDate=manualEndDate;
       return;
     }
-    const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate, isStageLinkActive(tr));
+    const earliestStart=determineStageEarliestStartDate(stageKey, previousEndDate);
     const scheduleResult=planStageAutoSchedule({
       stage:stageDraft,
       stageKey,
@@ -17644,7 +18353,6 @@ function calculateOrderStageDates(options={}){
     applyStageAutoDatesToRow(tr, scheduleResult.startIso, scheduleResult.endIso);
     previousEndDate=scheduleResult.endDateObj||previousEndDate;
     changed=true;
-    resetStageLinkOverride(tr);
     const hasStartPush=scheduleResult.delayDays>0;
     const hasFinishPush=scheduleResult.finishDelayDays>0;
     if(hasStartPush || hasFinishPush){
@@ -17687,7 +18395,7 @@ function calculateOrderStageDates(options={}){
   }
 }
 
-function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
+function determineStageEarliestStartDate(stageKey, previousEndDate){
   const today=today0();
   let earliest=addDays(today,0);
   if(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
@@ -17696,56 +18404,7 @@ function determineStageEarliestStartDate(stageKey, previousEndDate, linked){
       earliest=prev;
     }
   }
-  if(linked && previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const linkedStart=findLinkedStageStartDate(stageKey, previousEndDate);
-    if(linkedStart && linkedStart>earliest){
-      earliest=linkedStart;
-    }
-  }
   return earliest;
-}
-
-function findLinkedStageStartDate(stageKey, previousEndDate){
-  const gap=getCrmStageLinkGapDays();
-  if(!(previousEndDate instanceof Date) || Number.isNaN(previousEndDate.getTime())){
-    return null;
-  }
-  let remaining=Math.max(0, gap);
-  let cursor=addDays(previousEndDate,0);
-  let guard=0;
-  while(guard<730){
-    guard+=1;
-    if(isStageWorkingDayForLink(stageKey, cursor)){
-      if(remaining<=0){
-        return addDays(cursor,0);
-      }
-      remaining-=1;
-    }
-    cursor=addDays(cursor,1);
-  }
-  return addDays(cursor,0);
-}
-
-function isStageWorkingDayForLink(stageKey, date){
-  const normalized=normalizeCrmStageKey(stageKey||'');
-  if(!normalized) return true;
-  const evaluator=getCrmStageScheduleEvaluator(normalized);
-  if(evaluator && typeof evaluator.isWorking==='function' && !evaluator.isWorking(date)){
-    return false;
-  }
-  if(CRM_NOHOUR_STAGES.has(normalized)){
-    return true;
-  }
-  const calendar=getCrmStageCalendar(normalized);
-  const iso=fmtDateISO(date);
-  if(calendar?.exceptions instanceof Map && calendar.exceptions.has(iso)){
-    const cap=Math.max(0, Number(calendar.exceptions.get(iso))||0);
-    if(cap<=1e-6){
-      return false;
-    }
-  }
-  const baseCap=getCrmStageCapacity(normalized);
-  return baseCap>1e-6;
 }
 
 function planStageAutoSchedule({ stage, stageKey, orderId, orderTitle, earliestStart }){
@@ -18289,15 +18948,22 @@ function openOrder(id=null){
   }
   setOrderFormReadOnly(!canEdit);
   refreshOrderHistoryButton(editingOrderId);
+  resetOrderDraftBaseline();
   orderDlg.showModal();
 }
-function closeOrder(){orderDlg.close()}
+function closeOrder(){attemptCloseOrderDialog()}
 
 if(orderDlg){
+  orderDlg.addEventListener('cancel',event=>{
+    event.preventDefault();
+    attemptCloseOrderDialog();
+  });
   orderDlg.addEventListener('close',()=>{
     editingOrderId=null;
     pendingStageDeletes=[];
     stageSourceMap=new Map();
+    orderDraftBaseline=null;
+    orderDialogClosing=false;
     if(dlgTitleMeta){
       dlgTitleMeta.textContent='';
     }
@@ -18475,12 +19141,22 @@ function requestStageDelayReason(initialReason, diffDays){
   resetLateReasonDialog('');
   crmLateReasonInput.value=(initialReason||'').trim();
   const allowYesterday=diffDays<=1;
+  const allowWeekend=(new Date()).getDay()===1;
+  const normalizedDiff=Number.isFinite(diffDays)?Math.ceil(diffDays):3;
+  const weekendOffset=Math.min(3, Math.max(1, normalizedDiff));
   if(crmLateReasonYesterday){
     crmLateReasonYesterday.disabled=false;
     crmLateReasonYesterday.dataset.allowYesterday=allowYesterday?'1':'0';
     crmLateReasonYesterday.title=allowYesterday
       ? 'Отметить выполнение вчера'
       : 'Доступно, если отставание не превышает 1 день';
+  }
+  if(crmLateReasonWeekend){
+    crmLateReasonWeekend.disabled=false;
+    crmLateReasonWeekend.dataset.allowWeekend=allowWeekend?'1':'0';
+    crmLateReasonWeekend.title=allowWeekend
+      ? 'Отметить выполнение до выходных'
+      : 'Доступно только в понедельник';
   }
   return new Promise(resolve=>{
     const finalize=(result)=>{
@@ -18491,6 +19167,7 @@ function requestStageDelayReason(initialReason, diffDays){
       if(crmLateReasonSave) crmLateReasonSave.removeEventListener('click', onSave);
       if(crmLateReasonCancel) crmLateReasonCancel.removeEventListener('click', onCancel);
       if(crmLateReasonClose) crmLateReasonClose.removeEventListener('click', onCancel);
+      if(crmLateReasonWeekend) crmLateReasonWeekend.removeEventListener('click', onWeekend);
       if(crmLateReasonYesterday) crmLateReasonYesterday.removeEventListener('click', onYesterday);
       resolve(result);
     };
@@ -18505,6 +19182,15 @@ function requestStageDelayReason(initialReason, diffDays){
       }
       finalize({ action:'reason', reason:value });
     };
+    const onWeekend=()=>{
+      if(!allowWeekend){
+        resetLateReasonDialog('Отметка «До выходных» доступна только в понедельник.');
+        return;
+      }
+      const dayLabel=weekendOffset===1?'в воскресенье':weekendOffset===2?'в субботу':'в пятницу';
+      showToast({ title:'CRM', message:`Отмечено как выполненное ${dayLabel}.` });
+      finalize({ action:'weekend', daysBack:weekendOffset, dayLabel });
+    };
     const onYesterday=()=>{
       if(!allowYesterday){
         resetLateReasonDialog('Отметка «Выполнено вчера» доступна, если задержка не больше 1 дня.');
@@ -18515,6 +19201,7 @@ function requestStageDelayReason(initialReason, diffDays){
     if(crmLateReasonSave) crmLateReasonSave.addEventListener('click', onSave);
     if(crmLateReasonCancel) crmLateReasonCancel.addEventListener('click', onCancel);
     if(crmLateReasonClose) crmLateReasonClose.addEventListener('click', onCancel);
+    if(crmLateReasonWeekend) crmLateReasonWeekend.addEventListener('click', onWeekend);
     if(crmLateReasonYesterday) crmLateReasonYesterday.addEventListener('click', onYesterday);
     crmLateReasonDlg.addEventListener('close', onClose, { once:true });
     crmLateReasonDlg.showModal();
@@ -18546,6 +19233,13 @@ async function processStageCompletionChange(tr, isDone){
     if(decision.action==='yesterday'){
       doneAt=new Date(now.getTime()-86400000);
       reason='Выполнено вчера';
+    }else if(decision.action==='weekend'){
+      const daysBack=Math.min(3, Math.max(1, decision.daysBack||3));
+      doneAt=new Date(now.getTime()-(daysBack*86400000));
+      const dayLabel=typeof decision.dayLabel==='string' && decision.dayLabel.trim()
+        ? decision.dayLabel.trim()
+        : 'в выходные';
+      reason=`Выполнено ${dayLabel}`;
     }else if(decision.reason){
       reason=decision.reason;
     }
@@ -18608,48 +19302,6 @@ function refreshStageReorderControls(){
   });
 }
 
-function updateStageLinkButtonState(button, enabled){
-  if(!button) return;
-  button.textContent=enabled?'🔗':'⛓';
-  button.setAttribute('aria-pressed', enabled?'true':'false');
-  button.classList.toggle('is-active', !!enabled);
-}
-
-function setStageLinkState(tr, enabled){
-  if(!tr) return;
-  tr.dataset.linkPrev=enabled?'1':'0';
-  if(enabled){
-    delete tr.dataset.linkOverride;
-  }
-  const button=tr.querySelector('.stage-link-toggle');
-  updateStageLinkButtonState(button, !!enabled);
-}
-
-function isStageLinkActive(tr){
-  return tr?.dataset?.linkPrev==='1';
-}
-
-function resetStageLinkOverride(tr){
-  if(!tr) return;
-  delete tr.dataset.linkOverride;
-}
-
-function handleLinkedStageManualChange(tr, input){
-  if(!tr || !input) return true;
-  if(!isStageLinkActive(tr)) return true;
-  if(tr.dataset.linkOverride==='1') return true;
-  const nameInput=tr.querySelector('[data-k="name"]');
-  const stageLabel=(nameInput?.value||'Передел').trim()||'Передел';
-  const message=`Изменение даты нарушит связь с предыдущим переделом для «${stageLabel}». Продолжить?`;
-  if(window.confirm(message)){
-    tr.dataset.linkOverride='1';
-    return true;
-  }
-  const revert=input.dataset.prevValue||input.dataset.lastAccepted||input.dataset.original||'';
-  input.value=revert;
-  return false;
-}
-
 function moveStageRow(tr,direction){
   if(!stagesTableBody||!tr) return;
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
@@ -18667,11 +19319,32 @@ function moveStageRow(tr,direction){
   refreshStageReorderControls();
 }
 
-/* формат суммы */
-(function(){const inp=$('#orderForm input[name="serviceTotal"]');function parseMoney(s){if(s==null)return'';s=String(s).replace(/\s+/g,'').replace(',', '.');const n=Number(s);return Number.isFinite(n)?n:''}function fmt(n){return(n===''?'':Number(n).toLocaleString('ru-RU'))}
-if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
+  /* формат суммы */
+  (function(){const inp=$('#orderForm input[name="serviceTotal"]');function parseMoney(s){if(s==null)return'';s=String(s).replace(/\s+/g,'').replace(',', '.');const n=Number(s);return Number.isFinite(n)?n:''}function fmt(n){return(n===''?'':Number(n).toLocaleString('ru-RU'))}
+  if(inp){inp.addEventListener('focus',()=>{inp.value=String(inp.value).replace(/\s+/g,'')});inp.addEventListener('blur',()=>{const n=parseMoney(inp.value);inp.value=fmt(n)})}window._parseMoney=parseMoney})();
 
-function appendStageRow(st){
+  function updateStageDateWeekday(input){
+    if(!input) return;
+    const container=input.closest('.stage-date-cell');
+    const label=container?.querySelector('[data-dow]');
+    if(!label) return;
+    const raw=(input.value||'').trim();
+    if(!raw){
+      label.textContent='';
+      label.hidden=true;
+      return;
+    }
+    const date=parseDateInputValue(raw);
+    if(!(date instanceof Date) || Number.isNaN(date.getTime())){
+      label.textContent='';
+      label.hidden=true;
+      return;
+    }
+    label.textContent=(weekdayShort(date)||'').toUpperCase();
+    label.hidden=false;
+  }
+
+  function appendStageRow(st){
   const nmRaw=(st.name||'').trim();
   const nmNormalized=normalizeStageName(st.name);
   const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
@@ -18694,17 +19367,14 @@ function appendStageRow(st){
   }else if(st.completedLate===false){
     tr.dataset.completedLate='false';
   }
-  const linkEnabled=st.linkPrev===undefined?isStageLinkEnabledByDefault():!!st.linkPrev;
-  tr.dataset.linkPrev=linkEnabled?'1':'0';
-  tr.innerHTML=`
-    <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
-    <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-    <td class="col-link"><button type="button" class="pc-icon-btn stage-link-toggle" aria-pressed="${linkEnabled?'true':'false'}" title="Связь с предыдущим переделом">${linkEnabled?'🔗':'⛓'}</button></td>
-    <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
-    <td class="col-start"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /></td>
-    <td class="col-end"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /></td>
-    <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
-    <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
+    tr.innerHTML=`
+      <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
+      <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
+      <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
+      <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-end"><div class="stage-date-cell"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
+      <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
   const reorderCell=document.createElement('td');
   reorderCell.className='reorder';
   reorderCell.innerHTML='<div class="crm-stage-reorder"><button type="button" data-stage-move="up" title="Переместить выше">▲</button><button type="button" data-stage-move="down" title="Переместить ниже">▼</button></div>';
@@ -18731,14 +19401,6 @@ function appendStageRow(st){
     updateAllStageExpectations();
     refreshStageReorderControls();
   };
-  setStageLinkState(tr, linkEnabled);
-  const linkBtn=tr.querySelector('.stage-link-toggle');
-  if(linkBtn){
-    linkBtn.addEventListener('click',()=>{
-      const next=!(tr.dataset.linkPrev==='1');
-      setStageLinkState(tr, next);
-    });
-  }
   const moveUpBtn=tr.querySelector('[data-stage-move="up"]');
   if(moveUpBtn){
     moveUpBtn.addEventListener('click',()=>moveStageRow(tr,'up'));
@@ -18793,34 +19455,36 @@ function appendStageRow(st){
   }
   const startInput=tr.querySelector('[data-k="start"]');
   const endInput=tr.querySelector('[data-k="end"]');
-  if(startInput){
-    applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');
-    startInput.dataset.lastAccepted=startInput.value||'';
-    startInput.addEventListener('focus',()=>{
-      startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
-    });
-    startInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, startInput)) return;
-      enforceStageDateConstraints(tr, startInput);
-      applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
-    });
-  }
-  if(endInput){
-    applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');
-    endInput.dataset.lastAccepted=endInput.value||'';
-    endInput.addEventListener('focus',()=>{
-      endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
-    });
-    endInput.addEventListener('change',()=>{
-      if(!handleLinkedStageManualChange(tr, endInput)) return;
-      enforceStageDateConstraints(tr, endInput);
-      applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
-      syncAutoDates();
-      updateStageRowExpectation(tr);
-    });
-  }
+    if(startInput){
+      applyStageDateHighlight(startInput,st.originalStart||'','Исходная дата начала');
+      startInput.dataset.lastAccepted=startInput.value||'';
+      updateStageDateWeekday(startInput);
+      startInput.addEventListener('focus',()=>{
+        startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
+      });
+      startInput.addEventListener('change',()=>{
+        enforceStageDateConstraints(tr, startInput);
+        applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
+        updateStageDateWeekday(startInput);
+        syncAutoDates();
+        updateStageRowExpectation(tr);
+      });
+    }
+    if(endInput){
+      applyStageDateHighlight(endInput,st.originalEnd||'','Исходная дата конца');
+      endInput.dataset.lastAccepted=endInput.value||'';
+      updateStageDateWeekday(endInput);
+      endInput.addEventListener('focus',()=>{
+        endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
+      });
+      endInput.addEventListener('change',()=>{
+        enforceStageDateConstraints(tr, endInput);
+        applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
+        updateStageDateWeekday(endInput);
+        syncAutoDates();
+        updateStageRowExpectation(tr);
+      });
+    }
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
   return tr;
 }
@@ -18889,7 +19553,6 @@ function readStageRow(tr){
     originalEnd:endInput?.dataset?.original||'',
     value:suppressValueForStage(normalizedName)?'':(valueInput?.value??''),
     crmStageId:stageId,
-    linkPrev:tr.dataset?.linkPrev==='1',
     doneAt:typeof tr.dataset?.doneAt==='string'?tr.dataset.doneAt:'',
     delayReason:typeof tr.dataset?.delayReason==='string'?tr.dataset.delayReason:'',
     completedLate:tr.dataset?.completedLate==='true'
@@ -18967,6 +19630,76 @@ function readStages(){
     .filter(Boolean);
 }
 
+function captureOrderDraftSnapshot(){
+  if(!orderForm) return null;
+  const formValues={};
+  const elements=Array.from(orderForm.elements||[]).filter(el=>el && el.name);
+  elements.forEach(el=>{
+    if(el.type==='checkbox'){
+      formValues[el.name]=!!el.checked;
+    }else{
+      formValues[el.name]=typeof el.value==='string'?el.value:'';
+    }
+  });
+  formValues.orderDone=!!orderDone?.checked;
+  const stages=readStages().map(stage=>({
+    id:stage.crmStageId||stage.id||'',
+    name:stage.name||'',
+    done:!!stage.done,
+    progress:normalizeStageProgress(stage.progress||0),
+    start:stage.start||'',
+    end:stage.end||'',
+    value:stage.value||'',
+    doneAt:stage.doneAt||'',
+    delayReason:stage.delayReason||'',
+    completedLate:!!stage.completedLate
+  }));
+  const comments=orderCommentsDraft.map(comment=>({
+    id:comment?.id||'',
+    text:comment?.text||'',
+    author:comment?.author||'',
+    updatedAt:comment?.updatedAt||''
+  }));
+  const hiddenNote=typeof orderNotesHidden?.value==='string'?orderNotesHidden.value:'';
+  return { formValues, stages, comments, hiddenNote };
+}
+
+function resetOrderDraftBaseline(){
+  orderDraftBaseline=captureOrderDraftSnapshot();
+}
+
+function hasOrderDraftChanges(){
+  if(!orderForm) return false;
+  if(!orderDraftBaseline) return false;
+  const current=captureOrderDraftSnapshot();
+  return JSON.stringify(current)!==JSON.stringify(orderDraftBaseline);
+}
+
+function attemptCloseOrderDialog(){
+  if(!orderDlg || !orderDlg.open) return;
+  if(orderDialogClosing){
+    orderDlg.close();
+    return;
+  }
+  if(hasOrderDraftChanges()){
+    const saveNow=window.confirm('Есть несохранённые изменения. Сохранить перед закрытием?');
+    if(saveNow){
+      orderDialogClosing=true;
+      if(typeof orderForm.requestSubmit==='function'){
+        orderForm.requestSubmit();
+      }else{
+        orderForm.dispatchEvent(new Event('submit', { cancelable:true, bubbles:true }));
+      }
+      return;
+    }
+    const discard=window.confirm('Закрыть без сохранения? Все несохранённые изменения будут потеряны.');
+    if(!discard){
+      return;
+    }
+  }
+  orderDlg.close();
+}
+
 function calcAutoProgress(stages){
   const s=stages||[];
   if(!s.length)return 0;
@@ -18987,7 +19720,7 @@ function applyOrderAutoCompletionState(){
   if(!statusSel) return;
   if(!allComplete) return;
   const shippingEntry=stages.find(stage=>{
-    const key=resolveCrmStageKey(stage?.name);
+    const key=resolveCrmStageKeyWithMapping(stage?.name);
     return key==='ship';
   });
   const overdue=shippingEntry?stageEntryIsLate(shippingEntry):false;
@@ -19020,6 +19753,7 @@ function syncAutoDates(){
 
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
+  orderDialogClosing=false;
   if(!crmCanManageOrders()){
     showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
     return;
@@ -19088,7 +19822,9 @@ orderForm.addEventListener('submit',e=>{
 /* Настройки доски */
 const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
 const crmUnaccountedHidden=$('#crmUnaccountedHidden');
+const crmUnaccountedHiddenFilters=$('#crmUnaccountedHiddenFilter');
 const crmUnaccountedSummary=$('#crmUnaccountedSummary');
+const crmUnaccountedFilterSummary=$('#crmUnaccountedFilterSummary');
 const crmUnaccountedEditBtn=$('#crmUnaccountedEdit');
 const crmUnaccountedSettingsDlg=$('#crmUnaccountedSettingsDlg');
 const crmUnaccountedList=$('#crmUnaccountedList');
@@ -19096,6 +19832,7 @@ const crmUnaccountedInput=$('#crmUnaccountedNew');
 const crmUnaccountedAddBtn=$('#crmUnaccountedAdd');
 const crmUnaccountedEditorClose=$('#crmUnaccountedEditorClose');
 const crmUnaccountedEditorDone=$('#crmUnaccountedEditorDone');
+const crmUnaccountedFilterBox=$('#crmUnaccountedFilter');
 const crmPlanFreezeInput=boardForm?.querySelector('input[name="planFreezeDays"]')||null;
 const crmAutoPinInput=boardForm?.querySelector('input[name="autoPinOrders"]')||null;
 const crmExtraPercentInput=boardForm?.querySelector('input[name="extraPercent"]')||null;
@@ -19157,6 +19894,7 @@ if(crmLaneVisibilityChips){
   });
 }
 let crmUnaccountedDraft=[];
+let crmUnaccountedHiddenDraft=[];
 let crmStageScheduleDrafts={};
 let crmStageScheduleActiveStage=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'';
 let crmStageScheduleStageSelect=null;
@@ -19613,33 +20351,6 @@ function renderCrmPreferencesSettingsUI(){
   horizonHint.className='crm-field__hint';
   horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
   horizonField.append(horizonLabel, horizonInput, horizonHint);
-  const linkOption=document.createElement('label');
-  linkOption.className='crm-settings-checkbox';
-  const linkCheckbox=document.createElement('input');
-  linkCheckbox.type='checkbox';
-  linkCheckbox.name='prefLinkedStages';
-  linkCheckbox.checked=prefs.linkedStagesEnabled!==false;
-  const linkText=document.createElement('span');
-  linkText.textContent='Связь с предыдущим переделом (по умолчанию)';
-  linkOption.append(linkCheckbox, linkText);
-  const linkGapField=document.createElement('label');
-  linkGapField.className='crm-field';
-  const linkGapLabel=document.createElement('span');
-  linkGapLabel.className='crm-field__label';
-  linkGapLabel.textContent='Смещение даты следующего передела';
-  const linkGapInput=document.createElement('input');
-  linkGapInput.type='number';
-  linkGapInput.className='pc-input';
-  linkGapInput.name='prefLinkedStageGapDays';
-  linkGapInput.min='0';
-  linkGapInput.step='1';
-  linkGapInput.inputMode='numeric';
-  linkGapInput.placeholder='0';
-  linkGapInput.value=String(Math.max(0, prefs.linkedStageGapDays||0));
-  const linkGapHint=document.createElement('span');
-  linkGapHint.className='crm-field__hint';
-  linkGapHint.textContent='0 — стартуем в день завершения предыдущего передела (если рабочий день), 1 — со следующего рабочего дня и т.д.';
-  linkGapField.append(linkGapLabel, linkGapInput, linkGapHint);
   const laneSumField=document.createElement('label');
   laneSumField.className='crm-field';
   const laneSumLabel=document.createElement('span');
@@ -19750,7 +20461,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, linkOption, linkGapField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -20077,13 +20788,19 @@ function recalcCrmMappingAlert(){
 }
 
 function sanitizeCrmStatusList(list){
-  const sanitized=sanitizeCrmSettings({unaccountedStatuses:list}).unaccountedStatuses;
+  const sanitized=sanitizeCrmStatusListRaw(list);
   return Array.isArray(sanitized)?sanitized:[];
 }
 
 function updateCrmUnaccountedHidden(){
   if(crmUnaccountedHidden){
     crmUnaccountedHidden.value=crmUnaccountedDraft.join('\n');
+  }
+}
+
+function updateCrmUnaccountedHiddenFilters(){
+  if(crmUnaccountedHiddenFilters){
+    crmUnaccountedHiddenFilters.value=crmUnaccountedHiddenDraft.join('\n');
   }
 }
 
@@ -20100,6 +20817,19 @@ function updateCrmUnaccountedSummary(){
   crmUnaccountedSummary.textContent=`Не учитывать ${crmUnaccountedDraft.length} состояний`;
 }
 
+function updateCrmUnaccountedFilterSummary(){
+  if(!crmUnaccountedFilterSummary) return;
+  if(!crmUnaccountedHiddenDraft.length){
+    crmUnaccountedFilterSummary.textContent='В «Не учтённых» показываются все';
+    return;
+  }
+  if(crmUnaccountedHiddenDraft.length<=3){
+    crmUnaccountedFilterSummary.textContent=`Скрывать в «Не учтённых»: ${crmUnaccountedHiddenDraft.join(', ')}`;
+    return;
+  }
+  crmUnaccountedFilterSummary.textContent=`Скрывать ${crmUnaccountedHiddenDraft.length} состояний в разделе`;
+}
+
 function renderCrmUnaccountedEditorList(){
   if(!crmUnaccountedList) return;
   crmUnaccountedList.innerHTML='';
@@ -20108,6 +20838,7 @@ function renderCrmUnaccountedEditorList(){
     empty.className='crm-modal-empty';
     empty.textContent='Все состояния учитываются';
     crmUnaccountedList.appendChild(empty);
+    renderCrmUnaccountedFilterOptions();
     return;
   }
   crmUnaccountedDraft.forEach(status=>{
@@ -20122,15 +20853,73 @@ function renderCrmUnaccountedEditorList(){
     chip.appendChild(btn);
     crmUnaccountedList.appendChild(chip);
   });
+  renderCrmUnaccountedFilterOptions();
 }
 
 function setCrmUnaccountedDraft(list,options={}){
   crmUnaccountedDraft=sanitizeCrmStatusList(list);
   updateCrmUnaccountedHidden();
   updateCrmUnaccountedSummary();
+  setCrmUnaccountedHiddenDraft(crmUnaccountedHiddenDraft,{ render:false });
   if(options.render!==false){
     renderCrmUnaccountedEditorList();
   }
+}
+
+function setCrmUnaccountedHiddenDraft(list, options={}){
+  const allowed=new Set(crmUnaccountedDraft.map(normalizeStatusKey).filter(Boolean));
+  const sanitized=sanitizeCrmStatusList(list);
+  const filtered=sanitized.filter(status=>!allowed.size || allowed.has(normalizeStatusKey(status)));
+  crmUnaccountedHiddenDraft=filtered;
+  updateCrmUnaccountedHiddenFilters();
+  updateCrmUnaccountedFilterSummary();
+  if(options.render!==false){
+    renderCrmUnaccountedFilterOptions();
+  }
+}
+
+function renderCrmUnaccountedFilterOptions(){
+  if(!crmUnaccountedFilterBox) return;
+  crmUnaccountedFilterBox.innerHTML='';
+  if(!crmUnaccountedDraft.length){
+    const empty=document.createElement('span');
+    empty.className='crm-unaccounted-filter-label';
+    empty.textContent='Нет выбранных состояний';
+    crmUnaccountedFilterBox.appendChild(empty);
+    return;
+  }
+  const hiddenSet=new Set(crmUnaccountedHiddenDraft.map(normalizeStatusKey).filter(Boolean));
+  crmUnaccountedDraft.forEach(status=>{
+    const norm=normalizeStatusKey(status);
+    const wrapper=document.createElement('label');
+    const isShown=!hiddenSet.has(norm);
+    wrapper.className=`crm-unaccounted-filter-item${isShown?'':' is-muted'}`;
+    const input=document.createElement('input');
+    input.type='checkbox';
+    input.checked=isShown;
+    input.addEventListener('change',()=>toggleCrmUnaccountedFilter(status, input.checked));
+    const text=document.createElement('span');
+    text.textContent=status||'—';
+    wrapper.appendChild(input);
+    wrapper.appendChild(text);
+    crmUnaccountedFilterBox.appendChild(wrapper);
+  });
+}
+
+function toggleCrmUnaccountedFilter(status, visible){
+  const norm=normalizeStatusKey(status);
+  if(!norm) return;
+  let next=[...crmUnaccountedHiddenDraft];
+  if(visible){
+    next=next.filter(item=>normalizeStatusKey(item)!==norm);
+  }else if(!next.some(item=>normalizeStatusKey(item)===norm)){
+    next.push(status);
+  }
+  setCrmUnaccountedHiddenDraft(next);
+  state.settings.unaccountedHiddenStatuses=sanitizeCrmStatusList(next);
+  save('Фильтр «Не учтённые» обновлён');
+  updateCrmAuxButtons();
+  renderCrmUnaccounted();
 }
 
 function addCrmUnaccountedStatus(raw){
@@ -20204,6 +20993,9 @@ function openBoard(){
   crmMappingRemovedDraft=new Set();
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
   setCrmUnaccountedDraft(statuses,{render:false});
+  const hiddenStatuses=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
+  setCrmUnaccountedHiddenDraft(hiddenStatuses,{render:false});
+  renderCrmUnaccountedFilterOptions();
   const retention=state.settings?.trashRetention||DEFAULT_TRASH_RETENTION;
   boardForm.trashRetentionMode.value=retention.mode==='count'?'count':'days';
   boardForm.trashRetentionValue.value=retention.value||(retention.mode==='count'?DEFAULT_TRASH_RETENTION_COUNT:DEFAULT_TRASH_RETENTION_DAYS);
@@ -20245,6 +21037,11 @@ boardForm.addEventListener('submit',e=>{
   const sanitizedStatuses=sanitizeCrmStatusList(crmUnaccountedDraft);
   state.settings.unaccountedStatuses=sanitizedStatuses;
   setCrmUnaccountedDraft(sanitizedStatuses,{render:false});
+  const sanitizedHidden=sanitizeCrmStatusList(crmUnaccountedHiddenDraft);
+  state.settings.unaccountedHiddenStatuses=sanitizeCrmStatusList(
+    sanitizedHidden.filter(status=>crmUnaccountedDraft.some(base=>normalizeStatusKey(base)===normalizeStatusKey(status)))
+  );
+  setCrmUnaccountedHiddenDraft(state.settings.unaccountedHiddenStatuses,{render:false});
   const modeRaw=boardForm.trashRetentionMode.value==='count'?'count':'days';
   let retentionValue=Number(boardForm.trashRetentionValue.value);
   if(!Number.isFinite(retentionValue)||retentionValue<=0){
@@ -20301,8 +21098,6 @@ boardForm.addEventListener('submit',e=>{
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
-    linkedStagesEnabled:boardForm.prefLinkedStages?boardForm.prefLinkedStages.checked:true,
-    linkedStageGapDays:boardForm.prefLinkedStageGapDays?boardForm.prefLinkedStageGapDays.value:'',
     laneSumPeriod:{
       mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
       from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
@@ -21963,6 +22758,40 @@ if(crmOrdersTabBtn){
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
 }
+if(crmStageNavItem && crmStageNavDropdown){
+  const openStageDropdown=()=>{
+    if(crmStageNavHoverTimeout){
+      clearTimeout(crmStageNavHoverTimeout);
+      crmStageNavHoverTimeout=null;
+    }
+    setStageNavDropdown(true);
+  };
+  const closeStageDropdown=()=>{
+    if(crmStageNavHoverTimeout){
+      clearTimeout(crmStageNavHoverTimeout);
+    }
+    crmStageNavHoverTimeout=setTimeout(()=>setStageNavDropdown(false),120);
+  };
+  crmStageNavItem.addEventListener('mouseenter', openStageDropdown);
+  crmStageNavItem.addEventListener('mouseleave', closeStageDropdown);
+  crmStageNavDropdown.addEventListener('pointerenter', openStageDropdown);
+  crmStageNavDropdown.addEventListener('pointerleave', closeStageDropdown);
+  if(crmStageTabBtn){
+    crmStageTabBtn.addEventListener('focus', openStageDropdown);
+    crmStageTabBtn.addEventListener('blur', closeStageDropdown);
+  }
+}
+if(crmStageNavDropdown){
+  document.addEventListener('pointerdown',event=>{
+    if(crmStageNavDropdown.hidden) return;
+    if(crmStageNavItem && crmStageNavItem.contains(event.target)) return;
+    setStageNavDropdown(false);
+  });
+  window.addEventListener('resize',()=>{
+    if(crmStageNavDropdown.hidden) return;
+    updateCrmStageDropdownHeight();
+  });
+}
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
     const stageKey=crmStageSelect.value||'draw';
@@ -21975,12 +22804,12 @@ if(crmStageSelect){
     if(crmStageFilter && crmStageFilter.value!==filter){
       crmStageFilter.value=filter;
     }
-    if(crmStageTabBtn && currentCrmView==='stage'){
-      const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-      crmStageTabBtn.textContent=`Переделы (${label})`;
-    }
+    renderCrmStageTabLabel(stageKey);
+    setStageNavDropdown(false);
     if(currentCrmView==='stage'){
       renderCrmStageTable();
+    }else{
+      setCrmView('stage');
     }
     updateCrmCalendarButtons(stageKey);
     applyCrmWriteAccess();
@@ -22019,14 +22848,21 @@ if(crmStageRouteToggle){
 }
 applyAllCrmSectionCollapse();
 
+const applyCrmRouteToggleState=()=>{
+  document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
+    const active=btn.dataset.routeMode===crmStageRouteMode;
+    btn.setAttribute('aria-pressed', active?'true':'false');
+  });
+};
+
+applyCrmRouteToggleState();
+
 document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(btn=>{
   btn.addEventListener('click',()=>{
     const mode=btn.dataset.routeMode==='compact'?'compact':'detailed';
     if(crmStageRouteMode===mode) return;
     crmStageRouteMode=mode;
-    document.querySelectorAll('.crm-route-toggle [data-route-mode]').forEach(other=>{
-      other.setAttribute('aria-pressed', other===btn?'true':'false');
-    });
+    applyCrmRouteToggleState();
     renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
   });
 });
@@ -22081,14 +22917,29 @@ if(crmStageExceptionsClose){
 if(crmStageExceptionsCancel){
   crmStageExceptionsCancel.addEventListener('click',()=>closeCrmStageExceptionsDialog());
 }
-if(crmStageExceptionsApply){
-  crmStageExceptionsApply.addEventListener('click',()=>applyCrmStageExceptions());
+if(crmStageExceptionsAdd){
+  crmStageExceptionsAdd.addEventListener('click',()=>{
+    const stageKey=crmStageExceptionsDlg?.dataset.stage||crmStageSelect?.value||'draw';
+    openCrmCalendarEntryDialog('exception', stageKey);
+  });
+}
+if(crmStageExceptionsArchiveToggle){
+  crmStageExceptionsArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('exception'));
+}
+if(crmStageExceptionsHistoryToggle){
+  crmStageExceptionsHistoryToggle.addEventListener('click',()=>toggleCrmCalendarHistory('exception'));
 }
 if(crmStageExceptionsDlg){
   crmStageExceptionsDlg.addEventListener('cancel',evt=>{
     evt.preventDefault();
     closeCrmStageExceptionsDialog();
   });
+}
+if(crmStageExceptionsList){
+  crmStageExceptionsList.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'exception'));
+}
+if(crmStageExceptionsArchive){
+  crmStageExceptionsArchive.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'exception'));
 }
 
 if(crmStageReserveBtn){
@@ -22103,8 +22954,17 @@ if(crmStageReserveClose){
 if(crmStageReserveCancel){
   crmStageReserveCancel.addEventListener('click',()=>closeCrmStageReserveDialog());
 }
-if(crmStageReserveApply){
-  crmStageReserveApply.addEventListener('click',()=>applyCrmStageReserve());
+if(crmStageReserveAdd){
+  crmStageReserveAdd.addEventListener('click',()=>{
+    const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
+    openCrmCalendarEntryDialog('reserve', stageKey);
+  });
+}
+if(crmStageReserveArchiveToggle){
+  crmStageReserveArchiveToggle.addEventListener('click',()=>toggleCrmCalendarArchive('reserve'));
+}
+if(crmStageReserveHistoryToggle){
+  crmStageReserveHistoryToggle.addEventListener('click',()=>toggleCrmCalendarHistory('reserve'));
 }
 if(crmStageReserveDlg){
   crmStageReserveDlg.addEventListener('cancel',evt=>{
@@ -22112,10 +22972,25 @@ if(crmStageReserveDlg){
     closeCrmStageReserveDialog();
   });
 }
-if(crmStageReserveInput){
-  crmStageReserveInput.addEventListener('input',()=>{
-    const stageKey=crmStageReserveDlg?.dataset.stage||crmStageSelect?.value||'draw';
-    renderCrmStageReserveDiag(crmStageReserveInput.value, stageKey);
+if(crmStageReserveList){
+  crmStageReserveList.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'reserve'));
+}
+if(crmStageReserveArchive){
+  crmStageReserveArchive.addEventListener('click',evt=>handleCrmCalendarListClick(evt,'reserve'));
+}
+if(crmCalendarEntryForm){
+  crmCalendarEntryForm.addEventListener('submit',submitCrmCalendarEntry);
+}
+if(crmCalendarEntryCancel){
+  crmCalendarEntryCancel.addEventListener('click',()=>closeCrmCalendarEntryDialog());
+}
+if(crmCalendarEntryClose){
+  crmCalendarEntryClose.addEventListener('click',()=>closeCrmCalendarEntryDialog());
+}
+if(crmCalendarEntryDlg){
+  crmCalendarEntryDlg.addEventListener('cancel',evt=>{
+    evt.preventDefault();
+    closeCrmCalendarEntryDialog();
   });
 }
 if(crmOptimizeForm){
