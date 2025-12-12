@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlaneCore — Конструктор страниц</title>
+  <link rel="stylesheet" href="plan-core.css" />
+  <link rel="stylesheet" href="constructor.css" />
+  <script defer src="plan-core.js"></script>
+  <script defer src="plan-constructor.js"></script>
+</head>
+<body class="page-constructor">
+  <header class="constructor-header">
+    <div>
+      <p class="eyebrow">Гибкий набор отчётов</p>
+      <h1>Конструктор страниц</h1>
+      <p class="subtle">Добавляйте собственные таблицы, диаграммы Ганта, графики и плитки, а затем управляйте тем, что видят пользователи.</p>
+    </div>
+    <div class="header-actions">
+      <label class="toggle">
+        <input type="checkbox" id="constructor-visibility" />
+        <span>Включить конструктор для текущего профиля</span>
+      </label>
+      <button type="button" data-action="add-template" class="primary">Новый шаблон</button>
+    </div>
+  </header>
+
+  <main class="constructor-layout">
+    <section class="pane pane-roles">
+      <h2>Доступы</h2>
+      <p class="subtle">Настройте роли, которые могут создавать, редактировать и использовать шаблоны.</p>
+      <div class="role-grid" id="role-grid"></div>
+    </section>
+
+    <section class="pane pane-templates">
+      <div class="pane-head">
+        <h2>Шаблоны страниц</h2>
+        <div class="filters" id="template-filters"></div>
+      </div>
+      <div id="template-list" class="template-list"></div>
+    </section>
+
+    <section class="pane pane-preview">
+      <div class="pane-head">
+        <h2>Предпросмотр</h2>
+        <div class="preview-controls">
+          <label>Режим: 
+            <select id="preview-mode">
+              <option value="page">Страница</option>
+              <option value="data">Данные</option>
+            </select>
+          </label>
+          <label>Активный шаблон:
+            <select id="active-template"></select>
+          </label>
+        </div>
+      </div>
+      <div id="preview-area" class="preview-area empty">Нет выбранного шаблона</div>
+    </section>
+  </main>
+
+  <section id="template-editor" class="modal" hidden>
+    <div class="modal__dialog">
+      <header class="modal__header">
+        <h3 id="editor-title">Новый шаблон</h3>
+        <button type="button" class="icon-btn" data-action="close-editor" aria-label="Закрыть">✕</button>
+      </header>
+      <div class="modal__content">
+        <label class="stack">
+          <span>Название шаблона</span>
+          <input type="text" id="template-name" placeholder="Например: Загрузка лазера" />
+        </label>
+        <label class="stack">
+          <span>Тип</span>
+          <select id="template-type">
+            <option value="gantt">Диаграмма Ганта</option>
+            <option value="table">Таблица заказов</option>
+            <option value="chart">График</option>
+            <option value="tiles">Плитки</option>
+            <option value="dashboard">Дашборд</option>
+          </select>
+        </label>
+        <label class="stack" data-field="columns">
+          <span>Колонки для таблицы</span>
+          <select id="template-columns" multiple size="6"></select>
+        </label>
+        <label class="stack">
+          <span>Фильтры</span>
+          <div id="template-filters-editor" class="chips"></div>
+        </label>
+        <label class="stack">
+          <span>Отображать в интерфейсе</span>
+          <input type="checkbox" id="template-visible" />
+        </label>
+      </div>
+      <footer class="modal__footer">
+        <button type="button" data-action="save-template" class="primary">Сохранить</button>
+        <button type="button" data-action="close-editor">Отмена</button>
+      </footer>
+    </div>
+  </section>
+
+  <section id="order-editor" class="modal" hidden>
+    <div class="modal__dialog">
+      <header class="modal__header">
+        <h3>Редактирование заказа</h3>
+        <button type="button" class="icon-btn" data-action="close-order" aria-label="Закрыть">✕</button>
+      </header>
+      <div class="modal__content" id="order-form"></div>
+      <footer class="modal__footer">
+        <button type="button" data-action="save-order" class="primary">Сохранить</button>
+        <button type="button" data-action="close-order">Отмена</button>
+      </footer>
+    </div>
+  </section>
+</body>
+</html>
