@@ -2998,22 +2998,16 @@ const REPORT_PREVIEW_COLUMNS = {
 };
 const REPORT_PREVIEW_FALLBACKS = {
   stages: [
-    {
-      stage: 'laser',
-      workcenter: 'Лазерный станок',
-      start: '2024-05-12 09:00',
-      finish: '2024-05-12 14:30',
-      duration: '5.5 ч',
-      overdue: false
-    },
-    {
-      stage: 'bend',
-      workcenter: 'Гибка',
-      start: '2024-05-13 10:00',
-      finish: '2024-05-13 16:00',
-      duration: '6 ч',
-      overdue: true
-    }
+    { stage: 'draw', workcenter: 'Подготовка', start: '2024-05-10 08:30', finish: '2024-05-10 10:00', duration: '1.5 ч', overdue: false },
+    { stage: 'proc', workcenter: 'Закупка', start: '2024-05-10 10:30', finish: '2024-05-11 16:00', duration: '1 д 3.5 ч', overdue: false },
+    { stage: 'shear', workcenter: 'Рубка', start: '2024-05-11 09:00', finish: '2024-05-11 12:00', duration: '3 ч', overdue: false },
+    { stage: 'laser', workcenter: 'Лазерный станок', start: '2024-05-12 09:00', finish: '2024-05-12 14:30', duration: '5.5 ч', overdue: false },
+    { stage: 'bend', workcenter: 'Гибка', start: '2024-05-13 10:00', finish: '2024-05-13 16:00', duration: '6 ч', overdue: true },
+    { stage: 'weld', workcenter: 'Сварка', start: '2024-05-14 09:30', finish: '2024-05-14 18:00', duration: '7.5 ч', overdue: false },
+    { stage: 'mech', workcenter: 'Мехобработка', start: '2024-05-15 08:00', finish: '2024-05-15 12:00', duration: '4 ч', overdue: false },
+    { stage: 'coop', workcenter: 'Кооперация', start: '2024-05-15 13:00', finish: '2024-05-16 12:00', duration: '23 ч', overdue: false },
+    { stage: 'pack', workcenter: 'Упаковка', start: '2024-05-16 13:00', finish: '2024-05-16 15:00', duration: '2 ч', overdue: false },
+    { stage: 'ship', workcenter: 'Отгрузка', start: '2024-05-17 10:00', finish: '2024-05-17 11:00', duration: '1 ч', overdue: false }
   ],
   orders: [
     { number: 'A-1023', status: 'in_progress', customer: 'ООО «Север»', total: 185000, ready: false, overdue: false },
@@ -3192,10 +3186,12 @@ function applyReportFilters(rows, filters) {
 
 function extractStageRows(snapshot, detail) {
   const tasks = Array.isArray(snapshot?.t) ? snapshot.t : [];
+  const targetStage = normalizeStage(detail);
   const rows = tasks
     .map((task) => {
       if (!task) return null;
       const stage = normalizeStage(task.stage || task.process || detail || 'stage');
+      if (targetStage && stage !== targetStage) return null;
       const start = task.start || task.startDate || task.dateStart || task.plannedStart || null;
       const finish = task.finish || task.end || task.finishDate || task.plannedFinish || null;
       const duration = computeDurationLabel(start, finish, task.duration);
@@ -3209,7 +3205,16 @@ function extractStageRows(snapshot, detail) {
       };
     })
     .filter(Boolean);
-  return rows.length ? rows : REPORT_PREVIEW_FALLBACKS.stages;
+  if (rows.length) {
+    return rows;
+  }
+  if (targetStage) {
+    const fallbackByStage = REPORT_PREVIEW_FALLBACKS.stages.filter((entry) => normalizeStage(entry.stage) === targetStage);
+    if (fallbackByStage.length) {
+      return fallbackByStage;
+    }
+  }
+  return REPORT_PREVIEW_FALLBACKS.stages;
 }
 
 function extractOrderRows(snapshot) {

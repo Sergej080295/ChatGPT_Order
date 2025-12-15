@@ -51,13 +51,21 @@
     { value: 'route', label: 'Маршруты' }
   ];
 
+  const stageDetails = [
+    { value: 'draw', label: 'Подготовка в работу' },
+    { value: 'proc', label: 'Закупка' },
+    { value: 'shear', label: 'Рубка' },
+    { value: 'laser', label: 'Лазер' },
+    { value: 'bend', label: 'Гибка' },
+    { value: 'weld', label: 'Сварка' },
+    { value: 'mech', label: 'Мехобработка' },
+    { value: 'coop', label: 'Кооперация' },
+    { value: 'pack', label: 'Упаковка' },
+    { value: 'ship', label: 'Отгрузка' }
+  ];
+
   const sourceDetails = {
-    stages: [
-      { value: 'laser', label: 'Лазер' },
-      { value: 'bend', label: 'Гибка' },
-      { value: 'paint', label: 'Покраска' },
-      { value: 'other', label: 'Другой передел' }
-    ],
+    stages: [...stageDetails, { value: 'paint', label: 'Покраска' }, { value: 'other', label: 'Другой передел' }],
     orders: [
       { value: 'summary', label: 'Сводка заказа' },
       { value: 'finance', label: 'Финансы' }
@@ -708,10 +716,14 @@
     els.previewBtn?.addEventListener('click', previewData);
     els.templateStages?.addEventListener('click', () => applyTemplate('stages'));
     els.templateTable?.addEventListener('click', () => applyTemplate('table'));
+    document
+      .getElementById('reportPresetTemplateGantts')
+      ?.addEventListener('click', () => applyTemplate('ganttStages'));
   }
 
   function applyTemplate(type) {
     if (!els.widgetList) return;
+    let replace = true;
     const widgets =
       type === 'stages'
         ? [
@@ -730,6 +742,14 @@
               fields: ['stage', 'start', 'finish', 'overdue']
             }
           ]
+        : type === 'ganttStages'
+        ? stageDetails.map((stage) => ({
+            title: `Гант: ${stage.label}`,
+            type: 'gantt',
+            dataSource: 'stages',
+            detail: stage.value,
+            fields: ['stage', 'start', 'finish', 'duration', 'overdue']
+          }))
         : [
             {
               title: 'Сводка заказов',
@@ -739,11 +759,21 @@
               fields: ['number', 'status', 'customer', 'total', 'ready', 'overdue']
             }
           ];
-    els.widgetList.innerHTML = '';
+    if (type === 'ganttStages' && els.widgetList.childElementCount) {
+      replace = false;
+    }
+    if (replace) {
+      els.widgetList.innerHTML = '';
+    }
     widgets.forEach((widget, idx) => {
-      els.widgetList.appendChild(buildWidgetRow(widget, idx));
+      const insertIndex = replace ? idx : els.widgetList.childElementCount;
+      els.widgetList.appendChild(buildWidgetRow(widget, insertIndex));
     });
-    renderPreviewSkeleton('Нажмите «Предпросмотр данных», чтобы увидеть подборку по вашим переделам.');
+    const hint =
+      type === 'ganttStages'
+        ? 'Ганты по всем переделам добавлены в конец списка — откройте предпросмотр, чтобы увидеть каждый.'
+        : 'Нажмите «Предпросмотр данных», чтобы увидеть подборку по вашим переделам.';
+    renderPreviewSkeleton(hint);
   }
 
   async function previewData() {
