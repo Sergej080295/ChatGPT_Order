@@ -18,15 +18,19 @@
     activeInput: document.getElementById('reportActive'),
     publicInput: document.getElementById('reportPublic'),
     rolesInput: document.getElementById('reportRoles'),
-    layoutInput: document.getElementById('reportLayout'),
-    filtersInput: document.getElementById('reportFilters'),
+    layoutTypeInput: document.getElementById('reportLayoutType'),
+    filterStatusInput: document.getElementById('reportFilterStatus'),
+    filterFromInput: document.getElementById('reportFilterFrom'),
+    filterToInput: document.getElementById('reportFilterTo'),
+    filterOverdueInput: document.getElementById('reportFilterOverdue'),
     widgetList: document.getElementById('reportWidgets'),
     addWidgetBtn: document.getElementById('reportAddWidget'),
     saveBtn: document.getElementById('reportSave'),
     deleteBtn: document.getElementById('reportDelete'),
     visibilityBtn: document.getElementById('reportToggleVisibility'),
     settingsToggle: document.getElementById('reportsEnabled'),
-    settingsLabel: document.getElementById('reportsEnabledLabel')
+    settingsLabel: document.getElementById('reportsEnabledLabel'),
+    preview: document.getElementById('reportPreview')
   };
 
   const widgetTypes = [
@@ -43,6 +47,48 @@
     { value: 'stages', label: 'Переделы' },
     { value: 'route', label: 'Маршруты' }
   ];
+
+  const sourceDetails = {
+    stages: [
+      { value: 'laser', label: 'Лазер' },
+      { value: 'bend', label: 'Гибка' },
+      { value: 'paint', label: 'Покраска' },
+      { value: 'other', label: 'Другой передел' }
+    ],
+    orders: [
+      { value: 'summary', label: 'Сводка заказа' },
+      { value: 'finance', label: 'Финансы' }
+    ],
+    route: [
+      { value: 'timeline', label: 'Таймлайн' },
+      { value: 'checks', label: 'Контрольные точки' }
+    ]
+  };
+
+  const columnOptions = {
+    orders: [
+      { value: 'number', label: 'Номер' },
+      { value: 'status', label: 'Статус' },
+      { value: 'customer', label: 'Клиент' },
+      { value: 'total', label: 'Сумма' },
+      { value: 'ready', label: 'Готовность' },
+      { value: 'overdue', label: 'Просрочка' }
+    ],
+    stages: [
+      { value: 'stage', label: 'Передел' },
+      { value: 'workcenter', label: 'Участок' },
+      { value: 'start', label: 'Старт' },
+      { value: 'finish', label: 'Финиш' },
+      { value: 'duration', label: 'Длительность' },
+      { value: 'overdue', label: 'Просрочка' }
+    ],
+    route: [
+      { value: 'step', label: 'Шаг' },
+      { value: 'status', label: 'Статус' },
+      { value: 'responsible', label: 'Ответственный' },
+      { value: 'deadline', label: 'Дедлайн' }
+    ]
+  };
 
   function renderNotice(message, tone = 'info') {
     if (!els.notice) return;
@@ -123,8 +169,10 @@
     title.value = widget.title || '';
     title.placeholder = 'Название виджета';
     title.required = true;
+    title.dataset.role = 'title';
 
     const type = document.createElement('select');
+    type.dataset.role = 'type';
     widgetTypes.forEach((entry) => {
       const option = document.createElement('option');
       option.value = entry.value;
@@ -134,6 +182,7 @@
     });
 
     const source = document.createElement('select');
+    source.dataset.role = 'source';
     dataSources.forEach((entry) => {
       const option = document.createElement('option');
       option.value = entry.value;
@@ -142,9 +191,18 @@
       source.appendChild(option);
     });
 
-    const filters = document.createElement('textarea');
-    filters.placeholder = 'Фильтры в формате JSON';
-    filters.value = stringifyJson(widget.filters || {});
+    const detail = document.createElement('select');
+    detail.dataset.role = 'detail';
+    setDetailOptions(source.value, detail, widget.detail);
+
+    const columns = createMultiSelect(columnOptions[source.value] || [], widget.fields || []);
+    columns.dataset.role = 'columns';
+
+    const filterControls = createFilterControls(widget.filters);
+
+    const preview = document.createElement('div');
+    preview.className = 'reports-preview';
+    preview.dataset.role = 'preview';
 
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -153,16 +211,148 @@
     remove.addEventListener('click', () => {
       row.remove();
       renumberWidgets();
+      renderPreview();
+    });
+
+    function syncOptions() {
+      setDetailOptions(source.value, detail, detail.value);
+      replaceMultiSelectOptions(columns, columnOptions[source.value] || []);
+      updateWidgetPreview(row);
+      renderPreview();
+    }
+
+    [title, type, source, detail, columns, filterControls.field, filterControls.operator, filterControls.value].forEach((node) => {
+      node?.addEventListener('input', syncOptions);
+      node?.addEventListener('change', syncOptions);
     });
 
     row.append(
       createField('Название', title),
       createField('Тип', type),
       createField('Источник данных', source),
-      createField('Фильтры', filters),
+      createField('Детализация источника', detail),
+      createField('Поля/показатели', columns),
+      createField('Фильтр', filterControls.wrapper),
+      preview,
       remove
     );
+
+    updateWidgetPreview(row);
     return row;
+  }
+
+  function createMultiSelect(options, values = []) {
+    const select = document.createElement('select');
+    select.multiple = true;
+    select.size = 4;
+    replaceMultiSelectOptions(select, options, values);
+    return select;
+  }
+
+  function replaceMultiSelectOptions(select, options, values = []) {
+    if (!select) return;
+    const currentValues = values.length ? values : Array.from(select.selectedOptions).map((opt) => opt.value);
+    select.innerHTML = '';
+    options.forEach((entry) => {
+      const option = document.createElement('option');
+      option.value = entry.value;
+      option.textContent = entry.label;
+      if (currentValues.includes(entry.value)) option.selected = true;
+      select.appendChild(option);
+    });
+  }
+
+  function setDetailOptions(sourceValue, select, current) {
+    const options = sourceDetails[sourceValue] || [];
+    select.innerHTML = '';
+    if (!options.length) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'Не требуется';
+      select.appendChild(empty);
+      return;
+    }
+    options.forEach((entry) => {
+      const option = document.createElement('option');
+      option.value = entry.value;
+      option.textContent = entry.label;
+      if (current && current === entry.value) option.selected = true;
+      select.appendChild(option);
+    });
+  }
+
+  function createFilterControls(filters) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'reports-inline';
+    const firstFilter = Array.isArray(filters) && filters.length ? filters[0] : filters || {};
+    const field = document.createElement('select');
+    field.innerHTML = '';
+    ['status', 'overdue', 'stage', 'workcenter', 'kpi'].forEach((value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value === 'kpi' ? 'KPI' : value;
+      if (firstFilter.field === value) option.selected = true;
+      field.appendChild(option);
+    });
+
+    const operator = document.createElement('select');
+    ['=', '!=', '>', '<', 'contains'].forEach((value) => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      if (firstFilter.operator === value) option.selected = true;
+      operator.appendChild(option);
+    });
+
+    const value = document.createElement('input');
+    value.type = 'text';
+    value.placeholder = 'значение';
+    value.value = firstFilter.value || '';
+
+    wrapper.append(field, operator, value);
+    return { wrapper, field, operator, value };
+  }
+
+  function updateWidgetPreview(row) {
+    const preview = row.querySelector('[data-role="preview"]');
+    if (!preview) return;
+    const title = row.querySelector('input[data-role="title"]')?.value || 'Без названия';
+    const type = row.querySelector('select[data-role="type"]')?.selectedOptions?.[0]?.textContent || '';
+    const source = row.querySelector('select[data-role="source"]')?.selectedOptions?.[0]?.textContent || '';
+    const detail = row.querySelector('select[data-role="detail"]')?.selectedOptions?.[0]?.textContent || '';
+    const columns = Array.from(row.querySelector('select[data-role="columns"]')?.selectedOptions || []).map((opt) => opt.textContent);
+    preview.innerHTML = `<strong>${title}</strong>: ${type} · ${source}${detail ? ` (${detail})` : ''}`;
+    if (columns.length) {
+      const chips = document.createElement('div');
+      chips.className = 'reports-chip-list';
+      columns.forEach((col) => {
+        const chip = document.createElement('span');
+        chip.className = 'reports-chip';
+        chip.textContent = col;
+        chips.appendChild(chip);
+      });
+      preview.appendChild(chips);
+    }
+  }
+
+  function renderPreview() {
+    if (!els.preview) return;
+    const widgets = collectWidgets();
+    if (!widgets.length) {
+      els.preview.textContent = 'Добавьте виджеты, чтобы увидеть предпросмотр страницы.';
+      return;
+    }
+    els.preview.innerHTML = '<strong>Предпросмотр страницы</strong>';
+    const list = document.createElement('div');
+    list.className = 'reports-mini-list';
+    widgets.forEach((widget, idx) => {
+      const item = document.createElement('div');
+      const columns = Array.isArray(widget.fields) && widget.fields.length ? ` · поля: ${widget.fields.join(', ')}` : '';
+      const detail = widget.detail ? ` · ${widget.detail}` : '';
+      item.textContent = `${idx + 1}. ${widget.title || 'Виджет'} (${widget.type}, ${widget.dataSource}${detail})${columns}`;
+      list.appendChild(item);
+    });
+    els.preview.appendChild(list);
   }
 
   function createField(labelText, control) {
@@ -240,8 +430,11 @@
     if (els.activeInput) els.activeInput.checked = current.isActive !== false;
     if (els.publicInput) els.publicInput.checked = current.isPublic !== false;
     if (els.rolesInput) els.rolesInput.value = Array.isArray(current.allowedRoles) ? current.allowedRoles.join(', ') : '';
-    if (els.layoutInput) els.layoutInput.value = stringifyJson(current.layout || {});
-    if (els.filtersInput) els.filtersInput.value = stringifyJson(current.filters || {});
+    if (els.layoutTypeInput) els.layoutTypeInput.value = current.layout?.mode || 'grid';
+    if (els.filterStatusInput) els.filterStatusInput.value = current.filters?.status || '';
+    if (els.filterFromInput) els.filterFromInput.value = current.filters?.dateFrom || '';
+    if (els.filterToInput) els.filterToInput.value = current.filters?.dateTo || '';
+    if (els.filterOverdueInput) els.filterOverdueInput.checked = current.filters?.overdueOnly || false;
 
     if (els.widgetList) {
       els.widgetList.innerHTML = '';
@@ -252,6 +445,7 @@
     }
     updateVisibilityButton(current);
     updateDeleteButton(current);
+    renderPreview();
   }
 
   function updateDeleteButton(preset) {
@@ -262,16 +456,22 @@
   function collectWidgets() {
     if (!els.widgetList) return [];
     return Array.from(els.widgetList.querySelectorAll('.reports-widget')).map((node) => {
-      const title = node.querySelector('input[type="text"]')?.value || '';
-      const type = node.querySelector('select')?.value || 'table';
-      const selectElements = node.querySelectorAll('select');
-      const source = selectElements?.[1]?.value || selectElements?.[0]?.value || 'orders';
-      const filtersRaw = node.querySelector('textarea')?.value || '';
+      const title = node.querySelector('input[data-role="title"]')?.value || '';
+      const type = node.querySelector('select[data-role="type"]')?.value || 'table';
+      const source = node.querySelector('select[data-role="source"]')?.value || 'orders';
+      const detail = node.querySelector('select[data-role="detail"]')?.value || '';
+      const fields = Array.from(node.querySelector('select[data-role="columns"]')?.selectedOptions || []).map((opt) => opt.value);
+      const filterField = node.querySelector('div.reports-inline select')?.value;
+      const filterOperator = node.querySelector('div.reports-inline select:nth-child(2)')?.value;
+      const filterValue = node.querySelector('div.reports-inline input')?.value;
+      const filters = filterField && filterValue ? [{ field: filterField, operator: filterOperator, value: filterValue }] : [];
       return {
         title: title.trim(),
         type,
         dataSource: source,
-        filters: serializeJsonTextarea(filtersRaw)
+        detail,
+        fields,
+        filters
       };
     });
   }
@@ -339,14 +539,21 @@
       renderNotice('Недостаточно прав для сохранения пресетов', 'error');
       return;
     }
+    const filters = {
+      status: els.filterStatusInput?.value || '',
+      dateFrom: els.filterFromInput?.value || '',
+      dateTo: els.filterToInput?.value || '',
+      overdueOnly: !!els.filterOverdueInput?.checked
+    };
+    const layout = { mode: els.layoutTypeInput?.value || 'grid' };
     const payload = {
       name: els.nameInput?.value || '',
       description: els.descriptionInput?.value || '',
       isActive: !!els.activeInput?.checked,
       isPublic: !!els.publicInput?.checked,
       allowedRoles: parseRolesInput(els.rolesInput?.value || ''),
-      layout: serializeJsonTextarea(els.layoutInput?.value || ''),
-      filters: serializeJsonTextarea(els.filtersInput?.value || ''),
+      layout,
+      filters,
       widgets: collectWidgets()
     };
     const isEdit = Number.isFinite(state.selectedId);
@@ -445,6 +652,7 @@
       if (els.widgetList) {
         els.widgetList.appendChild(buildWidgetRow({}, els.widgetList.childElementCount));
       }
+      renderPreview();
     });
     els.deleteBtn?.addEventListener('click', deletePreset);
     els.visibilityBtn?.addEventListener('click', toggleVisibility);

@@ -141,6 +141,13 @@
       resize: vertical;
     }
 
+    .reports-inline {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      align-items: center;
+    }
+
     .reports-widget {
       border: 1px dashed color-mix(in srgb, var(--pc-border) 60%, transparent);
       border-radius: var(--pc-radius-lg);
@@ -165,6 +172,44 @@
       display: flex;
       gap: var(--pc-spacing-sm);
       flex-wrap: wrap;
+    }
+
+    .reports-preview {
+      margin-top: var(--pc-spacing-md);
+      padding: var(--pc-spacing-md);
+      border-radius: var(--pc-radius-lg);
+      border: 1px dashed color-mix(in srgb, var(--pc-border) 60%, transparent);
+      background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+      color: var(--pc-muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .reports-preview strong {
+      color: var(--pc-text);
+    }
+
+    .reports-mini-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+      color: var(--pc-text);
+    }
+
+    .reports-chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .reports-chip {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+      color: var(--pc-text);
+      border: 1px solid color-mix(in srgb, var(--pc-primary) 25%, transparent);
+      font-size: 12px;
     }
 
     @media (max-width: 960px) {
@@ -251,18 +296,38 @@
             </span>
           </label>
           <label class="reports-field">
-            <span>Макет страницы (JSON)</span>
-            <textarea id="reportLayout" placeholder='{"grid":[]}'></textarea>
+            <span>Тип компоновки</span>
+            <select id="reportLayoutType">
+              <option value="grid">Грид</option>
+              <option value="single">Одна колонка</option>
+              <option value="wide">Широкая + узкая колонка</option>
+            </select>
           </label>
           <label class="reports-field">
-            <span>Фильтры по умолчанию (JSON)</span>
-            <textarea id="reportFilters" placeholder='{"status":"in_progress"}'></textarea>
+            <span>Фильтр по статусу заказов</span>
+            <select id="reportFilterStatus">
+              <option value="">Любой статус</option>
+              <option value="in_progress">В работе</option>
+              <option value="ready">Готовы</option>
+              <option value="overdue">С просрочкой</option>
+            </select>
+          </label>
+          <label class="reports-field">
+            <span>Интервал дат</span>
+            <span class="reports-inline">
+              <input id="reportFilterFrom" type="date" />
+              <input id="reportFilterTo" type="date" />
+            </span>
+          </label>
+          <label class="reports-field">
+            <span><input type="checkbox" id="reportFilterOverdue" /> Показывать только просрочку</span>
           </label>
         </form>
         <div class="reports-widget-list" id="reportWidgets"></div>
         <div class="reports-controls">
           <button class="pc-btn pc-btn--ghost" type="button" id="reportAddWidget">Добавить виджет</button>
         </div>
+        <div class="reports-preview" id="reportPreview" aria-live="polite"></div>
       </section>
     </div>
   </main>

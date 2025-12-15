@@ -3070,8 +3070,29 @@ function sanitizeWidget(raw, index = 0) {
   const type = REPORT_WIDGET_TYPES.has(typeRaw) ? typeRaw : 'table';
   const title = sanitizeString(raw?.title || raw?.name || `Виджет ${index + 1}`);
   const dataSource = sanitizeString(raw?.dataSource || raw?.source || 'orders');
-  const filters = isPlainObject(raw?.filters) ? raw.filters : {};
+  let filters = {};
+  if (Array.isArray(raw?.filters)) {
+    filters = raw.filters
+      .map((entry) => {
+        if (!isPlainObject(entry)) return null;
+        const field = sanitizeString(entry.field);
+        const operator = sanitizeString(entry.operator || '=');
+        const value = sanitizeString(entry.value || '');
+        if (!field || !value) return null;
+        return { field, operator, value };
+      })
+      .filter(Boolean);
+  } else if (isPlainObject(raw?.filters)) {
+    filters = raw.filters;
+  }
   const options = isPlainObject(raw?.options) ? raw.options : {};
+  const detail = sanitizeString(raw?.detail || '');
+  const fields = Array.isArray(raw?.fields)
+    ? raw.fields
+        .map((value) => sanitizeString(value))
+        .filter(Boolean)
+        .filter((value, idx, arr) => arr.indexOf(value) === idx)
+    : [];
   const size = isPlainObject(raw?.size)
     ? {
         w: Number.isFinite(raw.size.w) && raw.size.w > 0 ? raw.size.w : 1,
@@ -3084,7 +3105,7 @@ function sanitizeWidget(raw, index = 0) {
         y: Number.isFinite(raw.position.y) ? raw.position.y : 0
       }
     : { x: 0, y: 0 };
-  return { id: safeId, type, title, dataSource, filters, options, size, position };
+  return { id: safeId, type, title, dataSource, detail, fields, filters, options, size, position };
 }
 
 function sanitizeWidgetList(value) {
