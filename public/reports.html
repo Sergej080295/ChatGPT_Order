@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlanCore — Отчёты</title>
+  <link rel="stylesheet" href="plan-core.css" />
+  <script defer src="plan-core.js"></script>
+  <script defer src="reports.js"></script>
+  <style>
+    body {
+      min-height: 100vh;
+      background: var(--pc-surface);
+      color: var(--pc-text);
+    }
+
+    .reports-shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: var(--pc-spacing-lg) var(--pc-spacing-md) var(--pc-spacing-xl);
+      display: flex;
+      flex-direction: column;
+      gap: var(--pc-spacing-lg);
+    }
+
+    .reports-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--pc-spacing-md);
+    }
+
+    .reports-title {
+      margin: 0;
+      font-size: 28px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .reports-notice {
+      padding: 12px 14px;
+      border-radius: var(--pc-radius-lg);
+      background: color-mix(in srgb, var(--pc-primary) 10%, transparent);
+      border: 1px solid color-mix(in srgb, var(--pc-primary) 25%, transparent);
+    }
+
+    .reports-notice[data-tone="error"] {
+      background: color-mix(in srgb, var(--pc-danger) 10%, transparent);
+      border-color: color-mix(in srgb, var(--pc-danger) 25%, transparent);
+    }
+
+    .reports-notice[data-tone="success"] {
+      background: color-mix(in srgb, var(--pc-success) 10%, transparent);
+      border-color: color-mix(in srgb, var(--pc-success) 25%, transparent);
+    }
+
+    .reports-grid {
+      display: grid;
+      gap: var(--pc-spacing-md);
+      grid-template-columns: 360px 1fr;
+    }
+
+    .reports-panel {
+      background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+      border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+      border-radius: var(--pc-radius-xl);
+      padding: var(--pc-spacing-md);
+      box-shadow: 0 10px 35px rgba(15, 23, 42, 0.08);
+    }
+
+    .reports-panel h2 {
+      margin-top: 0;
+      margin-bottom: var(--pc-spacing-sm);
+    }
+
+    .reports-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--pc-spacing-sm);
+      margin-bottom: var(--pc-spacing-sm);
+    }
+
+    .reports-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .reports-preset {
+      width: 100%;
+      border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+      border-radius: var(--pc-radius-lg);
+      padding: 10px 12px;
+      text-align: left;
+      background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+      cursor: pointer;
+    }
+
+    .reports-preset[data-active="0"] {
+      opacity: 0.65;
+    }
+
+    .reports-preset[data-visible="0"]::after {
+      content: 'Скрыто';
+      float: right;
+      color: var(--pc-muted);
+      font-size: 12px;
+    }
+
+    .reports-empty {
+      color: var(--pc-muted);
+    }
+
+    .reports-form {
+      display: grid;
+      gap: var(--pc-spacing-sm);
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    }
+
+    .reports-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 14px;
+    }
+
+    .reports-field input,
+    .reports-field textarea,
+    .reports-field select {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: var(--pc-radius-md);
+      border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+      background: color-mix(in srgb, var(--pc-surface) 98%, transparent);
+    }
+
+    .reports-field textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .reports-inline {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      align-items: center;
+    }
+
+    .reports-widget {
+      border: 1px dashed color-mix(in srgb, var(--pc-border) 60%, transparent);
+      border-radius: var(--pc-radius-lg);
+      padding: var(--pc-spacing-sm);
+      display: grid;
+      gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      align-items: end;
+    }
+
+    .reports-widget button {
+      justify-self: flex-start;
+    }
+
+    .reports-widget-list {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pc-spacing-sm);
+    }
+
+    .reports-controls {
+      display: flex;
+      gap: var(--pc-spacing-sm);
+      flex-wrap: wrap;
+    }
+
+    .reports-preview {
+      margin-top: var(--pc-spacing-md);
+      padding: var(--pc-spacing-md);
+      border-radius: var(--pc-radius-lg);
+      border: 1px dashed color-mix(in srgb, var(--pc-border) 60%, transparent);
+      background: color-mix(in srgb, var(--pc-surface) 96%, transparent);
+      color: var(--pc-muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .reports-preview strong {
+      color: var(--pc-text);
+    }
+
+    .reports-mini-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+      color: var(--pc-text);
+    }
+
+    .reports-chip-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .reports-chip {
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--pc-primary) 12%, transparent);
+      color: var(--pc-text);
+      border: 1px solid color-mix(in srgb, var(--pc-primary) 25%, transparent);
+      font-size: 12px;
+    }
+
+    @media (max-width: 960px) {
+      .reports-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body data-section="reports">
+  <header class="pc-header">
+    <div class="pc-header__logo" aria-label="PlanCore">
+      <span class="pc-logo-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" role="img" aria-hidden="true" focusable="false">
+          <path fill="currentColor" d="M12 2.4 20.2 7v10L12 21.6 3.8 17V7z" opacity="0.6" />
+          <path fill="currentColor" d="M12 5.2 6.4 8.4v7.2L12 18.8l5.6-3.2V8.4z" />
+        </svg>
+      </span>
+      <span class="pc-logo-text">PlanCore · Отчёты</span>
+    </div>
+    <div class="pc-header__actions">
+      <a class="pc-btn pc-btn--ghost" href="/CRM.html">Вернуться в CRM</a>
+      <button class="pc-icon-btn pc-theme-toggle" type="button" data-action="toggle-theme" aria-pressed="false" aria-label="Переключить тему">
+        <svg data-icon="sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6" />
+          <path d="M12 3v2M12 19v2M5 12H3m18 0h-2M5.6 5.6 7 7m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+        <svg data-icon="moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path fill="none" stroke="currentColor" stroke-width="1.6" d="M16.8 17.6a7.5 7.5 0 0 1-9.5-9.5 7.5 7.5 0 1 0 9.5 9.5Z" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="reports-shell">
+    <div class="reports-header">
+      <h1 class="reports-title">Конструктор отчётов</h1>
+      <label class="pc-toggle">
+        <input type="checkbox" id="reportsEnabled" />
+        <span id="reportsEnabledLabel">Выключено</span>
+      </label>
+    </div>
+    <div class="reports-notice" id="reportsNotice" hidden></div>
+
+    <div class="reports-grid">
+      <section class="reports-panel">
+        <div class="reports-actions">
+          <h2>Доступные пресеты</h2>
+          <div class="reports-controls">
+            <button class="pc-btn pc-btn--ghost" type="button" id="reportCreate">Новый пресет</button>
+            <button class="pc-btn" type="button" id="reportsReloadBtn">Обновить</button>
+          </div>
+        </div>
+        <div class="reports-list" id="reportPresetList"></div>
+      </section>
+
+      <section class="reports-panel">
+        <div class="reports-actions">
+          <h2 id="reportEditorTitle">Новый пресет</h2>
+          <div class="reports-controls">
+            <button class="pc-btn pc-btn--ghost" type="button" id="reportToggleVisibility" hidden>Скрыть в моих отчётах</button>
+            <button class="pc-btn pc-btn--danger" type="button" id="reportDelete" hidden>Удалить</button>
+            <button class="pc-btn" type="submit" form="reportPresetForm" id="reportSave">Сохранить</button>
+          </div>
+        </div>
+        <div class="reports-actions" style="margin-top: -10px">
+          <div class="reports-controls">
+            <button class="pc-btn pc-btn--ghost" type="button" id="reportPresetTemplateStages">Повторить страницу «Переделы»</button>
+            <button class="pc-btn pc-btn--ghost" type="button" id="reportPresetTemplateTable">Быстрый отчёт по таблице</button>
+            <button class="pc-btn pc-btn--ghost" type="button" id="reportPresetTemplateGantts">Ганты по всем переделам</button>
+          </div>
+          <div class="reports-controls" aria-live="polite" style="justify-content: flex-end; color: var(--pc-muted); font-size: 13px;">
+            <span id="reportPreviewHint">Настройте параметры и нажмите «Предпросмотр» внизу.</span>
+          </div>
+        </div>
+        <form class="reports-form" id="reportPresetForm">
+          <label class="reports-field">
+            <span>Название</span>
+            <input id="reportName" type="text" required />
+          </label>
+          <label class="reports-field">
+            <span>Описание</span>
+            <textarea id="reportDescription" placeholder="Опционально"></textarea>
+          </label>
+          <label class="reports-field">
+            <span>Роли с доступом (через запятую)</span>
+            <input id="reportRoles" type="text" placeholder="superadmin, admin" />
+          </label>
+          <label class="reports-field">
+            <span>Статус</span>
+            <span>
+              <label><input type="checkbox" id="reportActive" checked /> Активен</label>
+              <label style="margin-left: 12px"><input type="checkbox" id="reportPublic" checked /> Общедоступен</label>
+            </span>
+          </label>
+          <label class="reports-field">
+            <span>Тип компоновки</span>
+            <select id="reportLayoutType">
+              <option value="grid">Грид</option>
+              <option value="single">Одна колонка</option>
+              <option value="wide">Широкая + узкая колонка</option>
+            </select>
+          </label>
+          <label class="reports-field">
+            <span>Фильтр по статусу заказов</span>
+            <select id="reportFilterStatus">
+              <option value="">Любой статус</option>
+              <option value="in_progress">В работе</option>
+              <option value="ready">Готовы</option>
+              <option value="overdue">С просрочкой</option>
+            </select>
+          </label>
+          <label class="reports-field">
+            <span>Интервал дат</span>
+            <span class="reports-inline">
+              <input id="reportFilterFrom" type="date" />
+              <input id="reportFilterTo" type="date" />
+            </span>
+          </label>
+          <label class="reports-field">
+            <span><input type="checkbox" id="reportFilterOverdue" /> Показывать только просрочку</span>
+          </label>
+        </form>
+        <div class="reports-widget-list" id="reportWidgets"></div>
+        <div class="reports-controls">
+          <button class="pc-btn pc-btn--ghost" type="button" id="reportAddWidget">Добавить виджет</button>
+          <button class="pc-btn" type="button" id="reportPreviewBtn">Предпросмотр данных</button>
+        </div>
+        <div class="reports-preview" id="reportPreview" aria-live="polite"></div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

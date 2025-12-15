@@ -1589,6 +1589,33 @@
     min-width: 220px;
   }
 
+  .crm-reports-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    min-width: 260px;
+  }
+
+  .crm-reports-menu button {
+    width: 100%;
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .crm-reports-empty {
+    padding: 8px 10px;
+    color: var(--pc-muted);
+    font-size: 14px;
+  }
+
+  .crm-reports-actions {
+    width: 100%;
+    display: flex;
+    justify-content: flex-end;
+    margin-top: var(--pc-spacing-xs);
+  }
+
   .pc-nav__badge {
     display: inline-flex;
     align-items: center;
@@ -6020,6 +6047,17 @@
         </div>
       </div>
     </div>
+    <div class="pc-nav__item crm-reports-nav" id="crmReportsNavItem" hidden>
+      <button class="pc-nav__link" type="button" id="crmReportsNavBtn" data-section="reports" aria-haspopup="true" aria-expanded="false" data-tooltip-primary="Отчёты" data-tooltip-secondary="Доступные пресеты и конструктор страниц.">Отчёты</button>
+      <div class="crm-stage-nav__dropdown" id="crmReportsDropdown" hidden>
+        <div class="crm-stage-nav__dropdown-inner">
+          <div class="crm-reports-menu" id="crmReportsMenu" role="menu" aria-label="Пресеты отчётов"></div>
+          <div class="crm-reports-actions">
+            <button class="pc-btn pc-btn--ghost" type="button" id="crmReportsOpenBuilder">Конструктор</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
@@ -8596,6 +8634,11 @@ const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
 const crmCanEditComments=()=> crmWriteAccessEnabled() && !!crmPermissions.editComments;
 const crmCanDeleteComments=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteComments;
+const crmCanViewReports=()=> !!crmPermissions.viewReports;
+const crmCanUseReportPresets=()=> crmCanViewReports() && (crmPermissions.useReportPresets!==false);
+const crmCanEditReportPresets=()=> !!crmPermissions.editReportPresets;
+const crmCanDeleteReportPresets=()=> !!crmPermissions.deleteReportPresets;
+const crmCanAccessReportBuilder=()=> !!crmPermissions.accessReportBuilder;
 const crmCanManageStage=(stage)=>{
   if(!crmCanManageStages()) return false;
   const key=resolveCrmStageKey(stage)|| (typeof stage==='string'?stage.trim().toLowerCase():null);
@@ -8739,6 +8782,13 @@ const crmAdminState={
   roles:[],
   audit:[],
   selectedUserId:null
+};
+
+const crmReportsState={
+  enabled:false,
+  presets:[],
+  loading:false,
+  loaded:false
 };
 
 const deepClone=value=>{
@@ -8969,14 +9019,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, viewReports:true, useReportPresets:true, editReportPresets:true, deleteReportPresets:true, accessReportBuilder:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, viewReports:true, useReportPresets:true, editReportPresets:true, deleteReportPresets:true, accessReportBuilder:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, viewReports:true, useReportPresets:true, editReportPresets:false, deleteReportPresets:false, accessReportBuilder:false, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, viewReports:false, useReportPresets:false, editReportPresets:false, deleteReportPresets:false, accessReportBuilder:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages','viewReports','useReportPresets','editReportPresets','deleteReportPresets','accessReportBuilder'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -9019,6 +9069,17 @@ const CRM_ROLE_PERMISSION_GROUPS=[
     ]
   },
   {
+    key:'reports',
+    title:'Отчёты и конструктор',
+    items:[
+      { key:'viewReports', label:'Раздел «Отчёты»', hint:'Отображение вкладки и доступ к списку пресетов.' },
+      { key:'useReportPresets', label:'Использование пресетов', hint:'Просмотр, открытие и применение сохранённых страниц.' },
+      { key:'editReportPresets', label:'Создание и редактирование', hint:'Конструктор страниц и обновление пресетов.' },
+      { key:'deleteReportPresets', label:'Удаление/архив', hint:'Сокрытие или удаление пресетов отчётов.' },
+      { key:'accessReportBuilder', label:'Управление настройками', hint:'Настройка доступности раздела и глобальных параметров отчётов.' }
+    ]
+  },
+  {
     key:'admin',
     title:'Администрирование',
     items:[
@@ -9031,7 +9092,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, viewReports:false, useReportPresets:false, editReportPresets:false, deleteReportPresets:false, accessReportBuilder:false, stageAccess:crmDefaultStageAccess(false) };
   const normalizeFlag=(value, fallback=null)=>{
     if(typeof value==='boolean') return value;
     if(typeof value==='number') return value!==0;
@@ -10310,6 +10371,11 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOptimizeApply=$('#crmOptimizeApply'),
       crmOptimizeCancel=$('#crmOptimizeCancel'),
       crmOptimizeClose=$('#crmOptimizeClose'),
+      crmReportsNavItem=$('#crmReportsNavItem'),
+      crmReportsNavBtn=$('#crmReportsNavBtn'),
+      crmReportsDropdown=$('#crmReportsDropdown'),
+      crmReportsMenu=$('#crmReportsMenu'),
+      crmReportsOpenBuilder=$('#crmReportsOpenBuilder'),
       crmJournalBtn=$('#crmJournalBtn'),
       crmJournalBadge=$('#crmJournalBadge'),
       crmJournalDlg=$('#crmJournalDlg'),
@@ -15224,6 +15290,19 @@ function updateCrmNavigationAccess(){
       closeCrmJournal();
     }
   }
+  if(crmReportsNavItem){
+    const allowReports=crmCanViewReports() && (crmReportsState.enabled || crmCanAccessReportBuilder());
+    crmReportsNavItem.hidden=!allowReports;
+    if(!allowReports && crmReportsDropdown){
+      crmReportsDropdown.hidden=true;
+    }
+    if(crmReportsNavBtn){
+      crmReportsNavBtn.setAttribute('aria-expanded', (!crmReportsDropdown?.hidden && allowReports)?'true':'false');
+    }
+  }
+  if(crmReportsOpenBuilder){
+    crmReportsOpenBuilder.hidden=!crmCanAccessReportBuilder();
+  }
   if(crmAdminNavBtn){
     crmAdminNavBtn.hidden=!crmCanManageUsers();
   }
@@ -15260,6 +15339,77 @@ async function crmRequestJson(url, options={}){
     throw err;
   }
   return data;
+}
+
+function renderCrmReportsNav(){
+  if(!crmReportsMenu){
+    return;
+  }
+  crmReportsMenu.innerHTML='';
+  const allowReports=crmCanViewReports() && (crmReportsState.enabled || crmCanAccessReportBuilder());
+  if(!allowReports){
+    return;
+  }
+  const presets=Array.isArray(crmReportsState.presets)?crmReportsState.presets:[];
+  const visiblePresets=presets.filter(preset=>preset && preset.isVisible!==false && preset.isActive!==false);
+  if(!visiblePresets.length){
+    const empty=document.createElement('div');
+    empty.className='crm-reports-empty';
+    empty.textContent='Нет доступных пресетов';
+    crmReportsMenu.appendChild(empty);
+    return;
+  }
+  visiblePresets.forEach(preset=>{
+    const btn=document.createElement('button');
+    btn.type='button';
+    btn.className='pc-nav__link';
+    btn.textContent=preset.name||`Пресет ${preset.id}`;
+    btn.addEventListener('click',()=>{
+      toggleCrmReportsDropdown(false);
+      const targetId=encodeURIComponent(preset.id);
+      window.location.href=`/reports.html?preset=${targetId}`;
+    });
+    crmReportsMenu.appendChild(btn);
+  });
+}
+
+async function loadCrmReportsState(options={}){
+  if(!crmCanViewReports()){
+    crmReportsState.enabled=false;
+    crmReportsState.presets=[];
+    crmReportsState.loaded=true;
+    updateCrmNavigationAccess();
+    renderCrmReportsNav();
+    return;
+  }
+  crmReportsState.loading=true;
+  try{
+    const data=await crmRequestJson('/api/reports/presets', options);
+    crmReportsState.enabled=!!data?.settings?.enabled;
+    crmReportsState.presets=Array.isArray(data?.presets)?data.presets:[];
+    crmReportsState.loaded=true;
+  }catch(err){
+    console.warn('Не удалось загрузить пресеты отчётов', err);
+    crmReportsState.enabled=false;
+  }finally{
+    crmReportsState.loading=false;
+    updateCrmNavigationAccess();
+    renderCrmReportsNav();
+  }
+}
+
+function toggleCrmReportsDropdown(open){
+  if(!crmReportsDropdown||!crmReportsNavBtn) return;
+  const next=typeof open==='boolean'?open:crmReportsDropdown.hidden;
+  crmReportsDropdown.hidden=!next;
+  crmReportsNavBtn.setAttribute('aria-expanded', next?'true':'false');
+  if(next && !crmReportsState.loaded && !crmReportsState.loading){
+    loadCrmReportsState().catch(()=>{});
+  }
+}
+
+function closeCrmReportsDropdown(){
+  toggleCrmReportsDropdown(false);
 }
 
 function setCrmAdminTab(tabId){
@@ -22792,6 +22942,22 @@ if(crmStageNavDropdown){
     updateCrmStageDropdownHeight();
   });
 }
+if(crmReportsNavBtn){
+  crmReportsNavBtn.addEventListener('click',()=>toggleCrmReportsDropdown());
+}
+if(crmReportsDropdown){
+  document.addEventListener('pointerdown',event=>{
+    if(crmReportsDropdown.hidden) return;
+    if(crmReportsNavItem && crmReportsNavItem.contains(event.target)) return;
+    toggleCrmReportsDropdown(false);
+  });
+}
+if(crmReportsOpenBuilder){
+  crmReportsOpenBuilder.addEventListener('click',()=>{
+    toggleCrmReportsDropdown(false);
+    window.location.href='/reports.html?mode=builder';
+  });
+}
 if(crmStageSelect){
   crmStageSelect.addEventListener('change',()=>{
     const stageKey=crmStageSelect.value||'draw';
@@ -23348,6 +23514,7 @@ setupCrmHintTargets();
 renderAll();
 
 updateCrmUserMenu();
+loadCrmReportsState().catch(()=>{});
 updateCrmNavigationAccess();
 
 crmSettingsLinks.forEach(link => {
