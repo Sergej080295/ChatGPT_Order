@@ -25,12 +25,15 @@
     filterOverdueInput: document.getElementById('reportFilterOverdue'),
     widgetList: document.getElementById('reportWidgets'),
     addWidgetBtn: document.getElementById('reportAddWidget'),
+    previewBtn: document.getElementById('reportPreviewBtn'),
     saveBtn: document.getElementById('reportSave'),
     deleteBtn: document.getElementById('reportDelete'),
     visibilityBtn: document.getElementById('reportToggleVisibility'),
     settingsToggle: document.getElementById('reportsEnabled'),
     settingsLabel: document.getElementById('reportsEnabledLabel'),
-    preview: document.getElementById('reportPreview')
+    preview: document.getElementById('reportPreview'),
+    templateStages: document.getElementById('reportPresetTemplateStages'),
+    templateTable: document.getElementById('reportPresetTemplateTable')
   };
 
   const widgetTypes = [
@@ -211,14 +214,14 @@
     remove.addEventListener('click', () => {
       row.remove();
       renumberWidgets();
-      renderPreview();
+      renderPreviewSkeleton();
     });
 
     function syncOptions() {
       setDetailOptions(source.value, detail, detail.value);
       replaceMultiSelectOptions(columns, columnOptions[source.value] || []);
       updateWidgetPreview(row);
-      renderPreview();
+      renderPreviewSkeleton();
     }
 
     [title, type, source, detail, columns, filterControls.field, filterControls.operator, filterControls.value].forEach((node) => {
@@ -335,13 +338,22 @@
     }
   }
 
-  function renderPreview() {
+  function renderPreviewSkeleton(message = 'Добавьте виджеты, чтобы увидеть предпросмотр страницы.') {
     if (!els.preview) return;
-    const widgets = collectWidgets();
-    if (!widgets.length) {
-      els.preview.textContent = 'Добавьте виджеты, чтобы увидеть предпросмотр страницы.';
-      return;
-    }
+    els.preview.innerHTML = '<strong>Предпросмотр страницы</strong>';
+    const empty = document.createElement('div');
+    empty.className = 'reports-mini-list';
+    empty.textContent = message;
+    els.preview.appendChild(empty);
+  }
+
+  function renderPreviewLoading() {
+    if (!els.preview) return;
+    els.preview.innerHTML = '<strong>Предпросмотр страницы</strong><div class="reports-mini-list">Загрузка данных…</div>';
+  }
+
+  function renderPreviewContent(widgets, previews) {
+    if (!els.preview) return;
     els.preview.innerHTML = '<strong>Предпросмотр страницы</strong>';
     const list = document.createElement('div');
     list.className = 'reports-mini-list';
@@ -349,7 +361,41 @@
       const item = document.createElement('div');
       const columns = Array.isArray(widget.fields) && widget.fields.length ? ` · поля: ${widget.fields.join(', ')}` : '';
       const detail = widget.detail ? ` · ${widget.detail}` : '';
-      item.textContent = `${idx + 1}. ${widget.title || 'Виджет'} (${widget.type}, ${widget.dataSource}${detail})${columns}`;
+      item.innerHTML = `<div><strong>${idx + 1}. ${widget.title || 'Виджет'}</strong> (${widget.type}, ${widget.dataSource}${detail})${columns}</div>`;
+      const preview = previews[idx];
+      if (preview && Array.isArray(preview.rows) && preview.rows.length) {
+        const table = document.createElement('table');
+        table.className = 'pc-table';
+        const head = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        preview.columns.forEach((col) => {
+          const cell = document.createElement('th');
+          cell.textContent = col;
+          headRow.appendChild(cell);
+        });
+        head.appendChild(headRow);
+        const body = document.createElement('tbody');
+        preview.rows.slice(0, 5).forEach((row) => {
+          const tr = document.createElement('tr');
+          preview.columns.forEach((colKey) => {
+            const td = document.createElement('td');
+            td.textContent = row[colKey] ?? '';
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+        table.append(head, body);
+        item.appendChild(table);
+        const hint = document.createElement('div');
+        hint.className = 'reports-chip-list';
+        hint.innerHTML = `<span class="reports-chip">Показаны первые ${Math.min(5, preview.rows.length)} из ${preview.total || preview.rows.length} строк</span>`;
+        item.appendChild(hint);
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'reports-chip-list';
+        empty.innerHTML = '<span class="reports-chip">Нет данных для отображения</span>';
+        item.appendChild(empty);
+      }
       list.appendChild(item);
     });
     els.preview.appendChild(list);
@@ -445,7 +491,7 @@
     }
     updateVisibilityButton(current);
     updateDeleteButton(current);
-    renderPreview();
+    renderPreviewSkeleton();
   }
 
   function updateDeleteButton(preset) {
@@ -652,13 +698,71 @@
       if (els.widgetList) {
         els.widgetList.appendChild(buildWidgetRow({}, els.widgetList.childElementCount));
       }
-      renderPreview();
+      renderPreviewSkeleton();
     });
     els.deleteBtn?.addEventListener('click', deletePreset);
     els.visibilityBtn?.addEventListener('click', toggleVisibility);
     els.settingsToggle?.addEventListener('change', updateSettings);
     const createBtn = document.getElementById('reportCreate');
     createBtn?.addEventListener('click', resetForm);
+    els.previewBtn?.addEventListener('click', previewData);
+    els.templateStages?.addEventListener('click', () => applyTemplate('stages'));
+    els.templateTable?.addEventListener('click', () => applyTemplate('table'));
+  }
+
+  function applyTemplate(type) {
+    if (!els.widgetList) return;
+    const widgets =
+      type === 'stages'
+        ? [
+            {
+              title: 'Переделы: таблица',
+              type: 'table',
+              dataSource: 'stages',
+              detail: 'laser',
+              fields: ['stage', 'workcenter', 'start', 'finish', 'duration', 'overdue']
+            },
+            {
+              title: 'Переделы: Гант',
+              type: 'gantt',
+              dataSource: 'stages',
+              detail: 'laser',
+              fields: ['stage', 'start', 'finish', 'overdue']
+            }
+          ]
+        : [
+            {
+              title: 'Сводка заказов',
+              type: 'table',
+              dataSource: 'orders',
+              detail: 'summary',
+              fields: ['number', 'status', 'customer', 'total', 'ready', 'overdue']
+            }
+          ];
+    els.widgetList.innerHTML = '';
+    widgets.forEach((widget, idx) => {
+      els.widgetList.appendChild(buildWidgetRow(widget, idx));
+    });
+    renderPreviewSkeleton('Нажмите «Предпросмотр данных», чтобы увидеть подборку по вашим переделам.');
+  }
+
+  async function previewData() {
+    const widgets = collectWidgets();
+    if (!widgets.length) {
+      renderPreviewSkeleton();
+      return;
+    }
+    renderPreviewLoading();
+    try {
+      const previews = await Promise.all(
+        widgets.map((widget) => fetchJson('/api/reports/preview', { method: 'POST', body: { widget } }).catch(() => null))
+      );
+      renderPreviewContent(widgets, previews.map((entry) => entry?.preview || entry));
+    } catch (err) {
+      console.error('Preview failed', err);
+      renderNotice(err.message || 'Не удалось построить предпросмотр', 'error');
+      renderPreviewSkeleton('Предпросмотр недоступен, проверьте настройки виджетов.');
+    }
   }
 
   async function init() {
@@ -670,6 +774,7 @@
       }
       bindEvents();
       await loadPresets();
+      renderPreviewSkeleton();
     } catch (err) {
       console.error('Reports init failed', err);
       renderNotice(err.message || 'Не удалось открыть раздел отчётов', 'error');

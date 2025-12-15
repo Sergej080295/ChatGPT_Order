@@ -2991,6 +2991,39 @@ function sanitizeString(value) {
 
 const REPORT_WIDGET_TYPES = new Set(['table', 'gantt', 'chart', 'route', 'kpi', 'dashboard']);
 const DEFAULT_REPORT_SETTINGS = { enabled: false };
+const REPORT_PREVIEW_COLUMNS = {
+  orders: ['number', 'status', 'customer', 'total', 'ready', 'overdue'],
+  stages: ['stage', 'workcenter', 'start', 'finish', 'duration', 'overdue'],
+  route: ['step', 'status', 'responsible', 'deadline']
+};
+const REPORT_PREVIEW_FALLBACKS = {
+  stages: [
+    {
+      stage: 'laser',
+      workcenter: 'Лазерный станок',
+      start: '2024-05-12 09:00',
+      finish: '2024-05-12 14:30',
+      duration: '5.5 ч',
+      overdue: false
+    },
+    {
+      stage: 'bend',
+      workcenter: 'Гибка',
+      start: '2024-05-13 10:00',
+      finish: '2024-05-13 16:00',
+      duration: '6 ч',
+      overdue: true
+    }
+  ],
+  orders: [
+    { number: 'A-1023', status: 'in_progress', customer: 'ООО «Север»', total: 185000, ready: false, overdue: false },
+    { number: 'A-1019', status: 'overdue', customer: 'Завод Партнёр', total: 92000, ready: false, overdue: true }
+  ],
+  route: [
+    { step: 'Подготовка', status: 'done', responsible: 'Анна', deadline: '2024-05-10' },
+    { step: 'Лазер', status: 'in_progress', responsible: 'Иван', deadline: '2024-05-12' }
+  ]
+};
 
 function readReportSettings() {
   try {
@@ -3113,6 +3146,112 @@ function sanitizeWidgetList(value) {
     return [];
   }
   return value.map((entry, idx) => sanitizeWidget(entry, idx));
+}
+
+function buildReportPreview(snapshot, widget) {
+  const source = widget?.dataSource || 'orders';
+  const columns = Array.isArray(widget?.fields) && widget.fields.length
+    ? widget.fields.map((field) => sanitizeString(field))
+    : REPORT_PREVIEW_COLUMNS[source] || REPORT_PREVIEW_COLUMNS.orders;
+  let rows = [];
+  if (source === 'stages') {
+    rows = extractStageRows(snapshot, widget?.detail);
+  } else if (source === 'route') {
+    rows = extractRouteRows(snapshot);
+  } else {
+    rows = extractOrderRows(snapshot);
+  }
+  rows = applyReportFilters(rows, widget?.filters || []);
+  const normalized = rows.map((row) => {
+    const entry = {};
+    columns.forEach((col) => {
+      entry[col] = row?.[col];
+    });
+    return entry;
+  });
+  return { columns, rows: normalized, total: normalized.length };
+}
+
+function applyReportFilters(rows, filters) {
+  if (!Array.isArray(filters) || !filters.length) return rows;
+  return rows.filter((row) => {
+    return filters.every((filter) => {
+      const field = sanitizeString(filter.field);
+      const operator = sanitizeString(filter.operator || '=');
+      const expected = filter.value;
+      const actual = row?.[field];
+      if (expected == null || expected === '') return true;
+      if (operator === '!=') return actual != null && String(actual) !== String(expected);
+      if (operator === 'contains') return String(actual || '').toLowerCase().includes(String(expected).toLowerCase());
+      if (operator === '>') return Number(actual) > Number(expected);
+      if (operator === '<') return Number(actual) < Number(expected);
+      return String(actual) === String(expected);
+    });
+  });
+}
+
+function extractStageRows(snapshot, detail) {
+  const tasks = Array.isArray(snapshot?.t) ? snapshot.t : [];
+  const rows = tasks
+    .map((task) => {
+      if (!task) return null;
+      const stage = normalizeStage(task.stage || task.process || detail || 'stage');
+      const start = task.start || task.startDate || task.dateStart || task.plannedStart || null;
+      const finish = task.finish || task.end || task.finishDate || task.plannedFinish || null;
+      const duration = computeDurationLabel(start, finish, task.duration);
+      return {
+        stage,
+        workcenter: task.workcenter || task.area || task.machine || task.resource || '',
+        start,
+        finish,
+        duration,
+        overdue: Boolean(task.overdue || task.late || task.isOverdue)
+      };
+    })
+    .filter(Boolean);
+  return rows.length ? rows : REPORT_PREVIEW_FALLBACKS.stages;
+}
+
+function extractOrderRows(snapshot) {
+  const boards = Array.isArray(snapshot?.crm?.boards) ? snapshot.crm.boards : [];
+  const rows = [];
+  boards.forEach((board) => {
+    const orders = Array.isArray(board?.orders) ? board.orders : [];
+    orders.forEach((order) => {
+      rows.push({
+        number: order?.number || order?.name || order?.title || order?.uid || '',
+        status: order?.status || order?.state || order?.stage || '',
+        customer: order?.customer || order?.client || order?.buyer || '',
+        total: order?.total || order?.amount || order?.sum || order?.price || 0,
+        ready: Boolean(order?.ready || order?.isReady || order?.done),
+        overdue: Boolean(order?.overdue || order?.isOverdue || order?.late)
+      });
+    });
+  });
+  return rows.length ? rows : REPORT_PREVIEW_FALLBACKS.orders;
+}
+
+function extractRouteRows(snapshot) {
+  const routes = Array.isArray(snapshot?.routeOverrides) ? snapshot.routeOverrides : [];
+  const rows = routes
+    .map((route) => ({
+      step: route?.name || route?.step || '',
+      status: route?.status || route?.state || '',
+      responsible: route?.owner || route?.responsible || '',
+      deadline: route?.deadline || route?.due || ''
+    }))
+    .filter((row) => row.step || row.status || row.deadline);
+  return rows.length ? rows : REPORT_PREVIEW_FALLBACKS.route;
+}
+
+function computeDurationLabel(start, finish, fallback) {
+  const startDate = parseDate(start);
+  const endDate = parseDate(finish);
+  if (startDate && endDate) {
+    const diffHours = Math.max(0, (endDate - startDate) / (1000 * 60 * 60));
+    return `${diffHours.toFixed(1)} ч`;
+  }
+  return fallback || '';
 }
 
 function sanitizeReportPresetPayload(payload, existing = {}) {
@@ -7162,6 +7301,19 @@ app.post('/api/admin/rollback', requireAuth('manageUsers'), (_req, res) => {
 app.get('/api/reports/settings', requireAuth('viewReports'), (req, res) => {
   const settings = readReportSettings();
   res.json(settings);
+});
+
+app.post('/api/reports/preview', requireAuth('viewReports'), async (req, res) => {
+  try {
+    const widget = sanitizeWidget(req.body?.widget || req.body || {}, 0);
+    const snapshotRecord = await getCachedSnapshot();
+    const snapshot = snapshotRecord?.snapshot || buildEmptySnapshot();
+    const preview = buildReportPreview(snapshot, widget);
+    res.json({ preview });
+  } catch (err) {
+    console.error('Preview build failed', err);
+    res.status(400).json({ error: err?.message || 'Не удалось сформировать предпросмотр' });
+  }
 });
 
 app.patch('/api/reports/settings', requireAuth('accessReportBuilder'), (req, res) => {
