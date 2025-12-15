@@ -637,6 +637,34 @@ function getDatabase() {
       created_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS report_presets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      is_public INTEGER NOT NULL DEFAULT 1,
+      allowed_roles TEXT,
+      layout_json TEXT,
+      widgets_json TEXT NOT NULL,
+      filters_json TEXT,
+      meta_json TEXT,
+      created_by INTEGER,
+      updated_by INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS report_preset_visibility (
+      user_id INTEGER NOT NULL,
+      preset_id INTEGER NOT NULL,
+      is_visible INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (user_id, preset_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (preset_id) REFERENCES report_presets(id) ON DELETE CASCADE
+    );
   `);
   ensureAuthBootstrap();
   return sqlite;
@@ -701,7 +729,12 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'useJournal',
   'editComments',
   'deleteComments',
-  'addStages'
+  'addStages',
+  'viewReports',
+  'useReportPresets',
+  'editReportPresets',
+  'deleteReportPresets',
+  'accessReportBuilder'
 ]);
 
 function createStageAccessDefaults(enabled) {
@@ -726,6 +759,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: true,
     deleteComments: true,
     addStages: true,
+    viewReports: true,
+    useReportPresets: true,
+    editReportPresets: true,
+    deleteReportPresets: true,
+    accessReportBuilder: true,
     stageAccess: createStageAccessDefaults(true)
   },
   admin: {
@@ -742,6 +780,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: true,
     deleteComments: true,
     addStages: true,
+    viewReports: true,
+    useReportPresets: true,
+    editReportPresets: true,
+    deleteReportPresets: true,
+    accessReportBuilder: true,
     stageAccess: createStageAccessDefaults(true)
   },
   master: {
@@ -758,6 +801,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: false,
     deleteComments: false,
     addStages: true,
+    viewReports: true,
+    useReportPresets: true,
+    editReportPresets: false,
+    deleteReportPresets: false,
+    accessReportBuilder: false,
     stageAccess: createStageAccessDefaults(true)
   },
   guest: {
@@ -774,6 +822,11 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: false,
     deleteComments: false,
     addStages: false,
+    viewReports: false,
+    useReportPresets: false,
+    editReportPresets: false,
+    deleteReportPresets: false,
+    accessReportBuilder: false,
     stageAccess: createStageAccessDefaults(false)
   }
 };
@@ -2934,6 +2987,323 @@ function sanitizeString(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value.trim();
   return String(value).trim();
+}
+
+const REPORT_WIDGET_TYPES = new Set(['table', 'gantt', 'chart', 'route', 'kpi', 'dashboard']);
+const DEFAULT_REPORT_SETTINGS = { enabled: false };
+
+function readReportSettings() {
+  try {
+    const db = getDatabase();
+    const row = db.prepare('SELECT value_json FROM kv_store WHERE key = ?').get('reports_settings');
+    const parsed = safeParseJson(row?.value_json, null) || {};
+    const enabled = parseBoolean(parsed.enabled, DEFAULT_REPORT_SETTINGS.enabled);
+    const updatedAt = parsed.updatedAt || null;
+    const updatedBy = parsed.updatedBy || null;
+    return { enabled, updatedAt, updatedBy };
+  } catch (err) {
+    console.warn('[Reports] Failed to read settings', err);
+    return { ...DEFAULT_REPORT_SETTINGS, updatedAt: null, updatedBy: null };
+  }
+}
+
+function writeReportSettings(patch, actor = null) {
+  const current = readReportSettings();
+  const enabled = parseBoolean(patch?.enabled, current.enabled);
+  const nowIso = new Date().toISOString();
+  const payload = {
+    enabled,
+    updatedAt: nowIso,
+    updatedBy: actor ? { id: actor.id, login: actor.login } : null
+  };
+  try {
+    const db = getDatabase();
+    db.prepare(
+      `INSERT OR REPLACE INTO kv_store (key, value_json, updated_at)
+       VALUES (@key, @value_json, @updated_at)`
+    ).run({ key: 'reports_settings', value_json: JSON.stringify(payload), updated_at: nowIso });
+    recordAuditEvent({ user: actor, action: 'reports.settings.update', details: { enabled } });
+  } catch (err) {
+    console.error('[Reports] Failed to write settings', err);
+    throw err;
+  }
+  return payload;
+}
+
+function normalizeRoleList(rawRoles) {
+  if (!Array.isArray(rawRoles)) {
+    return [];
+  }
+  const normalized = rawRoles
+    .map((role) => normalizeRoleSlug(role))
+    .filter(Boolean)
+    .filter((value, index, array) => array.indexOf(value) === index);
+  return normalized;
+}
+
+function sanitizeLayoutConfig(raw) {
+  if (!isPlainObject(raw)) {
+    return {};
+  }
+  const layout = { ...raw };
+  if (Array.isArray(raw.grid)) {
+    layout.grid = raw.grid
+      .map((cell) => {
+        if (!isPlainObject(cell)) return null;
+        const x = Number.isFinite(cell.x) ? cell.x : 0;
+        const y = Number.isFinite(cell.y) ? cell.y : 0;
+        const w = Number.isFinite(cell.w) && cell.w > 0 ? cell.w : 1;
+        const h = Number.isFinite(cell.h) && cell.h > 0 ? cell.h : 1;
+        const widgetId = typeof cell.widgetId === 'string' && cell.widgetId.trim() ? cell.widgetId.trim() : null;
+        if (!widgetId) return null;
+        return { widgetId, x, y, w, h };
+      })
+      .filter(Boolean);
+  }
+  return layout;
+}
+
+function sanitizeWidget(raw, index = 0) {
+  const safeId = (raw && typeof raw.id === 'string' && raw.id.trim()) ||
+    (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : crypto.randomBytes(8).toString('hex'));
+  const typeRaw = typeof raw?.type === 'string' ? raw.type.trim().toLowerCase() : 'table';
+  const type = REPORT_WIDGET_TYPES.has(typeRaw) ? typeRaw : 'table';
+  const title = sanitizeString(raw?.title || raw?.name || `Виджет ${index + 1}`);
+  const dataSource = sanitizeString(raw?.dataSource || raw?.source || 'orders');
+  const filters = isPlainObject(raw?.filters) ? raw.filters : {};
+  const options = isPlainObject(raw?.options) ? raw.options : {};
+  const size = isPlainObject(raw?.size)
+    ? {
+        w: Number.isFinite(raw.size.w) && raw.size.w > 0 ? raw.size.w : 1,
+        h: Number.isFinite(raw.size.h) && raw.size.h > 0 ? raw.size.h : 1
+      }
+    : { w: 1, h: 1 };
+  const position = isPlainObject(raw?.position)
+    ? {
+        x: Number.isFinite(raw.position.x) ? raw.position.x : 0,
+        y: Number.isFinite(raw.position.y) ? raw.position.y : 0
+      }
+    : { x: 0, y: 0 };
+  return { id: safeId, type, title, dataSource, filters, options, size, position };
+}
+
+function sanitizeWidgetList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map((entry, idx) => sanitizeWidget(entry, idx));
+}
+
+function sanitizeReportPresetPayload(payload, existing = {}) {
+  const name = sanitizeString(payload?.name || existing.name);
+  if (!name) {
+    throw new Error('Название пресета обязательно');
+  }
+  const description = sanitizeString(payload?.description || existing.description || '');
+  const isActive = parseBoolean(payload?.isActive ?? payload?.is_active, existing.isActive ?? true);
+  const isPublic = parseBoolean(payload?.isPublic ?? payload?.is_public, existing.isPublic ?? true);
+  const allowedRoles = normalizeRoleList(payload?.allowedRoles || payload?.allowed_roles || existing.allowedRoles || []);
+  const filters = isPlainObject(payload?.filters)
+    ? payload.filters
+    : isPlainObject(existing.filters)
+    ? existing.filters
+    : {};
+  const layout = sanitizeLayoutConfig(payload?.layout || payload?.layoutConfig || existing.layout || {});
+  const widgets = sanitizeWidgetList(payload?.widgets || existing.widgets || []);
+  const meta = isPlainObject(payload?.meta) ? payload.meta : isPlainObject(existing.meta) ? existing.meta : null;
+  return { name, description, isActive, isPublic, allowedRoles, filters, layout, widgets, meta };
+}
+
+function mapReportPresetRow(row) {
+  if (!row) return null;
+  const allowedRoles = normalizeRoleList(safeParseJson(row.allowed_roles, []));
+  return {
+    id: Number(row.id),
+    name: row.name,
+    description: row.description || '',
+    isActive: Number(row.is_active) !== 0,
+    isPublic: Number(row.is_public) !== 0,
+    allowedRoles,
+    layout: safeParseJson(row.layout_json, {}) || {},
+    widgets: safeParseJson(row.widgets_json, []) || [],
+    filters: safeParseJson(row.filters_json, {}) || {},
+    meta: safeParseJson(row.meta_json, null),
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+    createdBy: row.created_by === null || row.created_by === undefined ? null : Number(row.created_by),
+    updatedBy: row.updated_by === null || row.updated_by === undefined ? null : Number(row.updated_by)
+  };
+}
+
+function readReportPresetById(presetId) {
+  if (!Number.isFinite(presetId)) {
+    return null;
+  }
+  try {
+    const db = getDatabase();
+    const row = db
+      .prepare(
+        `SELECT id, name, description, is_active, is_public, allowed_roles, layout_json, widgets_json, filters_json, meta_json,
+                created_by, updated_by, created_at, updated_at
+           FROM report_presets
+          WHERE id = ?`
+      )
+      .get(presetId);
+    return mapReportPresetRow(row);
+  } catch (err) {
+    console.warn('[Reports] Failed to read preset', err);
+    return null;
+  }
+}
+
+function readReportVisibilityMap(userId) {
+  if (!Number.isFinite(userId)) {
+    return new Map();
+  }
+  try {
+    const db = getDatabase();
+    const rows = db
+      .prepare('SELECT preset_id, is_visible FROM report_preset_visibility WHERE user_id = ?')
+      .all(userId);
+    const map = new Map();
+    rows.forEach((row) => {
+      map.set(Number(row.preset_id), Number(row.is_visible) !== 0);
+    });
+    return map;
+  } catch (err) {
+    console.warn('[Reports] Failed to read visibility map', err);
+    return new Map();
+  }
+}
+
+function presetAccessibleForUser(preset, user, { allowManage = false, includeInactive = false } = {}) {
+  if (!preset || !user) return false;
+  if (!preset.isActive && !includeInactive) {
+    return false;
+  }
+  if (allowManage) {
+    return true;
+  }
+  if (preset.isPublic) {
+    return true;
+  }
+  if (!preset.allowedRoles.length) {
+    return true;
+  }
+  const userRoles = Array.isArray(user.roles) ? user.roles.map((role) => normalizeRoleSlug(role)).filter(Boolean) : [];
+  return userRoles.some((role) => preset.allowedRoles.includes(role));
+}
+
+function listReportPresetsForUser(user, { includeInactive = false, includeAll = false } = {}) {
+  const db = getDatabase();
+  const rows = db
+    .prepare(
+      `SELECT id, name, description, is_active, is_public, allowed_roles, layout_json, widgets_json, filters_json, meta_json,
+              created_by, updated_by, created_at, updated_at
+         FROM report_presets
+        ORDER BY updated_at DESC`
+    )
+    .all();
+  const visibility = user?.id ? readReportVisibilityMap(user.id) : new Map();
+  const allowManage = includeAll || !!user?.permissions?.editReportPresets || !!user?.permissions?.accessReportBuilder;
+  const presets = [];
+  for (const row of rows) {
+    const preset = mapReportPresetRow(row);
+    if (!preset) continue;
+    const visible = visibility.has(preset.id) ? visibility.get(preset.id) : true;
+    if (!presetAccessibleForUser(preset, user, { allowManage, includeInactive })) {
+      continue;
+    }
+    presets.push({ ...preset, isVisible: !!visible });
+  }
+  return presets;
+}
+
+function saveReportPreset(presetInput, actor = null, presetId = null) {
+  const existing = presetId ? readReportPresetById(presetId) : null;
+  const sanitized = sanitizeReportPresetPayload(presetInput, existing || {});
+  const nowIso = new Date().toISOString();
+  const db = getDatabase();
+  const allowedRolesJson = sanitized.allowedRoles.length ? JSON.stringify(sanitized.allowedRoles) : null;
+  const layoutJson = sanitized.layout ? JSON.stringify(sanitized.layout) : null;
+  const widgetsJson = JSON.stringify(sanitized.widgets || []);
+  const filtersJson = sanitized.filters ? JSON.stringify(sanitized.filters) : null;
+  const metaJson = sanitized.meta ? JSON.stringify(sanitized.meta) : null;
+
+  if (presetId) {
+    if (!existing) {
+      return null;
+    }
+    db.prepare(
+      `UPDATE report_presets
+          SET name = @name,
+              description = @description,
+              is_active = @is_active,
+              is_public = @is_public,
+              allowed_roles = @allowed_roles,
+              layout_json = @layout_json,
+              widgets_json = @widgets_json,
+              filters_json = @filters_json,
+              meta_json = @meta_json,
+              updated_by = @updated_by,
+              updated_at = @updated_at
+        WHERE id = @id`
+    ).run({
+      id: presetId,
+      name: sanitized.name,
+      description: sanitized.description,
+      is_active: sanitized.isActive ? 1 : 0,
+      is_public: sanitized.isPublic ? 1 : 0,
+      allowed_roles: allowedRolesJson,
+      layout_json: layoutJson,
+      widgets_json: widgetsJson,
+      filters_json: filtersJson,
+      meta_json: metaJson,
+      updated_by: actor?.id ?? null,
+      updated_at: nowIso
+    });
+    recordAuditEvent({ user: actor, action: 'reports.presets.update', details: { presetId, name: sanitized.name } });
+    return readReportPresetById(presetId);
+  }
+
+  const result = db
+    .prepare(
+      `INSERT INTO report_presets
+         (name, description, is_active, is_public, allowed_roles, layout_json, widgets_json, filters_json, meta_json, created_by, updated_by, created_at, updated_at)
+       VALUES
+         (@name, @description, @is_active, @is_public, @allowed_roles, @layout_json, @widgets_json, @filters_json, @meta_json, @created_by, @updated_by, @created_at, @updated_at)`
+    )
+    .run({
+      name: sanitized.name,
+      description: sanitized.description,
+      is_active: sanitized.isActive ? 1 : 0,
+      is_public: sanitized.isPublic ? 1 : 0,
+      allowed_roles: allowedRolesJson,
+      layout_json: layoutJson,
+      widgets_json: widgetsJson,
+      filters_json: filtersJson,
+      meta_json: metaJson,
+      created_by: actor?.id ?? null,
+      updated_by: actor?.id ?? null,
+      created_at: nowIso,
+      updated_at: nowIso
+    });
+  const createdId = Number(result.lastInsertRowid);
+  recordAuditEvent({ user: actor, action: 'reports.presets.create', details: { presetId: createdId, name: sanitized.name } });
+  return readReportPresetById(createdId);
+}
+
+function setReportPresetVisibility(userId, presetId, isVisible) {
+  if (!Number.isFinite(userId) || !Number.isFinite(presetId)) {
+    throw new Error('Некорректные параметры видимости пресета');
+  }
+  const db = getDatabase();
+  db.prepare(
+    `INSERT INTO report_preset_visibility (user_id, preset_id, is_visible)
+       VALUES (?, ?, ?)
+       ON CONFLICT(user_id, preset_id) DO UPDATE SET is_visible = excluded.is_visible`
+  ).run(userId, presetId, isVisible ? 1 : 0);
+  return true;
 }
 
 function computeSnapshotHash(stateString) {
@@ -6768,6 +7138,123 @@ app.post('/api/admin/rollback', requireAuth('manageUsers'), (_req, res) => {
   res.status(410).json({ error: 'Rollback disabled' });
 });
 
+app.get('/api/reports/settings', requireAuth('viewReports'), (req, res) => {
+  const settings = readReportSettings();
+  res.json(settings);
+});
+
+app.patch('/api/reports/settings', requireAuth('accessReportBuilder'), (req, res) => {
+  try {
+    const settings = writeReportSettings(req.body || {}, req.user);
+    res.json(settings);
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Не удалось сохранить настройки отчётов' });
+  }
+});
+
+app.get('/api/reports/presets', requireAuth('viewReports'), (req, res) => {
+  const includeInactive = parseBoolean(req.query.includeInactive, false);
+  const includeAll = !!req.user?.permissions?.editReportPresets || !!req.user?.permissions?.accessReportBuilder;
+  const presets = listReportPresetsForUser(req.user, { includeInactive, includeAll });
+  res.json({ presets, settings: readReportSettings() });
+});
+
+app.get('/api/reports/presets/:id', requireAuth('viewReports'), (req, res) => {
+  const presetId = Number(req.params.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор пресета' });
+    return;
+  }
+  const preset = readReportPresetById(presetId);
+  if (!preset) {
+    res.status(404).json({ error: 'Пресет не найден' });
+    return;
+  }
+  const allowManage = !!req.user?.permissions?.editReportPresets || !!req.user?.permissions?.accessReportBuilder;
+  if (!presetAccessibleForUser(preset, req.user, { allowManage, includeInactive: true })) {
+    res.status(403).json({ error: 'Недостаточно прав для доступа к пресету' });
+    return;
+  }
+  const visibilityMap = req.user?.id ? readReportVisibilityMap(req.user.id) : new Map();
+  const isVisible = visibilityMap.has(preset.id) ? visibilityMap.get(preset.id) : true;
+  res.json({ preset: { ...preset, isVisible } });
+});
+
+app.post('/api/reports/presets', requireAuth('editReportPresets'), (req, res) => {
+  try {
+    const preset = saveReportPreset(req.body || {}, req.user, null);
+    res.status(201).json({ preset });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Не удалось создать пресет' });
+  }
+});
+
+app.patch('/api/reports/presets/:id', requireAuth('editReportPresets'), (req, res) => {
+  const presetId = Number(req.params.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор пресета' });
+    return;
+  }
+  try {
+    const preset = saveReportPreset(req.body || {}, req.user, presetId);
+    if (!preset) {
+      res.status(404).json({ error: 'Пресет не найден' });
+      return;
+    }
+    res.json({ preset });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Не удалось обновить пресет' });
+  }
+});
+
+app.delete('/api/reports/presets/:id', requireAuth('deleteReportPresets'), (req, res) => {
+  const presetId = Number(req.params.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор пресета' });
+    return;
+  }
+  const db = getDatabase();
+  const preset = readReportPresetById(presetId);
+  if (!preset) {
+    res.status(404).json({ error: 'Пресет не найден' });
+    return;
+  }
+  db
+    .prepare('UPDATE report_presets SET is_active = 0, updated_at = ?, updated_by = ? WHERE id = ?')
+    .run(new Date().toISOString(), req.user?.id ?? null, presetId);
+  recordAuditEvent({ user: req.user, action: 'reports.presets.delete', details: { presetId, name: preset.name } });
+  res.status(204).end();
+});
+
+app.post('/api/reports/presets/:id/visibility', requireAuth('viewReports'), (req, res) => {
+  if (!req.user?.id) {
+    res.status(400).json({ error: 'Не удалось определить пользователя' });
+    return;
+  }
+  const presetId = Number(req.params.id);
+  if (!Number.isFinite(presetId) || presetId <= 0) {
+    res.status(400).json({ error: 'Некорректный идентификатор пресета' });
+    return;
+  }
+  const preset = readReportPresetById(presetId);
+  if (!preset) {
+    res.status(404).json({ error: 'Пресет не найден' });
+    return;
+  }
+  const allowManage = !!req.user?.permissions?.editReportPresets || !!req.user?.permissions?.accessReportBuilder;
+  if (!presetAccessibleForUser(preset, req.user, { allowManage })) {
+    res.status(403).json({ error: 'Недостаточно прав' });
+    return;
+  }
+  const isVisible = parseBoolean(req.body?.isVisible ?? req.body?.visible ?? req.body?.value, true);
+  try {
+    setReportPresetVisibility(req.user.id, presetId, isVisible);
+    res.json({ presetId, isVisible });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Не удалось обновить видимость' });
+  }
+});
+
 
 app.get(['/CRM.html', '/crm.html'], (req, res) => {
   if (!req.user) {
@@ -6775,6 +7262,14 @@ app.get(['/CRM.html', '/crm.html'], (req, res) => {
     return;
   }
   res.sendFile(path.join(PUBLIC_DIR, 'CRM.html'));
+});
+
+app.get(['/reports', '/reports.html'], (req, res) => {
+  if (!req.user) {
+    res.redirect('/login');
+    return;
+  }
+  res.sendFile(path.join(PUBLIC_DIR, 'reports.html'));
 });
 
 app.use(express.static(PUBLIC_DIR, { index: false }));

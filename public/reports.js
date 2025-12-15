@@ -1,0 +1,472 @@
+(() => {
+  const state = {
+    user: null,
+    settings: { enabled: false },
+    presets: [],
+    selectedId: null,
+    loading: false
+  };
+
+  const els = {
+    notice: document.getElementById('reportsNotice'),
+    presetList: document.getElementById('reportPresetList'),
+    reloadBtn: document.getElementById('reportsReloadBtn'),
+    presetForm: document.getElementById('reportPresetForm'),
+    presetTitle: document.getElementById('reportEditorTitle'),
+    nameInput: document.getElementById('reportName'),
+    descriptionInput: document.getElementById('reportDescription'),
+    activeInput: document.getElementById('reportActive'),
+    publicInput: document.getElementById('reportPublic'),
+    rolesInput: document.getElementById('reportRoles'),
+    layoutInput: document.getElementById('reportLayout'),
+    filtersInput: document.getElementById('reportFilters'),
+    widgetList: document.getElementById('reportWidgets'),
+    addWidgetBtn: document.getElementById('reportAddWidget'),
+    saveBtn: document.getElementById('reportSave'),
+    deleteBtn: document.getElementById('reportDelete'),
+    visibilityBtn: document.getElementById('reportToggleVisibility'),
+    settingsToggle: document.getElementById('reportsEnabled'),
+    settingsLabel: document.getElementById('reportsEnabledLabel')
+  };
+
+  const widgetTypes = [
+    { value: 'table', label: 'Таблица' },
+    { value: 'gantt', label: 'Гант' },
+    { value: 'chart', label: 'График' },
+    { value: 'route', label: 'Маршрут заказа' },
+    { value: 'kpi', label: 'KPI' },
+    { value: 'dashboard', label: 'Дашборд' }
+  ];
+
+  const dataSources = [
+    { value: 'orders', label: 'Заказы' },
+    { value: 'stages', label: 'Переделы' },
+    { value: 'route', label: 'Маршруты' }
+  ];
+
+  function renderNotice(message, tone = 'info') {
+    if (!els.notice) return;
+    if (!message) {
+      els.notice.hidden = true;
+      els.notice.textContent = '';
+      els.notice.dataset.tone = '';
+      return;
+    }
+    els.notice.hidden = false;
+    els.notice.textContent = message;
+    els.notice.dataset.tone = tone;
+  }
+
+  async function fetchJson(url, options = {}) {
+    const merged = {
+      headers: { Accept: 'application/json', ...(options.headers || {}) },
+      credentials: 'same-origin',
+      ...options
+    };
+    if (merged.body && typeof merged.body === 'object' && !(merged.body instanceof FormData)) {
+      merged.headers['Content-Type'] = 'application/json';
+      merged.body = JSON.stringify(merged.body);
+    }
+    const res = await fetch(url, merged);
+    const isJson = res.headers.get('content-type')?.includes('application/json');
+    const data = isJson ? await res.json().catch(() => null) : null;
+    if (!res.ok) {
+      const error = new Error((data && data.error) || `Ошибка ${res.status}`);
+      error.status = res.status;
+      error.payload = data;
+      throw error;
+    }
+    return data;
+  }
+
+  function hasPermission(key) {
+    return !!state.user?.permissions?.[key];
+  }
+
+  function parseRolesInput(value) {
+    if (typeof value !== 'string') return [];
+    return value
+      .split(',')
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+      .filter((item, idx, arr) => arr.indexOf(item) === idx);
+  }
+
+  function serializeJsonTextarea(value) {
+    if (typeof value !== 'string') return {};
+    const trimmed = value.trim();
+    if (!trimmed) return {};
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_err) {
+      return {};
+    }
+  }
+
+  function stringifyJson(value) {
+    if (value == null) return '';
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function buildWidgetRow(widget = {}, index = 0) {
+    const row = document.createElement('div');
+    row.className = 'reports-widget';
+    row.dataset.index = String(index);
+
+    const title = document.createElement('input');
+    title.type = 'text';
+    title.value = widget.title || '';
+    title.placeholder = 'Название виджета';
+    title.required = true;
+
+    const type = document.createElement('select');
+    widgetTypes.forEach((entry) => {
+      const option = document.createElement('option');
+      option.value = entry.value;
+      option.textContent = entry.label;
+      if (widget.type === entry.value) option.selected = true;
+      type.appendChild(option);
+    });
+
+    const source = document.createElement('select');
+    dataSources.forEach((entry) => {
+      const option = document.createElement('option');
+      option.value = entry.value;
+      option.textContent = entry.label;
+      if (widget.dataSource === entry.value) option.selected = true;
+      source.appendChild(option);
+    });
+
+    const filters = document.createElement('textarea');
+    filters.placeholder = 'Фильтры в формате JSON';
+    filters.value = stringifyJson(widget.filters || {});
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'pc-btn pc-btn--ghost';
+    remove.textContent = 'Удалить';
+    remove.addEventListener('click', () => {
+      row.remove();
+      renumberWidgets();
+    });
+
+    row.append(
+      createField('Название', title),
+      createField('Тип', type),
+      createField('Источник данных', source),
+      createField('Фильтры', filters),
+      remove
+    );
+    return row;
+  }
+
+  function createField(labelText, control) {
+    const field = document.createElement('label');
+    field.className = 'reports-field';
+    const label = document.createElement('span');
+    label.textContent = labelText;
+    field.append(label, control);
+    return field;
+  }
+
+  function renumberWidgets() {
+    if (!els.widgetList) return;
+    els.widgetList.querySelectorAll('.reports-widget').forEach((node, index) => {
+      node.dataset.index = String(index);
+    });
+  }
+
+  function setFormBusy(isBusy) {
+    state.loading = isBusy;
+    const disable = !!isBusy;
+    [
+      els.presetForm,
+      els.saveBtn,
+      els.deleteBtn,
+      els.addWidgetBtn,
+      els.reloadBtn,
+      els.settingsToggle
+    ].forEach((control) => {
+      if (control) control.disabled = disable;
+    });
+  }
+
+  function renderPresetList() {
+    if (!els.presetList) return;
+    els.presetList.innerHTML = '';
+    if (!state.presets.length) {
+      const empty = document.createElement('div');
+      empty.className = 'reports-empty';
+      empty.textContent = 'Пока нет сохранённых пресетов';
+      els.presetList.appendChild(empty);
+      return;
+    }
+    state.presets.forEach((preset) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'reports-preset';
+      item.dataset.active = preset.isActive ? '1' : '0';
+      item.dataset.visible = preset.isVisible === false ? '0' : '1';
+      item.textContent = preset.name || `Пресет ${preset.id}`;
+      item.addEventListener('click', () => selectPreset(preset));
+      els.presetList.appendChild(item);
+    });
+  }
+
+  function updateVisibilityButton(preset) {
+    if (!els.visibilityBtn) return;
+    if (!preset || !preset.id) {
+      els.visibilityBtn.hidden = true;
+      return;
+    }
+    els.visibilityBtn.hidden = false;
+    const visible = preset.isVisible !== false;
+    els.visibilityBtn.textContent = visible ? 'Скрыть в моих отчётах' : 'Показывать в моих отчётах';
+    els.visibilityBtn.dataset.visible = visible ? '1' : '0';
+  }
+
+  function fillForm(preset) {
+    if (!els.presetForm) return;
+    const current = preset || {};
+    state.selectedId = current.id || null;
+    els.presetTitle.textContent = current.id ? `Редактирование: ${current.name || 'Пресет'}` : 'Новый пресет';
+    if (els.nameInput) els.nameInput.value = current.name || '';
+    if (els.descriptionInput) els.descriptionInput.value = current.description || '';
+    if (els.activeInput) els.activeInput.checked = current.isActive !== false;
+    if (els.publicInput) els.publicInput.checked = current.isPublic !== false;
+    if (els.rolesInput) els.rolesInput.value = Array.isArray(current.allowedRoles) ? current.allowedRoles.join(', ') : '';
+    if (els.layoutInput) els.layoutInput.value = stringifyJson(current.layout || {});
+    if (els.filtersInput) els.filtersInput.value = stringifyJson(current.filters || {});
+
+    if (els.widgetList) {
+      els.widgetList.innerHTML = '';
+      const widgets = Array.isArray(current.widgets) && current.widgets.length ? current.widgets : [{}];
+      widgets.forEach((widget, idx) => {
+        els.widgetList.appendChild(buildWidgetRow(widget, idx));
+      });
+    }
+    updateVisibilityButton(current);
+    updateDeleteButton(current);
+  }
+
+  function updateDeleteButton(preset) {
+    if (!els.deleteBtn) return;
+    els.deleteBtn.hidden = !preset || !preset.id || !hasPermission('deleteReportPresets');
+  }
+
+  function collectWidgets() {
+    if (!els.widgetList) return [];
+    return Array.from(els.widgetList.querySelectorAll('.reports-widget')).map((node) => {
+      const title = node.querySelector('input[type="text"]')?.value || '';
+      const type = node.querySelector('select')?.value || 'table';
+      const selectElements = node.querySelectorAll('select');
+      const source = selectElements?.[1]?.value || selectElements?.[0]?.value || 'orders';
+      const filtersRaw = node.querySelector('textarea')?.value || '';
+      return {
+        title: title.trim(),
+        type,
+        dataSource: source,
+        filters: serializeJsonTextarea(filtersRaw)
+      };
+    });
+  }
+
+  async function loadCurrentUser() {
+    const data = await fetchJson('/me');
+    if (!data?.user) {
+      window.location.href = '/login';
+      return;
+    }
+    state.user = data.user;
+  }
+
+  async function loadPresets() {
+    if (!hasPermission('viewReports')) {
+      renderNotice('Недостаточно прав для раздела «Отчёты».', 'error');
+      return;
+    }
+    renderNotice('Загрузка данных отчётов…');
+    try {
+      const data = await fetchJson('/api/reports/presets');
+      state.settings = data?.settings || { enabled: false };
+      state.presets = Array.isArray(data?.presets) ? data.presets : [];
+      renderNotice('');
+      renderSettingsToggle();
+      renderPresetList();
+      const search = new URLSearchParams(window.location.search);
+      const presetId = Number(search.get('preset'));
+      if (Number.isFinite(presetId)) {
+        const target = state.presets.find((entry) => Number(entry.id) === presetId);
+        if (target) {
+          selectPreset(target);
+        }
+      }
+    } catch (err) {
+      console.error('Reports load failed', err);
+      renderNotice(err.message || 'Не удалось загрузить отчёты', 'error');
+    }
+  }
+
+  function renderSettingsToggle() {
+    if (!els.settingsToggle) return;
+    const canManage = hasPermission('accessReportBuilder');
+    els.settingsToggle.disabled = !canManage;
+    els.settingsToggle.checked = !!state.settings.enabled;
+    if (els.settingsLabel) {
+      els.settingsLabel.textContent = state.settings.enabled ? 'Включено' : 'Выключено';
+    }
+  }
+
+  function selectPreset(preset) {
+    if (!preset) return;
+    fillForm(preset);
+    renderNotice('Редактирование выбранного пресета');
+  }
+
+  function resetForm() {
+    fillForm({});
+    renderNotice('Создаём новый пресет');
+  }
+
+  async function savePreset(event) {
+    event.preventDefault();
+    if (!hasPermission('editReportPresets')) {
+      renderNotice('Недостаточно прав для сохранения пресетов', 'error');
+      return;
+    }
+    const payload = {
+      name: els.nameInput?.value || '',
+      description: els.descriptionInput?.value || '',
+      isActive: !!els.activeInput?.checked,
+      isPublic: !!els.publicInput?.checked,
+      allowedRoles: parseRolesInput(els.rolesInput?.value || ''),
+      layout: serializeJsonTextarea(els.layoutInput?.value || ''),
+      filters: serializeJsonTextarea(els.filtersInput?.value || ''),
+      widgets: collectWidgets()
+    };
+    const isEdit = Number.isFinite(state.selectedId);
+    const url = isEdit ? `/api/reports/presets/${state.selectedId}` : '/api/reports/presets';
+    const method = isEdit ? 'PATCH' : 'POST';
+    setFormBusy(true);
+    try {
+      const data = await fetchJson(url, { method, body: payload });
+      const preset = data?.preset;
+      if (preset) {
+        if (isEdit) {
+          state.presets = state.presets.map((item) => (Number(item.id) === Number(preset.id) ? preset : item));
+        } else {
+          state.presets = [preset, ...state.presets];
+        }
+        selectPreset(preset);
+        renderPresetList();
+        renderNotice('Пресет сохранён', 'success');
+      }
+    } catch (err) {
+      console.error('Save preset failed', err);
+      renderNotice(err.message || 'Не удалось сохранить пресет', 'error');
+    } finally {
+      setFormBusy(false);
+    }
+  }
+
+  async function toggleVisibility() {
+    if (!hasPermission('viewReports')) return;
+    if (!state.selectedId) return;
+    const preset = state.presets.find((p) => Number(p.id) === Number(state.selectedId));
+    if (!preset) return;
+    const nextVisible = preset.isVisible === false;
+    try {
+      await fetchJson(`/api/reports/presets/${preset.id}/visibility`, {
+        method: 'POST',
+        body: { isVisible: nextVisible }
+      });
+      preset.isVisible = nextVisible;
+      updateVisibilityButton(preset);
+      renderPresetList();
+    } catch (err) {
+      console.error('Visibility update failed', err);
+      renderNotice(err.message || 'Не удалось обновить видимость', 'error');
+    }
+  }
+
+  async function deletePreset() {
+    if (!hasPermission('deleteReportPresets')) return;
+    if (!state.selectedId) return;
+    const preset = state.presets.find((p) => Number(p.id) === Number(state.selectedId));
+    const name = preset?.name || 'пресет';
+    const confirmed = window.confirm(`Удалить ${name}?`);
+    if (!confirmed) return;
+    setFormBusy(true);
+    try {
+      await fetchJson(`/api/reports/presets/${state.selectedId}`, { method: 'DELETE' });
+      state.presets = state.presets.filter((p) => Number(p.id) !== Number(state.selectedId));
+      resetForm();
+      renderPresetList();
+      renderNotice('Пресет удалён', 'success');
+    } catch (err) {
+      console.error('Delete preset failed', err);
+      renderNotice(err.message || 'Не удалось удалить пресет', 'error');
+    } finally {
+      setFormBusy(false);
+    }
+  }
+
+  async function updateSettings(event) {
+    const enabled = !!event.target.checked;
+    if (!hasPermission('accessReportBuilder')) {
+      renderSettingsToggle();
+      renderNotice('Нет прав для изменения глобальных настроек отчётов', 'error');
+      return;
+    }
+    try {
+      const data = await fetchJson('/api/reports/settings', {
+        method: 'PATCH',
+        body: { enabled }
+      });
+      state.settings = data || { enabled };
+      renderSettingsToggle();
+      renderNotice('Настройки обновлены', 'success');
+    } catch (err) {
+      console.error('Settings update failed', err);
+      renderNotice(err.message || 'Не удалось сохранить настройки', 'error');
+      renderSettingsToggle();
+    }
+  }
+
+  function bindEvents() {
+    els.reloadBtn?.addEventListener('click', () => loadPresets());
+    els.presetForm?.addEventListener('submit', savePreset);
+    els.addWidgetBtn?.addEventListener('click', () => {
+      if (els.widgetList) {
+        els.widgetList.appendChild(buildWidgetRow({}, els.widgetList.childElementCount));
+      }
+    });
+    els.deleteBtn?.addEventListener('click', deletePreset);
+    els.visibilityBtn?.addEventListener('click', toggleVisibility);
+    els.settingsToggle?.addEventListener('change', updateSettings);
+    const createBtn = document.getElementById('reportCreate');
+    createBtn?.addEventListener('click', resetForm);
+  }
+
+  async function init() {
+    try {
+      await loadCurrentUser();
+      if (!hasPermission('viewReports')) {
+        renderNotice('Недостаточно прав для раздела «Отчёты».', 'error');
+        return;
+      }
+      bindEvents();
+      await loadPresets();
+    } catch (err) {
+      console.error('Reports init failed', err);
+      renderNotice(err.message || 'Не удалось открыть раздел отчётов', 'error');
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
