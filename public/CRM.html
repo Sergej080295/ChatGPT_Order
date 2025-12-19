@@ -2545,6 +2545,145 @@
     display: none;
   }
 
+  .crm-reports-view {
+    display: none;
+    flex-direction: column;
+    gap: var(--pc-spacing-lg);
+  }
+
+  body[data-crm-view="reports"] .crm-reports-view {
+    display: flex;
+  }
+
+  body[data-crm-view="reports"] .crm-orders-view,
+  body[data-crm-view="reports"] .crm-stage-view,
+  body[data-crm-view="reports"] .crm-kanban {
+    display: none;
+  }
+
+  .crm-reports-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-reports-header h2 {
+    margin: 0;
+  }
+
+  .crm-reports-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-report-card {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    background: var(--pc-surface);
+    padding: var(--pc-spacing-md);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--pc-spacing-md);
+    align-items: center;
+  }
+
+  .crm-report-card__body {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-report-card__icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--pc-radius-sm);
+    display: grid;
+    place-items: center;
+    background: var(--pc-muted);
+    font-size: 20px;
+  }
+
+  .crm-report-card__desc {
+    margin: 4px 0 0;
+    color: var(--pc-muted-foreground);
+    font-size: 14px;
+  }
+
+  .crm-report-card__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-report-detail {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    background: var(--pc-surface);
+    padding: var(--pc-spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-report-detail__header {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-md);
+    flex-wrap: wrap;
+  }
+
+  .crm-report-detail__title h3 {
+    margin: 0 0 4px;
+  }
+
+  .crm-report-detail__title p {
+    margin: 0;
+    color: var(--pc-muted-foreground);
+  }
+
+  .crm-report-detail__controls {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-md);
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+
+  .crm-report-gantt-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-report-gantt-card {
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    overflow: hidden;
+    background: var(--pc-surface);
+  }
+
+  .crm-report-gantt-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
+    border-bottom: 1px solid var(--pc-border);
+  }
+
+  .crm-report-gantt-card__title {
+    display: flex;
+    align-items: center;
+    gap: var(--pc-spacing-sm);
+    font-weight: 600;
+  }
+
+  .crm-report-gantt-card__subtitle {
+    color: var(--pc-muted-foreground);
+    font-size: 14px;
+  }
+
   .crm-stage-layout {
     display: flex;
     gap: var(--pc-spacing-md);
@@ -6020,6 +6159,7 @@
         </div>
       </div>
     </div>
+    <button class="pc-nav__link" type="button" id="crmReportsNavBtn" data-section="reports" data-tooltip-primary="Отчеты" data-tooltip-secondary="Сводные представления и аналитика.">Отчеты</button>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
@@ -6376,6 +6516,55 @@
           <div class="crm-stage-route-empty" id="crmStageRouteEmpty" hidden>Маршрут не заполнен</div>
         </div>
       </section>
+    </div>
+  </div>
+  <div id="crmReportsView" class="crm-reports-view" hidden>
+    <div id="crmReportsList">
+      <div class="crm-reports-header">
+        <div>
+          <h2>Отчеты</h2>
+          <p class="crm-report-card__desc">Готовые представления и визуализации по всем переделам.</p>
+        </div>
+        <div class="crm-reports-actions">
+          <button type="button" class="pc-btn pc-btn--ghost" id="crmReportsBuilderBtn">Конструктор</button>
+        </div>
+      </div>
+      <div class="crm-report-card">
+        <div class="crm-report-card__body">
+          <div class="crm-report-card__icon" aria-hidden="true">📊</div>
+          <div>
+            <h3>Диаграммы Ганта</h3>
+            <p class="crm-report-card__desc">Все диаграммы переделов подряд для быстрого сравнения загрузки.</p>
+          </div>
+        </div>
+        <div class="crm-report-card__actions">
+          <button type="button" class="pc-btn pc-btn--primary" id="crmOpenGanttReportBtn">Открыть</button>
+        </div>
+      </div>
+    </div>
+    <div id="crmGanttReport" class="crm-report-detail" hidden>
+      <div class="crm-report-detail__header">
+        <button type="button" class="pc-btn pc-btn--ghost pc-btn--sm" id="crmGanttReportBackBtn">← К отчетам</button>
+        <div class="crm-report-detail__title">
+          <h3>Диаграммы Ганта</h3>
+          <p class="crm-report-card__desc">Отображение всех доступных переделов.</p>
+        </div>
+        <div class="crm-report-detail__controls">
+          <label>Отбор
+            <select id="crmReportsGanttFilter" class="pc-select pc-select--sm">
+              <option value="all">Все дни</option>
+              <option value="busy">Загруженные</option>
+              <option value="free">Свободные</option>
+            </select>
+          </label>
+          <label class="pc-switch pc-switch--sm" title="Показать плановый диапазон дат">
+            <input type="checkbox" id="crmReportsGanttRange" />
+            <span>Плановый диапазон</span>
+          </label>
+        </div>
+      </div>
+      <div id="crmGanttReportList" class="crm-report-gantt-list"></div>
+      <div class="crm-stage-detail-empty" id="crmGanttReportEmpty" hidden>Нет данных для диаграмм</div>
     </div>
   </div>
   <div class="crm-lane-visibility" id="crmLaneVisibility" hidden>
@@ -7234,7 +7423,7 @@ const CRM_DEFAULT_PREFERENCES={
   ganttRangeHints:false
 };
 const CRM_DEFAULT_START_VIEW='kanban';
-const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
+const CRM_START_VIEW_VALUES=new Set(['kanban','orders','reports',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
 const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
 const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
@@ -10220,9 +10409,11 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
       crmStageNavItem=$('#crmStageNavItem'),
       crmStageNavDropdown=$('#crmStageNavDropdown'),
+      crmReportsNavBtn=$('#crmReportsNavBtn'),
       crmStageControls=$('#crmStageControls'),
       crmOrdersFilter=$('#crmOrdersFilter'),
       crmStageViewEl=$('#crmStageView'),
+      crmReportsViewEl=$('#crmReportsView'),
       crmStageTableBody=$('#crmStageTable tbody'),
       crmStageEmpty=$('#crmStageEmpty'),
       crmStageSelect=$('#crmStageSelect'),
@@ -10272,6 +10463,15 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageRouteDialog=$('#crmStageRouteDlg'),
       crmStageRouteDialogContent=$('#crmStageRouteDlgContent'),
       crmStageRouteDialogClose=$('#crmStageRouteDlgClose'),
+      crmReportsListEl=$('#crmReportsList'),
+      crmGanttReportEl=$('#crmGanttReport'),
+      crmOpenGanttReportBtn=$('#crmOpenGanttReportBtn'),
+      crmGanttReportBackBtn=$('#crmGanttReportBackBtn'),
+      crmReportsGanttFilter=$('#crmReportsGanttFilter'),
+      crmReportsGanttRange=$('#crmReportsGanttRange'),
+      crmGanttReportList=$('#crmGanttReportList'),
+      crmGanttReportEmpty=$('#crmGanttReportEmpty'),
+      crmReportsBuilderBtn=$('#crmReportsBuilderBtn'),
       crmStageExceptionsDlg=$('#crmStageExceptionsDlg'),
       crmStageExceptionsList=$('#crmStageExceptionsList'),
       crmStageExceptionsArchive=$('#crmStageExceptionsArchive'),
@@ -10415,7 +10615,7 @@ let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
 const crmStartViewMode=getCrmStartViewSetting();
-const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
+const CRM_VIEW_MODES=new Set(['kanban','orders','stage','reports']);
 let currentCrmView='kanban';
 let initialStageViewKey='draw';
 const storedViewRaw=readCrmSessionValue(CRM_SESSION_VIEW_KEY);
@@ -10431,6 +10631,8 @@ if(storedStage && CRM_STAGE_KEYS.includes(storedStage)){
 if(!CRM_VIEW_MODES.has(storedView)){
   if(crmStartViewMode==='orders'){
     currentCrmView='orders';
+  }else if(crmStartViewMode==='reports'){
+    currentCrmView='reports';
   }else if(CRM_STAGE_KEYS.includes(crmStartViewMode)){
     currentCrmView='stage';
     initialStageViewKey=crmStartViewMode;
@@ -10506,6 +10708,7 @@ let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
 let crmStageNavHoverTimeout=null;
 let crmMappingRemovedDraft=new Set();
+let crmReportsActivePanel='list';
 
 if(crmStageSelect){
   decorateStageSelectOptions();
@@ -13189,30 +13392,41 @@ function buildCrmStageGanttPlaceholderSchedule(stageKey){
   };
 }
 
-function renderCrmStageGantt(rows, schedule){
-  if(!crmStageGanttLeft || !crmStageGanttHeader || !crmStageGanttBody){
+
+function renderCrmStageGantt(rows, schedule, options={}){
+  const opts=options&&typeof options==='object'?options:{};
+  const ganttLeft=opts.left||crmStageGanttLeft;
+  const ganttHeader=opts.header||crmStageGanttHeader;
+  const ganttBody=opts.body||crmStageGanttBody;
+  const ganttLeftHeader=opts.leftHeader||crmStageGanttLeftHeader;
+  const ganttEmpty=opts.empty||crmStageGanttEmpty;
+  const ganttScroll=opts.scroll||crmStageGanttScroll||ganttBody;
+  const ganttFilter=opts.filter||crmStageGanttFilter;
+  const filterValue=opts.filterValue ?? (ganttFilter?ganttFilter.value:'all');
+  const rangeHintsEnabled=opts.rangeHintsEnabled ?? isGanttRangeHintsEnabled();
+  if(!ganttLeft || !ganttHeader || !ganttBody){
     return;
   }
   const safeRows=Array.isArray(rows)
     ? rows.filter(row=>row && row.identity && (row.orderTitle||row.order||row.orderId))
     : [];
   const hasRows=safeRows.length>0;
-  crmStageGanttLeft.innerHTML='';
-  crmStageGanttHeader.innerHTML='';
-  crmStageGanttBody.innerHTML='';
-  crmStageGanttHeader.style.removeProperty('min-width');
-  crmStageGanttHeader.style.removeProperty('width');
-  crmStageGanttHeader.style.removeProperty('grid-template-columns');
-  crmStageGanttHeader.style.removeProperty('transform');
-  if(crmStageGanttBody){
-    crmStageGanttBody.style.removeProperty('min-width');
-    crmStageGanttBody.style.removeProperty('width');
+  ganttLeft.innerHTML='';
+  ganttHeader.innerHTML='';
+  ganttBody.innerHTML='';
+  ganttHeader.style.removeProperty('min-width');
+  ganttHeader.style.removeProperty('width');
+  ganttHeader.style.removeProperty('grid-template-columns');
+  ganttHeader.style.removeProperty('transform');
+  if(ganttBody){
+    ganttBody.style.removeProperty('min-width');
+    ganttBody.style.removeProperty('width');
   }
-  if(crmStageGanttLeftHeader){
-    crmStageGanttLeftHeader.style.removeProperty('min-height');
+  if(ganttLeftHeader){
+    ganttLeftHeader.style.removeProperty('min-height');
   }
   if(!schedule){
-    if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
+    if(ganttEmpty) ganttEmpty.hidden=false;
     return;
   }
   const today=today0();
@@ -13222,11 +13436,10 @@ function renderCrmStageGantt(rows, schedule){
     .filter(entry=>entry.day.date>=today)
     .sort((a,b)=>a.day.date-b.day.date);
   if(!dayEntries.length){
-    if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
+    if(ganttEmpty) ganttEmpty.hidden=false;
     return;
   }
-  if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=hasRows;
-  const filterValue=crmStageGanttFilter?crmStageGanttFilter.value:'all';
+  if(ganttEmpty) ganttEmpty.hidden=hasRows;
   const filteredDays=dayEntries.filter(entry=>{
     const meta=entry.day.meta||{};
     const pubCapRaw=Number(meta.pubCap);
@@ -13250,10 +13463,9 @@ function renderCrmStageGantt(rows, schedule){
     return true;
   });
   if(!filteredDays.length){
-    if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=false;
+    if(ganttEmpty) ganttEmpty.hidden=false;
     return;
   }
-  const rangeHintsEnabled=isGanttRangeHintsEnabled();
   const dayWidth=120;
   const dayTimeByIndex=filteredDays.map(entry=>entry.day.date.getTime());
   const totalWidth=filteredDays.length*dayWidth;
@@ -13272,14 +13484,14 @@ function renderCrmStageGantt(rows, schedule){
   }));
   const dayUsageMap=isHourly?new Map(filteredDays.map(({ key })=>[key,0])):null;
   const shouldRenderOrders=!(isHourly && filterValue==='free');
-  crmStageGanttHeader.style.gridTemplateColumns=headerTemplate;
-  crmStageGanttHeader.style.minWidth=widthValue;
-  crmStageGanttHeader.style.width=widthValue;
-  if(crmStageGanttBody){
-    crmStageGanttBody.style.minWidth=widthValue;
-    crmStageGanttBody.style.width=widthValue;
+  ganttHeader.style.gridTemplateColumns=headerTemplate;
+  ganttHeader.style.minWidth=widthValue;
+  ganttHeader.style.width=widthValue;
+  if(ganttBody){
+    ganttBody.style.minWidth=widthValue;
+    ganttBody.style.width=widthValue;
   }
-  if(crmStageGanttEmpty) crmStageGanttEmpty.hidden=true;
+  if(ganttEmpty) ganttEmpty.hidden=true;
   filteredDays.forEach(({ key, day })=>{
     const headerCell=document.createElement('span');
     const dow=document.createElement('span');
@@ -13299,7 +13511,7 @@ function renderCrmStageGantt(rows, schedule){
     if(key===todayKey){
       headerCell.classList.add('today');
     }
-    crmStageGanttHeader.appendChild(headerCell);
+    ganttHeader.appendChild(headerCell);
   });
   const perTask=schedule.perTask;
   const orderedRows=safeRows.slice().sort((a,b)=>a.displayIndex-b.displayIndex);
@@ -13315,12 +13527,6 @@ function renderCrmStageGantt(rows, schedule){
       });
     });
   }
-  const dayResidualMap=new Map(filteredDays.map(({ key })=>{
-    const meta=schedule.perDay.get(key)?.meta||{};
-    const capacityRaw=Number(meta.capDay);
-    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
-    return [key, capacity];
-  }));
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach((row,rowIdx)=>{
@@ -13388,21 +13594,48 @@ function renderCrmStageGantt(rows, schedule){
       if(key===todayKey){
         cell.classList.add('today');
       }
-      const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
-      const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
-      const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
-      const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
+      const segments=rowSegments.filter(seg=>seg.date instanceof Date && fmtDateISO(seg.date)===key);
+      let total=0;
+      let reserved=0;
+      let publicSum=0;
+      segments.forEach(seg=>{
+        const hours=Number(seg.hours)||0;
+        total+=hours;
+        if(seg.section==='reserve'){
+          reserved+=hours;
+        }else{
+          publicSum+=hours;
+        }
+      });
+      if(rangeHintsEnabled && rangeStartIdx>=0 && rangeEndIdx>=rangeStartIdx){
+        const highlight=document.createElement('div');
+        highlight.className='crm-stage-gantt-range crm-stage-gantt-range--bg';
+        const left=(rangeStartIdx*dayWidth)+2;
+        const width=Math.max(6, (rangeEndIdx-rangeStartIdx+1)*dayWidth-4);
+        highlight.style.left=`${left}px`;
+        highlight.style.width=`${width}px`;
+        rowEl.appendChild(highlight);
+      }
+      if(total>0 && !isHourly){
+        const usageLabel=document.createElement('div');
+        usageLabel.className='crm-stage-gantt-usage';
+        const totalLabel=formatStageWorkload(total, { hourless:!isHourly });
+        const reserveLabel=reserved>0?` (бронь ${formatStageWorkload(reserved,{hourless:!isHourly})})`:'';
+        const pubLabel=publicSum>0?` общая: ${formatStageWorkload(publicSum,{hourless:!isHourly})}`:'';
+        usageLabel.textContent=`${totalLabel}${reserveLabel}${pubLabel}`;
+        usageLabel.title=`${totalLabel}${reserveLabel}${pubLabel}`;
+        cell.appendChild(usageLabel);
+      }
       const totalsOnlyFree=isHourly && filterValue==='free';
       if(total>0){
         const fill=document.createElement('div');
         fill.className='crm-stage-gantt-fill';
         if(isHourly){
-          const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
-          const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
           const plannedLabel=formatStageWorkload(total,{ hourless:false });
-          fill.textContent=`${plannedLabel} / ${capLabel}`;
-          fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
-          dayResidualMap.set(key, Math.max(0, residualBefore-total));
+          const reserveLabel=reserved>0?` (бронь ${formatStageWorkload(reserved,{hourless:false})})`:'';
+          const pubLabel=publicSum>0?` общая: ${formatStageWorkload(publicSum,{hourless:false})}`:'';
+          fill.textContent=plannedLabel;
+          fill.title=`Запланировано: ${plannedLabel}${reserveLabel}${pubLabel}`;
         }else{
           fill.textContent=formatStageWorkload(total,{ hourless:true });
           fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
@@ -13412,6 +13645,13 @@ function renderCrmStageGantt(rows, schedule){
           fill.classList.add('late');
         }
         cell.appendChild(fill);
+      }
+      if(isHourly && total>0 && !totalsOnlyFree){
+        const reserveFill=document.createElement('div');
+        reserveFill.className='crm-stage-gantt-fill crm-stage-gantt-fill--reserve';
+        reserveFill.style.width=total>0?`${Math.min(100, (reserved/Math.max(total,0.001))*100)}%`:'0%';
+        reserveFill.title=`Бронь: ${formatStageWorkload(reserved,{hourless:false})}`;
+        cell.appendChild(reserveFill);
       }
       rowEl.appendChild(cell);
     });
@@ -13473,43 +13713,44 @@ function renderCrmStageGantt(rows, schedule){
     });
     fragmentBody.appendChild(totalRow);
   }
-  crmStageGanttLeft.appendChild(fragmentLeft);
-  crmStageGanttBody.appendChild(fragmentBody);
+  ganttLeft.appendChild(fragmentLeft);
+  ganttBody.appendChild(fragmentBody);
   let syncLock=false;
-  const scrollEl=crmStageGanttScroll||crmStageGanttBody;
+  const scrollEl=ganttScroll||ganttBody;
   if(scrollEl){
     scrollEl.onscroll=null;
   }
-  if(crmStageGanttLeft){
-    crmStageGanttLeft.onscroll=null;
+  if(ganttLeft){
+    ganttLeft.onscroll=null;
   }
   if(scrollEl){
     scrollEl.onscroll=()=>{
       if(syncLock) return;
       syncLock=true;
-      if(crmStageGanttLeft){
-        crmStageGanttLeft.scrollTop=scrollEl.scrollTop;
+      if(ganttLeft){
+        ganttLeft.scrollTop=scrollEl.scrollTop;
       }
       syncLock=false;
     };
   }
-  if(crmStageGanttLeft){
-    crmStageGanttLeft.onscroll=()=>{
+  if(ganttLeft){
+    ganttLeft.onscroll=()=>{
       if(syncLock) return;
       syncLock=true;
       if(scrollEl){
-        scrollEl.scrollTop=crmStageGanttLeft.scrollTop;
+        scrollEl.scrollTop=ganttLeft.scrollTop;
       }
       syncLock=false;
     };
   }
-  syncCrmGanttLayout();
+  syncCrmGanttLayout({ leftHeader:ganttLeftHeader, header:ganttHeader, left:ganttLeft, body:ganttBody });
 }
 
-  function syncCrmGanttLayout(){
+  function syncCrmGanttLayout(refs){
+    const r=refs&&typeof refs==='object'?refs:{};
     const apply=()=>{
-      syncCrmGanttHeaderHeight();
-      syncCrmGanttRowHeights();
+      syncCrmGanttHeaderHeight(r);
+      syncCrmGanttRowHeights(r);
     };
     if(typeof requestAnimationFrame==='function'){
       requestAnimationFrame(apply);
@@ -13517,8 +13758,7 @@ function renderCrmStageGantt(rows, schedule){
       setTimeout(apply,0);
     }
   }
-
-  function getCrmStageGanttRows(){
+function getCrmStageGanttRows(){
     if(Array.isArray(crmStageGanttRowsCache) && crmStageGanttRowsCache.length){
       return crmStageGanttRowsCache;
     }
@@ -13528,23 +13768,27 @@ function renderCrmStageGantt(rows, schedule){
     return [];
   }
 
-function syncCrmGanttHeaderHeight(){
-  if(!crmStageGanttLeftHeader || !crmStageGanttHeader){
+function syncCrmGanttHeaderHeight(refs={}){
+  const header=refs.header||crmStageGanttHeader;
+  const leftHeader=refs.leftHeader||crmStageGanttLeftHeader;
+  if(!leftHeader || !header){
     return;
   }
-  crmStageGanttLeftHeader.style.removeProperty('min-height');
-  const height=crmStageGanttHeader.offsetHeight||0;
+  leftHeader.style.removeProperty('min-height');
+  const height=header.offsetHeight||0;
   if(height>0){
-    crmStageGanttLeftHeader.style.minHeight=`${height}px`;
+    leftHeader.style.minHeight=`${height}px`;
   }
 }
 
-function syncCrmGanttRowHeights(){
-  if(!crmStageGanttLeft || !crmStageGanttBody){
+function syncCrmGanttRowHeights(refs={}){
+  const left=refs.left||crmStageGanttLeft;
+  const body=refs.body||crmStageGanttBody;
+  if(!left || !body){
     return;
   }
-  const leftRows=Array.from(crmStageGanttLeft.children||[]);
-  const bodyRows=Array.from(crmStageGanttBody.children||[]);
+  const leftRows=Array.from(left.children||[]);
+  const bodyRows=Array.from(body.children||[]);
   leftRows.forEach(row=>{ if(row && row.style) row.style.minHeight=''; });
   bodyRows.forEach(row=>{ if(row && row.style) row.style.minHeight=''; });
   const total=Math.min(leftRows.length, bodyRows.length);
@@ -15101,6 +15345,150 @@ function notifyCrmStageScheduleErrors(schedule){
     flushCrmPlanFreezeDirty();
     applyCrmStageSelectionHighlight();
   }
+
+function showCrmReportsList(){
+  crmReportsActivePanel='list';
+  if(crmReportsListEl){
+    crmReportsListEl.hidden=false;
+    crmReportsListEl.setAttribute('aria-hidden','false');
+  }
+  if(crmGanttReportEl){
+    crmGanttReportEl.hidden=true;
+    crmGanttReportEl.setAttribute('aria-hidden','true');
+  }
+}
+
+function openCrmGanttReport(){
+  crmReportsActivePanel='gantt';
+  if(crmReportsListEl){
+    crmReportsListEl.hidden=true;
+    crmReportsListEl.setAttribute('aria-hidden','true');
+  }
+  if(crmGanttReportEl){
+    crmGanttReportEl.hidden=false;
+    crmGanttReportEl.setAttribute('aria-hidden','false');
+  }
+  renderCrmReportsGantt();
+}
+
+function renderCrmReportsGantt(){
+  if(!crmGanttReportList) return;
+  const filterValue=crmReportsGanttFilter?crmReportsGanttFilter.value:'all';
+  const rangeEnabled=crmReportsGanttRange?!!crmReportsGanttRange.checked:isGanttRangeHintsEnabled();
+  if(crmReportsGanttRange){
+    setGanttRangeHintsEnabled(rangeEnabled);
+  }
+  crmGanttReportList.innerHTML='';
+  const stages=CRM_STAGE_SEQUENCE.length?CRM_STAGE_SEQUENCE.slice():CRM_STAGE_KEYS.slice();
+  let rendered=0;
+  stages.forEach(stageKey=>{
+    const { rows:allRows }=collectCrmStageRows(stageKey,{ ignoreSearch:true });
+    const schedule=allRows.length?buildCrmStageSchedule(stageKey, allRows):null;
+    const stageFilter=getCrmStageFilter(stageKey);
+    const visibleRows=[];
+    allRows.forEach(entry=>{
+      if(!crmStageRowMatchesFilter(stageFilter, entry)) return;
+      if(orderSearchNormalized && !orderMatchesSearch(entry.order)) return;
+      entry.displayIndex=visibleRows.length+1;
+      visibleRows.push(entry);
+    });
+    const card=buildCrmGanttReportCard(
+      stageKey,
+      visibleRows,
+      schedule??buildCrmStageGanttPlaceholderSchedule(stageKey),
+      filterValue,
+      rangeEnabled
+    );
+    if(card){
+      crmGanttReportList.appendChild(card);
+      rendered+=1;
+    }
+  });
+  if(crmGanttReportEmpty){
+    crmGanttReportEmpty.hidden=rendered>0;
+  }
+}
+
+function buildCrmGanttReportCard(stageKey, rows, schedule, filterValue, rangeEnabled){
+  const wrapper=document.createElement('section');
+  wrapper.className='crm-report-gantt-card';
+
+  const header=document.createElement('div');
+  header.className='crm-report-gantt-card__header';
+
+  const title=document.createElement('div');
+  title.className='crm-report-gantt-card__title';
+  const icon=document.createElement('span');
+  icon.textContent=CRM_STAGE_ICONS[stageKey]||'⏱';
+  const label=document.createElement('span');
+  label.textContent=CRM_STAGE_LABELS[stageKey]||stageKey;
+  title.append(icon, label);
+
+  const subtitle=document.createElement('div');
+  subtitle.className='crm-report-gantt-card__subtitle';
+  subtitle.textContent=rows.length>0
+    ? `${rows.length} ${formatOrderWord(rows.length)}`
+    : 'Нет заказов';
+
+  header.append(title, subtitle);
+
+  const shell=document.createElement('div');
+  shell.className='crm-stage-gantt-shell';
+
+  const grid=document.createElement('div');
+  grid.className='crm-stage-gantt-grid';
+
+  const leftWrap=document.createElement('div');
+  leftWrap.className='crm-stage-gantt-left';
+  const leftHeader=document.createElement('div');
+  leftHeader.className='crm-stage-gantt-left-header';
+  leftHeader.textContent='Заказ / Дата';
+  const leftBody=document.createElement('div');
+  leftBody.className='crm-stage-gantt-left-body';
+  leftWrap.append(leftHeader, leftBody);
+
+  const rightWrap=document.createElement('div');
+  rightWrap.className='crm-stage-gantt-right';
+  const scroll=document.createElement('div');
+  scroll.className='crm-stage-gantt-scroll';
+  const headerRow=document.createElement('div');
+  headerRow.className='crm-stage-gantt-header-row';
+  const bodyRow=document.createElement('div');
+  bodyRow.className='crm-stage-gantt-body';
+  scroll.append(headerRow, bodyRow);
+  rightWrap.append(scroll);
+
+  grid.append(leftWrap, rightWrap);
+  shell.append(grid);
+
+  const empty=document.createElement('div');
+  empty.className='crm-stage-detail-empty';
+  empty.textContent='Недостаточно данных для диаграммы';
+  empty.hidden=true;
+
+  wrapper.append(header, shell, empty);
+
+  renderCrmStageGantt(rows, schedule, {
+    left:leftBody,
+    header:headerRow,
+    body:bodyRow,
+    leftHeader,
+    empty,
+    scroll,
+    filterValue,
+    rangeHintsEnabled:rangeEnabled
+  });
+
+  return wrapper;
+}
+
+function renderCrmReportsHome(){
+  if(crmReportsActivePanel==='gantt'){
+    openCrmGanttReport();
+  }else{
+    showCrmReportsList();
+  }
+}
 
 function updateCrmAuxButtons(){
   const unaccounted=collectCrmUnaccountedOrders();
@@ -17079,6 +17467,7 @@ function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
   const inKanban=currentCrmView==='kanban';
+  const inReports=currentCrmView==='reports';
   if(crmNavKanbanBtn){
     crmNavKanbanBtn.classList.toggle('pc-nav__link--active',inKanban);
     crmNavKanbanBtn.setAttribute('aria-pressed',inKanban?'true':'false');
@@ -17092,6 +17481,10 @@ function updateCrmOrdersTabUi(){
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
     renderCrmStageTabLabel(crmStageSelect?.value||'draw');
   }
+  if(crmReportsNavBtn){
+    crmReportsNavBtn.classList.toggle('pc-nav__link--active',inReports);
+    crmReportsNavBtn.setAttribute('aria-pressed',inReports?'true':'false');
+  }
   if(crmStageControls){
     crmStageControls.hidden=!inStage;
     crmStageControls.setAttribute('aria-hidden',inStage?'false':'true');
@@ -17103,6 +17496,10 @@ function updateCrmOrdersTabUi(){
   if(crmStageViewEl){
     crmStageViewEl.hidden=!inStage;
     crmStageViewEl.setAttribute('aria-hidden',inStage?'false':'true');
+  }
+  if(crmReportsViewEl){
+    crmReportsViewEl.hidden=!inReports;
+    crmReportsViewEl.setAttribute('aria-hidden',inReports?'false':'true');
   }
 }
 
@@ -17129,6 +17526,8 @@ function setCrmView(view){
     syncCrmOrdersTotals();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='reports'){
+    renderCrmReportsHome();
   }else{
     renderCards();
   }
@@ -17139,6 +17538,8 @@ function renderCurrentView(){
     renderOrdersTable();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='reports'){
+    renderCrmReportsHome();
   }else{
     renderCards();
     updateCrmAuxButtons();
@@ -22758,6 +23159,9 @@ if(crmOrdersTabBtn){
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
 }
+if(crmReportsNavBtn){
+  crmReportsNavBtn.addEventListener('click',()=>setCrmView('reports'));
+}
 if(crmStageNavItem && crmStageNavDropdown){
   const openStageDropdown=()=>{
     if(crmStageNavHoverTimeout){
@@ -22836,6 +23240,34 @@ if(crmStageFilter){
       renderCrmStageGantt(getCrmStageGanttRows(), crmStageScheduleCache);
     });
   }
+
+if(crmOpenGanttReportBtn){
+  crmOpenGanttReportBtn.addEventListener('click',openCrmGanttReport);
+}
+if(crmGanttReportBackBtn){
+  crmGanttReportBackBtn.addEventListener('click',showCrmReportsList);
+}
+if(crmReportsGanttFilter){
+  crmReportsGanttFilter.addEventListener('change',()=>{
+    if(currentCrmView==='reports'){
+      renderCrmReportsGantt();
+    }
+  });
+}
+if(crmReportsGanttRange){
+  crmReportsGanttRange.checked=isGanttRangeHintsEnabled();
+  crmReportsGanttRange.addEventListener('change',()=>{
+    setGanttRangeHintsEnabled(!!crmReportsGanttRange.checked);
+    if(currentCrmView==='reports'){
+      renderCrmReportsGantt();
+    }
+  });
+}
+if(crmReportsBuilderBtn){
+  crmReportsBuilderBtn.addEventListener('click',()=>{
+    showToast({ title:'Отчеты', message:'Конструктор пока в разработке.', tone:'info', autoClose:3000 });
+  });
+}
 
 if(crmStageDetailToggle){
   crmStageDetailToggle.addEventListener('click',()=>toggleCrmSection('detail'));
