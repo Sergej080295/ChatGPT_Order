@@ -7227,6 +7227,7 @@ const CRM_DEFAULT_PREFERENCES={
   showLateTips:true,
   autoRefreshSeconds:CRM_DEFAULT_AUTO_REFRESH_SECONDS,
   routeHorizonDays:CRM_DEFAULT_ROUTE_HORIZON_DAYS,
+  autoDateOffsetDays:1,
   laneSumPeriod:CRM_DEFAULT_LANE_SUM_PERIOD,
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
@@ -8038,6 +8039,12 @@ function sanitizeCrmPreferences(raw){
     if(Object.prototype.hasOwnProperty.call(raw,'ganttRangeHints')){
       result.ganttRangeHints=raw.ganttRangeHints===true;
     }
+    if(Object.prototype.hasOwnProperty.call(raw,'autoDateOffsetDays')){
+      const parsed=Number(raw.autoDateOffsetDays);
+      if(Number.isFinite(parsed)){
+        result.autoDateOffsetDays=Math.max(0, Math.round(parsed));
+      }
+    }
   }
   return result;
 }
@@ -8139,6 +8146,13 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getCrmAutoDateOffsetDays(){
+  const prefs=getCrmPreferences();
+  const value=Number(prefs?.autoDateOffsetDays);
+  if(Number.isFinite(value)) return Math.max(0, Math.round(value));
+  return 0;
 }
 
 function getCrmLaneVisibilityPrefs(){
@@ -10183,7 +10197,7 @@ function getCrmStageCalendarEntryList(stageKey, kind){
 function writeCrmStageCalendarEntries(stageKey, kind, entries){
   const calendars=ensureCrmStageCalendars();
   const entry=calendars[stageKey]||{ exceptions:[], reserves:[], history:[] };
-  entry[kind]=sanitizeCrmCalendarEntries(entries, kind==='exception');
+  entry[kind]=sanitizeCrmCalendarEntries(entries, kind==='exception' || kind==='exceptions');
   calendars[stageKey]=entry;
 }
 
@@ -18397,9 +18411,10 @@ function calculateOrderStageDates(options={}){
 
 function determineStageEarliestStartDate(stageKey, previousEndDate){
   const today=today0();
-  let earliest=addDays(today,0);
+  const offsetDays=getCrmAutoDateOffsetDays();
+  let earliest=addDays(today, offsetDays);
   if(previousEndDate instanceof Date && !Number.isNaN(previousEndDate.getTime())){
-    const prev=addDays(previousEndDate,0);
+    const prev=addDays(previousEndDate, offsetDays);
     if(prev>earliest){
       earliest=prev;
     }
@@ -20351,6 +20366,25 @@ function renderCrmPreferencesSettingsUI(){
   horizonHint.className='crm-field__hint';
   horizonHint.textContent='Дополнительные дни в «Подетально» и диаграмме Ганта (0 — только фактические даты заказов).';
   horizonField.append(horizonLabel, horizonInput, horizonHint);
+  const autoDateOffsetField=document.createElement('label');
+  autoDateOffsetField.className='crm-field';
+  const autoDateOffsetLabel=document.createElement('span');
+  autoDateOffsetLabel.className='crm-field__label';
+  autoDateOffsetLabel.textContent='Сдвиг старта автодат, дней';
+  const autoDateOffsetInput=document.createElement('input');
+  autoDateOffsetInput.type='number';
+  autoDateOffsetInput.className='pc-input';
+  autoDateOffsetInput.name='prefAutoDateOffsetDays';
+  autoDateOffsetInput.min='0';
+  autoDateOffsetInput.step='1';
+  autoDateOffsetInput.inputMode='numeric';
+  if(Number.isFinite(prefs.autoDateOffsetDays)){
+    autoDateOffsetInput.value=String(Math.max(0, Math.round(prefs.autoDateOffsetDays)));
+  }
+  const autoDateOffsetHint=document.createElement('span');
+  autoDateOffsetHint.className='crm-field__hint';
+  autoDateOffsetHint.textContent='Применяется при автозаполнении дат переделов (0 — день в день).';
+  autoDateOffsetField.append(autoDateOffsetLabel, autoDateOffsetInput, autoDateOffsetHint);
   const laneSumField=document.createElement('label');
   laneSumField.className='crm-field';
   const laneSumLabel=document.createElement('span');
@@ -20461,7 +20495,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, autoDateOffsetField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -21098,6 +21132,7 @@ boardForm.addEventListener('submit',e=>{
     showLateTips:!!boardForm.prefShowLateTips?.checked,
     autoRefreshSeconds:boardForm.prefAutoRefreshSeconds?boardForm.prefAutoRefreshSeconds.value:'',
     routeHorizonDays:boardForm.prefRouteHorizonDays?boardForm.prefRouteHorizonDays.value:'',
+    autoDateOffsetDays:boardForm.prefAutoDateOffsetDays?boardForm.prefAutoDateOffsetDays.value:'',
     laneSumPeriod:{
       mode:boardForm.prefLaneSumMode?boardForm.prefLaneSumMode.value:'',
       from:boardForm.prefLaneSumFrom?boardForm.prefLaneSumFrom.value:'',
