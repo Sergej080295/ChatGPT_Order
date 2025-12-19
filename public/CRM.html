@@ -13527,12 +13527,6 @@ function renderCrmStageGantt(rows, schedule, options={}){
       });
     });
   }
-  const dayResidualMap=new Map(filteredDays.map(({ key })=>{
-    const meta=schedule.perDay.get(key)?.meta||{};
-    const capacityRaw=Number(meta.capDay);
-    const capacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
-    return [key, capacity];
-  }));
   const fragmentLeft=document.createDocumentFragment();
   const fragmentBody=document.createDocumentFragment();
   orderedRows.forEach((row,rowIdx)=>{
@@ -13601,9 +13595,6 @@ function renderCrmStageGantt(rows, schedule, options={}){
         cell.classList.add('today');
       }
       const segments=rowSegments.filter(seg=>seg.date instanceof Date && fmtDateISO(seg.date)===key);
-      const capacityInfo=schedule.perDay.get(key)?.meta||{};
-      const capacityRaw=Number(capacityInfo.capDay);
-      const baseCapacity=Number.isFinite(capacityRaw)?capacityRaw:schedule.baseCapacity;
       let total=0;
       let reserved=0;
       let publicSum=0;
@@ -13625,7 +13616,7 @@ function renderCrmStageGantt(rows, schedule, options={}){
         highlight.style.width=`${width}px`;
         rowEl.appendChild(highlight);
       }
-      if(total>0){
+      if(total>0 && !isHourly){
         const usageLabel=document.createElement('div');
         usageLabel.className='crm-stage-gantt-usage';
         const totalLabel=formatStageWorkload(total, { hourless:!isHourly });
@@ -13640,12 +13631,11 @@ function renderCrmStageGantt(rows, schedule, options={}){
         const fill=document.createElement('div');
         fill.className='crm-stage-gantt-fill';
         if(isHourly){
-          const residualBefore=Math.max(0, dayResidualMap.get(key) ?? baseCapacity);
-          const capLabel=formatStageWorkload(residualBefore,{ hourless:false });
           const plannedLabel=formatStageWorkload(total,{ hourless:false });
-          fill.textContent=`${plannedLabel} / ${capLabel}`;
-          fill.title=`Запланировано: ${plannedLabel} из ${capLabel}`;
-          dayResidualMap.set(key, Math.max(0, residualBefore-total));
+          const reserveLabel=reserved>0?` (бронь ${formatStageWorkload(reserved,{hourless:false})})`:'';
+          const pubLabel=publicSum>0?` общая: ${formatStageWorkload(publicSum,{hourless:false})}`:'';
+          fill.textContent=plannedLabel;
+          fill.title=`Запланировано: ${plannedLabel}${reserveLabel}${pubLabel}`;
         }else{
           fill.textContent=formatStageWorkload(total,{ hourless:true });
           fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:true })}`;
