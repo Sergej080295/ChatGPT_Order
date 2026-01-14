@@ -1,5 +1,6 @@
 (() => {
   const STORAGE_KEY = 'plancore_theme';
+  const PLANECORE_VERSION = '5.51';
   const prefersDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   const getCurrentTheme = () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light');
@@ -51,6 +52,17 @@
       const section = link.dataset.section;
       link.classList.toggle('pc-nav__link--active', section === currentSection);
     });
+  };
+
+  const ensureVersionBadge = () => {
+    let badge = document.querySelector('.pc-version-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'pc-version-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(badge);
+    }
+    badge.textContent = `PlaneCore v${PLANECORE_VERSION}`;
   };
 
   let navTooltipEl = null;
@@ -127,6 +139,7 @@
     updateToggleLabel(theme);
     initNav();
     bindNavTooltips();
+    ensureVersionBadge();
 
     const toggleBtn = document.querySelector('[data-action="toggle-theme"]');
     if (toggleBtn) {

@@ -4174,8 +4174,39 @@
   }
 
   .crm-linklike {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
     cursor: pointer;
     color: var(--pc-link, #2563eb);
+    transition: color 0.2s ease, transform 0.2s ease;
+  }
+
+  .crm-linklike::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -2px;
+    width: 100%;
+    height: 2px;
+    background: currentColor;
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform 0.2s ease;
+  }
+
+  .crm-linklike:hover,
+  .crm-linklike:focus {
+    color: color-mix(in srgb, var(--pc-link, #2563eb) 85%, #0f172a 15%);
+  }
+
+  .crm-linklike:hover::after,
+  .crm-linklike:focus::after {
+    transform: scaleX(1);
+  }
+
+  .crm-linklike:active {
+    transform: translateY(1px);
   }
 
 
@@ -5998,9 +6029,9 @@
   </div>
   <nav class="pc-nav" aria-label="Основные разделы">
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
-    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
+    <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-section="orders" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
     <div class="pc-nav__item crm-stage-nav" id="crmStageNavItem">
-      <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-view="stage" aria-haspopup="true" aria-expanded="false">Переделы</button>
+      <button class="pc-nav__link" type="button" id="crmStageTabBtn" data-section="stage" data-view="stage" aria-haspopup="true" aria-expanded="false">Переделы</button>
       <div class="crm-stage-nav__dropdown" id="crmStageNavDropdown" hidden>
         <div class="crm-stage-nav__dropdown-inner">
           <span class="crm-stage-select-shell" id="crmStageSelectShell" data-stage="">
@@ -10535,6 +10566,11 @@ if(crmStageFilter){
 setCrmStageFilter(initialStageViewKey, crmStageFilter ? crmStageFilter.value : getCrmStageFilter(initialStageViewKey));
 if(document.body){
   document.body.dataset.crmView=currentCrmView;
+  document.body.dataset.section=currentCrmView==='stage'
+    ? 'stage'
+    : currentCrmView==='orders'
+      ? 'orders'
+      : 'crm';
 }
 persistCrmSessionView();
 persistCrmSessionStage(initialStageViewKey);
@@ -13347,9 +13383,9 @@ function renderCrmStageGantt(rows, schedule){
     label.className='crm-stage-gantt-left-row';
     label.textContent=`${displayIndex}. ${row.orderTitle||'Заказ'}`;
     if(orderId && crmCanViewOrderDetails()){
-      label.classList.add('crm-linklike');
+      label.classList.add('crm-linklike', 'crm-order-title');
       label.title='Открыть карточку заказа';
-      label.addEventListener('dblclick',()=>openOrder(orderId));
+      label.addEventListener('click',()=>openOrder(orderId));
     }
     fragmentLeft.appendChild(label);
     const rowEl=document.createElement('div');
@@ -14002,8 +14038,8 @@ function renderCrmRouteDetailed(dataset, days){
     label.title=label.textContent;
     const orderId=order?.order?.id||order.orderId||order.id||'';
     if(orderId && crmCanViewOrderDetails()){
-      label.classList.add('crm-linklike');
-      label.addEventListener('dblclick',()=>openOrder(orderId));
+      label.classList.add('crm-linklike', 'crm-order-title');
+      label.addEventListener('click',()=>openOrder(orderId));
     }
     leftFragment.appendChild(label);
     const orderRow=createCrmRouteRow(days);
@@ -14118,8 +14154,8 @@ function renderCrmRouteCompact(dataset, days){
     label.title=label.textContent;
     const orderId=order?.order?.id||order.orderId||order.id||'';
     if(orderId && crmCanViewOrderDetails()){
-      label.classList.add('crm-linklike');
-      label.addEventListener('dblclick',()=>openOrder(orderId));
+      label.classList.add('crm-linklike', 'crm-order-title');
+      label.addEventListener('click',()=>openOrder(orderId));
     }
     leftFragment.appendChild(label);
     const row=createCrmRouteRow(days);
@@ -16278,10 +16314,13 @@ function renderOrdersTable(){
   rows.forEach(entry=>{
     const tr=document.createElement('tr');
     const title=buildCrmOrderTitle(entry.order);
+    const titleMarkup=entry.order?.id && crmCanViewOrderDetails()
+      ? `<span class="crm-linklike crm-order-title" data-order-id="${escapeHtml(entry.order.id)}">${escapeHtml(title)}</span>`
+      : escapeHtml(title);
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td>${renderOrderRouteCell(entry.order)}</td>
-      <td>${escapeHtml(title)}</td>
+      <td>${titleMarkup}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.proc)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.shear)}</td>
       <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.draw)}</td>
@@ -16305,8 +16344,12 @@ function renderOrdersTable(){
       }
     }
     const titleCell=tr.children[2];
-    if(titleCell && entry.order?.id){
-      titleCell.addEventListener('dblclick',()=>openOrder(entry.order.id));
+    const titleLink=titleCell?.querySelector('.crm-order-title');
+    if(titleLink && entry.order?.id){
+      titleLink.addEventListener('click',evt=>{
+        evt.stopPropagation();
+        openOrder(entry.order.id);
+      });
     }
     crmOrdersTableBody.appendChild(tr);
   });
@@ -16515,9 +16558,13 @@ function renderCrmStageTable(){
     const deleteDisabled=stageEditable?'':'disabled';
     const statusCellClass=['crm-stage-row-status', entry.statusClass].filter(Boolean).join(' ');
     const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
+    const orderTitleText=escapeHtml(entry.orderTitle||'Заказ');
+    const clickableTitle=entry.order?.id && crmCanViewOrderDetails()
+      ? `<span class="crm-linklike crm-order-title" data-order-id="${escapeHtml(entry.order.id)}">${orderTitleText}</span>`
+      : orderTitleText;
     const titleMarkup=entry.occurrenceTotal>1
-      ? `${escapeHtml(entry.orderTitle||'Заказ')} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
-      : escapeHtml(entry.orderTitle||'Заказ');
+      ? `${clickableTitle} <span class="crm-stage-dup-badge">№${entry.occurrenceIndex}</span>`
+      : clickableTitle;
     const pinTaskId=entry.stageId||entry.identity;
     const pinRecord=pinTaskId?getCrmPlanFreezeTaskRecord(entry.stageKey, pinTaskId):null;
     const pinned=!!(pinRecord && Array.isArray(pinRecord.segments) && pinRecord.segments.length);
@@ -16597,11 +16644,13 @@ function renderCrmStageTable(){
       });
     }
     tr.addEventListener('click',()=>setCrmStageSelection(entry.identity));
-    tr.addEventListener('dblclick',()=>{
-      if(entry.order?.id){
+    const titleLink=tr.querySelector('.crm-order-title');
+    if(titleLink && entry.order?.id){
+      titleLink.addEventListener('click',evt=>{
+        evt.stopPropagation();
         openOrder(entry.order.id);
-      }
-    });
+      });
+    }
     const statusCell=tr.querySelector('.crm-stage-row-status');
     if(statusCell){
       if(entry.statusTitle){
@@ -17136,6 +17185,11 @@ function setCrmView(view){
   }
   if(document.body){
     document.body.dataset.crmView=currentCrmView;
+    document.body.dataset.section=currentCrmView==='stage'
+      ? 'stage'
+      : currentCrmView==='orders'
+        ? 'orders'
+        : 'crm';
   }
   updateCrmOrdersTabUi();
   if(currentCrmView==='orders'){
