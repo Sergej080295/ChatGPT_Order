@@ -1,6 +1,6 @@
 (() => {
   const STORAGE_KEY = 'plancore_theme';
-  const PLANECORE_VERSION = '5.51';
+  const PLANECORE_VERSION = '5.52';
   const prefersDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   const getCurrentTheme = () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light');
@@ -62,7 +62,7 @@
       badge.setAttribute('aria-hidden', 'true');
       document.body.appendChild(badge);
     }
-    badge.textContent = `PlaneCore v${PLANECORE_VERSION}`;
+    badge.textContent = `v${PLANECORE_VERSION}`;
   };
 
   let navTooltipEl = null;

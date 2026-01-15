@@ -5200,6 +5200,14 @@
     display: inline-flex;
   }
 
+  .card-edited-today {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--pc-info);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-info) 20%, transparent);
+  }
+
   .card button {
     border: none;
     background: color-mix(in srgb, var(--pc-border) 45%, transparent);
@@ -6964,6 +6972,7 @@
     <div class="crm-admin-tabs" role="tablist" aria-label="Разделы администрирования">
       <button type="button" class="crm-admin-tab" data-admin-tab="users" role="tab" aria-selected="true">Пользователи</button>
       <button type="button" class="crm-admin-tab" data-admin-tab="roles" role="tab" aria-selected="false">Роли и права</button>
+      <button type="button" class="crm-admin-tab" data-admin-tab="settings" role="tab" aria-selected="false">Настройки</button>
       <button type="button" class="crm-admin-tab" data-admin-tab="audit" role="tab" aria-selected="false">Журнал действий</button>
     </div>
     <section class="crm-admin-section" data-admin-section="users" aria-hidden="false">
@@ -7032,6 +7041,39 @@
       <div class="crm-admin-actions">
         <button type="button" class="pc-btn pc-btn--primary" id="crmAdminRolesSave">Сохранить настройки ролей</button>
       </div>
+    </section>
+    <section class="crm-admin-section" data-admin-section="settings" aria-hidden="true">
+      <form id="crmAdminSettingsForm" class="crm-admin-form" autocomplete="off">
+        <div class="crm-admin-field">
+          <label>Стикеры на плитках CRM</label>
+          <div class="crm-admin-role-grid">
+            <label class="crm-admin-role-option">
+              <input type="checkbox" id="crmAdminStickerStageHours" />
+              <span>Часы по переделам</span>
+            </label>
+            <label class="crm-admin-role-option">
+              <input type="checkbox" id="crmAdminStickerServiceTotal" />
+              <span>Сумма услуг</span>
+            </label>
+            <label class="crm-admin-role-option">
+              <input type="checkbox" id="crmAdminStickerDateRange" />
+              <span>Диапазон дат заказа</span>
+            </label>
+            <label class="crm-admin-role-option">
+              <input type="checkbox" id="crmAdminStickerPartShare" />
+              <span>Часть (%)</span>
+            </label>
+            <label class="crm-admin-role-option">
+              <input type="checkbox" id="crmAdminStickerRestShare" />
+              <span>Остаток (%)</span>
+            </label>
+          </div>
+          <div class="crm-admin-pill">Настройки применяются ко всем пользователям и влияют на видимость стикеров в канбане.</div>
+        </div>
+        <div class="crm-admin-field crm-admin-field--actions">
+          <button type="submit" class="pc-btn pc-btn--primary" id="crmAdminSettingsSave">Сохранить</button>
+        </div>
+      </form>
     </section>
     <section class="crm-admin-section" data-admin-section="audit" aria-hidden="true">
       <div class="crm-admin-actions">
@@ -7252,6 +7294,13 @@ const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
 const CRM_LANE_SUM_MODES=new Set(['range','all']);
 const CRM_HINT_DEFAULTS=Object.freeze({ enabled:true, level1:true, level2:true, delayMs:500 });
+const CRM_KANBAN_STICKER_DEFAULTS=Object.freeze({
+  stageHours:true,
+  serviceTotal:true,
+  dateRange:true,
+  partShare:true,
+  restShare:true
+});
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
@@ -7642,6 +7691,7 @@ function sanitizeCrmSettings(raw){
   result.journalRetention=journalRetention;
   result.planFreezeDays=sanitizePlanFreezeDays(base.planFreezeDays);
   result.autoPinOrders=base.autoPinOrders===true;
+  result.admin=sanitizeCrmAdminSettings(base.admin);
   return result;
 }
 
@@ -7742,6 +7792,16 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
   result.planFreezeDays=sanitizePlanFreezeDays(
     preferred.planFreezeDays!==undefined?preferred.planFreezeDays:fallback.planFreezeDays
   );
+  const preferredAdmin=sanitizeCrmAdminSettings(preferred.admin);
+  const fallbackAdmin=sanitizeCrmAdminSettings(fallback.admin);
+  result.admin={
+    ...fallbackAdmin,
+    ...preferredAdmin,
+    kanbanStickers:{
+      ...fallbackAdmin.kanbanStickers,
+      ...preferredAdmin.kanbanStickers
+    }
+  };
 
   return sanitizeCrmSettings(result);
 }
@@ -8080,6 +8140,25 @@ function sanitizeCrmPreferences(raw){
   return result;
 }
 
+function sanitizeCrmKanbanStickerPrefs(raw){
+  const source=raw && typeof raw==='object' ? raw : {};
+  return {
+    stageHours:source.stageHours!==false,
+    serviceTotal:source.serviceTotal!==false,
+    dateRange:source.dateRange!==false,
+    partShare:source.partShare!==false,
+    restShare:source.restShare!==false
+  };
+}
+
+function sanitizeCrmAdminSettings(raw){
+  const base=raw && typeof raw==='object' ? raw : {};
+  return {
+    ...base,
+    kanbanStickers:sanitizeCrmKanbanStickerPrefs(base.kanbanStickers)
+  };
+}
+
 function sanitizeCrmStartView(value){
   if(typeof value==='string'){
     const normalized=value.trim().toLowerCase();
@@ -8177,6 +8256,15 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getCrmAdminSettings(){
+  return sanitizeCrmAdminSettings(state?.settings?.admin);
+}
+
+function getCrmKanbanStickerPrefs(){
+  const admin=getCrmAdminSettings();
+  return sanitizeCrmKanbanStickerPrefs(admin?.kanbanStickers);
 }
 
 function getCrmAutoDateOffsetDays(){
@@ -9187,6 +9275,9 @@ function shouldShowCrmLateTips(){
 function save(summary, options){
   const opts=options&&typeof options==='object'?options:{};
   const skipAutoOptimize=!!opts.skipAutoOptimize;
+  const meta=opts.meta&&typeof opts.meta==='object' && !Array.isArray(opts.meta)
+    ? { ...opts.meta }
+    : null;
   if(!skipAutoOptimize && !crmAutoOptimizeGuard && isCrmAutoOptimizationEnabled()){
     crmAutoOptimizeGuard=true;
     try{
@@ -9196,7 +9287,7 @@ function save(summary, options){
     }
   }
   persistLocal();
-  queueSync(summary);
+  queueSync(summary, meta);
 }
 function currentBoard(){
   state=ensureCrmStateShape(state);
@@ -10399,6 +10490,13 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmAdminRoleDescription=$('#crmAdminRoleDescription'),
       crmAdminRoleCreateBtn=$('#crmAdminRoleCreateBtn'),
       crmAdminRolesSave=$('#crmAdminRolesSave'),
+      crmAdminSettingsForm=$('#crmAdminSettingsForm'),
+      crmAdminStickerStageHours=$('#crmAdminStickerStageHours'),
+      crmAdminStickerServiceTotal=$('#crmAdminStickerServiceTotal'),
+      crmAdminStickerDateRange=$('#crmAdminStickerDateRange'),
+      crmAdminStickerPartShare=$('#crmAdminStickerPartShare'),
+      crmAdminStickerRestShare=$('#crmAdminStickerRestShare'),
+      crmAdminSettingsSave=$('#crmAdminSettingsSave'),
       crmAdminAuditList=$('#crmAdminAuditList'),
       crmAdminAuditRefresh=$('#crmAdminAuditRefresh'),
       crmUserMenu=$('#crmUserMenu'),
@@ -15561,6 +15659,48 @@ function renderCrmAdminRoles(){
   });
 }
 
+function renderCrmAdminSettings(){
+  const prefs=getCrmKanbanStickerPrefs();
+  if(crmAdminStickerStageHours) crmAdminStickerStageHours.checked=prefs.stageHours!==false;
+  if(crmAdminStickerServiceTotal) crmAdminStickerServiceTotal.checked=prefs.serviceTotal!==false;
+  if(crmAdminStickerDateRange) crmAdminStickerDateRange.checked=prefs.dateRange!==false;
+  if(crmAdminStickerPartShare) crmAdminStickerPartShare.checked=prefs.partShare!==false;
+  if(crmAdminStickerRestShare) crmAdminStickerRestShare.checked=prefs.restShare!==false;
+}
+
+function collectCrmAdminStickerPrefs(){
+  return {
+    stageHours:crmAdminStickerStageHours ? crmAdminStickerStageHours.checked : true,
+    serviceTotal:crmAdminStickerServiceTotal ? crmAdminStickerServiceTotal.checked : true,
+    dateRange:crmAdminStickerDateRange ? crmAdminStickerDateRange.checked : true,
+    partShare:crmAdminStickerPartShare ? crmAdminStickerPartShare.checked : true,
+    restShare:crmAdminStickerRestShare ? crmAdminStickerRestShare.checked : true
+  };
+}
+
+function handleCrmAdminSettingsSave(event){
+  event.preventDefault();
+  if(!crmCanManageUsers()){
+    showToast({ title:'Администрирование', message:'Недостаточно прав для изменения настроек.', tone:'error' });
+    return;
+  }
+  state=ensureCrmStateShape(state);
+  const adminSettings=sanitizeCrmAdminSettings(state.settings?.admin);
+  adminSettings.kanbanStickers=sanitizeCrmKanbanStickerPrefs(collectCrmAdminStickerPrefs());
+  state.settings.admin=adminSettings;
+  renderCrmAdminSettings();
+  save('Обновление настроек админ-панели', {
+    meta:{
+      source:'admin-panel',
+      summary:'Обновление настроек админ-панели',
+      note:'kanban-stickers'
+    },
+    skipAutoOptimize:true
+  });
+  renderCurrentView();
+  showToast({ title:'Администрирование', message:'Настройки сохранены', tone:'success' });
+}
+
 function renderCrmAdminAudit(){
   if(!crmAdminAuditList) return;
   crmAdminAuditList.innerHTML='';
@@ -15605,7 +15745,7 @@ function applyCrmAdminBusyState(){
       delete crmAdminDlg.dataset.loading;
     }
   }
-  [crmAdminUserSubmit,crmAdminRolesSave,crmAdminAuditRefresh].forEach(btn=>{
+  [crmAdminUserSubmit,crmAdminRolesSave,crmAdminSettingsSave,crmAdminAuditRefresh].forEach(btn=>{
     if(btn){
       btn.disabled=busy;
     }
@@ -15782,6 +15922,8 @@ async function openCrmAdmin(initialTab='users'){
     await loadCrmAdminUsers({ silent:true, skipBusy:true });
     if(target==='roles'){
       await loadCrmAdminRoles({ silent:true, skipBusy:true });
+    }else if(target==='settings'){
+      renderCrmAdminSettings();
     }else if(target==='audit'){
       await loadCrmAdminAudit({ silent:true, skipBusy:true });
     }
@@ -15803,13 +15945,15 @@ function closeCrmAdmin(){
 }
 
 async function activateCrmAdminTab(tabId,{ silent=false }={}){
-  const target=(tabId==='roles'||tabId==='audit')?tabId:'users';
+  const target=(tabId==='roles'||tabId==='audit'||tabId==='settings')?tabId:'users';
   setCrmAdminTab(target);
   try{
     if(target==='users'){
       await loadCrmAdminUsers({ silent });
     }else if(target==='roles'){
       await loadCrmAdminRoles({ silent });
+    }else if(target==='settings'){
+      renderCrmAdminSettings();
     }else{
       await loadCrmAdminAudit({ silent });
     }
@@ -17648,9 +17792,28 @@ function normalizeServiceTotalValue(raw){
   return Number.isFinite(numeric)?numeric:null;
 }
 
+function isOrderEditedToday(order){
+  if(!order || typeof order!=='object') return false;
+  const candidates=[order.updatedAt, order.modifiedAt, order.changedAt, order.editedAt, order.createdAt];
+  let iso='';
+  for(const value of candidates){
+    const normalized=coerceCalendarIso(value);
+    if(normalized){
+      iso=normalized;
+      break;
+    }
+  }
+  if(!iso) return false;
+  const date=new Date(iso);
+  if(Number.isNaN(date.getTime())) return false;
+  date.setHours(0,0,0,0);
+  return date.getTime()===today0().getTime();
+}
+
 function renderCards(){
   const b=currentBoard();
   if(!b)return;
+  const stickerPrefs=getCrmKanbanStickerPrefs();
   laneVisibilityState=computeLaneVisibility(b);
   const visibleLanes=laneVisibilityState.visible.length?laneVisibilityState.visible:(b.lanes||[]);
   const map=Object.fromEntries(visibleLanes.map(l=>[l,[]]));
@@ -17721,6 +17884,7 @@ function renderCards(){
       const card=document.createElement('div');card.className='card';card.draggable=true;card.dataset.id=o.id;
       const shippingLate=isOrderShippingLate(o);
       const hasOverdueStage=orderHasOverdueStageExcludingShipping(o,{ todayTime });
+      const editedToday=isOrderEditedToday(o);
       let progress=calcAutoProgress(o.stages);
       const manualProgress=normalizeStageProgress(o.progress);
       if(o.progressManual===true || !Array.isArray(o.stages) || !o.stages.length){
@@ -17728,22 +17892,28 @@ function renderCards(){
       }
       const [doneCnt,totalCnt]=stagesDoneCount(o);
       const chips=document.createElement('div');chips.className='chips';
-      (o.stages||[]).forEach(st=>{if(st.value!==''&&st.value!==undefined&&st.value!==null){chips.appendChild(chip(`${escapeHtml(st.name)}: ${escapeHtml(st.value)}`))}});
-      if(o.partOfPct)chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
-      if(o.restOfPct)chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
-      if(o.serviceTotal!==''&&o.serviceTotal!=null)chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
-      if(o.start||o.end){
+      if(stickerPrefs.stageHours){
+        (o.stages||[]).forEach(st=>{if(st.value!==''&&st.value!==undefined&&st.value!==null){chips.appendChild(chip(`${escapeHtml(st.name)}: ${escapeHtml(st.value)}`))}});
+      }
+      if(stickerPrefs.partShare && o.partOfPct) chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
+      if(stickerPrefs.restShare && o.restOfPct) chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
+      if(stickerPrefs.serviceTotal && o.serviceTotal!==''&&o.serviceTotal!=null){
+        chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
+      }
+      if(stickerPrefs.dateRange && (o.start||o.end)){
         const rangeLabel=formatOrderRangeLabel(o.start,o.end);
         const rangeTone=shippingLate?'danger':(hasOverdueStage?'warn':'ok');
         chips.appendChild(chip(rangeLabel,rangeTone));
       }
       const readyChecked=o.done?'checked':'';
+      const editedIndicator=editedToday ? '<span class="card-edited-today" title="Изменено сегодня"></span>' : '';
       card.innerHTML=`
         <div class="row">
           <div class="title">
             <input type="checkbox" class="ready-switch card-ready" data-act="toggle-done" ${readyChecked} title="Отметить заказ готовым" />
             <span class="card-name">${escapeHtml(o.title)}</span>
             <span class="card-alert">⚠️</span>
+            ${editedIndicator}
           </div>
           <div class="kebab grow"></div>
           <button class="ghost" data-act="move" title="Переместить ↩">↩</button>
@@ -21627,6 +21797,7 @@ function syncCrmNotificationsMutedFromPlanner(state){
 }
 let crmSyncTimer=null;
 let crmPendingSummary='Изменения CRM';
+let crmPendingMeta=null;
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
@@ -22363,8 +22534,9 @@ function showToast({title='CRM',message='',tone='info',autoClose=4000}={}){
   schedule();
 }
 
-function queueSync(summary){
+function queueSync(summary, meta){
   crmPendingSummary=summary||'Изменения CRM';
+  crmPendingMeta=meta && typeof meta==='object' && !Array.isArray(meta) ? { ...meta } : null;
   if(crmPendingRemotePayload){
     crmPendingRemoteDirty=true;
   }
@@ -22417,6 +22589,16 @@ async function pushCrmToServer(){
     return;
   }
   const summaryText = crmPendingSummary || 'Изменения CRM';
+  const metaOverride=crmPendingMeta && typeof crmPendingMeta==='object' ? crmPendingMeta : null;
+  const metaSource=typeof metaOverride?.source === 'string' && metaOverride.source.trim()
+    ? metaOverride.source.trim()
+    : 'crm';
+  const metaNote=typeof metaOverride?.note === 'string' && metaOverride.note.trim()
+    ? metaOverride.note.trim()
+    : '';
+  const metaSummary=typeof metaOverride?.summary === 'string' && metaOverride.summary.trim()
+    ? metaOverride.summary.trim()
+    : summaryText;
 
   const buildPlannerSyncPayload = async () => {
     let plannerSnapshot=null;
@@ -22468,9 +22650,9 @@ async function pushCrmToServer(){
     meta.lastChange={
       stage:'crm',
       stages:['crm'],
-      summary:summaryText,
+      summary:metaSummary,
       user:actorName,
-      source:'crm',
+      source:metaSource,
       time:nowLabel,
       changeType:'CRM',
       ordersSummary:summaryObj
@@ -22481,8 +22663,8 @@ async function pushCrmToServer(){
       id:`crm-${Date.now()}-${Math.random().toString(16).slice(2,8)}`,
       stage:'crm',
       user:actorName,
-      summary:summaryText,
-      source:'crm',
+      summary:metaSummary,
+      source:metaSource,
       time:nowLabel,
       changeType:'CRM',
       ordersSummary:summaryObj
@@ -22491,13 +22673,16 @@ async function pushCrmToServer(){
 
     const metaPayload={
       stage:'crm',
-      source:'crm',
-      summary:summaryText,
+      source:metaSource,
+      summary:metaSummary,
       user:actorName,
       time:nowLabel,
       changeType:'CRM',
       ordersSummary:summaryObj
     };
+    if(metaNote){
+      metaPayload.note=metaNote;
+    }
     if(baseHash) metaPayload.baseHash=baseHash;
     if(baseEtag) metaPayload.baseEtag=baseEtag;
     if(!metaPayload.ifMatch){
@@ -22543,6 +22728,7 @@ async function pushCrmToServer(){
 
   if(success){
     showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
+    crmPendingMeta=null;
   }else if(lastError){
     crmSuppressNext=false;
     if(lastError.code==='CRM_PLANNER_LOAD_FAILED'){
@@ -23270,6 +23456,9 @@ if(crmAdminRoleCreateForm){
       setCrmAdminBusy(false);
     }
   });
+}
+if(crmAdminSettingsForm){
+  crmAdminSettingsForm.addEventListener('submit',handleCrmAdminSettingsSave);
 }
 if(crmAdminRolesSave){
   crmAdminRolesSave.addEventListener('click',async ()=>{

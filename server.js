@@ -6674,6 +6674,18 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       channel
     });
 
+    if (source === 'admin-panel') {
+      recordAuditEvent({
+        user: req.user,
+        action: 'admin.settings.update',
+        details: {
+          summary: summary || null,
+          note: note || null,
+          meta: storedMeta || null
+        }
+      });
+    }
+
     const etag = computeEtag(latest.hash);
     if (etag) {
       res.set('ETag', etag);
