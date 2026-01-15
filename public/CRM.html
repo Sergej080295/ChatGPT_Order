@@ -8726,6 +8726,7 @@ const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manage
 const crmCanAddStages=()=> crmWriteAccessEnabled() && !!crmPermissions.addStages;
 const crmCanUseJournal=()=> !!crmPermissions.useJournal;
 const crmCanManageUsers=()=> !!crmPermissions.manageUsers;
+const crmCanViewAudit=()=> !!crmPermissions.viewAudit;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
 const crmCanEditComments=()=> crmWriteAccessEnabled() && !!crmPermissions.editComments;
 const crmCanDeleteComments=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteComments;
@@ -11392,6 +11393,13 @@ function stageEntryIsDone(stage){
   return progress>=100;
 }
 
+function isCrmOrderShippingDone(order){
+  if(!order||typeof order!=='object') return false;
+  const stages=Array.isArray(order?.stages)?order.stages:[];
+  const shippingStage=stages.find(stage=>resolveCrmStageKeyWithMapping(stage?.name)==='ship');
+  return stageEntryIsDone(shippingStage);
+}
+
 function extractStageDueIso(stage){
   if(!stage||typeof stage!=='object') return null;
   const candidates=[];
@@ -12235,7 +12243,8 @@ function collectCrmOrdersForList(filterMode){
       return !info || info.state!=='pending';
     });
     const statusDone=doneLane && order?.status===doneLane;
-    const isDone=!!(order?.done)|| statusDone || (stagesDone&&indicatorDone);
+    const shipDone=isCrmOrderShippingDone(order);
+    const isDone=!!(order?.done)|| statusDone || shipDone || (stagesDone&&indicatorDone);
     if(!isDone) meta.totalActive+=1;
     if(!orderMatchesSearch(order)) return;
     const stageMap=snapshot&&snapshot.map instanceof Map?snapshot.map:new Map();
@@ -13752,6 +13761,7 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
   const safeRows=Array.isArray(rows)?rows:[];
   const board=currentBoard();
+  const doneLane=Array.isArray(board?.lanes) && board.lanes.length ? board.lanes[board.lanes.length-1] : null;
   const today=today0();
   const todayIso=fmtDateISO(today);
   const ignoredStatuses=Array.isArray(state.settings?.unaccountedStatuses)
@@ -13796,7 +13806,10 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
   const sourceOrders=Array.isArray(board?.orders)?board.orders:[];
   const ensureEntry=(order,index)=>{
     if(!order||typeof order!=='object') return null;
-    if(order && order.done){
+    const statusDone=doneLane && order?.status===doneLane;
+    const shipDone=isCrmOrderShippingDone(order);
+    const orderMarkedDone=!!order?.done || statusDone || shipDone;
+    if(filter==='current' && orderMarkedDone){
       return null;
     }
     if(ignoredSet.size){
@@ -15359,7 +15372,7 @@ function updateCrmUserMenu(){
     }
     crmUserMetaEl.textContent=metaParts.join(' · ');
   }
-  if(!crmCanManageUsers() && crmAdminDlg && crmAdminDlg.open){
+  if(!crmCanManageUsers() && !crmCanViewAudit() && crmAdminDlg && crmAdminDlg.open){
     closeCrmAdmin();
   }
   if(!hasUser){
@@ -15376,10 +15389,50 @@ function updateCrmNavigationAccess(){
     }
   }
   if(crmAdminNavBtn){
-    crmAdminNavBtn.hidden=!crmCanManageUsers();
+    crmAdminNavBtn.hidden=!(crmCanManageUsers() || crmCanViewAudit());
   }
   if(crmSettingsNavBtn){
     crmSettingsNavBtn.hidden=!crmCanManageSettings();
+  }
+  applyCrmAdminTabAccess();
+}
+
+function crmCanAccessAdminPanel(){
+  return crmCanManageUsers() || crmCanViewAudit();
+}
+
+function canUseCrmAdminTab(tabId){
+  if(tabId==='audit') return crmCanViewAudit();
+  return crmCanManageUsers();
+}
+
+function resolveCrmAdminTab(tabId){
+  const normalized=(tabId==='roles'||tabId==='audit'||tabId==='settings')?tabId:'users';
+  if(canUseCrmAdminTab(normalized)) return normalized;
+  if(crmCanViewAudit()) return 'audit';
+  if(crmCanManageUsers()) return 'users';
+  return null;
+}
+
+function applyCrmAdminTabAccess(){
+  if(!crmAdminTabs || !crmAdminSections) return;
+  crmAdminTabs.forEach(tab=>{
+    const tabId=tab?.dataset?.adminTab||'users';
+    const allowed=canUseCrmAdminTab(tabId);
+    tab.hidden=!allowed;
+    tab.disabled=!allowed;
+  });
+  crmAdminSections.forEach(section=>{
+    const tabId=section?.dataset?.adminSection||'users';
+    const allowed=canUseCrmAdminTab(tabId);
+    section.hidden=!allowed;
+    if(!allowed){
+      section.setAttribute('aria-hidden','true');
+    }
+  });
+  const resolved=resolveCrmAdminTab(crmAdminState.activeTab);
+  if(resolved && resolved!==crmAdminState.activeTab){
+    setCrmAdminTab(resolved);
   }
 }
 
@@ -15683,6 +15736,7 @@ function collectCrmAdminStickerPrefs(){
 
 function refreshCrmAdminAuditIfActive(){
   if(crmAdminState.activeTab!=='audit') return;
+  if(!crmCanViewAudit()) return;
   loadCrmAdminAudit({ silent:true, skipBusy:true }).catch(()=>{});
 }
 
@@ -15904,7 +15958,7 @@ async function loadCrmAdminRoles({ silent=false, skipBusy=false }={}){
 }
 
 async function loadCrmAdminAudit({ silent=false, skipBusy=false }={}){
-  if(!crmCanManageUsers()) return null;
+  if(!crmCanViewAudit()) return null;
   if(!skipBusy) setCrmAdminBusy(true);
   try{
     const data=await crmRequestJson('/admin/audit');
@@ -15923,13 +15977,16 @@ async function loadCrmAdminAudit({ silent=false, skipBusy=false }={}){
 }
 
 async function openCrmAdmin(initialTab='users'){
-  if(!crmAdminDlg || !crmCanManageUsers()) return;
-  const target=initialTab||crmAdminState.activeTab||'users';
+  if(!crmAdminDlg || !crmCanAccessAdminPanel()) return;
+  applyCrmAdminTabAccess();
+  const target=resolveCrmAdminTab(initialTab||crmAdminState.activeTab||'users');
+  if(!target) return;
   setCrmAdminTab(target);
   setCrmAdminBusy(true);
   try{
-    await loadCrmAdminUsers({ silent:true, skipBusy:true });
-    if(target==='roles'){
+    if(target==='users'){
+      await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    }else if(target==='roles'){
       await loadCrmAdminRoles({ silent:true, skipBusy:true });
     }else if(target==='settings'){
       renderCrmAdminSettings();
@@ -15954,7 +16011,8 @@ function closeCrmAdmin(){
 }
 
 async function activateCrmAdminTab(tabId,{ silent=false }={}){
-  const target=(tabId==='roles'||tabId==='audit'||tabId==='settings')?tabId:'users';
+  const target=resolveCrmAdminTab(tabId);
+  if(!target) return;
   setCrmAdminTab(target);
   try{
     if(target==='users'){
@@ -23344,7 +23402,7 @@ if(crmJournalDetailDlg){
 if(crmAdminNavBtn){
   crmAdminNavBtn.addEventListener('click',()=>{
     setCrmUserMenuOpen(false);
-    openCrmAdmin('users');
+    openCrmAdmin(crmCanManageUsers() ? 'users' : 'audit');
   });
 }
 if(crmAdminCloseBtn){
