@@ -11982,6 +11982,7 @@ function commitCrmOrderJournal(previousSnapshot, order, explicitChanges){
   if(!prev||!changes.length){
     return false;
   }
+  order.updatedAt=new Date().toISOString();
   recordCrmJournalEntry(CRM_JOURNAL_TYPES.orderUpdated,{
     order:deepClone(order),
     previous:prev,
@@ -12218,6 +12219,7 @@ function collectCrmOrdersForList(filterMode){
   if(!board){
     return { rows:[], totals, meta:{ totalOrders:0, totalActive:0, filteredTotal:0, filteredActive:0 } };
   }
+  const doneLane=Array.isArray(board.lanes) && board.lanes.length ? board.lanes[board.lanes.length-1] : null;
   const mode=normalizeCrmFilter(filterMode);
   const meta={ totalOrders:board.orders.length, totalActive:0, filteredTotal:0, filteredActive:0 };
   const rows=[];
@@ -12232,7 +12234,8 @@ function collectCrmOrdersForList(filterMode){
       const info=indicator[stageKey];
       return !info || info.state!=='pending';
     });
-    const isDone=!!(order?.done)|| (stagesDone&&indicatorDone);
+    const statusDone=doneLane && order?.status===doneLane;
+    const isDone=!!(order?.done)|| statusDone || (stagesDone&&indicatorDone);
     if(!isDone) meta.totalActive+=1;
     if(!orderMatchesSearch(order)) return;
     const stageMap=snapshot&&snapshot.map instanceof Map?snapshot.map:new Map();
@@ -15678,6 +15681,11 @@ function collectCrmAdminStickerPrefs(){
   };
 }
 
+function refreshCrmAdminAuditIfActive(){
+  if(crmAdminState.activeTab!=='audit') return;
+  loadCrmAdminAudit({ silent:true, skipBusy:true }).catch(()=>{});
+}
+
 function handleCrmAdminSettingsSave(event){
   event.preventDefault();
   if(!crmCanManageUsers()){
@@ -15698,6 +15706,7 @@ function handleCrmAdminSettingsSave(event){
     skipAutoOptimize:true
   });
   renderCurrentView();
+  refreshCrmAdminAuditIfActive();
   showToast({ title:'Администрирование', message:'Настройки сохранены', tone:'success' });
 }
 
@@ -15970,6 +15979,7 @@ async function handleCrmAdminUnlock(userId){
     await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ unlock:true } });
     showToast({ title:'Администрирование', message:'Пользователь разблокирован', tone:'success' });
     await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    refreshCrmAdminAuditIfActive();
   }catch(err){
     console.error('Не удалось разблокировать пользователя',err);
     showToast({ title:'Администрирование', message:err.message||'Не удалось разблокировать пользователя', tone:'error' });
@@ -15992,6 +16002,7 @@ async function handleCrmAdminToggleActive(user){
     await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ isActive:!isActive } });
     showToast({ title:'Администрирование', message:!isActive?'Пользователь активирован':'Пользователь отключён', tone:'success' });
     await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    refreshCrmAdminAuditIfActive();
   }catch(err){
     console.error('Не удалось изменить статус пользователя',err);
     showToast({ title:'Администрирование', message:err.message||'Не удалось изменить статус пользователя', tone:'error' });
@@ -16017,6 +16028,7 @@ async function handleCrmAdminPassword(user){
     await crmRequestJson(`/admin/users/${id}`,{ method:'PATCH', body:{ password } });
     showToast({ title:'Администрирование', message:'Пароль обновлён', tone:'success' });
     await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    refreshCrmAdminAuditIfActive();
   }catch(err){
     console.error('Не удалось сменить пароль',err);
     showToast({ title:'Администрирование', message:err.message||'Не удалось сменить пароль', tone:'error' });
@@ -16040,6 +16052,7 @@ async function handleCrmAdminDelete(user){
     }
     showToast({ title:'Администрирование', message:'Пользователь удалён', tone:'success' });
     await loadCrmAdminUsers({ silent:true, skipBusy:true });
+    refreshCrmAdminAuditIfActive();
   }catch(err){
     console.error('Не удалось удалить пользователя',err);
     showToast({ title:'Администрирование', message:err.message||'Не удалось удалить пользователя', tone:'error' });
@@ -20016,6 +20029,7 @@ orderForm.addEventListener('submit',e=>{
   const previousCommentsRaw=Array.isArray(previousSnapshot?.comments)?previousSnapshot.comments:[];
   const previousCommentsSanitized=previousCommentsRaw.map(comment=>sanitizeOrderComment(comment)).filter(Boolean);
   const commentDiff=diffOrderComments(previousCommentsSanitized, comments);
+  const commentChanged=commentDiff.created.length || commentDiff.updated.length || commentDiff.removed.length;
   const currentStageIds=new Set(stages.map(stage=>stage?.crmStageId||stage?.id||''));
   let removedStages=[];
   if(editingOrderId){
@@ -20036,8 +20050,13 @@ orderForm.addEventListener('submit',e=>{
     notes:commentSummary,status:nextStatus,statusEnteredAt,
     serviceTotal:(()=>{const v=(window._parseMoney?.(orderForm.serviceTotal.value));return v===''?'':v})(),stages,
     comments,
-    createdAt:exist?.createdAt||new Date().toISOString(),partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
+    createdAt:exist?.createdAt||new Date().toISOString(),
+    updatedAt:exist?.updatedAt||new Date().toISOString(),
+    partOfPct:exist?.partOfPct??null,restOfPct:exist?.restOfPct??null,
     parentId:exist?.parentId??null,childIds:exist?.childIds??[],_origValues:exist?._origValues??undefined,_origPctUsed:exist?._origPctUsed??undefined};
+  if(commentChanged){
+    obj.updatedAt=new Date().toISOString();
+  }
   if(obj.done)obj.progress=100;
   if(exist){
     Object.assign(exist,obj);
@@ -23403,6 +23422,7 @@ if(crmAdminUserForm){
         showToast({ title:'Администрирование', message:'Пользователь создан', tone:'success' });
       }
       await loadCrmAdminUsers({ silent:true, skipBusy:true });
+      refreshCrmAdminAuditIfActive();
       if(isEdit){
         const current=findCrmAdminUserById(userId);
         if(current){
@@ -23449,6 +23469,7 @@ if(crmAdminRoleCreateForm){
       showToast({ title:'Администрирование', message:'Роль создана', tone:'success' });
       if(crmAdminRoleCreateForm) crmAdminRoleCreateForm.reset();
       await loadCrmAdminRoles({ silent:true, skipBusy:true });
+      refreshCrmAdminAuditIfActive();
     }catch(err){
       console.error('Не удалось создать роль',err);
       showToast({ title:'Администрирование', message:err.message||'Не удалось создать роль', tone:'error' });
@@ -23509,6 +23530,7 @@ if(crmAdminRolesSave){
       await crmRequestJson('/admin/roles/description',{ method:'PUT', body:{ roles:rolesPayload } });
       showToast({ title:'Администрирование', message:'Описания ролей обновлены', tone:'success' });
       await loadCrmAdminRoles({ silent:true, skipBusy:true });
+      refreshCrmAdminAuditIfActive();
     }catch(err){
       console.error('Не удалось обновить описания ролей',err);
       showToast({ title:'Администрирование', message:err.message||'Не удалось сохранить описания ролей', tone:'error' });
