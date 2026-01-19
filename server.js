@@ -1864,7 +1864,7 @@ function ensureAdminPreserved(userId, nextRoleSlugs) {
   const normalized = Array.isArray(nextRoleSlugs)
     ? nextRoleSlugs.map(normalizeRoleSlug).filter(Boolean)
     : [];
-  if (normalized.includes('admin')) {
+  if (normalized.includes('admin') || normalized.includes('superadmin')) {
     return true;
   }
   const db = getDatabase();
@@ -1873,7 +1873,7 @@ function ensureAdminPreserved(userId, nextRoleSlugs) {
       `SELECT COUNT(*) AS count
          FROM user_roles ur
          JOIN roles r ON r.id = ur.role_id
-        WHERE r.slug = 'admin' AND ur.user_id != ?`
+        WHERE r.slug IN ('admin','superadmin') AND ur.user_id != ?`
     )
     .get(userId);
   const count = Number(row?.count || 0);
@@ -2105,10 +2105,18 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
     res.status(404).json({ error: 'Пользователь не найден' });
     return;
   }
+  const beforeSnapshot = {
+    login: current.user?.login || null,
+    displayName: current.user?.display_name || '',
+    isActive: Number(current.user?.is_active) !== 0,
+    roles: Array.isArray(current.roles) ? current.roles.map((role) => role.slug).filter(Boolean) : []
+  };
   const body = (req.body && typeof req.body === 'object') ? req.body : {};
   const updates = [];
   const db = getDatabase();
   const nowIso = new Date().toISOString();
+  let passwordChanged = false;
+  let unlockApplied = false;
 
   if (body.displayName !== undefined) {
     const name = typeof body.displayName === 'string' ? body.displayName.trim() : '';
@@ -2145,6 +2153,7 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
   if (body.unlock === true) {
     updates.push({ column: 'failed_attempts', value: 0 });
     updates.push({ column: 'locked_until', value: null });
+    unlockApplied = true;
   }
 
   if (body.password) {
@@ -2155,6 +2164,7 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
     const hash = await bcrypt.hash(body.password, 10);
     updates.push({ column: 'password_hash', value: hash });
     updates.push({ column: 'password_updated_at', value: nowIso });
+    passwordChanged = true;
   }
 
   if (updates.length) {
@@ -2168,7 +2178,44 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
 
   const fresh = readUserWithRolesById(userId);
   const response = buildUserPayload(fresh.user, fresh.roles);
-  recordAuditEvent({ user: req.user, action: 'admin.user.update', details: { userId, roles: appliedRoles } });
+  const afterSnapshot = {
+    login: fresh.user?.login || null,
+    displayName: fresh.user?.display_name || '',
+    isActive: Number(fresh.user?.is_active) !== 0,
+    roles: Array.isArray(fresh.roles) ? fresh.roles.map((role) => role.slug).filter(Boolean) : []
+  };
+  const changes = [];
+  if (beforeSnapshot.displayName !== afterSnapshot.displayName) {
+    changes.push({ field: 'displayName', label: 'Имя', before: beforeSnapshot.displayName, after: afterSnapshot.displayName });
+  }
+  if (beforeSnapshot.isActive !== afterSnapshot.isActive) {
+    changes.push({
+      field: 'isActive',
+      label: 'Статус',
+      before: beforeSnapshot.isActive ? 'Активен' : 'Отключен',
+      after: afterSnapshot.isActive ? 'Активен' : 'Отключен'
+    });
+  }
+  if (JSON.stringify(beforeSnapshot.roles) !== JSON.stringify(afterSnapshot.roles)) {
+    changes.push({ field: 'roles', label: 'Роли', before: beforeSnapshot.roles, after: afterSnapshot.roles });
+  }
+  if (passwordChanged) {
+    changes.push({ field: 'password', label: 'Пароль', before: '—', after: 'обновлён' });
+  }
+  if (unlockApplied) {
+    changes.push({ field: 'unlock', label: 'Блокировка', before: 'заблокирован', after: 'разблокирован' });
+  }
+  recordAuditEvent({
+    user: req.user,
+    action: 'admin.user.update',
+    details: {
+      userId,
+      login: beforeSnapshot.login,
+      changes,
+      before: beforeSnapshot,
+      after: afterSnapshot
+    }
+  });
   ensureUsersExportSnapshot();
   res.json({ user: response });
 });

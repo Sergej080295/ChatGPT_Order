@@ -15740,6 +15740,87 @@ function refreshCrmAdminAuditIfActive(){
   loadCrmAdminAudit({ silent:true, skipBusy:true }).catch(()=>{});
 }
 
+function formatCrmAdminAuditValue(value){
+  if(Array.isArray(value)){
+    return value.length?value.join(', '):'—';
+  }
+  if(value===null || value===undefined || value===''){
+    return '—';
+  }
+  if(typeof value==='object'){
+    try{
+      return JSON.stringify(value);
+    }catch(_err){
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function buildCrmAdminAuditSummary(entry){
+  const details=entry?.details||{};
+  const login=details?.login||details?.userLogin||details?.username||entry?.username||'';
+  const changes=Array.isArray(details?.changes)?details.changes:[];
+  const action=entry?.action||'';
+  if(action==='admin.user.create'){
+    const roles=Array.isArray(details?.roles)?details.roles:[];
+    const roleLabel=roles.length?`Роли: ${roles.join(', ')}`:'Роли не указаны';
+    return login?`${login} • ${roleLabel}`:roleLabel;
+  }
+  if(action==='admin.user.update'){
+    if(changes.length){
+      return changes.map(change=>change.label||change.field||'Изменение').join(', ');
+    }
+    return login?`Пользователь: ${login}`:'Изменение пользователя';
+  }
+  if(action==='admin.user.delete'){
+    return login?`Пользователь: ${login}`:'Удалён пользователь';
+  }
+  if(action==='admin.roles.create'){
+    return details?.slug?`Роль: ${details.slug}`:'Создание роли';
+  }
+  if(action==='admin.roles.update'){
+    return 'Обновлены роли и права';
+  }
+  if(action==='admin.settings.update'){
+    return details?.summary||'Обновлены настройки';
+  }
+  return '';
+}
+
+function buildCrmAdminAuditTitle(entry){
+  const action=entry?.action||'';
+  if(action==='admin.user.create') return 'Создан пользователь';
+  if(action==='admin.user.update') return 'Обновлён пользователь';
+  if(action==='admin.user.delete') return 'Удалён пользователь';
+  if(action==='admin.roles.create') return 'Создана роль';
+  if(action==='admin.roles.update') return 'Обновлены роли';
+  if(action==='admin.settings.update') return 'Обновлены настройки';
+  if(action==='auth.login') return 'Вход в систему';
+  if(action==='auth.logout') return 'Выход из системы';
+  if(action==='auth.failed') return 'Ошибка входа';
+  return action || '—';
+}
+
+function buildCrmAdminAuditDetails(entry){
+  const details=entry?.details;
+  if(!details) return '';
+  const changes=Array.isArray(details?.changes)?details.changes:[];
+  if(changes.length){
+    return changes.map(change=>{
+      const label=change.label||change.field||'Изменение';
+      const before=formatCrmAdminAuditValue(change.before);
+      const after=formatCrmAdminAuditValue(change.after);
+      return `• ${label}: ${before} → ${after}`;
+    }).join('\n');
+  }
+  try{
+    return JSON.stringify(details,null,2);
+  }catch(_err){
+    return String(details);
+  }
+}
+
 function handleCrmAdminSettingsSave(event){
   event.preventDefault();
   if(!crmCanManageUsers()){
@@ -15779,20 +15860,40 @@ function renderCrmAdminAudit(){
     const item=document.createElement('article');
     item.className='crm-admin-audit-item';
     const title=document.createElement('strong');
-    title.textContent=entry.action||'—';
+    title.textContent=buildCrmAdminAuditTitle(entry);
     const user=document.createElement('span');
     user.textContent=entry.username?`Пользователь: ${entry.username}`:'Пользователь не указан';
+    const summaryText=buildCrmAdminAuditSummary(entry);
+    const summary=summaryText?document.createElement('span'):null;
+    if(summary){
+      summary.textContent=summaryText;
+    }
     const time=document.createElement('time');
     time.dateTime=entry.createdAt||'';
     time.textContent=formatDateTimeSafe(entry.createdAt||'');
     item.appendChild(title);
     item.appendChild(user);
+    if(summary){
+      item.appendChild(summary);
+    }
     item.appendChild(time);
-    if(entry.details){
+    const detailsText=buildCrmAdminAuditDetails(entry);
+    if(detailsText){
       const details=document.createElement('pre');
-      details.textContent=JSON.stringify(entry.details,null,2);
+      details.textContent=detailsText;
       details.style.margin='0';
       details.style.whiteSpace='pre-wrap';
+      details.hidden=true;
+      const detailsBtn=document.createElement('button');
+      detailsBtn.type='button';
+      detailsBtn.className='pc-btn pc-btn--ghost';
+      detailsBtn.textContent='Подробно';
+      detailsBtn.addEventListener('click',()=>{
+        const isHidden=details.hidden;
+        details.hidden=!isHidden;
+        detailsBtn.textContent=isHidden?'Скрыть':'Подробно';
+      });
+      item.appendChild(detailsBtn);
       item.appendChild(details);
     }
     crmAdminAuditList.appendChild(item);
