@@ -678,6 +678,7 @@ const pool = {
 const STAGE_SLUGS = Object.freeze([
   'draw',
   'proc',
+  'supply',
   'shear',
   'laser',
   'bend',
@@ -692,10 +693,13 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'view',
   'write',
   'viewOrderDetails',
+  'createOrders',
+  'editOrders',
+  'deleteOrders',
+  'updateStageProgress',
   'manageUsers',
   'manageSettings',
   'manageStages',
-  'manageOrders',
   'completeOrders',
   'viewAudit',
   'useJournal',
@@ -716,10 +720,13 @@ const DEFAULT_ROLE_PERMISSIONS = {
     view: true,
     write: true,
     viewOrderDetails: true,
+    createOrders: true,
+    editOrders: true,
+    deleteOrders: true,
+    updateStageProgress: true,
     manageUsers: true,
     manageSettings: true,
     manageStages: true,
-    manageOrders: true,
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
@@ -732,10 +739,13 @@ const DEFAULT_ROLE_PERMISSIONS = {
     view: true,
     write: true,
     viewOrderDetails: true,
+    createOrders: true,
+    editOrders: true,
+    deleteOrders: true,
+    updateStageProgress: true,
     manageUsers: false,
     manageSettings: true,
     manageStages: true,
-    manageOrders: true,
     completeOrders: true,
     viewAudit: true,
     useJournal: true,
@@ -748,10 +758,13 @@ const DEFAULT_ROLE_PERMISSIONS = {
     view: true,
     write: true,
     viewOrderDetails: true,
+    createOrders: false,
+    editOrders: false,
+    deleteOrders: false,
+    updateStageProgress: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: true,
-    manageOrders: false,
     completeOrders: false,
     viewAudit: false,
     useJournal: true,
@@ -764,10 +777,13 @@ const DEFAULT_ROLE_PERMISSIONS = {
     view: true,
     write: false,
     viewOrderDetails: true,
+    createOrders: false,
+    editOrders: false,
+    deleteOrders: false,
+    updateStageProgress: false,
     manageUsers: false,
     manageSettings: false,
     manageStages: false,
-    manageOrders: false,
     completeOrders: false,
     viewAudit: false,
     useJournal: false,
@@ -1035,19 +1051,36 @@ function normalizeRoleSlug(input) {
 function normalizeRolePermissions(payload, slug) {
   const result = {};
   const defaults = (slug && DEFAULT_ROLE_PERMISSIONS[slug]) || {};
+  const source = payload && typeof payload === 'object' ? payload : {};
+  const legacyManageOrders = Object.prototype.hasOwnProperty.call(source, 'manageOrders') ? source.manageOrders : undefined;
+  const legacyManageStages = Object.prototype.hasOwnProperty.call(source, 'manageStages') ? source.manageStages : undefined;
+  if (legacyManageOrders !== undefined) {
+    if (!Object.prototype.hasOwnProperty.call(source, 'createOrders')) {
+      source.createOrders = legacyManageOrders;
+    }
+    if (!Object.prototype.hasOwnProperty.call(source, 'editOrders')) {
+      source.editOrders = legacyManageOrders;
+    }
+    if (!Object.prototype.hasOwnProperty.call(source, 'deleteOrders')) {
+      source.deleteOrders = legacyManageOrders;
+    }
+  }
+  if (legacyManageStages !== undefined && !Object.prototype.hasOwnProperty.call(source, 'updateStageProgress')) {
+    source.updateStageProgress = legacyManageStages;
+  }
   for (const key of ROLE_PERMISSION_KEYS) {
-    const rawValue = payload && Object.prototype.hasOwnProperty.call(payload, key) ? payload[key] : undefined;
+    const rawValue = Object.prototype.hasOwnProperty.call(source, key) ? source[key] : undefined;
     if (typeof rawValue === 'boolean') {
       result[key] = rawValue;
     } else {
       result[key] = !!defaults[key];
     }
   }
-  if (!Object.prototype.hasOwnProperty.call(payload || {}, 'addStages') && defaults.addStages === undefined) {
+  if (!Object.prototype.hasOwnProperty.call(source, 'addStages') && defaults.addStages === undefined) {
     result.addStages = !!result.manageStages;
   }
   const stageDefaults = defaults.stageAccess && typeof defaults.stageAccess === 'object' ? defaults.stageAccess : {};
-  const sourceStages = payload && typeof payload.stageAccess === 'object' ? payload.stageAccess : {};
+  const sourceStages = source && typeof source.stageAccess === 'object' ? source.stageAccess : {};
   const stageAccess = {};
   for (const stage of STAGE_SLUGS) {
     if (typeof sourceStages[stage] === 'boolean') {

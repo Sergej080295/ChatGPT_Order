@@ -3552,6 +3552,7 @@
 
   .crm-stage-route-stat--draw { --crmRouteStatColor:#38bdf8; }
   .crm-stage-route-stat--proc { --crmRouteStatColor:#22c55e; }
+  .crm-stage-route-stat--supply { --crmRouteStatColor:#84cc16; }
   .crm-stage-route-stat--shear { --crmRouteStatColor:#fde047; --crmRouteStatAccent:#5b4100; --crmRouteStatText:#4a3600; }
   .crm-stage-route-stat--laser { --crmRouteStatColor:#f97316; }
   .crm-stage-route-stat--bend { --crmRouteStatColor:#ef4444; }
@@ -3591,6 +3592,7 @@
 
   .crm-route-stage--draw { background: #38bdf8; }
   .crm-route-stage--proc { background: #22c55e; }
+  .crm-route-stage--supply { background: #84cc16; }
   .crm-route-stage--shear { background: #fde047; color: #5b4100; }
   .crm-route-stage--laser { background: #f97316; }
   .crm-route-stage--bend { background: #ef4444; }
@@ -6046,6 +6048,7 @@
             <select id="crmStageSelect" class="pc-select">
             <option value="draw">📐 Подготовка в работу</option>
             <option value="proc">🛒 Закупка</option>
+            <option value="supply">📥 Поставка ДС</option>
             <option value="shear">✂️ Рубка</option>
             <option value="laser">🔦 Лазер</option>
             <option value="bend">🗜️ Гибка</option>
@@ -6184,6 +6187,7 @@
           <col style="width:240px">
           <col style="width:92px">
           <col style="width:92px">
+          <col style="width:92px">
           <col style="width:150px">
           <col style="width:150px">
           <col style="width:150px">
@@ -6199,6 +6203,7 @@
             <th title="Маршрут заказа">Маршрут</th>
             <th>Заказ</th>
             <th>Закупка</th>
+            <th>Поставка ДС</th>
             <th>Рубка</th>
             <th>Подготовка, ч</th>
             <th>Лазер, ч</th>
@@ -6221,6 +6226,7 @@
             <col style="width:240px">
             <col style="width:92px">
             <col style="width:92px">
+            <col style="width:92px">
             <col style="width:150px">
             <col style="width:150px">
             <col style="width:150px">
@@ -6236,6 +6242,7 @@
             <td></td>
             <td></td>
             <td data-total-stage="proc">0 шт</td>
+            <td data-total-stage="supply">0 шт</td>
             <td data-total-stage="shear">0 шт</td>
             <td data-total-stage="draw">0ч</td>
             <td data-total-stage="laser">0ч</td>
@@ -7268,12 +7275,12 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
-const CRM_STAGE_KEYS=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
-const CRM_STAGE_SEQUENCE=['draw','proc','shear','laser','bend','weld','mech','coop','pack','ship'];
+const CRM_STAGE_KEYS=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
+const CRM_STAGE_SEQUENCE=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
-const CRM_DEFAULT_PARALLEL={ proc:5, shear:5, coop:3, pack:3, ship:5 };
-const CRM_INDICATOR_STAGES=['proc','shear','coop','pack','ship'];
+const CRM_DEFAULT_PARALLEL={ proc:5, supply:5, shear:5, coop:3, pack:3, ship:5 };
+const CRM_INDICATOR_STAGES=['proc','supply','shear','coop','pack','ship'];
 const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
 const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
   { key:'daily', label:'Без выходных', type:'weekly', pattern:[true,true,true,true,true,true,true] },
@@ -7317,9 +7324,9 @@ const CRM_DEFAULT_PREFERENCES={
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
-const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
-const BOOL_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
-const HOURLESS_STAGE_NAMES=new Set(['закупка','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Поставка ДС','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
+const BOOL_STAGE_NAMES=new Set(['закупка','поставка дс','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const HOURLESS_STAGE_NAMES=new Set(['закупка','поставка дс','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
 const crmStageFilterByKey=new Map();
 const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
 const CRM_ROUTE_DAY_FILTERS=new Set(['all','busy','free']);
@@ -8720,7 +8727,10 @@ const crmWriteAccessEnabled=()=>{
   return currentWriteMode===DATA_WRITE_MODES.both || currentWriteMode===DATA_WRITE_MODES.crm;
 };
 const crmCanViewOrderDetails=()=> !!crmPermissions.viewOrderDetails;
-const crmCanManageOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.manageOrders;
+const crmCanCreateOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.createOrders;
+const crmCanEditOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.editOrders;
+const crmCanDeleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteOrders;
+const crmCanUpdateStageProgress=()=> crmWriteAccessEnabled() && !!crmPermissions.updateStageProgress;
 const crmCanCompleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.completeOrders;
 const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manageStages;
 const crmCanAddStages=()=> crmWriteAccessEnabled() && !!crmPermissions.addStages;
@@ -8730,12 +8740,19 @@ const crmCanViewAudit=()=> !!crmPermissions.viewAudit;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
 const crmCanEditComments=()=> crmWriteAccessEnabled() && !!crmPermissions.editComments;
 const crmCanDeleteComments=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteComments;
-const crmCanManageStage=(stage)=>{
-  if(!crmCanManageStages()) return false;
+const crmCanAccessStage=(stage)=>{
   const key=resolveCrmStageKey(stage)|| (typeof stage==='string'?stage.trim().toLowerCase():null);
   if(!key) return false;
   const stageAccess=(crmPermissions.stageAccess&&typeof crmPermissions.stageAccess==='object')?crmPermissions.stageAccess:{};
   return !!stageAccess[key];
+};
+const crmCanManageStage=(stage)=>{
+  if(!crmCanManageStages()) return false;
+  return crmCanAccessStage(stage);
+};
+const crmCanUpdateStageProgressForStage=(stage)=>{
+  if(!crmCanUpdateStageProgress()) return false;
+  return crmCanAccessStage(stage);
 };
 function updateCrmDbIndicator(){
   if(!crmDbIndicator) return;
@@ -8766,7 +8783,8 @@ function setCrmDataSource(source){
 let lastCrmWriteBlockedAt=0;
 const applyCrmWriteAccess=()=>{
   const canWrite=crmWriteAccessEnabled();
-  const canOrders=crmCanManageOrders();
+  const canOrders=crmCanEditOrders();
+  const canCreateOrders=crmCanCreateOrders();
   const canViewOrders=crmCanViewOrderDetails();
   const canStages=crmCanManageStages();
   const canComplete=crmCanCompleteOrders();
@@ -8783,8 +8801,8 @@ const applyCrmWriteAccess=()=>{
   }
   const newOrderBtn=$('#newOrderBtn');
   if(newOrderBtn){
-    newOrderBtn.disabled=!canOrders;
-    newOrderBtn.hidden=!canOrders;
+    newOrderBtn.disabled=!canCreateOrders;
+    newOrderBtn.hidden=!canCreateOrders;
   }
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
@@ -9086,7 +9104,8 @@ function ensureStageHoursPreference(normalized, label){
 }
 
 const CRM_STAGE_ALIASES={
-  proc:['proc','закупка','закуп','поставка','закупки'],
+  proc:['proc','закупка','закуп','закупки','поставка'],
+  supply:['supply','поставка дс','поставка сырья','давальческое сырьё','давальческое сырье','давальческое','дс'],
   shear:['shear','рубка','резка','рез','раскрой'],
   draw:['draw','подготовка','подготовка в работу','пвр','подготовкавработу'],
   laser:['laser','лазер','лазерная резка','лазерная'],
@@ -9103,14 +9122,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, viewOrderDetails:true, manageUsers:true, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:true, manageStages:true, manageOrders:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:true, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, viewOrderDetails:true, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, manageUsers:true, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, manageUsers:false, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:true, manageUsers:false, manageSettings:false, manageStages:true, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','manageOrders','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','createOrders','editOrders','deleteOrders','updateStageProgress','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -9131,7 +9150,10 @@ const CRM_ROLE_PERMISSION_GROUPS=[
     title:'Заказы и очередь',
     items:[
       { key:'viewOrderDetails', label:'Просмотр карточки заказа', hint:'Открывать окно заказа для просмотра данных.' },
-      { key:'manageOrders', label:'Управление заказами', hint:'Создание, редактирование и удаление заказов.' },
+      { key:'createOrders', label:'Создавать заказы', hint:'Разрешает создавать новые заказы.' },
+      { key:'editOrders', label:'Редактировать заказы', hint:'Изменение данных и состава заказа.' },
+      { key:'deleteOrders', label:'Удалять заказы', hint:'Удаление заказов из системы.' },
+      { key:'updateStageProgress', label:'Прогресс переделов', hint:'Отметка процента готовности и завершения передела.' },
       { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
       { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
     ]
@@ -9165,7 +9187,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, viewOrderDetails:false, manageUsers:false, manageSettings:false, manageStages:false, manageOrders:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, viewOrderDetails:false, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
   const normalizeFlag=(value, fallback=null)=>{
     if(typeof value==='boolean') return value;
     if(typeof value==='number') return value!==0;
@@ -10587,6 +10609,7 @@ const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
 const CRM_STAGE_LABELS={
   draw:'Подготовка в работу',
   proc:'Закупка',
+  supply:'Поставка ДС',
   shear:'Рубка',
   laser:'Лазер',
   bend:'Гибка',
@@ -10599,6 +10622,7 @@ const CRM_STAGE_LABELS={
 const CRM_STAGE_ICONS=Object.freeze({
   draw:'📐',
   proc:'🛒',
+  supply:'📥',
   shear:'✂️',
   laser:'🔦',
   bend:'🗜️',
@@ -10611,6 +10635,7 @@ const CRM_STAGE_ICONS=Object.freeze({
 const CRM_STAGE_LETTERS={
   draw:'П',
   proc:'З',
+  supply:'Д',
   shear:'Р',
   laser:'Л',
   bend:'Г',
@@ -10625,6 +10650,7 @@ applyCrmWriteAccess();
 const CRM_ROUTE_STAGE_CLASS={
   draw:'crm-route-stage--draw',
   proc:'crm-route-stage--proc',
+  supply:'crm-route-stage--supply',
   shear:'crm-route-stage--shear',
   laser:'crm-route-stage--laser',
   bend:'crm-route-stage--bend',
@@ -12223,7 +12249,7 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
 
 function collectCrmOrdersForList(filterMode){
   const board=currentBoard();
-  const totals={ orders:0, proc:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const totals={ orders:0, proc:0, supply:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
   if(!board){
     return { rows:[], totals, meta:{ totalOrders:0, totalActive:0, filteredTotal:0, filteredActive:0 } };
   }
@@ -16526,6 +16552,7 @@ function updateCrmOrdersTotals(totals){
   const ordersCell=crmOrdersTotalsBox.querySelector('[data-total="orders"]');
   if(ordersCell) ordersCell.textContent=`Итого: ${totals.orders}`;
   setText('proc',`${totals.proc} шт`);
+  setText('supply',`${totals.supply} шт`);
   setText('shear',`${totals.shear} шт`);
   setText('coop',`${totals.coop} шт`);
   setText('pack',`${totals.pack} шт`);
@@ -16613,7 +16640,7 @@ function renderOrdersTable(){
   if(!rows.length){
     const tr=document.createElement('tr');
     const td=document.createElement('td');
-    td.colSpan=13;
+    td.colSpan=14;
     td.className='orders-overview-empty';
     td.textContent='Нет заказов для отображения';
     tr.appendChild(td);
@@ -16638,6 +16665,7 @@ function renderOrdersTable(){
       <td>${renderOrderRouteCell(entry.order)}</td>
       <td>${titleMarkup}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.proc)}</td>
+      <td>${renderIndicatorCell(entry.snapshot.indicator.supply)}</td>
       <td>${renderIndicatorCell(entry.snapshot.indicator.shear)}</td>
       <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.draw)}</td>
       <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.laser)}</td>
@@ -16843,6 +16871,7 @@ function renderCrmStageTable(){
     if(entry.isLate) tr.classList.add('crm-stage-late');
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
     const stageEditable=crmCanManageStage(entry.stageKey);
+    const stageProgressEditable=crmCanUpdateStageProgressForStage(entry.stageKey);
     if(entry.done){
       doneCount+=1;
     }else{
@@ -16870,7 +16899,7 @@ function renderCrmStageTable(){
     const reserveDisabled=(!stageEditable||isHourless)?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
     const doneChecked=entry.done?'checked':'';
-    const doneDisabled=stageEditable?'':'disabled';
+    const doneDisabled=stageProgressEditable?'':'disabled';
     const deleteDisabled=stageEditable?'':'disabled';
     const statusCellClass=['crm-stage-row-status', entry.statusClass].filter(Boolean).join(' ');
     const progressMarkup=renderCrmProgressLabelSimple(entry.progress, entry.expectedProgress, entry.done, entry.expectedBehind);
@@ -17244,8 +17273,8 @@ function promptStageCompletionStatus(order){
 }
 
 async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sourceInput=null){
-  if(!crmCanManageStage(stageKey)){
-    showToast({ title:'CRM', message:'У вас нет прав для изменения статуса этого передела.', tone:'warn' });
+  if(!crmCanUpdateStageProgressForStage(stageKey)){
+    showToast({ title:'CRM', message:'У вас нет прав для отметки прогресса этого передела.', tone:'warn' });
     return;
   }
   const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
@@ -18710,7 +18739,8 @@ function handleClearStageDates(){
 }
 
 function handleStageDatesCalculation(options={}){
-  if(!crmCanManageOrders()){
+  const canEditDraft=editingOrderId ? crmCanEditOrders() : crmCanCreateOrders();
+  if(!canEditDraft){
     showToast({ title:'PlaneCore', message:'Недостаточно прав для пересчёта дат.', tone:'warn' });
     return;
   }
@@ -19245,7 +19275,7 @@ function setOrderFormReadOnly(readOnly){
     orderCommentSend.disabled=readOnly || !crmCanEditComments();
   }
   if(deleteOrderBtn){
-    deleteOrderBtn.disabled=readOnly;
+    deleteOrderBtn.disabled=readOnly || !crmCanDeleteOrders();
   }
   if(splitBtn){
     splitBtn.disabled=readOnly;
@@ -19268,6 +19298,20 @@ function setOrderFormReadOnly(readOnly){
   }
   if(dateTodayChk){
     dateTodayChk.disabled=readOnly;
+  }
+  const canUpdateProgress=crmCanUpdateStageProgress();
+  if(stagesTableBody){
+    stagesTableBody.querySelectorAll('[data-k="done"], [data-k="progress"]').forEach(input=>{
+      if(!input) return;
+      if(input.dataset.readonlyWasDisabled===undefined){
+        input.dataset.readonlyWasDisabled=input.disabled?'1':'0';
+      }
+      if(!canUpdateProgress){
+        input.disabled=true;
+      }else if(!readOnly){
+        input.disabled=input.dataset.readonlyWasDisabled==='1';
+      }
+    });
   }
 }
 
@@ -19293,8 +19337,10 @@ function updateOrderDialogMeta(){
 
 function openOrder(id=null){
   const canView=crmCanViewOrderDetails();
-  const canEdit=crmCanManageOrders();
-  if(!id && !canEdit){
+  const canCreate=crmCanCreateOrders();
+  const canDelete=crmCanDeleteOrders();
+  const canEdit= id ? crmCanEditOrders() : canCreate;
+  if(!id && !canCreate){
     showToast({ title:'CRM', message:'У вас нет прав для создания заказов.', tone:'warn' });
     return;
   }
@@ -19327,9 +19373,9 @@ function openOrder(id=null){
     updateOrderDialogMeta();
     window._editingOrigValues=(o.childIds?.length?(o._origValues||null):null);
     if(deleteOrderBtn){
-      deleteOrderBtn.style.display=canEdit?'':'none';
+      deleteOrderBtn.style.display=canDelete?'':'none';
       deleteOrderBtn.onclick=()=>{
-        if(!canEdit) return;
+        if(!canDelete) return;
         if(!confirm('Удалить этот заказ?'))return;
         handleOrderRemoval(o,b);
         renderCurrentView();
@@ -19672,6 +19718,10 @@ async function processStageCompletionChange(tr, isDone){
 
 async function handleStageDoneToggle(tr, doneEl, options={}){
   if(!tr||!doneEl) return true;
+  if(!crmCanUpdateStageProgress()){
+    showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
+    return false;
+  }
   const progEl=tr.querySelector('[data-k="progress"]');
   const isBoolOnly=!progEl;
   const prevProgress=options.prevProgress!==undefined?options.prevProgress:(progEl?progEl.value:'');
@@ -19765,6 +19815,7 @@ function moveStageRow(tr,direction){
   const suppressValue=isStageNameHourless(nmNormalized);
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
+  const canUpdateProgress=crmCanUpdateStageProgress();
   const stageId=ensureStageIdentity(st);
   tr.dataset.stageId=stageId;
   if(typeof st.doneAt==='string' && st.doneAt){
@@ -19780,8 +19831,8 @@ function moveStageRow(tr,direction){
   }
     tr.innerHTML=`
       <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
-      <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''}/></td>
-      <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" /><span class="expected-indicator"></span></div>`}</td>
+      <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''} ${canUpdateProgress?'':'disabled'} /></td>
+      <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" ${canUpdateProgress?'':'disabled'} /><span class="expected-indicator"></span></div>`}</td>
       <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
       <td class="col-end"><div class="stage-date-cell"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
       <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
@@ -19824,6 +19875,11 @@ function moveStageRow(tr,direction){
   const doneEl=tr.querySelector('[data-k="done"]');
   if(doneEl){
     doneEl.addEventListener('change',async ()=>{
+      if(!crmCanUpdateStageProgress()){
+        doneEl.checked=!doneEl.checked;
+        showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
+        return;
+      }
       await handleStageDoneToggle(tr, doneEl, { prevProgress:progEl?progEl.value:'' });
     });
   }
@@ -19832,6 +19888,11 @@ function moveStageRow(tr,direction){
       progEl.dataset.prevValue=progEl.value||'';
     });
     progEl.addEventListener('input',async e=>{
+      if(!crmCanUpdateStageProgress()){
+        e.target.value=progEl.dataset.prevValue||'';
+        showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
+        return;
+      }
       const v=Number(e.target.value||0);
       const prevValue=progEl.dataset.prevValue!==undefined?progEl.dataset.prevValue:progEl.value;
       if(doneEl){
@@ -20165,11 +20226,14 @@ function syncAutoDates(){
 orderForm.addEventListener('submit',e=>{
   e.preventDefault(); const b=currentBoard();
   orderDialogClosing=false;
-  if(!crmCanManageOrders()){
+  const id=orderForm.id.value||safeRandomUUID();
+  const exist=b.orders.find(x=>x.id===id);
+  const canSave=exist ? crmCanEditOrders() : crmCanCreateOrders();
+  if(!canSave){
     showToast({ title:'CRM', message:'У вас нет прав для сохранения заказа.', tone:'warn' });
     return;
   }
-  const id=orderForm.id.value||safeRandomUUID(); const exist=b.orders.find(x=>x.id===id); const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
+  const previousSnapshot=exist?deepClone(exist):null; const stages=readStages();
   const invalidStage=stages.find(stage=>{
     const startIso=coerceCalendarIso(stage?.start||'');
     const endIso=coerceCalendarIso(stage?.end||'');
