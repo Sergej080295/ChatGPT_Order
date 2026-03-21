@@ -4967,6 +4967,15 @@
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-status-waiting) 20%, transparent);
   }
 
+  .col.col--overdue > header {
+    border-color: color-mix(in srgb, var(--pc-danger) 55%, var(--pc-border));
+    background: color-mix(in srgb, var(--pc-danger) 10%, var(--pc-surface));
+  }
+
+  .col.col--overdue .lane-title {
+    color: color-mix(in srgb, var(--pc-danger) 70%, var(--pc-text));
+  }
+
   .col.col--unaccounted {
     border-style: dashed;
     border-color: color-mix(in srgb, var(--pc-warning, #fcc419) 40%, var(--pc-border));
@@ -7296,6 +7305,7 @@ const CRM_MIN_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_AUTO_REFRESH_SECONDS=5;
 const CRM_DEFAULT_ROUTE_HORIZON_DAYS=14;
 const CRM_MAX_ROUTE_HORIZON_DAYS=365;
+const CRM_OVERDUE_LANE_DAYS=7;
 const CRM_ROUTE_FROM_TODAY_DEFAULT=true;
 const CRM_LANE_SUM_PERIOD_MODES=new Set(['day','week','month','quarter','year','custom']);
 const CRM_DEFAULT_LANE_SUM_PERIOD=Object.freeze({ mode:'month', from:'', to:'' });
@@ -7319,7 +7329,8 @@ const CRM_DEFAULT_PREFERENCES={
   laneSumModes:{},
   hints:CRM_HINT_DEFAULTS,
   laneVisibility:{ autoHideEmpty:false, hiddenByBoard:{} },
-  ganttRangeHints:false
+  ganttRangeHints:false,
+  overdueLaneHighlight:{ byBoard:{} }
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
@@ -8101,6 +8112,28 @@ function sanitizeLaneVisibility(raw){
   return result;
 }
 
+function sanitizeLaneOverdueHighlight(raw){
+  const result={ byBoard:{} };
+  if(!raw || typeof raw!=='object') return result;
+  const source=raw.byBoard && typeof raw.byBoard==='object' ? raw.byBoard : raw;
+  const sanitizedMap={};
+  Object.entries(source).forEach(([boardId, lanes])=>{
+    const key=typeof boardId==='string'?boardId.trim():'';
+    if(!key) return;
+    const seen=new Set();
+    const unique=[];
+    (Array.isArray(lanes)?lanes:[]).forEach(lane=>{
+      const normalized=typeof lane==='string'?lane.trim():'';
+      if(!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      unique.push(normalized);
+    });
+    sanitizedMap[key]=unique;
+  });
+  result.byBoard=sanitizedMap;
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -8111,6 +8144,9 @@ function sanitizeCrmPreferences(raw){
     result.laneSumPeriod=sanitizeLaneSumPeriod(raw.laneSumPeriod);
     result.laneSumModes=sanitizeLaneSumModes(raw.laneSumModes);
     result.laneVisibility=sanitizeLaneVisibility(raw.laneVisibility);
+    result.overdueLaneHighlight=sanitizeLaneOverdueHighlight(
+      raw.overdueLaneHighlight || raw.overdueHighlight || raw.laneOverdueHighlight
+    );
     const intervalKeys=[
       'autoRefreshSeconds',
       'autoRefreshIntervalSeconds',
@@ -8334,6 +8370,36 @@ function setAutoHideEmptyLanes(enabled){
   const visibility=sanitizeLaneVisibility(prefs.laneVisibility);
   visibility.autoHideEmpty=enabled===true;
   prefs.laneVisibility=visibility;
+  state.settings.preferences=prefs;
+}
+
+function getCrmOverdueLaneHighlightPrefs(){
+  const prefs=getCrmPreferences();
+  return sanitizeLaneOverdueHighlight(prefs?.overdueLaneHighlight);
+}
+
+function getOverdueHighlightLanesForBoard(boardId){
+  const prefs=getCrmOverdueLaneHighlightPrefs();
+  const key=typeof boardId==='string'?boardId.trim():'';
+  if(!key) return null;
+  if(Object.prototype.hasOwnProperty.call(prefs.byBoard||{}, key)){
+    const list=Array.isArray(prefs.byBoard[key])?prefs.byBoard[key]:[];
+    return new Set(list.map(lane=>typeof lane==='string'?lane.trim():'').filter(Boolean));
+  }
+  return null;
+}
+
+function setOverdueHighlightLanesForBoard(boardId, lanes){
+  const key=typeof boardId==='string'?boardId.trim():'';
+  if(!key) return;
+  if(!state.settings) state.settings={};
+  const prefs=sanitizeCrmPreferences(state.settings.preferences);
+  const source=Array.isArray(lanes)?lanes:typeof lanes==='string'?[lanes]:[];
+  const normalized=source.map(lane=>typeof lane==='string'?lane.trim():'').filter(Boolean);
+  const unique=[...new Set(normalized)];
+  const highlightPrefs=sanitizeLaneOverdueHighlight(prefs.overdueLaneHighlight);
+  highlightPrefs.byBoard[key]=unique;
+  prefs.overdueLaneHighlight=highlightPrefs;
   state.settings.preferences=prefs;
 }
 
@@ -18015,6 +18081,8 @@ function renderCards(){
   const b=currentBoard();
   if(!b)return;
   const stickerPrefs=getCrmKanbanStickerPrefs();
+  const overdueLanePrefs=getOverdueHighlightLanesForBoard(b.id);
+  const overdueLaneSet=new Set();
   laneVisibilityState=computeLaneVisibility(b);
   const visibleLanes=laneVisibilityState.visible.length?laneVisibilityState.visible:(b.lanes||[]);
   const map=Object.fromEntries(visibleLanes.map(l=>[l,[]]));
@@ -18027,12 +18095,22 @@ function renderCards(){
   const canCompleteOrders=crmCanCompleteOrders();
   const laneSumRange=resolveLaneSumRange();
   const todayTime=today0().getTime();
+  const todayDate=today0();
   b.orders.forEach(o=>{
     computeOrderDatesFromStages(o);
-    ensureOrderStatusEnteredAt(o);
+    const statusEnteredAt=ensureOrderStatusEnteredAt(o);
     let lane=o.status;
     if(!Object.prototype.hasOwnProperty.call(map,lane)) lane=fallbackLane;
     if(!Object.prototype.hasOwnProperty.call(map,lane)) return;
+    const shouldCheckOverdue=!overdueLanePrefs || overdueLanePrefs.has(lane);
+    if(shouldCheckOverdue && statusEnteredAt){
+      const enteredDate=new Date(`${statusEnteredAt}T00:00:00`);
+      if(!Number.isNaN(enteredDate.getTime())){
+        if(daysBetween(enteredDate, todayDate)>CRM_OVERDUE_LANE_DAYS){
+          overdueLaneSet.add(lane);
+        }
+      }
+    }
     if(!doneLane || lane!==doneLane){
       totalActive++;
     }
@@ -18182,6 +18260,7 @@ function renderCards(){
     drop.scrollTop=prevScroll;
     if(col){
       col.classList.toggle('lane-has-issues',laneHasIssues);
+      col.classList.toggle('col--overdue',overdueLaneSet.has(lane));
       const alertEl=col.querySelector('[data-lane-alert]');
       if(alertEl){
         if(laneHasIssues){
@@ -20893,6 +20972,41 @@ function renderCrmPreferencesSettingsUI(){
   syncLaneSumControls();
   laneSumField.append(laneSumLabel, laneSumSelect, laneSumCustomWrap, laneSumHint);
 
+  const overdueField=document.createElement('div');
+  overdueField.className='crm-field';
+  const overdueLabel=document.createElement('span');
+  overdueLabel.className='crm-field__label';
+  overdueLabel.textContent='Подсветка колонки при простое 7+ дней';
+  const overdueList=document.createElement('div');
+  overdueList.className='crm-settings-inline';
+  const board=currentBoard();
+  const savedOverdueLanes=getOverdueHighlightLanesForBoard(board?.id);
+  const selectedOverdueLanes=savedOverdueLanes ?? new Set((board?.lanes||[]).map(lane=>lane));
+  if(board && Array.isArray(board.lanes) && board.lanes.length){
+    board.lanes.forEach(lane=>{
+      const laneOption=document.createElement('label');
+      laneOption.className='crm-settings-checkbox';
+      const laneCheckbox=document.createElement('input');
+      laneCheckbox.type='checkbox';
+      laneCheckbox.dataset.prefOverdueLane='1';
+      laneCheckbox.value=lane;
+      laneCheckbox.checked=selectedOverdueLanes.has(lane);
+      const laneText=document.createElement('span');
+      laneText.textContent=lane;
+      laneOption.append(laneCheckbox, laneText);
+      overdueList.appendChild(laneOption);
+    });
+  }else{
+    const emptyNote=document.createElement('span');
+    emptyNote.className='muted';
+    emptyNote.textContent='Сначала настройте список колонок доски.';
+    overdueList.appendChild(emptyNote);
+  }
+  const overdueHint=document.createElement('span');
+  overdueHint.className='crm-field__hint';
+  overdueHint.textContent='Если в выбранной колонке есть заказ старше 7 дней, её шапка подсвечивается красным.';
+  overdueField.append(overdueLabel, overdueList, overdueHint);
+
   const autoHideOption=document.createElement('label');
   autoHideOption.className='crm-settings-checkbox';
   const autoHideCheckbox=document.createElement('input');
@@ -20961,7 +21075,7 @@ function renderCrmPreferencesSettingsUI(){
   hintsCheckbox.addEventListener('change',syncHintControls);
   syncHintControls();
 
-  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, autoDateOffsetField, laneSumField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
+  control.append(autoOption, cascadeOption, tipsOption, refreshField, horizonField, autoDateOffsetField, laneSumField, overdueField, autoHideOption, hintsTitle, hintsMaster, hintLevel1, hintLevel2, hintDelayField);
   row.appendChild(label);
   row.appendChild(control);
   crmPreferencesContainer.appendChild(row);
@@ -21592,6 +21706,12 @@ boardForm.addEventListener('submit',e=>{
     }
   });
   state.settings.parallel=normalizeParallelMap(parallelDraft, state.settings?.parallel||CRM_DEFAULT_PARALLEL);
+  const overdueLaneInputs=[...boardForm.querySelectorAll('input[data-pref-overdue-lane]')];
+  const overdueLaneSelection=overdueLaneInputs.filter(input=>input.checked).map(input=>input.value);
+  const overdueLaneByBoard={ ...(state.settings?.preferences?.overdueLaneHighlight?.byBoard||{}) };
+  if(b?.id){
+    overdueLaneByBoard[b.id]=overdueLaneSelection;
+  }
   state.settings.preferences=sanitizeCrmPreferences({
     autoOptimize:!!boardForm.prefAutoOptimize?.checked,
     cascadeReady:!!boardForm.prefCascadeReady?.checked,
@@ -21608,6 +21728,9 @@ boardForm.addEventListener('submit',e=>{
     laneVisibility:{
       autoHideEmpty:!!boardForm.prefAutoHideEmptyLanes?.checked,
       hiddenByBoard:state.settings?.preferences?.laneVisibility?.hiddenByBoard||{}
+    },
+    overdueLaneHighlight:{
+      byBoard:overdueLaneByBoard
     },
     hints:{
       enabled:boardForm.prefHintsEnabled?boardForm.prefHintsEnabled.checked:true,
