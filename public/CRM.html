@@ -8169,28 +8169,42 @@ function sanitizeLaneOverdueHighlight(raw){
 
 function sanitizeCrmStagePresetEntry(raw){
   if(!raw || typeof raw!=='object') return null;
+  const idRaw=typeof raw.id==='string'?raw.id.trim():'';
   const name=typeof raw.name==='string'?raw.name.trim():'';
   if(!name) return null;
   const normalized=normalizeStageName(name);
   if(!normalized) return null;
   const hasHours=raw.hasHours!==false;
-  return { name, hasHours };
+  const visible=raw.visible!==false;
+  const id=idRaw||`preset:${normalized}`;
+  return { id, name, hasHours, visible };
 }
 
 function sanitizeCrmStagePresetList(raw){
   const base=Array.isArray(raw)?raw:CRM_BASE_STAGE_PRESETS;
   const result=[];
+  const usedIds=new Set();
   const seen=new Set();
   base.forEach(entry=>{
     const sanitized=sanitizeCrmStagePresetEntry(entry);
     if(!sanitized) return;
     const key=normalizeStageName(sanitized.name);
     if(!key || seen.has(key)) return;
+    let id=sanitized.id;
+    if(!id || usedIds.has(id)){
+      id=`preset:${key}`;
+    }
+    let suffix=1;
+    while(usedIds.has(id)){
+      suffix+=1;
+      id=`preset:${key}:${suffix}`;
+    }
+    usedIds.add(id);
     seen.add(key);
-    result.push(sanitized);
+    result.push({ ...sanitized, id });
   });
   if(!result.length){
-    return CRM_BASE_STAGE_PRESETS.map(item=>({ ...item }));
+    return CRM_BASE_STAGE_PRESETS.map(item=>sanitizeCrmStagePresetEntry(item)).filter(Boolean);
   }
   return result;
 }
@@ -8371,7 +8385,10 @@ function getCrmStagePresets(){
 }
 
 function getCrmStagePresetNames(){
-  return getCrmStagePresets().map(item=>item.name).filter(Boolean);
+  return getCrmStagePresets()
+    .filter(item=>item.visible!==false)
+    .map(item=>item.name)
+    .filter(Boolean);
 }
 
 function getCrmAdminSettings(){
@@ -21369,13 +21386,98 @@ function collectCrmStagePresetInputs(){
   if(!crmStagePresetContainer) return [];
   const rows=[...crmStagePresetContainer.querySelectorAll('[data-stage-preset-row]')];
   return rows.map(row=>{
+    const idInput=row.querySelector('input[name="crmStagePresetId"]');
     const nameInput=row.querySelector('input[name="crmStagePresetName"]');
     const hoursInput=row.querySelector('input[name="crmStagePresetHours"]');
+    const visibleInput=row.querySelector('input[name="crmStagePresetVisible"]');
     return {
+      id:idInput?idInput.value:'',
       name:nameInput?nameInput.value:'',
-      hasHours:hoursInput?!!hoursInput.checked:true
+      hasHours:hoursInput?!!hoursInput.checked:true,
+      visible:visibleInput?!!visibleInput.checked:true
     };
   });
+}
+
+function buildCrmStagePresetDiff(previousList,nextList){
+  const prevById=new Map();
+  const nextById=new Map();
+  (previousList||[]).forEach(entry=>{
+    if(!entry || !entry.id) return;
+    prevById.set(entry.id, entry);
+  });
+  (nextList||[]).forEach(entry=>{
+    if(!entry || !entry.id) return;
+    nextById.set(entry.id, entry);
+  });
+  const renamed=[];
+  const removed=[];
+  prevById.forEach((prev,id)=>{
+    const next=nextById.get(id);
+    const prevNorm=normalizeStageName(prev?.name);
+    if(!next){
+      if(prevNorm){
+        removed.push(prevNorm);
+      }
+      return;
+    }
+    const nextNorm=normalizeStageName(next?.name);
+    if(prevNorm && nextNorm && prevNorm!==nextNorm){
+      renamed.push({ from:prevNorm, to:next.name.trim() });
+    }
+  });
+  return { renamed, removed };
+}
+
+function applyCrmStagePresetDiffToOrders(diff){
+  if(!diff || (!diff.renamed?.length && !diff.removed?.length)) return;
+  const renameMap=new Map();
+  (diff.renamed||[]).forEach(entry=>{
+    if(!entry || !entry.from || !entry.to) return;
+    renameMap.set(entry.from, entry.to);
+  });
+  const removedSet=new Set((diff.removed||[]).filter(Boolean));
+  state.boards.forEach(board=>{
+    const orders=Array.isArray(board?.orders)?board.orders:[];
+    orders.forEach(order=>{
+      if(!Array.isArray(order?.stages)) return;
+      const nextStages=[];
+      order.stages.forEach(stage=>{
+        if(!stage || typeof stage!=='object') return;
+        const normalized=normalizeStageName(stage.name);
+        if(normalized && removedSet.has(normalized)){
+          return;
+        }
+        if(normalized && renameMap.has(normalized)){
+          stage.name=renameMap.get(normalized);
+        }
+        nextStages.push(stage);
+      });
+      order.stages=nextStages;
+    });
+  });
+}
+
+function syncCrmStagePresetDiffToMapping(diff){
+  if(!state.settings) state.settings={};
+  const current=sanitizeCrmStageMapping(state.settings.mapping);
+  const next={ ...current };
+  (diff?.renamed||[]).forEach(entry=>{
+    if(!entry || !entry.from) return;
+    const targetKey=normalizeCrmStageKey(entry.to);
+    if(!targetKey) return;
+    if(next[entry.from]){
+      const existing=next[targetKey]&&typeof next[targetKey]==='object'?next[targetKey]:{};
+      next[targetKey]={ ...next[entry.from], ...existing };
+      delete next[entry.from];
+    }
+  });
+  (diff?.removed||[]).forEach(key=>{
+    if(key && next[key]){
+      delete next[key];
+    }
+  });
+  state.settings.mapping=sanitizeCrmStageMapping(next);
 }
 
 function syncCrmStagePresetHoursToMapping(list){
@@ -21417,13 +21519,17 @@ function renderCrmStagePresetSettingsUI(){
     rowEl.dataset.stagePresetRow='1';
     const title=document.createElement('div');
     title.className='crm-mapping-row__title';
+    const idInput=document.createElement('input');
+    idInput.type='hidden';
+    idInput.name='crmStagePresetId';
+    idInput.value=entry.id||`preset:${normalizeStageName(entry.name)}`;
     const nameInput=document.createElement('input');
     nameInput.type='text';
     nameInput.className='pc-input';
     nameInput.name='crmStagePresetName';
     nameInput.value=entry.name||'';
     nameInput.placeholder='Название передела';
-    title.appendChild(nameInput);
+    title.append(idInput,nameInput);
     const controls=document.createElement('div');
     controls.className='crm-mapping-row__controls';
     const typeLabel=document.createElement('label');
@@ -21435,13 +21541,22 @@ function renderCrmStagePresetSettingsUI(){
     const typeText=document.createElement('span');
     typeText.textContent='Есть часы';
     typeLabel.append(typeInput,typeText);
+    const visibleLabel=document.createElement('label');
+    visibleLabel.className='crm-mapping-row__hours';
+    const visibleInput=document.createElement('input');
+    visibleInput.type='checkbox';
+    visibleInput.name='crmStagePresetVisible';
+    visibleInput.checked=entry.visible!==false;
+    const visibleText=document.createElement('span');
+    visibleText.textContent='Использовать';
+    visibleLabel.append(visibleInput,visibleText);
     const deleteBtn=document.createElement('button');
     deleteBtn.type='button';
     deleteBtn.className='pc-icon-btn crm-mapping-row__delete';
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(typeLabel,deleteBtn);
+    controls.append(typeLabel,visibleLabel,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -21462,7 +21577,7 @@ function renderCrmStagePresetSettingsUI(){
   control.appendChild(tools);
   const note=document.createElement('div');
   note.className='crm-mapping-note';
-  note.textContent='Переделы из этого списка используются в кнопке «Все» и выборе «Из списка».';
+  note.textContent='Переделы с галочкой «Использовать» попадают в кнопки «Все» и «Из списка».';
   control.appendChild(note);
   row.append(label,control);
   crmStagePresetContainer.appendChild(row);
@@ -21530,7 +21645,7 @@ if(crmStagePresetContainer){
     const target=event.target;
     if(!(target instanceof HTMLButtonElement)) return;
     if(target.dataset.stagePresetAdd){
-      crmStagePresetDraft=[...collectCrmStagePresetInputs(), { name:'', hasHours:true }];
+      crmStagePresetDraft=[...collectCrmStagePresetInputs(), { id:`preset:new:${safeRandomUUID()}`, name:'', hasHours:true, visible:true }];
       renderCrmStagePresetSettingsUI();
       return;
     }
@@ -21856,6 +21971,7 @@ boardForm.addEventListener('submit',e=>{
   const id=boardForm.id.value;
   const b=state.boards.find(x=>x.id===id);
   const prevSettings=deepClone(state.settings);
+  const prevStagePresets=getCrmStagePresets().map(item=>({ ...item }));
   const prevBoardMeta={ name:b.name, lanes:Array.isArray(b.lanes)?b.lanes.slice():[] };
   b.name=boardForm.name.value.trim()||'Доска';
   b.lanes=boardForm.lanes.value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -21978,8 +22094,11 @@ boardForm.addEventListener('submit',e=>{
   state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
   const stagePresetInputs=collectCrmStagePresetInputs();
   const stagePresetDraft=sanitizeCrmStagePresetList(stagePresetInputs);
+  const stagePresetDiff=buildCrmStagePresetDiff(prevStagePresets, stagePresetDraft);
+  syncCrmStagePresetDiffToMapping(stagePresetDiff);
   state.settings.stagePresets=stagePresetDraft;
   syncCrmStagePresetHoursToMapping(stagePresetDraft);
+  applyCrmStagePresetDiffToOrders(stagePresetDiff);
   applyTrashRetention();
   applyJournalRetention();
   updateAllStageExpectations();
