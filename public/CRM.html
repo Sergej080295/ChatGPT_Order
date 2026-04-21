@@ -10766,7 +10766,7 @@ if(!CRM_VIEW_MODES.has(storedView)){
 }
 const CRM_PROGRESS_STAGES=['draw','laser','bend','weld','mech'];
 const CRM_ORDER_FILTERS=new Set(['current','all','done','late']);
-const CRM_STAGE_LABELS={
+const DEFAULT_CRM_STAGE_LABELS=Object.freeze({
   draw:'Подготовка в работу',
   proc:'Закупка',
   supply:'Поставка ДС',
@@ -10778,7 +10778,8 @@ const CRM_STAGE_LABELS={
   coop:'Кооперация',
   pack:'Упаковка',
   ship:'Отгрузка'
-};
+});
+const CRM_STAGE_LABELS={ ...DEFAULT_CRM_STAGE_LABELS };
 const CRM_STAGE_ICONS=Object.freeze({
   draw:'📐',
   proc:'🛒',
@@ -10839,9 +10840,11 @@ let crmMappingRemovedDraft=new Set();
 let crmStagePresetDraft=[];
 
 if(crmStageSelect){
-  decorateStageSelectOptions();
-  crmStageSelect.value=initialStageViewKey;
-  updateStageSelectAppearance(crmStageSelect.value);
+  refreshCrmStagePresentation();
+  if(initialStageViewKey && Array.from(crmStageSelect.options).some(option=>option.value===initialStageViewKey)){
+    crmStageSelect.value=initialStageViewKey;
+  }
+  updateStageSelectAppearance(crmStageSelect.value||initialStageViewKey);
   enhanceCrmStageSelect();
   updateCrmStageSelectDisplay();
   setupStageSelectObserver();
@@ -11002,6 +11005,83 @@ function updateStageSelectAppearance(stageKey){
   if(!crmStageSelectShell) return;
   const key=typeof stageKey==='string'?stageKey.trim():'';
   crmStageSelectShell.dataset.stage=key;
+}
+
+function resolvePresetStageKeyForLabel(name){
+  const normalized=normalizeCrmStageKey(name);
+  if(!normalized) return null;
+  const mappingEntry=getCrmStageMappingEntry(normalized);
+  if(mappingEntry){
+    if(mappingEntry.stage===CRM_STAGE_IGNORE) return null;
+    if(mappingEntry.stage && CRM_STAGE_KEYS.includes(mappingEntry.stage)){
+      return mappingEntry.stage;
+    }
+  }
+  return resolveCrmStageKey(normalized);
+}
+
+function refreshCrmStageLabelsFromPresets(){
+  CRM_STAGE_KEYS.forEach(key=>{
+    CRM_STAGE_LABELS[key]=DEFAULT_CRM_STAGE_LABELS[key]||key;
+  });
+  const presets=getCrmStagePresets();
+  presets.forEach(entry=>{
+    if(!entry || entry.visible===false) return;
+    const key=resolvePresetStageKeyForLabel(entry.name);
+    if(!key) return;
+    CRM_STAGE_LABELS[key]=entry.name;
+  });
+}
+
+function getCrmSelectableStageKeys(){
+  const keys=[];
+  const addKey=key=>{
+    if(CRM_STAGE_KEYS.includes(key) && !keys.includes(key)){
+      keys.push(key);
+    }
+  };
+  getCrmStagePresets().forEach(entry=>{
+    if(!entry || entry.visible===false) return;
+    const key=resolvePresetStageKeyForLabel(entry.name);
+    if(key) addKey(key);
+  });
+  if(!keys.length){
+    CRM_STAGE_SEQUENCE.forEach(addKey);
+  }
+  return keys;
+}
+
+function rebuildCrmStageSelectOptions(){
+  if(!crmStageSelect) return;
+  const stageKeys=getCrmSelectableStageKeys();
+  const previous=crmStageSelect.value;
+  crmStageSelect.innerHTML='';
+  stageKeys.forEach(stageKey=>{
+    const baseLabel=(CRM_STAGE_LABELS[stageKey]||stageKey)||'';
+    const option=new Option(baseLabel, stageKey);
+    option.dataset.baseLabel=baseLabel.trim();
+    decorateStageOptionElement(option, stageKey);
+    crmStageSelect.appendChild(option);
+  });
+  const nextValue=stageKeys.includes(previous)?previous:(stageKeys[0]||CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||'draw');
+  if(nextValue){
+    crmStageSelect.value=nextValue;
+  }
+  decorateStageSelectOptions();
+  buildCrmStageSelectMenu();
+  updateCrmStageSelectDisplay();
+  updateCrmStageSelectMenuSelection();
+  const activeValue=crmStageSelect.value||nextValue;
+  updateStageSelectAppearance(activeValue);
+  renderCrmStageTabLabel(activeValue);
+  if(crmStageFilter){
+    crmStageFilter.value=getCrmStageFilter(activeValue);
+  }
+}
+
+function refreshCrmStagePresentation(){
+  refreshCrmStageLabelsFromPresets();
+  rebuildCrmStageSelectOptions();
 }
 const CRM_STAGE_FILTER_LABELS={
   current:'Текущие',
@@ -23714,6 +23794,7 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){
   updatePlannerAutoRefreshFromPreferences();
+  refreshCrmStagePresentation();
   renderBoardSelect();
   renderColumns();
   renderCurrentView();
