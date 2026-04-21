@@ -6778,6 +6778,12 @@
                 <div id="crmMappingSettings"></div>
               </div>
             </details>
+            <details class="crm-settings-group" open>
+              <summary>Пресеты переделов</summary>
+              <div class="crm-settings-fields">
+                <div id="crmStagePresetSettings"></div>
+              </div>
+            </details>
           </div>
         </section>
       </div>
@@ -7284,6 +7290,20 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
+const CRM_BASE_STAGE_PRESETS=Object.freeze([
+  { name:'Подготовка в работу', hasHours:true },
+  { name:'Закупка', hasHours:false },
+  { name:'Поставка ДС', hasHours:false },
+  { name:'Рубка', hasHours:false },
+  { name:'Лазер', hasHours:true },
+  { name:'Гибка', hasHours:true },
+  { name:'Сварка', hasHours:true },
+  { name:'Мехобработка', hasHours:true },
+  { name:'Кооперация', hasHours:false },
+  { name:'Упаковка', hasHours:false },
+  { name:'Отгрузка', hasHours:false },
+  { name:'Чек лист', hasHours:false }
+]);
 const CRM_STAGE_KEYS=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_SEQUENCE=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
@@ -7335,9 +7355,15 @@ const CRM_DEFAULT_PREFERENCES={
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
-const ALL_STAGE_PRESETS=['Подготовка в работу','Закупка','Поставка ДС','Рубка','Лазер','Гибка','Сварка','Мехобработка','Кооперация','Упаковка','Отгрузка','Чек лист'];
-const BOOL_STAGE_NAMES=new Set(['закупка','поставка дс','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
-const HOURLESS_STAGE_NAMES=new Set(['закупка','поставка дс','рубка','упаковка','отгрузка','чек лист','чек-лист','чеклист']);
+const ALL_STAGE_PRESETS=CRM_BASE_STAGE_PRESETS.map(item=>item.name);
+const BOOL_STAGE_NAMES=new Set(
+  CRM_BASE_STAGE_PRESETS
+    .filter(item=>item.hasHours===false)
+    .map(item=>normalizeStageName(item.name))
+    .filter(Boolean)
+    .concat(['чек-лист','чеклист'])
+);
+const HOURLESS_STAGE_NAMES=new Set(BOOL_STAGE_NAMES);
 const crmStageFilterByKey=new Map();
 const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
 const CRM_ROUTE_DAY_FILTERS=new Set(['all','busy','free']);
@@ -7701,6 +7727,7 @@ function sanitizeCrmSettings(raw){
   result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
+  result.stagePresets=sanitizeCrmStagePresetList(base.stagePresets);
   result.mapping=sanitizeCrmStageMapping(base.mapping);
   result.stageSchedules=sanitizeCrmStageSchedules(base.stageSchedules, base.hourlessSchedule);
   result.unaccountedStatuses=uniqueStatuses;
@@ -7767,6 +7794,11 @@ function mergeCrmSettings(preferredSettings, fallbackSettings){
     hiddenByBoard:{ ...fallbackVisibility.hiddenByBoard, ...preferredVisibility.hiddenByBoard }
   };
   result.startView=preferred.startView||fallback.startView;
+  result.stagePresets=sanitizeCrmStagePresetList(
+    preferredSettings && Object.prototype.hasOwnProperty.call(preferredSettings,'stagePresets')
+      ? preferred.stagePresets
+      : fallback.stagePresets
+  );
 
   const preferredAutoDefined=preferredSettings && typeof preferredSettings==='object'
     && Object.prototype.hasOwnProperty.call(preferredSettings,'autoPinOrders');
@@ -8134,6 +8166,34 @@ function sanitizeLaneOverdueHighlight(raw){
   return result;
 }
 
+function sanitizeCrmStagePresetEntry(raw){
+  if(!raw || typeof raw!=='object') return null;
+  const name=typeof raw.name==='string'?raw.name.trim():'';
+  if(!name) return null;
+  const normalized=normalizeStageName(name);
+  if(!normalized) return null;
+  const hasHours=raw.hasHours!==false;
+  return { name, hasHours };
+}
+
+function sanitizeCrmStagePresetList(raw){
+  const base=Array.isArray(raw)?raw:CRM_BASE_STAGE_PRESETS;
+  const result=[];
+  const seen=new Set();
+  base.forEach(entry=>{
+    const sanitized=sanitizeCrmStagePresetEntry(entry);
+    if(!sanitized) return;
+    const key=normalizeStageName(sanitized.name);
+    if(!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(sanitized);
+  });
+  if(!result.length){
+    return CRM_BASE_STAGE_PRESETS.map(item=>({ ...item }));
+  }
+  return result;
+}
+
 function sanitizeCrmPreferences(raw){
   const result={ ...CRM_DEFAULT_PREFERENCES };
   if(raw && typeof raw==='object'){
@@ -8299,6 +8359,18 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function getCrmStagePresets(){
+  const presets=sanitizeCrmStagePresetList(state?.settings?.stagePresets);
+  if(state && state.settings){
+    state.settings.stagePresets=presets;
+  }
+  return presets;
+}
+
+function getCrmStagePresetNames(){
+  return getCrmStagePresets().map(item=>item.name).filter(Boolean);
 }
 
 function getCrmAdminSettings(){
@@ -9135,6 +9207,10 @@ function stageNameHasHours(normalized){
   if(!key) return false;
   const preference=getStageHoursPreference(key);
   if(preference!==null) return preference;
+  const presetEntry=getCrmStagePresets().find(item=>normalizeStageName(item.name)===key);
+  if(presetEntry){
+    return presetEntry.hasHours!==false;
+  }
   if(HOURLESS_STAGE_NAMES.has(key)) return false;
   const entry=getCrmStageMappingEntry(key);
   const mappedStage=entry&&typeof entry.stage==='string'?entry.stage:'';
@@ -10742,6 +10818,7 @@ let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
 let crmStageNavHoverTimeout=null;
 let crmMappingRemovedDraft=new Set();
+let crmStagePresetDraft=[];
 
 if(crmStageSelect){
   decorateStageSelectOptions();
@@ -19295,7 +19372,7 @@ if(presetStagesBtn){
   presetStagesBtn.addEventListener('click',()=>applyStagePreset(DEFAULT_STAGES));
 }
 if(allStagesBtn){
-  allStagesBtn.addEventListener('click',()=>applyStagePreset(ALL_STAGE_PRESETS));
+  allStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmStagePresetNames()));
 }
 if(splitBtn){
   splitBtn.addEventListener('click',()=>openSplitDialog());
@@ -20052,12 +20129,13 @@ function moveStageRow(tr,direction){
   function resolveKnownStageName(name){
     const normalized=normalizeStageName(name||'');
     if(!normalized) return '';
-    const matched=ALL_STAGE_PRESETS.find(stage=>normalizeStageName(stage)===normalized);
+    const matched=getCrmStagePresetNames().find(stage=>normalizeStageName(stage)===normalized);
     return matched || name.trim();
   }
 
   function promptCustomStageName(){
-    const hint=`Доступные переделы: ${ALL_STAGE_PRESETS.join(', ')}`;
+    const available=getCrmStagePresetNames();
+    const hint=`Доступные переделы: ${available.join(', ')}`;
     const raw=window.prompt(`Название передела\n${hint}`,'');
     if(typeof raw!=='string') return '';
     const trimmed=raw.trim();
@@ -20132,7 +20210,7 @@ function suppressValueForStage(normalizedName){
 }
 
 function showStagePicker(anchor){
-  const presets=Array.isArray(ALL_STAGE_PRESETS)?ALL_STAGE_PRESETS.filter(Boolean):[];
+  const presets=getCrmStagePresetNames().filter(Boolean);
   closePopup();
   if(!presets.length){
     appendStageByName('');
@@ -20403,6 +20481,7 @@ const crmStageScheduleContainer=boardForm?.querySelector('#crmHourlessScheduleSe
 const crmPreferencesContainer=boardForm?.querySelector('#crmPreferencesSettings')||null;
 const crmStartViewContainer=boardForm?.querySelector('#crmStartViewSettings')||null;
 const crmMappingContainer=boardForm?.querySelector('#crmMappingSettings')||null;
+const crmStagePresetContainer=boardForm?.querySelector('#crmStagePresetSettings')||null;
 const crmSettingsTabButtons=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-tab')):[];
 const crmSettingsPanels=boardForm?Array.from(boardForm.querySelectorAll('.crm-settings-panel')):[];
 let crmSettingsActiveTabId=crmSettingsPanels[0]?.dataset?.panel||'general';
@@ -21285,6 +21364,109 @@ function renderCrmMappingSettingsUI(){
   updateCrmMappingAlertState();
 }
 
+function collectCrmStagePresetInputs(){
+  if(!crmStagePresetContainer) return [];
+  const rows=[...crmStagePresetContainer.querySelectorAll('[data-stage-preset-row]')];
+  return rows.map(row=>{
+    const nameInput=row.querySelector('input[name="crmStagePresetName"]');
+    const hoursInput=row.querySelector('input[name="crmStagePresetHours"]');
+    return {
+      name:nameInput?nameInput.value:'',
+      hasHours:hoursInput?!!hoursInput.checked:true
+    };
+  });
+}
+
+function syncCrmStagePresetHoursToMapping(list){
+  if(!state.settings) state.settings={};
+  const current=sanitizeCrmStageMapping(state.settings.mapping);
+  const next={ ...current };
+  list.forEach(entry=>{
+    const normalized=normalizeCrmStageKey(entry?.name);
+    if(!normalized) return;
+    const existing=next[normalized]&&typeof next[normalized]==='object'?next[normalized]:{};
+    next[normalized]={
+      stage:typeof existing.stage==='string'?existing.stage:'',
+      hasHours:entry.hasHours!==false
+    };
+  });
+  state.settings.mapping=sanitizeCrmStageMapping(next);
+}
+
+function renderCrmStagePresetSettingsUI(){
+  if(!crmStagePresetContainer) return;
+  crmStagePresetContainer.innerHTML='';
+  const row=document.createElement('div');
+  row.className='crm-settings-row crm-settings-row--stack';
+  const label=document.createElement('div');
+  label.className='crm-settings-label';
+  label.textContent='Список переделов';
+  const control=document.createElement('div');
+  control.className='crm-settings-control crm-settings-control--column';
+  const list=document.createElement('div');
+  list.className='crm-mapping-list';
+  const source=Array.isArray(crmStagePresetDraft)&&crmStagePresetDraft.length
+    ? crmStagePresetDraft
+    : getCrmStagePresets();
+  const presets=sanitizeCrmStagePresetList(source);
+  crmStagePresetDraft=presets.map(item=>({ ...item }));
+  presets.forEach((entry,index)=>{
+    const rowEl=document.createElement('div');
+    rowEl.className='crm-mapping-row';
+    rowEl.dataset.stagePresetRow='1';
+    const title=document.createElement('div');
+    title.className='crm-mapping-row__title';
+    const nameInput=document.createElement('input');
+    nameInput.type='text';
+    nameInput.className='pc-input';
+    nameInput.name='crmStagePresetName';
+    nameInput.value=entry.name||'';
+    nameInput.placeholder='Название передела';
+    title.appendChild(nameInput);
+    const controls=document.createElement('div');
+    controls.className='crm-mapping-row__controls';
+    const typeLabel=document.createElement('label');
+    typeLabel.className='crm-mapping-row__hours';
+    const typeInput=document.createElement('input');
+    typeInput.type='checkbox';
+    typeInput.name='crmStagePresetHours';
+    typeInput.checked=entry.hasHours!==false;
+    const typeText=document.createElement('span');
+    typeText.textContent='Есть часы';
+    typeLabel.append(typeInput,typeText);
+    const deleteBtn=document.createElement('button');
+    deleteBtn.type='button';
+    deleteBtn.className='pc-icon-btn crm-mapping-row__delete';
+    deleteBtn.textContent='✖';
+    deleteBtn.title='Удалить передел';
+    deleteBtn.dataset.stagePresetDelete=String(index);
+    controls.append(typeLabel,deleteBtn);
+    rowEl.append(title,controls);
+    list.appendChild(rowEl);
+  });
+  control.appendChild(list);
+  const tools=document.createElement('div');
+  tools.className='crm-settings-inline';
+  const addBtn=document.createElement('button');
+  addBtn.type='button';
+  addBtn.className='pc-btn pc-btn--ghost';
+  addBtn.textContent='Добавить передел';
+  addBtn.dataset.stagePresetAdd='1';
+  const restoreBtn=document.createElement('button');
+  restoreBtn.type='button';
+  restoreBtn.className='pc-btn pc-btn--ghost';
+  restoreBtn.textContent='Загрузить базовые';
+  restoreBtn.dataset.stagePresetRestore='1';
+  tools.append(addBtn,restoreBtn);
+  control.appendChild(tools);
+  const note=document.createElement('div');
+  note.className='crm-mapping-note';
+  note.textContent='Переделы из этого списка используются в кнопке «Все» и выборе «Из списка».';
+  control.appendChild(note);
+  row.append(label,control);
+  crmStagePresetContainer.appendChild(row);
+}
+
 if(crmMappingContainer){
   crmMappingContainer.addEventListener('change',event=>{
     const target=event.target;
@@ -21338,6 +21520,32 @@ if(crmMappingContainer){
         row.remove();
       }
       renderCrmMappingSettingsUI();
+    }
+  });
+}
+
+if(crmStagePresetContainer){
+  crmStagePresetContainer.addEventListener('click',event=>{
+    const target=event.target;
+    if(!(target instanceof HTMLButtonElement)) return;
+    if(target.dataset.stagePresetAdd){
+      crmStagePresetDraft=[...collectCrmStagePresetInputs(), { name:'', hasHours:true }];
+      renderCrmStagePresetSettingsUI();
+      return;
+    }
+    if(target.dataset.stagePresetRestore){
+      if(!window.confirm('Заменить текущий список переделов базовым набором?')) return;
+      crmStagePresetDraft=CRM_BASE_STAGE_PRESETS.map(item=>({ ...item }));
+      renderCrmStagePresetSettingsUI();
+      return;
+    }
+    if(target.dataset.stagePresetDelete!==undefined){
+      const source=collectCrmStagePresetInputs();
+      const index=Number(target.dataset.stagePresetDelete);
+      if(!Number.isInteger(index) || index<0 || index>=source.length) return;
+      source.splice(index,1);
+      crmStagePresetDraft=source;
+      renderCrmStagePresetSettingsUI();
     }
   });
 }
@@ -21605,6 +21813,7 @@ function openBoard(){
   boardForm.lanes.value=b.lanes.join(', ');
   boardForm.id.value=b.id;
   crmMappingRemovedDraft=new Set();
+  crmStagePresetDraft=getCrmStagePresets().map(item=>({ ...item }));
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
   setCrmUnaccountedDraft(statuses,{render:false});
   const hiddenStatuses=Array.isArray(state.settings?.unaccountedHiddenStatuses)?state.settings.unaccountedHiddenStatuses:[];
@@ -21636,6 +21845,7 @@ function openBoard(){
   renderCrmPreferencesSettingsUI();
   renderCrmStartViewSettingsUI();
   renderCrmMappingSettingsUI();
+  renderCrmStagePresetSettingsUI();
   setCrmSettingsActiveTab(crmSettingsActiveTabId);
   boardDlg.showModal();
 }
@@ -21765,6 +21975,10 @@ boardForm.addEventListener('submit',e=>{
     mappingDraft[normalized]=record;
   });
   state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
+  const stagePresetInputs=collectCrmStagePresetInputs();
+  const stagePresetDraft=sanitizeCrmStagePresetList(stagePresetInputs);
+  state.settings.stagePresets=stagePresetDraft;
+  syncCrmStagePresetHoursToMapping(stagePresetDraft);
   applyTrashRetention();
   applyJournalRetention();
   updateAllStageExpectations();
