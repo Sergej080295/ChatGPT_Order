@@ -7354,6 +7354,9 @@ const CRM_DEFAULT_PREFERENCES={
 };
 const CRM_DEFAULT_START_VIEW='kanban';
 const CRM_START_VIEW_VALUES=new Set(['kanban','orders',...CRM_STAGE_KEYS]);
+const CRM_FIXED_STAGE_KEYS=[...CRM_STAGE_KEYS];
+const CRM_FIXED_STAGE_SEQUENCE=[...CRM_STAGE_SEQUENCE];
+const CRM_FIXED_START_VIEW_VALUES=['kanban','orders'];
 const DEFAULT_EXTRA_TIME_SETTINGS={ percent:5, minimum:0.25 };
 const ALL_STAGE_PRESETS=CRM_BASE_STAGE_PRESETS.map(item=>item.name);
 const normalizeStagePresetName=value=>(value==null?'':String(value)).replace(/\s+/g,' ').trim().toLowerCase();
@@ -7369,6 +7372,8 @@ const crmStageFilterByKey=new Map();
 const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
 const CRM_ROUTE_DAY_FILTERS=new Set(['all','busy','free']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+const CRM_BASE_NOHOUR_STAGE_KEYS=new Set(CRM_NOHOUR_STAGES);
+let crmDynamicStageKeys=[];
 const DEFAULT_PLAN_FREEZE_DAYS=0;
 function normalizeSearchTerm(value){
   if(value==null) return '';
@@ -8207,6 +8212,92 @@ function sanitizeCrmStagePresetList(raw){
     return CRM_BASE_STAGE_PRESETS.map(item=>sanitizeCrmStagePresetEntry(item)).filter(Boolean);
   }
   return result;
+}
+
+function buildCustomStageKey(seed, used){
+  const normalized=normalizeStageName(seed).replace(/[^a-zа-я0-9]+/gi,'_').replace(/^_+|_+$/g,'');
+  const base=`custom_${normalized||'stage'}`;
+  let candidate=base;
+  let suffix=1;
+  while(used.has(candidate)){
+    suffix+=1;
+    candidate=`${base}_${suffix}`;
+  }
+  return candidate;
+}
+
+function ensureCrmDynamicStageCatalog(){
+  const settings=state?.settings;
+  const presets=sanitizeCrmStagePresetList(settings?.stagePresets);
+  if(settings){
+    settings.stagePresets=presets;
+    if(!settings.stagePresetKeyMap || typeof settings.stagePresetKeyMap!=='object'){
+      settings.stagePresetKeyMap={};
+    }
+  }
+  crmDynamicStageKeys.forEach(key=>{
+    const keyIndex=CRM_STAGE_KEYS.indexOf(key);
+    if(keyIndex>=0) CRM_STAGE_KEYS.splice(keyIndex,1);
+    const seqIndex=CRM_STAGE_SEQUENCE.indexOf(key);
+    if(seqIndex>=0) CRM_STAGE_SEQUENCE.splice(seqIndex,1);
+    delete CRM_STAGE_LABELS[key];
+    delete CRM_STAGE_ALIASES[key];
+    delete CRM_ROUTE_STAGE_CLASS[key];
+    CRM_NOHOUR_STAGES.delete(key);
+  });
+  crmDynamicStageKeys=[];
+  CRM_FIXED_STAGE_KEYS.forEach(key=>{
+    if(!CRM_STAGE_KEYS.includes(key)) CRM_STAGE_KEYS.push(key);
+  });
+  CRM_FIXED_STAGE_SEQUENCE.forEach(key=>{
+    if(!CRM_STAGE_SEQUENCE.includes(key)) CRM_STAGE_SEQUENCE.push(key);
+  });
+  CRM_BASE_NOHOUR_STAGE_KEYS.forEach(key=>CRM_NOHOUR_STAGES.add(key));
+  const usedKeys=new Set(CRM_STAGE_KEYS);
+  presets.forEach(entry=>{
+    if(!entry || entry.visible===false) return;
+    const normalized=normalizeCrmStageKey(entry.name);
+    const mappingEntry=normalized?getCrmStageMappingEntry(normalized):null;
+    if(mappingEntry && mappingEntry.stage===CRM_STAGE_IGNORE) return;
+    const fixedStage=mappingEntry?.stage && CRM_FIXED_STAGE_KEYS.includes(mappingEntry.stage)
+      ? mappingEntry.stage
+      : resolveCrmStageKey(entry.name||'');
+    if(fixedStage){
+      CRM_STAGE_LABELS[fixedStage]=entry.name;
+      if(entry.hasHours===false){
+        CRM_NOHOUR_STAGES.add(fixedStage);
+      }
+      return;
+    }
+    const map=settings?.stagePresetKeyMap||{};
+    let key=typeof map[entry.id]==='string'?map[entry.id].trim():'';
+    if(!key || usedKeys.has(key)){
+      key=buildCustomStageKey(entry.id||entry.name, usedKeys);
+      if(settings){
+        settings.stagePresetKeyMap[entry.id]=key;
+      }
+    }
+    usedKeys.add(key);
+    crmDynamicStageKeys.push(key);
+    CRM_STAGE_KEYS.push(key);
+    CRM_STAGE_SEQUENCE.push(key);
+    CRM_STAGE_LABELS[key]=entry.name;
+    CRM_ROUTE_STAGE_CLASS[key]='crm-route-stage--custom';
+    CRM_STAGE_ALIASES[key]=[key, normalizeStageName(entry.name)].filter(Boolean);
+    if(entry.hasHours===false){
+      CRM_NOHOUR_STAGES.add(key);
+    }
+    if(normalized){
+      setCrmStageMappingEntry(normalized, existing=>({
+        ...(existing||{}),
+        stage:key,
+        hasHours:entry.hasHours!==false
+      }));
+    }
+  });
+  CRM_START_VIEW_VALUES.clear();
+  CRM_FIXED_START_VIEW_VALUES.forEach(value=>CRM_START_VIEW_VALUES.add(value));
+  CRM_STAGE_KEYS.forEach(value=>CRM_START_VIEW_VALUES.add(value));
 }
 
 function sanitizeCrmPreferences(raw){
@@ -10839,6 +10930,7 @@ let crmStageNavHoverTimeout=null;
 let crmMappingRemovedDraft=new Set();
 let crmStagePresetDraft=[];
 
+ensureCrmDynamicStageCatalog();
 if(crmStageSelect){
   refreshCrmStagePresentation();
   if(initialStageViewKey && Array.from(crmStageSelect.options).some(option=>option.value===initialStageViewKey)){
@@ -22004,6 +22096,7 @@ if(crmUnaccountedSettingsDlg){
   crmUnaccountedSettingsDlg.addEventListener('cancel',()=>closeCrmUnaccountedEditor());
 }
 function openBoard(){
+  ensureCrmDynamicStageCatalog();
   const b=currentBoard();
   boardForm.name.value=b.name;
   boardForm.lanes.value=b.lanes.join(', ');
@@ -22177,6 +22270,7 @@ boardForm.addEventListener('submit',e=>{
   const stagePresetDiff=buildCrmStagePresetDiff(prevStagePresets, stagePresetDraft);
   syncCrmStagePresetDiffToMapping(stagePresetDiff);
   state.settings.stagePresets=stagePresetDraft;
+  ensureCrmDynamicStageCatalog();
   syncCrmStagePresetHoursToMapping(stagePresetDraft);
   applyCrmStagePresetDiffToOrders(stagePresetDiff);
   applyTrashRetention();
@@ -23794,6 +23888,7 @@ document.addEventListener('click',e=>{
 /* INIT */
 function renderAll(){
   updatePlannerAutoRefreshFromPreferences();
+  ensureCrmDynamicStageCatalog();
   refreshCrmStagePresentation();
   renderBoardSelect();
   renderColumns();
