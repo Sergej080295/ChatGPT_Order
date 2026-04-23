@@ -7375,6 +7375,7 @@ const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').
 const CRM_BASE_NOHOUR_STAGE_KEYS=new Set(CRM_NOHOUR_STAGES);
 let crmDynamicStageKeys=[];
 let crmStageCatalogSignature='';
+let crmStagePresentationSignature='';
 const DEFAULT_PLAN_FREEZE_DAYS=0;
 function normalizeSearchTerm(value){
   if(value==null) return '';
@@ -11192,6 +11193,11 @@ function rebuildCrmStageSelectOptions(){
 }
 
 function refreshCrmStagePresentation(){
+  const stageSignature=`${crmStageCatalogSignature}|${CRM_STAGE_KEYS.map(key=>`${key}:${CRM_STAGE_LABELS[key]||''}`).join('|')}`;
+  if(stageSignature===crmStagePresentationSignature){
+    return;
+  }
+  crmStagePresentationSignature=stageSignature;
   refreshCrmStageLabelsFromPresets();
   rebuildCrmStageSelectOptions();
 }
@@ -21591,6 +21597,26 @@ function collectCrmStagePresetInputs(){
   });
 }
 
+function normalizeCrmStagePresetDraftList(raw){
+  const source=Array.isArray(raw)?raw:[];
+  if(!source.length) return [];
+  const usedIds=new Set();
+  return source.map((entry,index)=>{
+    const safeEntry=entry&&typeof entry==='object'?entry:{};
+    let id=typeof safeEntry.id==='string'?safeEntry.id.trim():'';
+    if(!id || usedIds.has(id)){
+      id=`preset:draft:${index+1}:${safeRandomUUID()}`;
+    }
+    usedIds.add(id);
+    return {
+      id,
+      name:typeof safeEntry.name==='string'?safeEntry.name:'',
+      hasHours:safeEntry.hasHours!==false,
+      visible:safeEntry.visible!==false
+    };
+  });
+}
+
 function buildCrmStagePresetDiff(previousList,nextList){
   const prevById=new Map();
   const nextById=new Map();
@@ -21700,10 +21726,9 @@ function renderCrmStagePresetSettingsUI(){
   control.className='crm-settings-control crm-settings-control--column';
   const list=document.createElement('div');
   list.className='crm-mapping-list';
-  const source=Array.isArray(crmStagePresetDraft)&&crmStagePresetDraft.length
-    ? crmStagePresetDraft
-    : getCrmStagePresets();
-  const presets=sanitizeCrmStagePresetList(source);
+  const presets=Array.isArray(crmStagePresetDraft)&&crmStagePresetDraft.length
+    ? normalizeCrmStagePresetDraftList(crmStagePresetDraft)
+    : getCrmStagePresets().map(item=>({ ...item }));
   crmStagePresetDraft=presets.map(item=>({ ...item }));
   presets.forEach((entry,index)=>{
     const rowEl=document.createElement('div');
