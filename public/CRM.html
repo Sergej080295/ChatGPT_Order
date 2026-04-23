@@ -7374,6 +7374,7 @@ const CRM_ROUTE_DAY_FILTERS=new Set(['all','busy','free']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
 const CRM_BASE_NOHOUR_STAGE_KEYS=new Set(CRM_NOHOUR_STAGES);
 let crmDynamicStageKeys=[];
+let crmStageCatalogSignature='';
 const DEFAULT_PLAN_FREEZE_DAYS=0;
 function normalizeSearchTerm(value){
   if(value==null) return '';
@@ -8228,7 +8229,17 @@ function buildCustomStageKey(seed, used){
 
 function ensureCrmDynamicStageCatalog(){
   const settings=state?.settings;
-  const presets=sanitizeCrmStagePresetList(settings?.stagePresets);
+  const signatureSource={
+    presets:sanitizeCrmStagePresetList(settings?.stagePresets),
+    keyMap:settings?.stagePresetKeyMap&&typeof settings.stagePresetKeyMap==='object'?settings.stagePresetKeyMap:{},
+    mapping:sanitizeCrmStageMapping(settings?.mapping)
+  };
+  const nextSignature=JSON.stringify(signatureSource);
+  if(nextSignature===crmStageCatalogSignature){
+    return;
+  }
+  crmStageCatalogSignature=nextSignature;
+  const presets=signatureSource.presets;
   if(settings){
     settings.stagePresets=presets;
     if(!settings.stagePresetKeyMap || typeof settings.stagePresetKeyMap!=='object'){
@@ -8252,6 +8263,7 @@ function ensureCrmDynamicStageCatalog(){
   CRM_FIXED_STAGE_SEQUENCE.forEach(key=>{
     if(!CRM_STAGE_SEQUENCE.includes(key)) CRM_STAGE_SEQUENCE.push(key);
   });
+  CRM_NOHOUR_STAGES.clear();
   CRM_BASE_NOHOUR_STAGE_KEYS.forEach(key=>CRM_NOHOUR_STAGES.add(key));
   const usedKeys=new Set(CRM_STAGE_KEYS);
   presets.forEach(entry=>{
@@ -8266,6 +8278,8 @@ function ensureCrmDynamicStageCatalog(){
       CRM_STAGE_LABELS[fixedStage]=entry.name;
       if(entry.hasHours===false){
         CRM_NOHOUR_STAGES.add(fixedStage);
+      }else{
+        CRM_NOHOUR_STAGES.delete(fixedStage);
       }
       return;
     }
@@ -8286,13 +8300,19 @@ function ensureCrmDynamicStageCatalog(){
     CRM_STAGE_ALIASES[key]=[key, normalizeStageName(entry.name)].filter(Boolean);
     if(entry.hasHours===false){
       CRM_NOHOUR_STAGES.add(key);
+    }else{
+      CRM_NOHOUR_STAGES.delete(key);
     }
     if(normalized){
-      setCrmStageMappingEntry(normalized, existing=>({
-        ...(existing||{}),
-        stage:key,
-        hasHours:entry.hasHours!==false
-      }));
+      const existing=getCrmStageMappingEntry(normalized);
+      const nextHasHours=entry.hasHours!==false;
+      if(!existing || existing.stage!==key || existing.hasHours!==nextHasHours){
+        setCrmStageMappingEntry(normalized, current=>({
+          ...(current||{}),
+          stage:key,
+          hasHours:nextHasHours
+        }));
+      }
     }
   });
   CRM_START_VIEW_VALUES.clear();
