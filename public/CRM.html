@@ -6185,6 +6185,7 @@
               <option value="late">С опозданием</option>
             </select>
           </label>
+          <button type="button" id="crmOrdersStageFilterBtn" class="pc-btn pc-btn--ghost" title="Фильтр заказов по переделам">Переделы: все</button>
         </div>
       </div>
     </div>
@@ -7129,7 +7130,7 @@ const CRM_STAGE_COLLAPSE_KEY='planecore_crm_stage_collapse_v1';
 const CRM_STAGE_COLLAPSE_FALLBACKS=['mini_crm_stage_collapse_v1'];
 const CRM_GANTT_RANGE_PREF_KEY='planecore_crm_gantt_range_pref_v1';
 const CRM_GANTT_RANGE_PREF_FALLBACKS=['mini_crm_gantt_range_pref_v1'];
-const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:false });
+const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:true });
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -7304,6 +7305,29 @@ const CRM_BASE_STAGE_PRESETS=Object.freeze([
   { name:'Отгрузка', hasHours:false },
   { name:'Чек лист', hasHours:false }
 ]);
+const CRM_STAGE_ICON_OPTIONS=Object.freeze([
+  { value:'📐', label:'Чертёж / подготовка' },
+  { value:'🛒', label:'Закупка' },
+  { value:'📥', label:'Поставка' },
+  { value:'✂️', label:'Рубка / резка' },
+  { value:'🔦', label:'Лазер' },
+  { value:'🗜️', label:'Гибка / пресс' },
+  { value:'🔩', label:'Сварка' },
+  { value:'⚙️', label:'Мехобработка' },
+  { value:'🤝', label:'Кооперация' },
+  { value:'📦', label:'Упаковка' },
+  { value:'🚚', label:'Отгрузка' },
+  { value:'🖨️', label:'Печать' },
+  { value:'🎨', label:'Покраска' },
+  { value:'🧪', label:'Контроль / ОТК' },
+  { value:'🧵', label:'Сборка / швейка' },
+  { value:'🧰', label:'Монтаж' },
+  { value:'🏭', label:'Производство' },
+  { value:'🔧', label:'Настройка / слесарка' },
+  { value:'📋', label:'Чек-лист / приёмка' },
+  { value:'🧊', label:'Склад / хранение' }
+]);
+const CRM_STAGE_ICON_VALUES=new Set(CRM_STAGE_ICON_OPTIONS.map(item=>item.value));
 const CRM_STAGE_KEYS=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_SEQUENCE=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
@@ -8184,7 +8208,9 @@ function sanitizeCrmStagePresetEntry(raw){
   const hasHours=raw.hasHours!==false;
   const visible=raw.visible!==false;
   const id=idRaw||`preset:${normalized}`;
-  return { id, name, hasHours, visible };
+  const iconRaw=typeof raw.icon==='string'?raw.icon.trim():'';
+  const icon=CRM_STAGE_ICON_VALUES.has(iconRaw)?iconRaw:'';
+  return { id, name, hasHours, visible, icon };
 }
 
 function sanitizeCrmStagePresetList(raw){
@@ -8253,6 +8279,7 @@ function ensureCrmDynamicStageCatalog(){
     const seqIndex=CRM_STAGE_SEQUENCE.indexOf(key);
     if(seqIndex>=0) CRM_STAGE_SEQUENCE.splice(seqIndex,1);
     delete CRM_STAGE_LABELS[key];
+    delete CRM_STAGE_ICONS[key];
     delete CRM_STAGE_ALIASES[key];
     delete CRM_ROUTE_STAGE_CLASS[key];
     CRM_NOHOUR_STAGES.delete(key);
@@ -8263,6 +8290,9 @@ function ensureCrmDynamicStageCatalog(){
   });
   CRM_FIXED_STAGE_SEQUENCE.forEach(key=>{
     if(!CRM_STAGE_SEQUENCE.includes(key)) CRM_STAGE_SEQUENCE.push(key);
+  });
+  CRM_FIXED_STAGE_KEYS.forEach(key=>{
+    CRM_STAGE_ICONS[key]=DEFAULT_CRM_STAGE_ICONS[key]||'';
   });
   CRM_NOHOUR_STAGES.clear();
   CRM_BASE_NOHOUR_STAGE_KEYS.forEach(key=>CRM_NOHOUR_STAGES.add(key));
@@ -8277,6 +8307,9 @@ function ensureCrmDynamicStageCatalog(){
       : resolveCrmStageKey(entry.name||'');
     if(fixedStage){
       CRM_STAGE_LABELS[fixedStage]=entry.name;
+      if(CRM_STAGE_ICON_VALUES.has(entry.icon)){
+        CRM_STAGE_ICONS[fixedStage]=entry.icon;
+      }
       if(entry.hasHours===false){
         CRM_NOHOUR_STAGES.add(fixedStage);
       }else{
@@ -8297,6 +8330,7 @@ function ensureCrmDynamicStageCatalog(){
     CRM_STAGE_KEYS.push(key);
     CRM_STAGE_SEQUENCE.push(key);
     CRM_STAGE_LABELS[key]=entry.name;
+    CRM_STAGE_ICONS[key]=CRM_STAGE_ICON_VALUES.has(entry.icon)?entry.icon:'🏭';
     CRM_ROUTE_STAGE_CLASS[key]='crm-route-stage--custom';
     CRM_STAGE_ALIASES[key]=[key, normalizeStageName(entry.name)].filter(Boolean);
     if(entry.hasHours===false){
@@ -10653,6 +10687,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageNavDropdown=$('#crmStageNavDropdown'),
       crmStageControls=$('#crmStageControls'),
       crmOrdersFilter=$('#crmOrdersFilter'),
+      crmOrdersStageFilterBtn=$('#crmOrdersStageFilterBtn'),
       crmStageViewEl=$('#crmStageView'),
       crmStageTableBody=$('#crmStageTable tbody'),
       crmStageEmpty=$('#crmStageEmpty'),
@@ -10892,7 +10927,7 @@ const DEFAULT_CRM_STAGE_LABELS=Object.freeze({
   ship:'Отгрузка'
 });
 const CRM_STAGE_LABELS={ ...DEFAULT_CRM_STAGE_LABELS };
-const CRM_STAGE_ICONS=Object.freeze({
+const DEFAULT_CRM_STAGE_ICONS=Object.freeze({
   draw:'📐',
   proc:'🛒',
   supply:'📥',
@@ -10905,6 +10940,7 @@ const CRM_STAGE_ICONS=Object.freeze({
   pack:'📦',
   ship:'🚚'
 });
+const CRM_STAGE_ICONS={ ...DEFAULT_CRM_STAGE_ICONS };
 const CRM_STAGE_LETTERS={
   draw:'П',
   proc:'З',
@@ -10948,6 +10984,7 @@ let crmStageSelectMenuItems=[];
 let crmStageSelectMenuOpen=false;
 let crmStageSelectDismissHandler=null;
 let crmStageNavHoverTimeout=null;
+let crmOrdersStageFilter=new Set();
 let crmMappingRemovedDraft=new Set();
 let crmStagePresetDraft=[];
 
@@ -12651,6 +12688,10 @@ function collectCrmOrdersForList(filterMode){
     });
     const isLate=progressLate||hourlessLate;
     const isActive=!isDone;
+    if(crmOrdersStageFilter.size){
+      const hasSelectedStage=Array.from(crmOrdersStageFilter).some(stageKey=>stageMap.has(stageKey));
+      if(!hasSelectedStage) return;
+    }
     const startTimestamp=getOrderStartTimestamp(order);
     let include=true;
     switch(mode){
@@ -12693,6 +12734,86 @@ function collectCrmOrdersForList(filterMode){
     });
   });
   return { rows, totals, meta };
+}
+
+function getCrmOrdersStageFilterOptions(){
+  return CRM_STAGE_SEQUENCE.map(stageKey=>({
+    key:stageKey,
+    label:CRM_STAGE_LABELS[stageKey]||stageKey
+  }));
+}
+
+function updateCrmOrdersStageFilterButtonLabel(){
+  if(!crmOrdersStageFilterBtn) return;
+  if(!crmOrdersStageFilter.size){
+    crmOrdersStageFilterBtn.textContent='Переделы: все';
+    return;
+  }
+  crmOrdersStageFilterBtn.textContent=`Переделы: ${crmOrdersStageFilter.size}`;
+}
+
+function openCrmOrdersStageFilterPicker(anchor){
+  if(!crmOrdersStageFilterBtn) return;
+  const options=getCrmOrdersStageFilterOptions();
+  closePopup();
+  const rect=anchor?.getBoundingClientRect?.();
+  const popup=document.createElement('div');
+  popup.className='popup stage-picker';
+  popup.innerHTML='<h4>Фильтр переделов в списке заказов</h4>';
+  const list=document.createElement('div');
+  list.className='items';
+  options.forEach(option=>{
+    const item=document.createElement('label');
+    item.className='item';
+    item.style.justifyContent='flex-start';
+    item.style.gap='8px';
+    const input=document.createElement('input');
+    input.type='checkbox';
+    input.checked=crmOrdersStageFilter.has(option.key);
+    input.dataset.stageKey=option.key;
+    const text=document.createElement('span');
+    text.textContent=option.label;
+    item.append(input,text);
+    list.appendChild(item);
+  });
+  popup.appendChild(list);
+  const actions=document.createElement('div');
+  actions.className='rowc';
+  actions.style.marginTop='8px';
+  actions.style.justifyContent='space-between';
+  const resetBtn=document.createElement('button');
+  resetBtn.type='button';
+  resetBtn.className='pc-btn pc-btn--ghost';
+  resetBtn.textContent='Сброс';
+  resetBtn.addEventListener('click',()=>{
+    crmOrdersStageFilter.clear();
+    updateCrmOrdersStageFilterButtonLabel();
+    renderCurrentView();
+    closePopup();
+  });
+  const applyBtn=document.createElement('button');
+  applyBtn.type='button';
+  applyBtn.className='pc-btn pc-btn--primary';
+  applyBtn.textContent='Применить';
+  applyBtn.addEventListener('click',()=>{
+    const selected=new Set();
+    list.querySelectorAll('input[type="checkbox"][data-stage-key]').forEach(input=>{
+      if(input.checked) selected.add(input.dataset.stageKey);
+    });
+    crmOrdersStageFilter=selected;
+    updateCrmOrdersStageFilterButtonLabel();
+    renderCurrentView();
+    closePopup();
+  });
+  actions.append(resetBtn,applyBtn);
+  popup.appendChild(actions);
+  document.body.appendChild(popup);
+  const left=Math.min(window.innerWidth-popup.offsetWidth-12, rect?rect.left:20);
+  const top=Math.min(window.innerHeight-popup.offsetHeight-12, rect?(rect.bottom+6):20);
+  popup.style.left=`${Math.max(12,left)}px`;
+  popup.style.top=`${Math.max(12,top)}px`;
+  _popup=popup;
+  setTimeout(()=>document.addEventListener('click',clickAwayPopup,{once:true}),0);
 }
 
 function collectCrmUnaccountedOrders(){
@@ -21588,11 +21709,13 @@ function collectCrmStagePresetInputs(){
     const nameInput=row.querySelector('input[name="crmStagePresetName"]');
     const hoursInput=row.querySelector('input[name="crmStagePresetHours"]');
     const visibleInput=row.querySelector('input[name="crmStagePresetVisible"]');
+    const iconInput=row.querySelector('select[name="crmStagePresetIcon"]');
     return {
       id:idInput?idInput.value:'',
       name:nameInput?nameInput.value:'',
       hasHours:hoursInput?!!hoursInput.checked:true,
-      visible:visibleInput?!!visibleInput.checked:true
+      visible:visibleInput?!!visibleInput.checked:true,
+      icon:iconInput?iconInput.value:''
     };
   });
 }
@@ -21612,7 +21735,8 @@ function normalizeCrmStagePresetDraftList(raw){
       id,
       name:typeof safeEntry.name==='string'?safeEntry.name:'',
       hasHours:safeEntry.hasHours!==false,
-      visible:safeEntry.visible!==false
+      visible:safeEntry.visible!==false,
+      icon:CRM_STAGE_ICON_VALUES.has(safeEntry.icon)?safeEntry.icon:''
     };
   });
 }
@@ -21749,6 +21873,14 @@ function renderCrmStagePresetSettingsUI(){
     title.append(idInput,nameInput);
     const controls=document.createElement('div');
     controls.className='crm-mapping-row__controls';
+    const iconSelect=document.createElement('select');
+    iconSelect.className='pc-select';
+    iconSelect.name='crmStagePresetIcon';
+    iconSelect.appendChild(new Option('Авто-иконка',''));
+    CRM_STAGE_ICON_OPTIONS.forEach(option=>{
+      iconSelect.appendChild(new Option(`${option.value} ${option.label}`, option.value));
+    });
+    iconSelect.value=CRM_STAGE_ICON_VALUES.has(entry.icon)?entry.icon:'';
     const typeLabel=document.createElement('label');
     typeLabel.className='crm-mapping-row__hours';
     const typeInput=document.createElement('input');
@@ -21773,7 +21905,7 @@ function renderCrmStagePresetSettingsUI(){
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(typeLabel,visibleLabel,deleteBtn);
+    controls.append(iconSelect,typeLabel,visibleLabel,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -21862,7 +21994,7 @@ if(crmStagePresetContainer){
     const target=event.target instanceof Element ? event.target.closest('button') : null;
     if(!(target instanceof HTMLButtonElement)) return;
     if(target.dataset.stagePresetAdd){
-      crmStagePresetDraft=[...collectCrmStagePresetInputs(), { id:`preset:new:${safeRandomUUID()}`, name:'', hasHours:true, visible:true }];
+      crmStagePresetDraft=[...collectCrmStagePresetInputs(), { id:`preset:new:${safeRandomUUID()}`, name:'', hasHours:true, visible:true, icon:'' }];
       renderCrmStagePresetSettingsUI();
       return;
     }
@@ -24081,6 +24213,13 @@ if(crmOrdersFilter){
       renderOrdersTable();
     }
   });
+}
+if(crmOrdersStageFilterBtn){
+  crmOrdersStageFilterBtn.addEventListener('click',event=>{
+    event.preventDefault();
+    openCrmOrdersStageFilterPicker(crmOrdersStageFilterBtn);
+  });
+  updateCrmOrdersStageFilterButtonLabel();
 }
 if(crmUnaccountedBtn){
   crmUnaccountedBtn.addEventListener('click',()=>openCrmUnaccounted());
