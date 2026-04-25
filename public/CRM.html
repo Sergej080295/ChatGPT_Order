@@ -896,6 +896,10 @@
     background: var(--pc-surface-subtle);
   }
 
+  .pc-icon-btn--alert {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--pc-danger) 35%, transparent);
+  }
+
   .crm-admin-modal {
     width: min(1160px, 98vw);
     border: none;
@@ -1178,6 +1182,7 @@
 
   .crm-admin-users-table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: collapse;
     background: var(--pc-surface-base);
     border-radius: 20px;
@@ -1191,9 +1196,11 @@
 
   .crm-admin-users-table th,
   .crm-admin-users-table td {
-    padding: var(--pc-spacing-md) var(--pc-spacing-lg);
+    padding: var(--pc-spacing-sm) var(--pc-spacing-md);
     text-align: left;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border-subtle) 70%, transparent);
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .crm-admin-users-table th {
@@ -1209,7 +1216,7 @@
 
   .crm-admin-form {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: var(--pc-spacing-lg);
     background: var(--pc-surface-base);
     padding: var(--pc-spacing-xl);
@@ -6577,7 +6584,7 @@
       <input type="hidden" name="end" />
       <div class="orderNo"><label>№ заказа</label><input name="orderNo" required /></div>
       <div class="customer"><label>Клиент</label><input name="customer" /></div>
-      <div class="service"><label>Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
+      <div class="service"><label id="crmServiceMetricLabel">Сумма услуг, ₽</label><input name="serviceTotal" type="text" inputmode="decimal" placeholder="0" /></div>
       <div class="progressField"><label>Общий прогресс, %</label><input name="progress" type="number" min="0" max="100" value="0" disabled /></div>
     </div>
 
@@ -6727,6 +6734,16 @@
                   <label class="crm-field">
                     <span class="crm-field__label">Мин. доп. время, ч</span>
                     <input name="extraMinimum" class="pc-input" type="number" min="0" step="0.01" />
+                  </label>
+                </div>
+                <div class="crm-settings-inline">
+                  <label class="crm-field">
+                    <span class="crm-field__label">Название метрики заказа</span>
+                    <input name="serviceMetricName" class="pc-input" placeholder="Сумма услуг" />
+                  </label>
+                  <label class="crm-field">
+                    <span class="crm-field__label">Единица измерения</span>
+                    <input name="serviceMetricUnit" class="pc-input" placeholder="₽" />
                   </label>
                 </div>
                 <small class="muted">Старые записи из корзины и журнала будут удаляться автоматически по выбранным правилам.</small>
@@ -7362,6 +7379,7 @@ const CRM_KANBAN_STICKER_DEFAULTS=Object.freeze({
   partShare:true,
   restShare:true
 });
+const CRM_SERVICE_METRIC_DEFAULT=Object.freeze({ name:'Сумма услуг', unit:'₽' });
 const CRM_DEFAULT_PREFERENCES={
   autoOptimize:true,
   cascadeReady:true,
@@ -8520,6 +8538,26 @@ function getCrmStageParallel(stageKey){
 
 function getCrmPreferences(){
   return sanitizeCrmPreferences(state?.settings?.preferences);
+}
+
+function sanitizeCrmServiceMetric(raw){
+  const source=raw&&typeof raw==='object'?raw:{};
+  const name=typeof source.name==='string'&&source.name.trim()?source.name.trim():CRM_SERVICE_METRIC_DEFAULT.name;
+  const unit=typeof source.unit==='string'&&source.unit.trim()?source.unit.trim():CRM_SERVICE_METRIC_DEFAULT.unit;
+  return { name, unit };
+}
+
+function getCrmServiceMetric(){
+  const metric=sanitizeCrmServiceMetric(state?.settings?.serviceMetric);
+  if(state && state.settings){
+    state.settings.serviceMetric=metric;
+  }
+  return metric;
+}
+
+function crmServiceMetricLabel(){
+  const metric=getCrmServiceMetric();
+  return metric.unit?`${metric.name}, ${metric.unit}`:metric.name;
 }
 
 function getCrmStagePresets(){
@@ -10777,6 +10815,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOptimizeCancel=$('#crmOptimizeCancel'),
       crmOptimizeClose=$('#crmOptimizeClose'),
       crmJournalBtn=$('#crmJournalBtn'),
+      notificationsBtn=$('#notificationsBtn'),
       crmJournalBadge=$('#crmJournalBadge'),
       crmJournalDlg=$('#crmJournalDlg'),
       crmJournalList=$('#crmJournalList'),
@@ -12460,7 +12499,7 @@ function describeOrderChanges(previous,next){
   mapField('status','Статус');
   mapField('start','Дата начала');
   mapField('end','Дата завершения');
-  mapField('serviceTotal','Стоимость услуг');
+  mapField('serviceTotal',getCrmServiceMetric().name);
   mapField('progress','Прогресс');
   if(!!previous.done!==!!next.done){
     changes.push({
@@ -12734,6 +12773,39 @@ function collectCrmOrdersForList(filterMode){
     });
   });
   return { rows, totals, meta };
+}
+
+const CRM_ORDERS_STAGE_COLUMN_INDEX=Object.freeze({
+  proc:3, supply:4, shear:5, draw:6, laser:7, bend:8, weld:9, mech:10, coop:11, pack:12, ship:13
+});
+
+function getCrmOrdersVisibleColumnCount(){
+  const hidden=crmOrdersStageFilter.size ? Object.keys(CRM_ORDERS_STAGE_COLUMN_INDEX).filter(key=>!crmOrdersStageFilter.has(key)).length : 0;
+  return 14-hidden;
+}
+
+function applyCrmOrdersStageColumnFilter(){
+  const table=document.getElementById('crmOrdersTable');
+  const totalsTable=crmOrdersTotalsBox?.querySelector('table');
+  const hiddenKeys=crmOrdersStageFilter.size
+    ? Object.keys(CRM_ORDERS_STAGE_COLUMN_INDEX).filter(key=>!crmOrdersStageFilter.has(key))
+    : [];
+  const hiddenIndexes=new Set(hiddenKeys.map(key=>CRM_ORDERS_STAGE_COLUMN_INDEX[key]));
+  [table, totalsTable].forEach(targetTable=>{
+    if(!targetTable) return;
+    targetTable.querySelectorAll('tr').forEach(tr=>{
+      Array.from(tr.children).forEach((cell,idx)=>{
+        const visible=!hiddenIndexes.has(idx);
+        cell.style.display=visible?'':'none';
+      });
+    });
+    const colgroup=targetTable.querySelector('colgroup');
+    if(colgroup){
+      Array.from(colgroup.children).forEach((col,idx)=>{
+        col.style.display=!hiddenIndexes.has(idx)?'':'none';
+      });
+    }
+  });
 }
 
 function getCrmOrdersStageFilterOptions(){
@@ -15887,12 +15959,15 @@ function updateCrmUserMenu(){
 }
 
 function updateCrmNavigationAccess(){
+  const allowJournal=crmCanUseJournal();
   if(crmJournalBtn){
-    const allowJournal=crmCanUseJournal();
-    crmJournalBtn.hidden=!allowJournal;
-    if(!allowJournal && crmJournalDlg?.open){
-      closeCrmJournal();
-    }
+    crmJournalBtn.hidden=true;
+  }
+  if(notificationsBtn){
+    notificationsBtn.hidden=!allowJournal;
+  }
+  if(!allowJournal && crmJournalDlg?.open){
+    closeCrmJournal();
   }
   if(crmAdminNavBtn){
     crmAdminNavBtn.hidden=!(crmCanManageUsers() || crmCanViewAudit());
@@ -17120,7 +17195,7 @@ function renderOrdersTable(){
   if(!rows.length){
     const tr=document.createElement('tr');
     const td=document.createElement('td');
-    td.colSpan=14;
+    td.colSpan=getCrmOrdersVisibleColumnCount();
     td.className='orders-overview-empty';
     td.textContent='Нет заказов для отображения';
     tr.appendChild(td);
@@ -17129,6 +17204,7 @@ function renderOrdersTable(){
     updateCrmOrdersTotals(totals);
     updateCrmOrdersStats(meta);
     updateSearchUI();
+    applyCrmOrdersStageColumnFilter();
     syncCrmOrdersTotals();
     bindCrmOrdersScrollSync();
     updateCrmAuxButtons();
@@ -17181,6 +17257,7 @@ function renderOrdersTable(){
   updateCrmOrdersTotals(totals);
   updateCrmOrdersStats(meta);
   updateSearchUI();
+  applyCrmOrdersStageColumnFilter();
   syncCrmOrdersTotals();
   bindCrmOrdersScrollSync();
   updateCrmAuxButtons();
@@ -18216,7 +18293,7 @@ function renderColumns(){
             <span class="lane-title">${laneLabel}</span>
             <span class="lane-meta">
               <button class="lane-sum-toggle" type="button" data-lane="${laneLabel}" data-mode="${laneMode}" title="${laneModeTitle}">${laneMode==='all'?'∑ все':'∑ период'}</button>
-              <span class="lane-sum" data-lane-sum>0 ₽</span>
+              <span class="lane-sum" data-lane-sum>0 ${getCrmServiceMetric().unit}</span>
               <span class="lane-count" data-lane-count>(0 шт)</span>
               <span class="lane-alert" data-lane-alert>⚠️</span>
               <button class="lane-hide" type="button" data-lane="${laneLabel}" title="Свернуть колонку" aria-label="Свернуть колонку">⇤</button>
@@ -18552,7 +18629,8 @@ function renderCards(){
       const sumEl=col.querySelector('[data-lane-sum]');
       if(sumEl){
         const formatted=sumValue.toLocaleString('ru-RU');
-        sumEl.textContent=`${formatted} ₽`;
+        const unit=getCrmServiceMetric().unit;
+        sumEl.textContent=unit?`${formatted} ${unit}`:formatted;
         sumEl.dataset.periodLabel=applyRange?(laneSumRange?.label||''):'';
         sumEl.dataset.mode=laneMode;
         sumEl.title=applyRange && laneSumRange?.description
@@ -18591,7 +18669,9 @@ function renderCards(){
       if(stickerPrefs.partShare && o.partOfPct) chips.appendChild(chip(`<img src="${iconPart()}"/>Часть (${o.partOfPct}%)`,'ok'));
       if(stickerPrefs.restShare && o.restOfPct) chips.appendChild(chip(`<img src="${iconRest()}"/>Остаток (${o.restOfPct}%)`,'warn'));
       if(stickerPrefs.serviceTotal && o.serviceTotal!==''&&o.serviceTotal!=null){
-        chips.appendChild(chip(`Сумма услуг: ${Number(o.serviceTotal).toLocaleString('ru-RU')} ₽`));
+        const metric=getCrmServiceMetric();
+        const valueText=Number(o.serviceTotal).toLocaleString('ru-RU');
+        chips.appendChild(chip(`${metric.name}: ${metric.unit?`${valueText} ${metric.unit}`:valueText}`));
       }
       if(stickerPrefs.dateRange && (o.start||o.end)){
         const rangeLabel=formatOrderRangeLabel(o.start,o.end);
@@ -18817,6 +18897,7 @@ function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
 const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+const crmServiceMetricLabelEl=$('#crmServiceMetricLabel');
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
@@ -22298,12 +22379,19 @@ function openBoard(){
     crmAutoPinInput.checked=!!state.settings.autoPinOrders;
   }
   const extraSettings=getExtraTimeSettings();
+  const serviceMetric=getCrmServiceMetric();
   const scheduleMap=getCrmStageSchedules();
   if(crmExtraPercentInput){
     crmExtraPercentInput.value=String(extraSettings.percent);
   }
   if(crmExtraMinimumInput){
     crmExtraMinimumInput.value=String(extraSettings.minimum);
+  }
+  if(boardForm.serviceMetricName){
+    boardForm.serviceMetricName.value=serviceMetric.name;
+  }
+  if(boardForm.serviceMetricUnit){
+    boardForm.serviceMetricUnit.value=serviceMetric.unit;
   }
   renderCrmCapacitySettingsUI();
   renderCrmParallelSettingsUI();
@@ -22360,6 +22448,10 @@ boardForm.addEventListener('submit',e=>{
     percent:sanitizeExtraPercent(extraPercentRaw),
     minimum:sanitizeExtraMinimum(extraMinimumRaw)
   };
+  state.settings.serviceMetric=sanitizeCrmServiceMetric({
+    name:boardForm.serviceMetricName?boardForm.serviceMetricName.value:'',
+    unit:boardForm.serviceMetricUnit?boardForm.serviceMetricUnit.value:''
+  });
   commitCrmStageScheduleInputs();
   const capacityInputs=[...boardForm.querySelectorAll('input[data-crm-setting="capacity"]')];
   const capacityDraft={};
@@ -23004,6 +23096,12 @@ function updateCrmJournalUi(){
     const ariaLabel=unread>0?`${baseLabel}: ${unread} новых`:`${baseLabel}`;
     crmJournalBtn.setAttribute('aria-label',ariaLabel);
   }
+  if(notificationsBtn){
+    notificationsBtn.classList.toggle('pc-icon-btn--alert', unread>0);
+    const ariaLabel=unread>0?`Уведомления: ${unread} новых`:'Уведомления';
+    notificationsBtn.setAttribute('aria-label', ariaLabel);
+    notificationsBtn.title=ariaLabel;
+  }
   if(editingOrderId){
     refreshOrderHistoryButton(editingOrderId);
   }
@@ -23037,6 +23135,9 @@ function openCrmJournal(){
   if(crmJournalBtn){
     crmJournalBtn.setAttribute('aria-expanded','true');
   }
+  if(notificationsBtn){
+    notificationsBtn.setAttribute('aria-expanded','true');
+  }
 }
 
 function closeCrmJournal(){
@@ -23045,6 +23146,9 @@ function closeCrmJournal(){
   }
   if(crmJournalBtn){
     crmJournalBtn.setAttribute('aria-expanded','false');
+  }
+  if(notificationsBtn){
+    notificationsBtn.setAttribute('aria-expanded','false');
   }
   updateCrmJournalUi();
 }
@@ -24057,6 +24161,12 @@ function setupCrmHintTargets(){
   window.addEventListener('resize', hideCrmHint);
 }
 
+function updateCrmServiceMetricUi(){
+  if(crmServiceMetricLabelEl){
+    crmServiceMetricLabelEl.textContent=crmServiceMetricLabel();
+  }
+}
+
 /* Ripple на кнопках */
 document.addEventListener('click',e=>{
   const btn=e.target.closest('button'); if(btn){const rect=btn.getBoundingClientRect();const span=document.createElement('span');span.className='ripple';const size=Math.max(rect.width,rect.height);span.style.width=span.style.height=size+'px';const x=e.clientX-rect.left-size/2;const y=e.clientY-rect.top-size/2;span.style.left=x+'px';span.style.top=y+'px';btn.appendChild(span);span.addEventListener('animationend',()=>span.remove(),{once:true})}
@@ -24067,6 +24177,7 @@ function renderAll(){
   updatePlannerAutoRefreshFromPreferences();
   ensureCrmDynamicStageCatalog();
   refreshCrmStagePresentation();
+  updateCrmServiceMetricUi();
   renderBoardSelect();
   renderColumns();
   renderCurrentView();
@@ -24356,6 +24467,9 @@ if(crmOptimizeDlg){
 }
 if(crmJournalBtn){
   crmJournalBtn.addEventListener('click',()=>openCrmJournal());
+}
+if(notificationsBtn){
+  notificationsBtn.addEventListener('click',()=>openCrmJournal());
 }
 if(crmJournalClose){
   crmJournalClose.addEventListener('click',()=>closeCrmJournal());
