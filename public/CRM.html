@@ -2593,6 +2593,12 @@
     background: color-mix(in srgb, var(--pc-border) 26%, transparent);
   }
 
+
+  .crm-admin-icon-btn {
+    min-width: 36px;
+    padding-inline: 8px;
+  }
+
   .crm-stage-legend {
     display: flex;
     gap: var(--pc-spacing-md);
@@ -7355,6 +7361,7 @@ const CRM_NOHOUR_STAGES=new Set(CRM_INDICATOR_STAGES);
 const CRM_HOURLESS_SCHEDULE_PRESETS=Object.freeze([
   { key:'daily', label:'Без выходных', type:'weekly', pattern:[true,true,true,true,true,true,true] },
   { key:'five_two', label:'5/2 (пн–пт)', type:'weekly', pattern:[false,true,true,true,true,true,false] },
+  { key:'six_one', label:'6/1 (пн–сб)', type:'weekly', pattern:[false,true,true,true,true,true,true] },
   { key:'two_two', label:'2/2', type:'cycle', length:4, work:[0,1] },
   { key:'three_three', label:'3/3', type:'cycle', length:6, work:[0,1,2] },
   { key:'four_two', label:'4/2', type:'cycle', length:6, work:[0,1,2,3] }
@@ -10694,10 +10701,15 @@ function mapFromCalendarEntries(entries, allowZero){
 
 function getCrmStageCalendar(stageKey){
   const calendars=ensureCrmStageCalendars();
+  const globalEntry=calendars.__global__||{ exceptions:[], reserves:[] };
   const entry=calendars[stageKey]||{ exceptions:[], reserves:[] };
+  const exceptions=mapFromCalendarEntries(globalEntry.exceptions, true);
+  const stageExceptions=mapFromCalendarEntries(entry.exceptions, true);
+  stageExceptions.forEach((value,iso)=>exceptions.set(iso,value));
   return {
-    exceptions:mapFromCalendarEntries(entry.exceptions, true),
-    reserves:mapFromCalendarEntries(entry.reserves, false)
+    exceptions,
+    reserves:mapFromCalendarEntries(entry.reserves, false),
+    globalExceptions:mapFromCalendarEntries(globalEntry.exceptions, true)
   };
 }
 
@@ -14806,7 +14818,8 @@ function renderCrmRouteDetailed(dataset, days){
         stageLabel.className='crm-route-label stage';
         let text=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
         if(instance.occurrenceTotal>1){
-          text+=` №${instance.occurrenceIndex}`;
+          const opName=(instance.stage?.name||'').toString().trim();
+          text+=opName?` • ${opName}`:` №${instance.occurrenceIndex}`;
         }
         stageLabel.textContent=text;
         stageLabel.title=text.slice(2);
@@ -14831,7 +14844,8 @@ function renderCrmRouteDetailed(dataset, days){
             titleText+=` • ${hoursLabel}`;
           }
           if(seg.occurrenceTotal>1){
-            titleText+=` • №${seg.occurrenceIndex}`;
+            const opName=(seg.stage?.name||'').toString().trim();
+            titleText+=opName?` • ${opName}`:` • №${seg.occurrenceIndex}`;
           }
           bar.title=titleText;
           row.appendChild(bar);
@@ -14954,7 +14968,8 @@ function renderCrmRouteCompact(dataset, days){
         part.textContent=hoursText?`${letter} ${hoursText}`:`${letter}`;
         let title=`${CRM_STAGE_LABELS[seg.stageKey]||seg.stageKey}: ${formatStagePeriod(seg.start, seg.end)}`;
         if(seg.occurrenceTotal>1){
-          title+=` • №${seg.occurrenceIndex}`;
+          const opName=(seg.stage?.name||'').toString().trim();
+          title+=opName?` • ${opName}`:` • №${seg.occurrenceIndex}`;
         }
         part.title=title;
         combo.appendChild(part);
@@ -16186,8 +16201,10 @@ function renderCrmAdminUsers(){
 
     const editBtn=document.createElement('button');
     editBtn.type='button';
-    editBtn.className='pc-btn pc-btn--ghost';
-    editBtn.textContent='Редактировать';
+    editBtn.className='pc-btn pc-btn--ghost crm-admin-icon-btn';
+    editBtn.innerHTML='✏️';
+    editBtn.title='Редактировать';
+    editBtn.setAttribute('aria-label','Редактировать');
     editBtn.addEventListener('click',()=>{
       fillCrmAdminUserForm(user);
       setCrmAdminTab('users');
@@ -16197,30 +16214,38 @@ function renderCrmAdminUsers(){
     if(user.failedAttempts>0 || user.lockedUntil){
       const unlockBtn=document.createElement('button');
       unlockBtn.type='button';
-      unlockBtn.className='pc-btn pc-btn--ghost';
-      unlockBtn.textContent='Разблокировать';
+      unlockBtn.className='pc-btn pc-btn--ghost crm-admin-icon-btn';
+      unlockBtn.innerHTML='🔓';
+      unlockBtn.title='Разблокировать';
+      unlockBtn.setAttribute('aria-label','Разблокировать');
       unlockBtn.addEventListener('click',()=>handleCrmAdminUnlock(user.id));
       actions.appendChild(unlockBtn);
     }
 
     const toggleBtn=document.createElement('button');
     toggleBtn.type='button';
-    toggleBtn.className='pc-btn pc-btn--ghost';
-    toggleBtn.textContent=user.isActive!==false?'Отключить':'Включить';
+    toggleBtn.className='pc-btn pc-btn--ghost crm-admin-icon-btn';
+    toggleBtn.innerHTML=user.isActive!==false?'⏸️':'▶️';
+    toggleBtn.title=user.isActive!==false?'Отключить':'Включить';
+    toggleBtn.setAttribute('aria-label', user.isActive!==false?'Отключить':'Включить');
     toggleBtn.addEventListener('click',()=>handleCrmAdminToggleActive(user));
     actions.appendChild(toggleBtn);
 
     const passwordBtn=document.createElement('button');
     passwordBtn.type='button';
-    passwordBtn.className='pc-btn pc-btn--ghost';
-    passwordBtn.textContent='Сменить пароль';
+    passwordBtn.className='pc-btn pc-btn--ghost crm-admin-icon-btn';
+    passwordBtn.innerHTML='🔑';
+    passwordBtn.title='Сменить пароль';
+    passwordBtn.setAttribute('aria-label','Сменить пароль');
     passwordBtn.addEventListener('click',()=>handleCrmAdminPassword(user));
     actions.appendChild(passwordBtn);
 
     const deleteBtn=document.createElement('button');
     deleteBtn.type='button';
-    deleteBtn.className='pc-btn pc-btn--danger';
-    deleteBtn.textContent='Удалить';
+    deleteBtn.className='pc-btn pc-btn--danger crm-admin-icon-btn';
+    deleteBtn.innerHTML='🗑️';
+    deleteBtn.title='Удалить';
+    deleteBtn.setAttribute('aria-label','Удалить');
     deleteBtn.addEventListener('click',()=>handleCrmAdminDelete(user));
     actions.appendChild(deleteBtn);
 
@@ -21038,7 +21063,8 @@ function renderCrmCapacitySettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmCapacitySettings();
-  CRM_STAGE_SEQUENCE.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
+  const presentStageKeys=Array.from(new Set(getCrmStagePresets().map(item=>resolveCrmStageKeyWithMapping(item?.name)).filter(Boolean)));
+  presentStageKeys.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
     const title=document.createElement('label');
@@ -21076,7 +21102,8 @@ function renderCrmParallelSettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmParallelSettings();
-  CRM_STAGE_SEQUENCE.filter(stage=>CRM_NOHOUR_STAGES.has(stage)).forEach(stage=>{
+  const presentStageKeys=Array.from(new Set(getCrmStagePresets().map(item=>resolveCrmStageKeyWithMapping(item?.name)).filter(Boolean)));
+  presentStageKeys.filter(stage=>CRM_NOHOUR_STAGES.has(stage)).forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
     const title=document.createElement('label');
