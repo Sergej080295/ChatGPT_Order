@@ -13254,6 +13254,7 @@ function buildCrmStageSchedule(stageKey, rows, options){
     return {
       id:row.identity,
       label:row.orderTitle||'Заказ',
+      stageName:row.stage?.name||'',
       orderId:row.orderId,
       useReserve:!!row.useReserve,
       start:safeStart,
@@ -13818,7 +13819,11 @@ function renderCrmStageStack(schedule){
     initialDone.set(task.id, base);
   });
   const cumulative=new Map(schedule.tasks.map(task=>[task.id, initialDone.get(task.id)||0]));
-  const labelMap=new Map(schedule.tasks.map(task=>[task.id, task.label||'Заказ']));
+  const labelMap=new Map(schedule.tasks.map(task=>{
+    const stageSuffix=(task.stageName||'').toString().trim();
+    const base=task.label||'Заказ';
+    return [task.id, stageSuffix?`${base} ${stageSuffix}`:base];
+  }));
   const hasReserve=entries.some(entry=>entry.day.segments.some(seg=>seg.section==='reserve'));
   entries.forEach(({ key, day })=>{
     const col=document.createElement('div');
@@ -14143,7 +14148,13 @@ function renderCrmStageGantt(rows, schedule){
     const displayIndex=Number.isFinite(row.displayIndex)?row.displayIndex:rowIdx+1;
     const label=document.createElement('div');
     label.className='crm-stage-gantt-left-row';
-    label.textContent=`${displayIndex}. ${row.orderTitle||'Заказ'}`;
+    const baseOrderTitle=`${displayIndex}. ${row.orderTitle||'Заказ'}`;
+    const stageOpName=(row.stage?.name||'').toString().trim();
+    if(stageOpName){
+      label.innerHTML=`${escapeHtml(baseOrderTitle)} <span class="crm-stage-dup-badge">${escapeHtml(stageOpName)}</span>`;
+    }else{
+      label.textContent=baseOrderTitle;
+    }
     if(orderId && crmCanViewOrderDetails()){
       label.classList.add('crm-linklike', 'crm-order-title');
       label.title='Открыть карточку заказа';
@@ -19349,6 +19360,7 @@ function handleDateTodayChange(){
   updateAllStageExpectations();
 }
 
+
 function deriveEditingOrderTitle(){
   const orderNo=(orderForm?.orderNo?.value||'').trim();
   const title=(orderForm?.title?.value||'').trim();
@@ -20470,7 +20482,7 @@ function moveStageRow(tr,direction){
   function appendStageRow(st){
   const nmRaw=(st.name||'').trim();
   const nmNormalized=normalizeStageName(st.name);
-  const isBoolOnly=BOOL_STAGE_NAMES.has(nmNormalized);
+  const isBoolOnly=!stageNameHasHours(nmNormalized);
   if(nmNormalized && getStageHoursPreference(nmNormalized)===null){
     ensureStageHoursPreference(nmNormalized, nmRaw);
   }
@@ -20663,6 +20675,7 @@ function applyStagePreset(names){
   updateAllStageExpectations();
 }
 
+
 function readStageRow(tr){
   if(!tr) return null;
   const stageId=tr.dataset.stageId||generateStageId();
@@ -20675,7 +20688,7 @@ function readStageRow(tr){
   const valueInput=get('value');
   const rawName=(nameInput?.value||'').trim();
   const normalizedName=normalizeStageName(rawName);
-  const boolOnly=BOOL_STAGE_NAMES.has(normalizedName);
+  const boolOnly=!stageNameHasHours(normalizedName);
   const done=!!doneInput?.checked;
   const progress=boolOnly?(done?100:0):Math.max(0,Math.min(100,Number(progressInput?.value||0)));
   return {
@@ -21945,6 +21958,66 @@ function buildCrmStagePresetDiff(previousList,nextList){
   return { renamed, removed };
 }
 
+
+function buildCrmStageTypeChangeMap(previousList,nextList){
+  const prevMap=new Map((previousList||[]).map(item=>[normalizeStageName(item?.name), item?.hasHours!==false]));
+  const nextMap=new Map((nextList||[]).map(item=>[normalizeStageName(item?.name), item?.hasHours!==false]));
+  const changed=new Map();
+  nextMap.forEach((hasHours,key)=>{
+    if(!key||!prevMap.has(key)) return;
+    const prev=prevMap.get(key);
+    if(prev!==hasHours) changed.set(key,{ prevHasHours:prev, hasHours });
+  });
+  return changed;
+}
+
+function applyCrmStageTypeChangesToOrders(typeChanges){
+  if(!(typeChanges instanceof Map) || !typeChanges.size) return false;
+  let changed=false;
+  state.boards.forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      if(!Array.isArray(order?.stages)) return;
+      order.stages.forEach(stage=>{
+        if(!stage||typeof stage!=='object') return;
+        const key=normalizeStageName(stage.name);
+        const meta=typeChanges.get(key);
+        if(!meta) return;
+        if(meta.hasHours){
+          if(stage.value==null || stage.value==='') stage.value='1';
+        }else{
+          if(stage.progress!=null && Number(stage.progress)!==100 && Number(stage.progress)!==0){ stage.progress=0; }
+        }
+        changed=true;
+      });
+    });
+  });
+  return changed;
+}
+
+function ensureHourlyStagesCapacity(stageList, prevList){
+  const capacity={ ...getCrmCapacitySettings() };
+  const prevMap=new Map((prevList||[]).map(item=>[normalizeStageName(item?.name), item?.hasHours!==false]));
+  const touched=[];
+  (stageList||[]).forEach(entry=>{
+    const nameKey=normalizeStageName(entry?.name);
+    if(!nameKey || entry?.hasHours===false) return;
+    const stageKey=resolveCrmStageKeyWithMapping(entry.name);
+    if(!stageKey) return;
+    const prevHasHours=prevMap.get(nameKey);
+    const becameHourly=prevHasHours===false;
+    const isNew=!prevMap.has(nameKey);
+    const current=Number(capacity[stageKey]);
+    if((becameHourly||isNew) && (!Number.isFinite(current)||current<=0)){
+      capacity[stageKey]=1;
+      touched.push(CRM_STAGE_LABELS[stageKey]||entry.name||stageKey);
+    }
+  });
+  if(touched.length){
+    state.settings.capacity=normalizeCapacityMap(capacity, CRM_DEFAULT_CAPACITY);
+    showToast({ title:'CRM', message:`Для новых/изменённых часовых переделов установлена вместимость 1: ${Array.from(new Set(touched)).join(', ')}. Проверьте значения в настройках.`, tone:'warn' });
+  }
+}
+
 function applyCrmStagePresetDiffToOrders(diff){
   if(!diff || (!diff.renamed?.length && !diff.removed?.length)) return;
   const renameMap=new Map();
@@ -22648,12 +22721,15 @@ boardForm.addEventListener('submit',e=>{
     stagePresetDraft
   );
   const stagePresetDiff=buildCrmStagePresetDiff(prevStagePresets, stagePresetDraft);
+  const stageTypeChanges=buildCrmStageTypeChangeMap(prevStagePresets, stagePresetDraft);
   syncCrmStagePresetDiffToMapping(stagePresetDiff);
   state.settings.stagePresets=stagePresetDraft;
   state.settings.defaultStagePresetIds=defaultPresetIds;
   ensureCrmDynamicStageCatalog();
   syncCrmStagePresetHoursToMapping(stagePresetDraft);
   applyCrmStagePresetDiffToOrders(stagePresetDiff);
+  const stageTypeAdjusted=applyCrmStageTypeChangesToOrders(stageTypeChanges);
+  ensureHourlyStagesCapacity(stagePresetDraft, prevStagePresets);
   applyTrashRetention();
   applyJournalRetention();
   updateAllStageExpectations();
