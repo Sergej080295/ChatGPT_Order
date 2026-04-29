@@ -6146,8 +6146,7 @@
           <div class="crm-toolbar__stage-buttons">
             <button id="crmStageExceptionsBtn" class="pc-btn pc-btn--secondary" type="button">Исключения</button>
             <button id="crmStageReserveBtn" class="pc-btn pc-btn--secondary" type="button">Бронь</button>
-            <button id="crmStageOptimizeBtn" class="pc-btn pc-btn--primary" type="button" title="Оптимизировать очередь передела">Оптимизировать очередь</button>
-          </div>
+                      </div>
         </div>
         <div class="crm-toolbar__search" id="crmSearchRow">
           <label for="orderSearchInput">Поиск</label>
@@ -7099,7 +7098,7 @@
             </label>
             <label class="crm-admin-role-option">
               <input type="checkbox" id="crmAdminStickerServiceTotal" />
-              <span>Сумма услуг</span>
+              <span id="crmAdminStickerServiceLabel">Сумма услуг</span>
             </label>
             <label class="crm-admin-role-option">
               <input type="checkbox" id="crmAdminStickerDateRange" />
@@ -9190,7 +9189,6 @@ const applyCrmWriteAccess=()=>{
   }
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
-  if(crmStageOptimizeBtn){ crmStageOptimizeBtn.disabled=!canStages; }
   if(addStageBtn){
     addStageBtn.hidden=!canAddStages;
     addStageBtn.disabled=!canAddStages;
@@ -10911,6 +10909,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmAdminSettingsForm=$('#crmAdminSettingsForm'),
       crmAdminStickerStageHours=$('#crmAdminStickerStageHours'),
       crmAdminStickerServiceTotal=$('#crmAdminStickerServiceTotal'),
+      crmAdminStickerServiceLabel=$('#crmAdminStickerServiceLabel'),
       crmAdminStickerDateRange=$('#crmAdminStickerDateRange'),
       crmAdminStickerPartShare=$('#crmAdminStickerPartShare'),
       crmAdminStickerRestShare=$('#crmAdminStickerRestShare'),
@@ -13822,7 +13821,7 @@ function renderCrmStageStack(schedule){
   const labelMap=new Map(schedule.tasks.map(task=>{
     const stageSuffix=(task.stageName||'').toString().trim();
     const base=task.label||'Заказ';
-    return [task.id, stageSuffix?`${base} ${stageSuffix}`:base];
+    return [task.id, stageSuffix?`${base} · ${stageSuffix}`:base];
   }));
   const hasReserve=entries.some(entry=>entry.day.segments.some(seg=>seg.section==='reserve'));
   entries.forEach(({ key, day })=>{
@@ -16368,7 +16367,8 @@ function renderCrmAdminRoles(){
     const stageItems=document.createElement('div');
     stageItems.className='crm-admin-permission-items';
     const stageAccess=permissions.stageAccess&&typeof permissions.stageAccess==='object'?permissions.stageAccess:{};
-    CRM_STAGE_PERMISSION_KEYS.forEach(stageKey=>{
+    const currentStageKeys=Array.from(new Set(getCrmStagePresets().map(item=>resolveCrmStageKeyWithMapping(item?.name)).filter(Boolean)));
+    currentStageKeys.forEach(stageKey=>{
       const option=document.createElement('label');
       option.className='crm-admin-permission-option';
       const checkbox=document.createElement('input');
@@ -16399,6 +16399,8 @@ function renderCrmAdminSettings(){
   if(crmAdminStickerStageHours) crmAdminStickerStageHours.checked=prefs.stageHours!==false;
   if(crmAdminStickerServiceTotal) crmAdminStickerServiceTotal.checked=prefs.serviceTotal!==false;
   if(crmAdminStickerDateRange) crmAdminStickerDateRange.checked=prefs.dateRange!==false;
+  const metric=getCrmServiceMetric();
+  if(crmAdminStickerServiceLabel) crmAdminStickerServiceLabel.textContent=(metric?.name||'Сумма услуг');
   if(crmAdminStickerPartShare) crmAdminStickerPartShare.checked=prefs.partShare!==false;
   if(crmAdminStickerRestShare) crmAdminStickerRestShare.checked=prefs.restShare!==false;
 }
@@ -18116,9 +18118,6 @@ function handleCrmStageManualOptimization(){
   }
   if(crmAutoOptimizeGuard) return;
   let changed=false;
-  if(crmStageOptimizeBtn){
-    crmStageOptimizeBtn.disabled=true;
-  }
   crmAutoOptimizeGuard=true;
   try{
     changed=runCrmAutoOptimization({ reason:'manual' });
@@ -18127,9 +18126,6 @@ function handleCrmStageManualOptimization(){
     }
   }finally{
     crmAutoOptimizeGuard=false;
-    if(crmStageOptimizeBtn){
-      crmStageOptimizeBtn.disabled=false;
-    }
   }
   if(changed){
     showToast({ title:'CRM', message:'Очередь передела оптимизирована.', tone:'success' });
@@ -21356,11 +21352,15 @@ function renderCrmStageSchedulesUI(config){
   extrasHint.textContent='Дни вне графика отображаются как выходные. Здесь можно добавить рабочие смены поверх шаблона.';
   extrasGroup.append(extrasLabel, extrasRow, extrasList, extrasHint);
 
+  const globalHolidayGroup=document.createElement('div');
+  globalHolidayGroup.className='crm-chip-input';
+  globalHolidayGroup.innerHTML='<span class="crm-field__label">Общие выходные / праздники</span><div class="crm-chip-input-row"><input type="date" class="pc-input" id="crmGlobalHolidayInput"><button type="button" class="pc-btn pc-btn--secondary" id="crmGlobalHolidayAdd">Добавить</button></div><div class="crm-chip-list" id="crmGlobalHolidayList"></div>';
+
   const summary=document.createElement('div');
   summary.className='crm-settings-summary';
   summary.textContent='Выберите передел и задайте его расписание. Настройки применяются ко всем представлениям CRM.';
 
-  control.append(stageField, presetField, startField, extrasGroup, summary);
+  control.append(stageField, presetField, startField, extrasGroup, globalHolidayGroup, summary);
   row.append(label, control);
   crmStageScheduleContainer.appendChild(row);
 
@@ -21413,6 +21413,20 @@ function renderCrmStageSchedulesUI(config){
       }
     };
   }
+
+
+  const globalInput=globalHolidayGroup.querySelector('#crmGlobalHolidayInput');
+  const globalAdd=globalHolidayGroup.querySelector('#crmGlobalHolidayAdd');
+  const globalList=globalHolidayGroup.querySelector('#crmGlobalHolidayList');
+  const renderGlobal=()=>{
+    const map=mapFromCalendarEntries(getCrmStageCalendarEntryList('__global__','exceptions'), true);
+    const dates=Array.from(map.keys()).sort((a,b)=>a.localeCompare(b));
+    globalList.innerHTML=dates.length?'':'';
+    if(!dates.length){ globalList.innerHTML='<span class="muted">Общих выходных нет</span>'; return; }
+    dates.forEach(iso=>{ const chip=document.createElement('span'); chip.className='crm-chip'; chip.innerHTML=`<span>${formatCalendarIso(iso)}</span>`; const btn=document.createElement('button'); btn.type='button'; btn.textContent='✕'; btn.onclick=()=>{ const next=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); writeCrmStageCalendarEntries('__global__','exceptions',next); renderGlobal(); }; chip.appendChild(btn); globalList.appendChild(chip); });
+  };
+  if(globalAdd){ globalAdd.onclick=()=>{ const iso=coerceCalendarIso(globalInput?.value||''); if(!iso) return; const list=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); list.push({iso,value:0}); writeCrmStageCalendarEntries('__global__','exceptions',list); if(globalInput) globalInput.value=''; renderGlobal(); }; }
+  renderGlobal();
 
   loadCrmStageScheduleEditor(crmStageScheduleActiveStage);
 }
@@ -24577,9 +24591,6 @@ if(crmStageExceptionsArchive){
 
 if(crmStageReserveBtn){
   crmStageReserveBtn.addEventListener('click',()=>openCrmStageReserveDialog());
-}
-if(crmStageOptimizeBtn){
-  crmStageOptimizeBtn.addEventListener('click',()=>handleCrmStageManualOptimization());
 }
 if(crmStageReserveClose){
   crmStageReserveClose.addEventListener('click',()=>closeCrmStageReserveDialog());
