@@ -2548,8 +2548,28 @@
   }
 
   body[data-crm-view="stage"] .crm-orders-view,
-  body[data-crm-view="stage"] .crm-kanban {
+  body[data-crm-view="stage"] .crm-kanban,
+  body[data-crm-view="stage"] .crm-stage-route-card {
     display: none;
+  }
+
+  body[data-crm-view="route"] .crm-stage-view {
+    display: flex;
+  }
+
+  body[data-crm-view="route"] .crm-stage-layout,
+  body[data-crm-view="route"] .crm-stage-gantt-card,
+  body[data-crm-view="route"] .crm-orders-view,
+  body[data-crm-view="route"] .crm-kanban {
+    display: none;
+  }
+
+  body[data-crm-view="route"] .crm-stage-secondary {
+    display: block;
+  }
+
+  body[data-crm-view="route"] .crm-stage-route-card {
+    display: block;
   }
 
   .crm-stage-layout {
@@ -3603,17 +3623,18 @@
     text-align: center;
   }
 
-  .crm-route-stage--draw { background: #38bdf8; }
-  .crm-route-stage--proc { background: #22c55e; }
-  .crm-route-stage--supply { background: #84cc16; }
-  .crm-route-stage--shear { background: #fde047; color: #5b4100; }
-  .crm-route-stage--laser { background: #f97316; }
-  .crm-route-stage--bend { background: #ef4444; }
-  .crm-route-stage--weld { background: #7f1d1d; }
-  .crm-route-stage--mech { background: #6b7280; }
-  .crm-route-stage--coop { background: #14b8a6; }
-  .crm-route-stage--pack { background: #8b5e3c; }
-  .crm-route-stage--ship { background: #8b5cf6; }
+  .crm-route-stage--draw { background: var(--crm-route-stage-color, #38bdf8); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--proc { background: var(--crm-route-stage-color, #22c55e); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--supply { background: var(--crm-route-stage-color, #84cc16); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--shear { background: var(--crm-route-stage-color, #fde047); color: var(--crm-route-stage-text, #5b4100); }
+  .crm-route-stage--laser { background: var(--crm-route-stage-color, #f97316); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--bend { background: var(--crm-route-stage-color, #ef4444); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--weld { background: var(--crm-route-stage-color, #7f1d1d); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--mech { background: var(--crm-route-stage-color, #6b7280); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--coop { background: var(--crm-route-stage-color, #14b8a6); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--pack { background: var(--crm-route-stage-color, #8b5e3c); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--ship { background: var(--crm-route-stage-color, #8b5cf6); color: var(--crm-route-stage-text, #fff); }
+  .crm-route-stage--custom { background: var(--crm-route-stage-color, #64748b); color: var(--crm-route-stage-text, #fff); }
 
   .crm-stage-overdue__list {
     font-size: 13px;
@@ -6084,6 +6105,7 @@
         </div>
       </div>
     </div>
+    <button class="pc-nav__link" type="button" id="crmRouteTabBtn" data-section="route" data-view="route" data-tooltip-primary="Общий маршрут" data-tooltip-secondary="Сводная диаграмма маршрутов всех заказов по текущим переделам.">Общий маршрут</button>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
       Журнал
@@ -6396,7 +6418,7 @@
       </section>
       <section class="crm-stage-route-card" data-collapse-section="route">
         <div class="crm-stage-route-header">
-          <h3>Общий маршрут заказов</h3>
+          <h3>Общий маршрут</h3>
           <div class="crm-stage-route-actions">
             <label class="pc-switch pc-switch--sm" title="Скрыть прошедшие даты">
               <input type="checkbox" id="crmRouteTodayToggle" checked />
@@ -6615,6 +6637,7 @@
               <button type="button" id="addStageFromListBtn" class="pc-btn pc-btn--ghost" title="Выбрать передел из шаблона">📋 Из списка</button>
               <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost">🔁 Базовые</button>
               <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost">📋 Все</button>
+              <button type="button" id="clearStagesListBtn" class="pc-btn pc-btn--ghost" title="Очистить текущий список переделов">🧹 Очистить список</button>
             </div>
           </div>
         </div>
@@ -7152,7 +7175,7 @@ const CRM_STAGE_COLLAPSE_KEY='planecore_crm_stage_collapse_v1';
 const CRM_STAGE_COLLAPSE_FALLBACKS=['mini_crm_stage_collapse_v1'];
 const CRM_GANTT_RANGE_PREF_KEY='planecore_crm_gantt_range_pref_v1';
 const CRM_GANTT_RANGE_PREF_FALLBACKS=['mini_crm_gantt_range_pref_v1'];
-const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:true });
+const CRM_STAGE_COLLAPSE_DEFAULTS=Object.freeze({ detail:false, gantt:false, route:false });
 const $=(s,r=document)=>r.querySelector(s); const $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDateISO=d=>{
@@ -7314,18 +7337,18 @@ const iconRest=()=>'data:image/svg+xml;base64,'+btoa(`<svg xmlns="http://www.w3.
 const DEFAULT_LANES=['Не запланированное','Клиент','Отдел продаж','Технологи','Производство','Закупка','Упаковка','Готово (Ож. отгрузки)','Отгружено'];
 const DEFAULT_STAGES=['Подготовка в работу','Рубка','Лазер','Гибка','Упаковка','Отгрузка'];
 const CRM_BASE_STAGE_PRESETS=Object.freeze([
-  { name:'Подготовка в работу', hasHours:true },
-  { name:'Закупка', hasHours:false },
-  { name:'Поставка ДС', hasHours:false },
-  { name:'Рубка', hasHours:false },
-  { name:'Лазер', hasHours:true },
-  { name:'Гибка', hasHours:true },
-  { name:'Сварка', hasHours:true },
-  { name:'Мехобработка', hasHours:true },
-  { name:'Кооперация', hasHours:false },
-  { name:'Упаковка', hasHours:false },
-  { name:'Отгрузка', hasHours:false },
-  { name:'Чек лист', hasHours:false }
+  { name:'Подготовка в работу', hasHours:true, color:'#38bdf8' },
+  { name:'Закупка', hasHours:false, color:'#22c55e' },
+  { name:'Поставка ДС', hasHours:false, color:'#84cc16' },
+  { name:'Рубка', hasHours:false, color:'#fde047' },
+  { name:'Лазер', hasHours:true, color:'#f97316' },
+  { name:'Гибка', hasHours:true, color:'#ef4444' },
+  { name:'Сварка', hasHours:true, color:'#7f1d1d' },
+  { name:'Мехобработка', hasHours:true, color:'#6b7280' },
+  { name:'Кооперация', hasHours:false, color:'#14b8a6' },
+  { name:'Упаковка', hasHours:false, color:'#8b5e3c' },
+  { name:'Отгрузка', hasHours:false, color:'#8b5cf6' },
+  { name:'Чек лист', hasHours:false, color:'#64748b' }
 ]);
 const CRM_STAGE_ICON_OPTIONS=Object.freeze([
   { value:'📐', label:'Чертёж / подготовка' },
@@ -7350,6 +7373,20 @@ const CRM_STAGE_ICON_OPTIONS=Object.freeze([
   { value:'🧊', label:'Склад / хранение' }
 ]);
 const CRM_STAGE_ICON_VALUES=new Set(CRM_STAGE_ICON_OPTIONS.map(item=>item.value));
+function sanitizeCrmStageColor(value){
+  if(typeof value!=='string') return '';
+  const trimmed=value.trim();
+  return /^#[0-9a-f]{6}$/i.test(trimmed)?trimmed.toLowerCase():'';
+}
+function getReadableRouteTextColor(color){
+  const normalized=sanitizeCrmStageColor(color);
+  if(!normalized) return '#fff';
+  const r=parseInt(normalized.slice(1,3),16);
+  const g=parseInt(normalized.slice(3,5),16);
+  const b=parseInt(normalized.slice(5,7),16);
+  const yiq=(r*299+g*587+b*114)/1000;
+  return yiq>=150?'#111827':'#fff';
+}
 const CRM_STAGE_KEYS=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_SEQUENCE=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
@@ -8234,7 +8271,8 @@ function sanitizeCrmStagePresetEntry(raw){
   const id=idRaw||`preset:${normalized}`;
   const iconRaw=typeof raw.icon==='string'?raw.icon.trim():'';
   const icon=CRM_STAGE_ICON_VALUES.has(iconRaw)?iconRaw:'';
-  return { id, name, hasHours, visible, icon };
+  const color=sanitizeCrmStageColor(raw.color)||'#64748b';
+  return { id, name, hasHours, visible, icon, color };
 }
 
 function sanitizeCrmStagePresetList(raw){
@@ -9114,6 +9152,8 @@ const crmCanCreateOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.create
 const crmCanEditOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.editOrders;
 const crmCanDeleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteOrders;
 const crmCanUpdateStageProgress=()=> crmWriteAccessEnabled() && !!crmPermissions.updateStageProgress;
+const crmCanEditStageDetails=()=> crmWriteAccessEnabled() && !!crmPermissions.editStageDetails;
+const crmCanEditStageDates=()=> crmWriteAccessEnabled() && !!crmPermissions.editStageDates;
 const crmCanCompleteOrders=()=> crmWriteAccessEnabled() && !!crmPermissions.completeOrders;
 const crmCanManageStages=()=> crmWriteAccessEnabled() && !!crmPermissions.manageStages;
 const crmCanAddStages=()=> crmWriteAccessEnabled() && !!crmPermissions.addStages;
@@ -9508,14 +9548,14 @@ function crmDefaultStageAccess(enabled){
   return map;
 }
 const CRM_ROLE_DEFAULT_PERMISSIONS={
-  superadmin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, manageUsers:true, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  admin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, manageUsers:false, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  master:{ view:true, write:true, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:true, manageUsers:false, manageSettings:false, manageStages:true, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
-  guest:{ view:true, write:false, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
+  superadmin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, editStageDetails:true, editStageDates:true, manageUsers:true, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  admin:{ view:true, write:true, viewOrderDetails:true, createOrders:true, editOrders:true, deleteOrders:true, updateStageProgress:true, editStageDetails:true, editStageDates:true, manageUsers:false, manageSettings:true, manageStages:true, completeOrders:true, viewAudit:true, useJournal:true, editComments:true, deleteComments:true, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  master:{ view:true, write:true, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:true, editStageDetails:true, editStageDates:true, manageUsers:false, manageSettings:false, manageStages:true, completeOrders:false, viewAudit:false, useJournal:true, editComments:false, deleteComments:false, addStages:true, stageAccess:crmDefaultStageAccess(true) },
+  guest:{ view:true, write:false, viewOrderDetails:true, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, editStageDetails:false, editStageDates:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) }
 };
 CRM_ROLE_DEFAULT_PERMISSIONS.administrator=CRM_ROLE_DEFAULT_PERMISSIONS.admin;
 const CRM_ROLE_SLUG_ALIASES={ administrator:'admin' };
-const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','createOrders','editOrders','deleteOrders','updateStageProgress','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
+const CRM_ROLE_PERMISSION_KEYS=['view','write','viewOrderDetails','createOrders','editOrders','deleteOrders','updateStageProgress','editStageDetails','editStageDates','completeOrders','manageStages','manageSettings','manageUsers','viewAudit','useJournal','editComments','deleteComments','addStages'];
 function resolveCrmRoleSlug(slug){
   if(!slug && slug!==0) return '';
   const normalized=String(slug).trim().toLowerCase();
@@ -9540,6 +9580,8 @@ const CRM_ROLE_PERMISSION_GROUPS=[
       { key:'editOrders', label:'Редактировать заказы', hint:'Изменение данных и состава заказа.' },
       { key:'deleteOrders', label:'Удалять заказы', hint:'Удаление заказов из системы.' },
       { key:'updateStageProgress', label:'Прогресс переделов', hint:'Отметка процента готовности и завершения передела.' },
+      { key:'editStageDetails', label:'Данные переделов', hint:'Изменение названий, состава и часов/значений по переделам в карточке заказа.' },
+      { key:'editStageDates', label:'Даты переделов', hint:'Установка и изменение плановых дат выполнения переделов.' },
       { key:'completeOrders', label:'Отмечать готовность заказов', hint:'Разрешает переключать статус «Заказ готов» и завершать заказы с канбана и формы.' },
       { key:'useJournal', label:'Журнал изменений', hint:'Просмотр и очистка записей журнала CRM.' }
     ]
@@ -9573,7 +9615,7 @@ const CRM_ROLE_PERMISSION_GROUPS=[
 const CRM_AUTH_INFO=(window.__CRM_AUTH__ && typeof window.__CRM_AUTH__==='object')?window.__CRM_AUTH__:{};
 const crmCurrentUser=(CRM_AUTH_INFO.user && typeof CRM_AUTH_INFO.user==='object')?CRM_AUTH_INFO.user:null;
 const crmPermissions=(()=>{
-  const defaults={ view:false, write:false, viewOrderDetails:false, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
+  const defaults={ view:false, write:false, viewOrderDetails:false, createOrders:false, editOrders:false, deleteOrders:false, updateStageProgress:false, editStageDetails:false, editStageDates:false, manageUsers:false, manageSettings:false, manageStages:false, completeOrders:false, viewAudit:false, useJournal:false, editComments:false, deleteComments:false, addStages:false, stageAccess:crmDefaultStageAccess(false) };
   const normalizeFlag=(value, fallback=null)=>{
     if(typeof value==='boolean') return value;
     if(typeof value==='number') return value!==0;
@@ -10767,6 +10809,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOrdersTotalsBox=$('#crmOrdersTotals'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
+      crmRouteTabBtn=$('#crmRouteTabBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
       crmStageNavItem=$('#crmStageNavItem'),
       crmStageNavDropdown=$('#crmStageNavDropdown'),
@@ -10975,7 +11018,7 @@ let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
 const crmStartViewMode=getCrmStartViewSetting();
-const CRM_VIEW_MODES=new Set(['kanban','orders','stage']);
+const CRM_VIEW_MODES=new Set(['kanban','orders','stage','route']);
 let currentCrmView='kanban';
 let initialStageViewKey='draw';
 const storedViewRaw=readCrmSessionValue(CRM_SESSION_VIEW_KEY);
@@ -11095,7 +11138,9 @@ if(document.body){
   document.body.dataset.crmView=currentCrmView;
   document.body.dataset.section=currentCrmView==='stage'
     ? 'stage'
-    : currentCrmView==='orders'
+    : currentCrmView==='route'
+      ? 'route'
+      : currentCrmView==='orders'
       ? 'orders'
       : 'crm';
 }
@@ -14418,6 +14463,7 @@ function applyCrmStageSelectionHighlight(){
 }
 
 function buildCrmRouteDataset(rows, filterMode, options={}){
+  const allowedRouteStages=new Set(getCrmCurrentRouteStageKeys());
   const opts=options&&typeof options==='object'?options:{};
   const ignoreSearch=opts.ignoreSearch===true;
   const filter=CRM_STAGE_FILTERS.has(filterMode)?filterMode:'current';
@@ -14516,7 +14562,7 @@ function buildCrmRouteDataset(rows, filterMode, options={}){
     stageList.forEach((stage, stageIndex)=>{
       if(!stage||typeof stage!=='object') return;
       const stageKey=resolveCrmStageKeyWithMapping(stage.name);
-      if(!stageKey) return;
+      if(!stageKey || (allowedRouteStages.size && !allowedRouteStages.has(stageKey))) return;
       const start=normalizeDate(stage.start);
       const end=normalizeDate(stage.end);
       const baseHours=parseStageHours(stage);
@@ -14839,7 +14885,8 @@ function renderCrmRouteDetailed(dataset, days){
         const spanInfo=computeCrmRouteSpan(seg, dayIndexMap);
         if(spanInfo){
           const bar=document.createElement('div');
-          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
+          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]||'crm-route-stage--custom'].filter(Boolean).join(' ');
+          applyCrmRouteStageStyle(bar, stageKey);
           bar.style.left=`calc(${spanInfo.start} * var(--crmRouteDayWidth))`;
           bar.style.width=`calc(${spanInfo.span} * var(--crmRouteDayWidth) - 6px)`;
           if(seg.done) bar.classList.add('is-done');
@@ -14874,7 +14921,8 @@ function renderCrmRouteDetailed(dataset, days){
         const spanInfo=computeCrmRouteSpan(seg, dayIndexMap);
         if(spanInfo){
           const bar=document.createElement('div');
-          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]].filter(Boolean).join(' ');
+          bar.className=['crm-route-bar', CRM_ROUTE_STAGE_CLASS[stageKey]||'crm-route-stage--custom'].filter(Boolean).join(' ');
+          applyCrmRouteStageStyle(bar, stageKey);
           bar.style.left=`calc(${spanInfo.start} * var(--crmRouteDayWidth))`;
           bar.style.width=`calc(${spanInfo.span} * var(--crmRouteDayWidth) - 6px)`;
           if(seg.done) bar.classList.add('is-done');
@@ -14969,7 +15017,8 @@ function renderCrmRouteCompact(dataset, days){
       const fallbackShare=segments.length?100/segments.length:100;
       segments.forEach(({ seg })=>{
         const part=document.createElement('div');
-        part.className=['crm-route-seg', CRM_ROUTE_STAGE_CLASS[seg.stageKey]].filter(Boolean).join(' ');
+        part.className=['crm-route-seg', CRM_ROUTE_STAGE_CLASS[seg.stageKey]||'crm-route-stage--custom'].filter(Boolean).join(' ');
+        applyCrmRouteStageStyle(part, seg.stageKey);
         const weight=seg.totalHours>0?seg.totalHours:((seg.start instanceof Date && seg.end instanceof Date)?Math.max(1, daysBetween(seg.start, seg.end)+1):1);
         const share=totalWeight>0?(weight/totalWeight)*100:fallbackShare;
         part.style.flex=`0 0 ${share.toFixed(2)}%`;
@@ -15486,6 +15535,28 @@ function handleCrmCalendarListClick(event, mode){
   }
 }
 
+function getCrmCurrentRouteStageKeys(){
+  ensureCrmDynamicStageCatalog();
+  return Array.from(new Set(getCrmStagePresets()
+    .filter(item=>item&&item.visible!==false)
+    .map(item=>resolveCrmStageKeyWithMapping(item.name)||resolveCrmStageKey(item.name))
+    .filter(Boolean)));
+}
+function getCrmRouteStageMeta(stageKey){
+  const key=normalizeCrmStageKey(stageKey);
+  const preset=getCrmStagePresets().find(item=>{
+    const resolved=resolveCrmStageKeyWithMapping(item.name)||resolveCrmStageKey(item.name);
+    return normalizeCrmStageKey(resolved)===key;
+  });
+  return { color:sanitizeCrmStageColor(preset?.color)||'#64748b', text:getReadableRouteTextColor(preset?.color||'#64748b') };
+}
+function applyCrmRouteStageStyle(el, stageKey){
+  if(!el) return;
+  const meta=getCrmRouteStageMeta(stageKey);
+  el.style.setProperty('--crm-route-stage-color', meta.color);
+  el.style.setProperty('--crm-route-stage-text', meta.text);
+}
+
 function updateCrmRouteStageVisibility(stageKey, isVisible){
   if(!stageKey) return;
   const wasHidden=crmRouteHiddenStages.has(stageKey);
@@ -15515,7 +15586,7 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, from
   const visibleDays=applyCrmRouteFromToday(baseDays, fromToday!==false);
   if(crmStageRouteLegend){
     crmStageRouteLegend.innerHTML='';
-    CRM_STAGE_SEQUENCE.forEach(stage=>{
+    getCrmCurrentRouteStageKeys().forEach(stage=>{
       const label=document.createElement('label');
       label.className='crm-route-legend-item';
       const checkbox=document.createElement('input');
@@ -15527,7 +15598,8 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, from
       });
       label.classList.toggle('is-off', !checkbox.checked);
       const chip=document.createElement('span');
-      chip.className=['crm-route-legend-chip', CRM_ROUTE_STAGE_CLASS[stage]].filter(Boolean).join(' ');
+      chip.className=['crm-route-legend-chip', CRM_ROUTE_STAGE_CLASS[stage]||'crm-route-stage--custom'].filter(Boolean).join(' ');
+      applyCrmRouteStageStyle(chip, stage);
       const icon=document.createElement('span');
       icon.className='crm-route-legend-icon';
       const iconSymbol=stageIconForKey(stage);
@@ -18139,6 +18211,7 @@ function updateCrmOrdersTabUi(){
   const inOrders=currentCrmView==='orders';
   const inStage=currentCrmView==='stage';
   const inKanban=currentCrmView==='kanban';
+  const inRoute=currentCrmView==='route';
   if(crmNavKanbanBtn){
     crmNavKanbanBtn.classList.toggle('pc-nav__link--active',inKanban);
     crmNavKanbanBtn.setAttribute('aria-pressed',inKanban?'true':'false');
@@ -18152,6 +18225,10 @@ function updateCrmOrdersTabUi(){
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
     renderCrmStageTabLabel(crmStageSelect?.value||'draw');
   }
+  if(crmRouteTabBtn){
+    crmRouteTabBtn.classList.toggle('pc-nav__link--active',inRoute);
+    crmRouteTabBtn.setAttribute('aria-pressed',inRoute?'true':'false');
+  }
   if(crmStageControls){
     crmStageControls.hidden=!inStage;
     crmStageControls.setAttribute('aria-hidden',inStage?'false':'true');
@@ -18161,8 +18238,8 @@ function updateCrmOrdersTabUi(){
     crmOrdersViewEl.setAttribute('aria-hidden',inOrders?'false':'true');
   }
   if(crmStageViewEl){
-    crmStageViewEl.hidden=!inStage;
-    crmStageViewEl.setAttribute('aria-hidden',inStage?'false':'true');
+    crmStageViewEl.hidden=!(inStage||inRoute);
+    crmStageViewEl.setAttribute('aria-hidden',(inStage||inRoute)?'false':'true');
   }
 }
 
@@ -18184,7 +18261,9 @@ function setCrmView(view){
     document.body.dataset.crmView=currentCrmView;
     document.body.dataset.section=currentCrmView==='stage'
       ? 'stage'
-      : currentCrmView==='orders'
+      : currentCrmView==='route'
+        ? 'route'
+        : currentCrmView==='orders'
         ? 'orders'
         : 'crm';
   }
@@ -18194,9 +18273,18 @@ function setCrmView(view){
     syncCrmOrdersTotals();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='route'){
+    renderCrmRouteView();
   }else{
     renderCards();
   }
+}
+
+function renderCrmRouteView(){
+  if(crmStageCollapseState?.route){ setCrmSectionCollapsed('route', false); }
+  crmStageRouteContext={ rows:[], stageKey:crmStageSelect?.value||initialStageViewKey||'draw', filter:'current' };
+  renderCrmStageRouteOverview(crmStageRouteContext.rows, crmStageRouteContext.stageKey, crmStageRouteContext.filter, crmRouteDayFilter, crmRouteFromToday);
+  updateCrmAuxButtons();
 }
 
 function renderCurrentView(){
@@ -18204,6 +18292,8 @@ function renderCurrentView(){
     renderOrdersTable();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='route'){
+    renderCrmRouteView();
   }else{
     renderCards();
     updateCrmAuxButtons();
@@ -18991,7 +19081,7 @@ function showTooltipForOrder(o,anchorEl){
 function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 
 /* ORDER DIALOG */
-const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
+const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),clearStagesListBtn=$('#clearStagesListBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
 const crmServiceMetricLabelEl=$('#crmServiceMetricLabel');
 addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
@@ -19336,6 +19426,11 @@ applyCrmWriteAccess();
 
 function handleDateTodayChange(){
   if(!dateTodayChk || !dateTodayChk.checked) return;
+  if(!crmCanEditStageDates()){
+    dateTodayChk.checked=false;
+    showToast({ title:'CRM', message:'Нет прав для изменения дат переделов.', tone:'warn' });
+    return;
+  }
   if(!stagesTableBody) return;
   const today=fmtDateISO(new Date());
     stagesTableBody.querySelectorAll('tr').forEach(tr=>{
@@ -19386,6 +19481,10 @@ function applyStageAutoDatesToRow(tr,startIso,endIso){
   }
 
 function handleClearStageDates(){
+  if(!crmCanEditStageDates()){
+    showToast({ title:'CRM', message:'Нет прав для очистки дат переделов.', tone:'warn' });
+    return;
+  }
   if(!stagesTableBody) return;
   stagesTableBody.querySelectorAll('tr').forEach(tr=>{
     const startInput=tr.querySelector('[data-k="start"]');
@@ -19410,7 +19509,7 @@ function handleClearStageDates(){
 
 function handleStageDatesCalculation(options={}){
   const canEditDraft=editingOrderId ? crmCanEditOrders() : crmCanCreateOrders();
-  if(!canEditDraft){
+  if(!canEditDraft || !crmCanEditStageDates()){
     showToast({ title:'PlaneCore', message:'Недостаточно прав для пересчёта дат.', tone:'warn' });
     return;
   }
@@ -19888,6 +19987,30 @@ if(presetStagesBtn){
 if(allStagesBtn){
   allStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmStagePresetNames()));
 }
+function clearStageList(){
+  if(!crmCanEditStageDetails()){
+    showToast({ title:'CRM', message:'Нет прав для очистки списка переделов.', tone:'warn' });
+    return;
+  }
+  if(!stagesTableBody) return;
+  if(stagesTableBody.children.length && !confirm('Очистить все переделы в заказе?')) return;
+  if(editingOrderId && stageSourceMap instanceof Map){
+    Array.from(stagesTableBody.querySelectorAll('tr')).forEach((tr,index)=>{
+      const stageId=tr.dataset.stageId||'';
+      const snapshot=readStageRow(tr) || (stageId?stageSourceMap.get(stageId):null);
+      if(stageId) stageSourceMap.delete(stageId);
+      if(stageId && snapshot){ pendingStageDeletes.push({ stageId, stage:deepClone(snapshot), position:index }); }
+    });
+  }
+  stagesTableBody.innerHTML='';
+  syncAutoProgress();
+  syncAutoDates();
+  updateAllStageExpectations();
+  refreshStageReorderControls();
+}
+if(clearStagesListBtn){
+  clearStagesListBtn.addEventListener('click',clearStageList);
+}
 if(splitBtn){
   splitBtn.addEventListener('click',()=>openSplitDialog());
 }
@@ -19967,9 +20090,20 @@ function setOrderFormReadOnly(readOnly){
     allStagesBtn.disabled=readOnly;
   }
   if(dateTodayChk){
-    dateTodayChk.disabled=readOnly;
+    dateTodayChk.disabled=readOnly || !crmCanEditStageDates();
+  }
+  if(calcStageDatesBtn){
+    calcStageDatesBtn.disabled=readOnly || !crmCanEditStageDates();
+  }
+  if(clearStageDatesBtn){
+    clearStageDatesBtn.disabled=readOnly || !crmCanEditStageDates();
+  }
+  if(clearStagesListBtn){
+    clearStagesListBtn.disabled=readOnly || !crmCanEditStageDetails();
   }
   const canUpdateProgress=crmCanUpdateStageProgress();
+  const canEditStageDetails=crmCanEditStageDetails();
+  const canEditStageDates=crmCanEditStageDates();
   if(stagesTableBody){
     stagesTableBody.querySelectorAll('[data-k="done"], [data-k="progress"]').forEach(input=>{
       if(!input) return;
@@ -19981,6 +20115,20 @@ function setOrderFormReadOnly(readOnly){
       }else if(!readOnly){
         input.disabled=input.dataset.readonlyWasDisabled==='1';
       }
+    });
+    stagesTableBody.querySelectorAll('[data-k="name"], [data-k="value"], .btn-circle, [data-stage-move]').forEach(input=>{
+      if(!input) return;
+      if(input.dataset.detailWasDisabled===undefined){
+        input.dataset.detailWasDisabled=input.disabled?'1':'0';
+      }
+      input.disabled=readOnly || !canEditStageDetails ? true : input.dataset.detailWasDisabled==='1';
+    });
+    stagesTableBody.querySelectorAll('[data-k="start"], [data-k="end"]').forEach(input=>{
+      if(!input) return;
+      if(input.dataset.dateWasDisabled===undefined){
+        input.dataset.dateWasDisabled=input.disabled?'1':'0';
+      }
+      input.disabled=readOnly || !canEditStageDates ? true : input.dataset.dateWasDisabled==='1';
     });
   }
 }
@@ -20486,6 +20634,8 @@ function moveStageRow(tr,direction){
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
   const canUpdateProgress=crmCanUpdateStageProgress();
+  const canEditStageDetails=crmCanEditStageDetails();
+  const canEditStageDates=crmCanEditStageDates();
   const stageId=ensureStageIdentity(st);
   tr.dataset.stageId=stageId;
   if(typeof st.doneAt==='string' && st.doneAt){
@@ -20500,16 +20650,16 @@ function moveStageRow(tr,direction){
     tr.dataset.completedLate='false';
   }
     tr.innerHTML=`
-      <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" /></td>
+      <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" ${canEditStageDetails?'':'disabled'} /></td>
       <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''} ${canUpdateProgress?'':'disabled'} /></td>
       <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" ${canUpdateProgress?'':'disabled'} /><span class="expected-indicator"></span></div>`}</td>
-      <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
-      <td class="col-end"><div class="stage-date-cell"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" /><span class="stage-date-dow" data-dow></span></div></td>
-      <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
-      <td class="chk"><button type="button" class="btn-circle danger" title="Удалить">✖</button></td>`;
+      <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" ${canEditStageDates?'':'disabled'} /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-end"><div class="stage-date-cell"><input data-k="end" type="date" value="${escapeHtml(st.end||'')}" ${canEditStageDates?'':'disabled'} /><span class="stage-date-dow" data-dow></span></div></td>
+      <td class="col-rate">${suppressValue?'<span class="muted">—</span>':`<div class="rowc stage-hours-cell"><input data-k="value" type="number" step="0.01" value="${st.value??''}" placeholder="число" ${canEditStageDetails?'':'disabled'} /><span class="crm-stage-auto" data-auto></span><small class="muted tag-mini" data-orig></small></div>`}</td>
+      <td class="chk"><button type="button" class="btn-circle danger" title="Удалить" ${canEditStageDetails?'':'disabled'}>✖</button></td>`;
   const reorderCell=document.createElement('td');
   reorderCell.className='reorder';
-  reorderCell.innerHTML='<div class="crm-stage-reorder"><button type="button" data-stage-move="up" title="Переместить выше">▲</button><button type="button" data-stage-move="down" title="Переместить ниже">▼</button></div>';
+  reorderCell.innerHTML=`<div class="crm-stage-reorder"><button type="button" data-stage-move="up" title="Переместить выше" ${canEditStageDetails?'':'disabled'}>▲</button><button type="button" data-stage-move="down" title="Переместить ниже" ${canEditStageDetails?'':'disabled'}>▼</button></div>`;
   tr.insertBefore(reorderCell, tr.firstChild);
   const origMap=window._editingOrigValues||null;
   if(origMap&&!suppressValue){const nameNow=nmRaw||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
@@ -20605,6 +20755,7 @@ function moveStageRow(tr,direction){
         startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
       });
       startInput.addEventListener('change',()=>{
+        if(!crmCanEditStageDates()){ startInput.value=startInput.dataset.prevValue||startInput.dataset.lastAccepted||''; return; }
         enforceStageDateConstraints(tr, startInput);
         applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
         updateStageDateWeekday(startInput);
@@ -20620,6 +20771,7 @@ function moveStageRow(tr,direction){
         endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
       });
       endInput.addEventListener('change',()=>{
+        if(!crmCanEditStageDates()){ endInput.value=endInput.dataset.prevValue||endInput.dataset.lastAccepted||''; return; }
         enforceStageDateConstraints(tr, endInput);
         applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
         updateStageDateWeekday(endInput);
@@ -21915,6 +22067,7 @@ function collectCrmStagePresetInputs(){
       hasHours:hoursInput?!!hoursInput.checked:true,
       visible:visibleInput?!!visibleInput.checked:true,
       icon:iconInput?iconInput.value:'',
+      color:(row.querySelector('input[name="crmStagePresetColor"]')?.value||''),
       inDefault:defaultInput?!!defaultInput.checked:false
     };
   });
@@ -21937,6 +22090,7 @@ function normalizeCrmStagePresetDraftList(raw){
       hasHours:safeEntry.hasHours!==false,
       visible:safeEntry.visible!==false,
       icon:CRM_STAGE_ICON_VALUES.has(safeEntry.icon)?safeEntry.icon:'',
+      color:sanitizeCrmStageColor(safeEntry.color)||'#64748b',
       inDefault:safeEntry.inDefault===true
     };
   });
@@ -22142,6 +22296,11 @@ function renderCrmStagePresetSettingsUI(){
       iconSelect.appendChild(new Option(`${option.value} ${option.label}`, option.value));
     });
     iconSelect.value=CRM_STAGE_ICON_VALUES.has(entry.icon)?entry.icon:'';
+    const colorInput=document.createElement('input');
+    colorInput.type='color';
+    colorInput.name='crmStagePresetColor';
+    colorInput.title='Цвет передела в общем маршруте';
+    colorInput.value=sanitizeCrmStageColor(entry.color)||'#64748b';
     const typeLabel=document.createElement('label');
     typeLabel.className='crm-mapping-row__hours';
     const typeInput=document.createElement('input');
@@ -22175,7 +22334,7 @@ function renderCrmStagePresetSettingsUI(){
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(iconSelect,typeLabel,visibleLabel,defaultLabel,deleteBtn);
+    controls.append(iconSelect,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -24271,6 +24430,7 @@ const CRM_HINT_TARGETS=[
   { selector:'#addStageFromListBtn', level1:'Передел из списка', level2:'Открывает справочник стандартных переделов для вставки.' },
   { selector:'#presetStagesBtn', level1:'Базовые переделы', level2:'Добавляет преднастроенный набор шагов в заказ.' },
   { selector:'#allStagesBtn', level1:'Все переделы', level2:'Открывает полный справочник переделов для вставки в заказ.' },
+  { selector:'#clearStagesListBtn', level1:'Очистить список', level2:'Удаляет все строки переделов в текущей карточке заказа.' },
   { selector:'#splitBtn', level1:'Подзаказ', level2:'Разбивает текущий заказ на отдельный подзаказ без потери истории.' },
   { selector:'#orderHistoryBtn', level1:'История', level2:'Показывает журнал изменений по заказу с деталями полей и дат.' },
   { selector:'#newOrderBtn', level1:'Создать заказ', level2:'Открывает карточку нового заказа. Номер и клиент будут основой названия.' },
@@ -24397,6 +24557,9 @@ if(crmOrdersTabBtn){
 }
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
+}
+if(crmRouteTabBtn){
+  crmRouteTabBtn.addEventListener('click',()=>setCrmView('route'));
 }
 if(crmStageNavItem && crmStageNavDropdown){
   const openStageDropdown=()=>{

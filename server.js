@@ -697,6 +697,8 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'editOrders',
   'deleteOrders',
   'updateStageProgress',
+  'editStageDetails',
+  'editStageDates',
   'manageUsers',
   'manageSettings',
   'manageStages',
@@ -724,6 +726,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editOrders: true,
     deleteOrders: true,
     updateStageProgress: true,
+    editStageDetails: true,
+    editStageDates: true,
     manageUsers: true,
     manageSettings: true,
     manageStages: true,
@@ -743,6 +747,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editOrders: true,
     deleteOrders: true,
     updateStageProgress: true,
+    editStageDetails: true,
+    editStageDates: true,
     manageUsers: false,
     manageSettings: true,
     manageStages: true,
@@ -762,6 +768,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editOrders: false,
     deleteOrders: false,
     updateStageProgress: true,
+    editStageDetails: true,
+    editStageDates: true,
     manageUsers: false,
     manageSettings: false,
     manageStages: true,
@@ -781,6 +789,8 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editOrders: false,
     deleteOrders: false,
     updateStageProgress: false,
+    editStageDetails: false,
+    editStageDates: false,
     manageUsers: false,
     manageSettings: false,
     manageStages: false,
@@ -1067,6 +1077,12 @@ function normalizeRolePermissions(payload, slug) {
   }
   if (legacyManageStages !== undefined && !Object.prototype.hasOwnProperty.call(source, 'updateStageProgress')) {
     source.updateStageProgress = legacyManageStages;
+  }
+  if (legacyManageStages !== undefined && !Object.prototype.hasOwnProperty.call(source, 'editStageDetails')) {
+    source.editStageDetails = legacyManageStages;
+  }
+  if (legacyManageStages !== undefined && !Object.prototype.hasOwnProperty.call(source, 'editStageDates')) {
+    source.editStageDates = legacyManageStages;
   }
   for (const key of ROLE_PERMISSION_KEYS) {
     const rawValue = Object.prototype.hasOwnProperty.call(source, key) ? source[key] : undefined;
