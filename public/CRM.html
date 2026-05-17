@@ -1341,6 +1341,46 @@
     padding: 0 var(--pc-spacing-xl) var(--pc-spacing-xl);
   }
 
+  .crm-admin-role-card--compact {
+    padding: 0;
+  }
+
+  .crm-admin-role-open {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: var(--pc-spacing-lg) var(--pc-spacing-xl);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--pc-spacing-md);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .crm-admin-role-open:hover,
+  .crm-admin-role-open:focus-visible {
+    background: color-mix(in srgb, var(--pc-accent-primary) 10%, transparent);
+    outline: none;
+  }
+
+  .crm-admin-role-dialog {
+    width: min(1120px, 96vw);
+    max-height: 92vh;
+  }
+
+  .crm-admin-role-dialog__body {
+    padding-top: var(--pc-spacing-lg);
+    max-height: min(70vh, 760px);
+    overflow: auto;
+  }
+
+  .crm-admin-permission-hint--block {
+    margin: calc(-1 * var(--pc-spacing-xs)) 0 var(--pc-spacing-sm);
+    line-height: 1.35;
+  }
+
   .crm-admin-role-field {
     display: flex;
     flex-direction: column;
@@ -2549,26 +2589,36 @@
 
   body[data-crm-view="stage"] .crm-orders-view,
   body[data-crm-view="stage"] .crm-kanban,
+  body[data-crm-view="stage"] .crm-stage-all-gantt-card,
   body[data-crm-view="stage"] .crm-stage-route-card {
     display: none;
   }
 
-  body[data-crm-view="route"] .crm-stage-view {
+  body[data-crm-view="route"] .crm-stage-view,
+  body[data-crm-view="gantt"] .crm-stage-view {
     display: flex;
   }
 
   body[data-crm-view="route"] .crm-stage-layout,
   body[data-crm-view="route"] .crm-stage-gantt-card,
+  body[data-crm-view="route"] .crm-stage-all-gantt-card,
   body[data-crm-view="route"] .crm-orders-view,
-  body[data-crm-view="route"] .crm-kanban {
+  body[data-crm-view="route"] .crm-kanban,
+  body[data-crm-view="gantt"] .crm-stage-layout,
+  body[data-crm-view="gantt"] .crm-stage-gantt-card,
+  body[data-crm-view="gantt"] .crm-stage-route-card,
+  body[data-crm-view="gantt"] .crm-orders-view,
+  body[data-crm-view="gantt"] .crm-kanban {
     display: none;
   }
 
-  body[data-crm-view="route"] .crm-stage-secondary {
+  body[data-crm-view="route"] .crm-stage-secondary,
+  body[data-crm-view="gantt"] .crm-stage-secondary {
     display: block;
   }
 
-  body[data-crm-view="route"] .crm-stage-route-card {
+  body[data-crm-view="route"] .crm-stage-route-card,
+  body[data-crm-view="gantt"] .crm-stage-all-gantt-card {
     display: block;
   }
 
@@ -2900,6 +2950,7 @@
   }
 
   .crm-stage-secondary .crm-stage-gantt-card,
+  .crm-stage-secondary .crm-stage-all-gantt-card,
   .crm-stage-secondary .crm-stage-route-card {
     width: calc(100% + 24px);
     margin-inline: -12px;
@@ -2907,6 +2958,7 @@
 
   @media (max-width: 900px) {
     .crm-stage-secondary .crm-stage-gantt-card,
+    .crm-stage-secondary .crm-stage-all-gantt-card,
     .crm-stage-secondary .crm-stage-route-card {
       width: 100%;
       margin-inline: 0;
@@ -2918,6 +2970,7 @@
   }
 
   .crm-stage-gantt-card,
+  .crm-stage-all-gantt-card,
   .crm-stage-route-card,
   .crm-stage-overdue {
     border: 1px solid var(--pc-border);
@@ -3019,7 +3072,7 @@
 
   .crm-stage-gantt-grid {
     display: grid;
-    grid-template-columns: 200px 1fr;
+    grid-template-columns: 260px 1fr;
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     overflow: hidden;
@@ -3053,6 +3106,30 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .crm-stage-all-gantt-list {
+    display: grid;
+    gap: var(--pc-spacing-md);
+  }
+
+  .crm-stage-all-gantt-item {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    border-radius: var(--pc-radius-md);
+    background: color-mix(in srgb, var(--pc-surface-base, var(--pc-surface)) 96%, transparent);
+    overflow: hidden;
+  }
+
+  .crm-stage-all-gantt-item > summary {
+    cursor: pointer;
+    padding: 10px 12px;
+    font-weight: var(--pc-font-weight-semibold);
+  }
+
+  .crm-stage-all-gantt-item .crm-stage-gantt-grid {
+    border-inline: none;
+    border-bottom: none;
+    border-radius: 0;
   }
 
   .crm-stage-gantt-right {
@@ -3675,10 +3752,10 @@
     padding: var(--pc-spacing-xl) var(--pc-spacing-xl) var(--pc-spacing-md);
     background: var(--pc-surface);
     border-radius: var(--pc-radius-xxl, 28px);
-    box-shadow: 0 26px 58px rgba(15, 23, 42, 0.26);
-    min-width: min(520px, 92vw);
-    max-width: min(680px, 96vw);
-    width: min(640px, 94vw);
+    box-shadow: none;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
   }
 
   .crm-route-modal__close {
@@ -5429,12 +5506,13 @@
   }
 
   .pc-modal.pc-modal--route {
-    background: transparent;
-    box-shadow: none;
+    background: var(--pc-surface);
+    box-shadow: 0 28px 64px rgba(15, 23, 42, 0.32);
     padding: 0;
-    border-radius: 0;
-    border: none;
-    width: auto;
+    border-radius: var(--pc-radius-xxl, 28px);
+    border: 1px solid var(--pc-border);
+    width: min(760px, 96vw);
+    max-width: 96vw;
     outline: none;
   }
 
@@ -6105,6 +6183,7 @@
         </div>
       </div>
     </div>
+    <button class="pc-nav__link" type="button" id="crmGanttTabBtn" data-section="gantt" data-view="gantt" data-tooltip-primary="Гант" data-tooltip-secondary="Сводные диаграммы Ганта по всем активным переделам.">Гант</button>
     <button class="pc-nav__link" type="button" id="crmRouteTabBtn" data-section="route" data-view="route" data-tooltip-primary="Общий маршрут" data-tooltip-secondary="Сводная диаграмма маршрутов всех заказов по текущим переделам.">Общий маршрут</button>
     <button class="pc-nav__link" type="button" id="crmSettingsNavBtn" data-section="settings" data-action="open-settings" data-tooltip-primary="Настройки" data-tooltip-secondary="Конфигурация CRM, расписаний, подсказок и отображения.">Настройки</button>
     <button class="pc-nav__link" type="button" id="crmJournalBtn" data-section="journal" aria-haspopup="dialog" aria-expanded="false" data-tooltip-primary="Журнал" data-tooltip-secondary="Уведомления системы, ошибки и события для разбора.">
@@ -6415,6 +6494,12 @@
           </div>
           <div class="crm-stage-detail-empty" id="crmStageGanttEmpty" hidden>Недостаточно данных для диаграммы</div>
         </div>
+      </section>
+      <section class="crm-stage-all-gantt-card" id="crmAllGanttCard" aria-label="Гант по всем переделам">
+        <div class="crm-stage-gantt-header crm-section-header">
+          <h3>Гант</h3>
+        </div>
+        <div class="crm-stage-all-gantt-list" id="crmAllGanttList"></div>
       </section>
       <section class="crm-stage-route-card" data-collapse-section="route">
         <div class="crm-stage-route-header">
@@ -10809,6 +10894,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmOrdersTotalsBox=$('#crmOrdersTotals'),
       crmOrdersPanelEl=$('#crmOrdersPanel'),
       crmOrdersTabBtn=$('#crmOrdersTabBtn'),
+      crmGanttTabBtn=$('#crmGanttTabBtn'),
       crmRouteTabBtn=$('#crmRouteTabBtn'),
       crmStageTabBtn=$('#crmStageTabBtn'),
       crmStageNavItem=$('#crmStageNavItem'),
@@ -10839,6 +10925,7 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmStageGanttEmpty=$('#crmStageGanttEmpty'),
       crmStageGanttToggle=$('#crmStageGanttToggle'),
       crmStageGanttBodyWrap=$('#crmStageGanttBodyWrap'),
+      crmAllGanttList=$('#crmAllGanttList'),
       crmStageRouteWrap=$('#crmStageRoute'),
       crmStageRouteLegend=$('#crmStageRouteLegend'),
       crmStageRouteDetailed=$('#crmStageRouteDetailed'),
@@ -11018,7 +11105,7 @@ let crmPendingRemotePayload=null;
 let crmPendingRemoteNotified=false;
 let crmPendingRemoteDirty=false;
 const crmStartViewMode=getCrmStartViewSetting();
-const CRM_VIEW_MODES=new Set(['kanban','orders','stage','route']);
+const CRM_VIEW_MODES=new Set(['kanban','orders','stage','gantt','route']);
 let currentCrmView='kanban';
 let initialStageViewKey='draw';
 const storedViewRaw=readCrmSessionValue(CRM_SESSION_VIEW_KEY);
@@ -11140,7 +11227,9 @@ if(document.body){
     ? 'stage'
     : currentCrmView==='route'
       ? 'route'
-      : currentCrmView==='orders'
+      : currentCrmView==='gantt'
+        ? 'gantt'
+        : currentCrmView==='orders'
       ? 'orders'
       : 'crm';
 }
@@ -16360,27 +16449,50 @@ function renderCrmAdminRoles(){
   if(!crmAdminRolesGrid) return;
   crmAdminRolesGrid.innerHTML='';
   const roles=Array.isArray(crmAdminState.roles)?crmAdminState.roles:[];
+  if(!roles.length){
+    const empty=document.createElement('div');
+    empty.className='crm-modal-empty';
+    empty.textContent='Роли не найдены.';
+    crmAdminRolesGrid.appendChild(empty);
+    return;
+  }
   roles.forEach(role=>{
     const slug=(role?.slug||'').trim();
     if(!slug) return;
     const permissions=getRolePermissionsForUi(role);
     const card=document.createElement('section');
-    card.className='crm-admin-role-card';
+    card.className='crm-admin-role-card crm-admin-role-card--compact';
 
-    const header=document.createElement('header');
-    header.className='crm-admin-role-card__header';
+    const openBtn=document.createElement('button');
+    openBtn.type='button';
+    openBtn.className='crm-admin-role-open';
     const title=document.createElement('span');
     title.className='crm-admin-role-card__title';
     title.textContent=role.displayName||slug;
     const pill=document.createElement('span');
     pill.className='crm-admin-role-pill';
     pill.textContent=slug;
-    header.appendChild(title);
-    header.appendChild(pill);
-    card.appendChild(header);
+    openBtn.append(title,pill);
+    card.appendChild(openBtn);
+
+    const dialog=document.createElement('dialog');
+    dialog.className='pc-modal crm-admin-role-dialog';
+    dialog.setAttribute('aria-label',`Настройка роли ${role.displayName||slug}`);
+
+    const dialogHead=document.createElement('div');
+    dialogHead.className='dlg-head';
+    const headTitle=document.createElement('strong');
+    headTitle.textContent=role.displayName||slug;
+    const closeBtn=document.createElement('button');
+    closeBtn.type='button';
+    closeBtn.className='pc-icon-btn';
+    closeBtn.setAttribute('data-variant','ghost');
+    closeBtn.setAttribute('aria-label','Закрыть');
+    closeBtn.textContent='✖';
+    dialogHead.append(headTitle,closeBtn);
 
     const body=document.createElement('div');
-    body.className='crm-admin-role-card__body';
+    body.className='crm-admin-role-card__body crm-admin-role-dialog__body';
 
     const descriptionField=document.createElement('label');
     descriptionField.className='crm-admin-role-field';
@@ -16435,7 +16547,10 @@ function renderCrmAdminRoles(){
     stageGroup.className='crm-admin-permission-group crm-admin-permission-group--stages';
     const stageHeading=document.createElement('h4');
     stageHeading.textContent='Производство по переделам';
-    stageGroup.appendChild(stageHeading);
+    const stageHint=document.createElement('p');
+    stageHint.className='crm-admin-permission-hint crm-admin-permission-hint--block';
+    stageHint.textContent='Выберите, с какими текущими переделами эта роль может работать: менять прогресс, даты, бронь и исключения при наличии соответствующих общих прав.';
+    stageGroup.append(stageHeading,stageHint);
     const stageItems=document.createElement('div');
     stageItems.className='crm-admin-permission-items';
     const stageAccess=permissions.stageAccess&&typeof permissions.stageAccess==='object'?permissions.stageAccess:{};
@@ -16461,7 +16576,24 @@ function renderCrmAdminRoles(){
     stageGroup.appendChild(stageItems);
     permissionsWrapper.appendChild(stageGroup);
     body.appendChild(permissionsWrapper);
-    card.appendChild(body);
+
+    const footer=document.createElement('div');
+    footer.className='dlg-footer';
+    const closeFooter=document.createElement('button');
+    closeFooter.type='button';
+    closeFooter.className='pc-btn pc-btn--secondary';
+    closeFooter.textContent='Закрыть';
+    footer.appendChild(closeFooter);
+
+    dialog.append(dialogHead,body,footer);
+    card.appendChild(dialog);
+    openBtn.addEventListener('click',()=>{
+      try{ dialog.showModal(); }catch(_err){ dialog.open=true; }
+    });
+    const closeDialog=()=>{ try{ dialog.close(); }catch(_err){ dialog.open=false; } };
+    closeBtn.addEventListener('click',closeDialog);
+    closeFooter.addEventListener('click',closeDialog);
+    dialog.addEventListener('cancel',evt=>{ evt.preventDefault(); closeDialog(); });
     crmAdminRolesGrid.appendChild(card);
   });
 }
@@ -18212,6 +18344,7 @@ function updateCrmOrdersTabUi(){
   const inStage=currentCrmView==='stage';
   const inKanban=currentCrmView==='kanban';
   const inRoute=currentCrmView==='route';
+  const inGantt=currentCrmView==='gantt';
   if(crmNavKanbanBtn){
     crmNavKanbanBtn.classList.toggle('pc-nav__link--active',inKanban);
     crmNavKanbanBtn.setAttribute('aria-pressed',inKanban?'true':'false');
@@ -18224,6 +18357,10 @@ function updateCrmOrdersTabUi(){
     crmStageTabBtn.classList.toggle('pc-nav__link--active',inStage);
     crmStageTabBtn.setAttribute('aria-pressed',inStage?'true':'false');
     renderCrmStageTabLabel(crmStageSelect?.value||'draw');
+  }
+  if(crmGanttTabBtn){
+    crmGanttTabBtn.classList.toggle('pc-nav__link--active',inGantt);
+    crmGanttTabBtn.setAttribute('aria-pressed',inGantt?'true':'false');
   }
   if(crmRouteTabBtn){
     crmRouteTabBtn.classList.toggle('pc-nav__link--active',inRoute);
@@ -18238,8 +18375,8 @@ function updateCrmOrdersTabUi(){
     crmOrdersViewEl.setAttribute('aria-hidden',inOrders?'false':'true');
   }
   if(crmStageViewEl){
-    crmStageViewEl.hidden=!(inStage||inRoute);
-    crmStageViewEl.setAttribute('aria-hidden',(inStage||inRoute)?'false':'true');
+    crmStageViewEl.hidden=!(inStage||inRoute||inGantt);
+    crmStageViewEl.setAttribute('aria-hidden',(inStage||inRoute||inGantt)?'false':'true');
   }
 }
 
@@ -18263,7 +18400,9 @@ function setCrmView(view){
       ? 'stage'
       : currentCrmView==='route'
         ? 'route'
-        : currentCrmView==='orders'
+        : currentCrmView==='gantt'
+          ? 'gantt'
+          : currentCrmView==='orders'
         ? 'orders'
         : 'crm';
   }
@@ -18273,11 +18412,78 @@ function setCrmView(view){
     syncCrmOrdersTotals();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='gantt'){
+    renderCrmAllGanttView();
   }else if(currentCrmView==='route'){
     renderCrmRouteView();
   }else{
     renderCards();
   }
+}
+
+function renderCrmSimpleGantt(targets, rows, schedule){
+  const left=targets?.left;
+  const header=targets?.header;
+  const body=targets?.body;
+  const empty=targets?.empty;
+  const leftHeader=targets?.leftHeader;
+  if(!left||!header||!body) return;
+  left.innerHTML=''; header.innerHTML=''; body.innerHTML='';
+  const safeRows=Array.isArray(rows)?rows.filter(row=>row&&row.identity):[];
+  if(!schedule||!safeRows.length){ if(empty) empty.hidden=false; return; }
+  const today=today0();
+  const days=Array.from(schedule.perDay.entries()).map(([key,day])=>({key,day})).filter(x=>x.day.date>=today).sort((a,b)=>a.day.date-b.day.date);
+  if(!days.length){ if(empty) empty.hidden=false; return; }
+  if(empty) empty.hidden=true;
+  const dayWidth=120;
+  const template=`repeat(${days.length}, ${dayWidth}px)`;
+  const width=`${days.length*dayWidth}px`;
+  header.style.gridTemplateColumns=template; header.style.width=width; header.style.minWidth=width; body.style.width=width; body.style.minWidth=width;
+  if(leftHeader) leftHeader.style.removeProperty('min-height');
+  days.forEach(({day,key})=>{ const cell=document.createElement('span'); const dow=document.createElement('span'); dow.className='crm-gantt-dow'; dow.textContent=weekdayShort(day.date); const label=document.createElement('span'); label.textContent=fmtDateHuman(day.date); cell.append(dow,label); if([0,6].includes(day.date.getDay())) cell.classList.add('weekend'); if(key===fmtDateISO(today)) cell.classList.add('today'); header.appendChild(cell); });
+  const perTask=schedule.perTask instanceof Map?schedule.perTask:new Map();
+  safeRows.forEach((row,index)=>{
+    const leftRow=document.createElement('div');
+    leftRow.className='crm-stage-gantt-left-row';
+    leftRow.textContent=`${index+1}. ${row.orderTitle||'Заказ'}`;
+    left.appendChild(leftRow);
+    const rowEl=document.createElement('div');
+    rowEl.className='crm-stage-gantt-row';
+    rowEl.style.gridTemplateColumns=template; rowEl.style.width=width; rowEl.style.minWidth=width;
+    const segments=perTask.get(row.identity)?.segments||[];
+    days.forEach(({key,day})=>{
+      const cell=document.createElement('div'); cell.className='crm-stage-gantt-cell';
+      if([0,6].includes(day.date.getDay())) cell.classList.add('weekend');
+      const total=segments.filter(seg=>fmtDateISO(seg.date)===key).reduce((sum,seg)=>sum+(Number(seg.hours)||0),0);
+      if(total>0){ const fill=document.createElement('div'); fill.className='crm-stage-gantt-fill status-ok'; fill.textContent=formatStageWorkload(total,{ hourless:schedule.isHourless }); cell.appendChild(fill); }
+      rowEl.appendChild(cell);
+    });
+    body.appendChild(rowEl);
+  });
+}
+
+function renderCrmAllGanttView(){
+  if(!crmAllGanttList) return;
+  crmAllGanttList.innerHTML='';
+  const stages=getCrmCurrentRouteStageKeys();
+  stages.forEach(stageKey=>{
+    const stageLabel=CRM_STAGE_LABELS[stageKey]||stageKey;
+    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+    const stageRows=Array.isArray(rows)?rows:[];
+    const schedule=stageRows.length?buildCrmStageSchedule(stageKey, stageRows):null;
+    const details=document.createElement('details');
+    details.className='crm-stage-all-gantt-item';
+    details.open=!!(stageRows.length&&schedule);
+    const summary=document.createElement('summary');
+    summary.textContent=stageRows.length&&schedule?stageLabel:`${stageLabel} — нет данных`;
+    details.appendChild(summary);
+    const shell=document.createElement('div'); shell.className='crm-stage-gantt-shell';
+    shell.innerHTML='<div class="crm-stage-gantt-grid"><div class="crm-stage-gantt-left"><div class="crm-stage-gantt-left-header">Заказ / Дата</div><div class="crm-stage-gantt-left-body"></div></div><div class="crm-stage-gantt-right"><div class="crm-stage-gantt-scroll"><div class="crm-stage-gantt-header-row"></div><div class="crm-stage-gantt-body"></div></div></div></div><div class="crm-stage-detail-empty" hidden>Нет данных</div>';
+    details.appendChild(shell);
+    crmAllGanttList.appendChild(details);
+    renderCrmSimpleGantt({ left:shell.querySelector('.crm-stage-gantt-left-body'), header:shell.querySelector('.crm-stage-gantt-header-row'), body:shell.querySelector('.crm-stage-gantt-body'), empty:shell.querySelector('.crm-stage-detail-empty'), leftHeader:shell.querySelector('.crm-stage-gantt-left-header') }, stageRows, schedule);
+  });
+  updateCrmAuxButtons();
 }
 
 function renderCrmRouteView(){
@@ -18292,6 +18498,8 @@ function renderCurrentView(){
     renderOrdersTable();
   }else if(currentCrmView==='stage'){
     renderCrmStageTable();
+  }else if(currentCrmView==='gantt'){
+    renderCrmAllGanttView();
   }else if(currentCrmView==='route'){
     renderCrmRouteView();
   }else{
@@ -22020,7 +22228,7 @@ function renderCrmMappingSettingsUI(){
         hoursLabel.dataset.disabled='';
       }
       const hoursText=document.createElement('span');
-      hoursText.textContent='Есть часы';
+      hoursText.textContent='Часы';
       hoursLabel.append(hoursInput, hoursText);
       controls.append(selectWrap, hoursLabel);
       if(entry.source==='mapping'){
@@ -22308,7 +22516,7 @@ function renderCrmStagePresetSettingsUI(){
     typeInput.name='crmStagePresetHours';
     typeInput.checked=entry.hasHours!==false;
     const typeText=document.createElement('span');
-    typeText.textContent='Есть часы';
+    typeText.textContent='Часы';
     typeLabel.append(typeInput,typeText);
     const visibleLabel=document.createElement('label');
     visibleLabel.className='crm-mapping-row__hours';
@@ -22317,7 +22525,7 @@ function renderCrmStagePresetSettingsUI(){
     visibleInput.name='crmStagePresetVisible';
     visibleInput.checked=entry.visible!==false;
     const visibleText=document.createElement('span');
-    visibleText.textContent='Использовать';
+    visibleText.textContent='Активно';
     visibleLabel.append(visibleInput,visibleText);
     const defaultLabel=document.createElement('label');
     defaultLabel.className='crm-mapping-row__hours';
@@ -22326,7 +22534,7 @@ function renderCrmStagePresetSettingsUI(){
     defaultInput.name='crmStagePresetDefault';
     defaultInput.checked=entry.inDefault===true || crmDefaultStagePresetDraft.has(entry.id);
     const defaultText=document.createElement('span');
-    defaultText.textContent='В «Базовые»';
+    defaultText.textContent='Базовые';
     defaultLabel.append(defaultInput,defaultText);
     const deleteBtn=document.createElement('button');
     deleteBtn.type='button';
@@ -22355,7 +22563,7 @@ function renderCrmStagePresetSettingsUI(){
   control.appendChild(tools);
   const note=document.createElement('div');
   note.className='crm-mapping-note';
-  note.textContent='Переделы с галочкой «Использовать» попадают в кнопки «Все» и «Из списка».';
+  note.textContent='Переделы с галочкой «Активно» попадают в кнопки «Все» и «Из списка».';
   control.appendChild(note);
   row.append(label,control);
   crmStagePresetContainer.appendChild(row);
@@ -24557,6 +24765,9 @@ if(crmOrdersTabBtn){
 }
 if(crmStageTabBtn){
   crmStageTabBtn.addEventListener('click',()=>setCrmView('stage'));
+}
+if(crmGanttTabBtn){
+  crmGanttTabBtn.addEventListener('click',()=>setCrmView('gantt'));
 }
 if(crmRouteTabBtn){
   crmRouteTabBtn.addEventListener('click',()=>setCrmView('route'));
