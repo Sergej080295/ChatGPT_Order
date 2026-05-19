@@ -854,7 +854,7 @@
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    min-width: 220px;
+    min-width: 0;
     background: color-mix(in srgb, var(--pc-surface) 94%, rgba(15, 23, 42, 0.08));
     border: 1px solid color-mix(in srgb, var(--pc-border) 82%, transparent);
     border-radius: 16px;
@@ -1633,7 +1633,7 @@
 
   .crm-stage-nav__dropdown .crm-stage-select-shell {
     width: 100%;
-    min-width: 220px;
+    min-width: 0;
   }
 
   .pc-nav__badge {
@@ -2148,7 +2148,7 @@
 
     .crm-mapping-row__title {
       flex: 1 1 0;
-      min-width: 220px;
+      min-width: 0;
     }
 
     .crm-mapping-row__controls {
@@ -2158,7 +2158,7 @@
 
     .crm-mapping-row__select {
       flex: 0 1 260px;
-      min-width: 220px;
+      min-width: 0;
     }
 
     .crm-mapping-row__hours {
@@ -4063,10 +4063,8 @@
 
   .stage-picker-submenu {
     display: none;
-    position: absolute;
-    left: calc(100% + 6px);
-    top: 0;
-    min-width: 220px;
+    position: static;
+    min-width: 0;
     max-height: 280px;
     overflow: auto;
     padding: 6px;
@@ -4075,6 +4073,7 @@
     background: var(--pc-surface);
     box-shadow: var(--pc-shadow-popover, 0 18px 42px rgba(15, 23, 42, 0.24));
     z-index: 20;
+    margin: 6px 0 0 14px;
   }
 
   .stage-picker-group:hover .stage-picker-submenu,
@@ -6745,7 +6744,6 @@
               <span class="note">Галочка «Готово» = 100% по переделу.</span>
             </div>
             <div class="right">
-              <button type="button" id="addStageBtn" class="pc-btn pc-btn--secondary" title="Добавить новый передел">+ Передел</button>
               <button type="button" id="addStageFromListBtn" class="pc-btn pc-btn--ghost" title="Выбрать передел из шаблона">📋 Из списка</button>
               <button type="button" id="presetStagesBtn" class="pc-btn pc-btn--ghost">🔁 Базовые</button>
               <button type="button" id="allStagesBtn" class="pc-btn pc-btn--ghost">📋 Все</button>
@@ -6933,7 +6931,6 @@
             <details class="crm-settings-group" open>
               <summary>Сопоставление переделов</summary>
               <div class="crm-settings-fields">
-                <div id="crmMappingSettings"></div>
               </div>
             </details>
             <details class="crm-settings-group" open>
@@ -7588,6 +7585,10 @@ function buildCrmStageStepName(base, step){
   const cleanBase=(base||'').toString().replace(/\s+/g,' ').trim();
   const cleanStep=(step||'').toString().replace(/\s+/g,' ').trim();
   return cleanBase && cleanStep ? `${cleanBase}${CRM_STAGE_STEP_SEPARATOR}${cleanStep}` : cleanBase;
+}
+function getCrmStageStepDisplayLabel(stageName){
+  const split=splitCrmStageStepName(stageName||'');
+  return split.step||'';
 }
 function parseCrmStageSteps(value){
   const source=Array.isArray(value)?value:(typeof value==='string'?value.split(/[\n,;]+/):[]);
@@ -9325,7 +9326,6 @@ let orderDone=null;
 let crmOptimizeResolver=null;
 let crmOptimizeCurrentEntries=[];
 let crmOptimizeCompact=true;
-let addStageBtn=null;
 let addStageFromListBtn=null;
 const DATA_WRITE_MODES={ both:'both', crm:'crm', planner:'planner' };
 const normalizeWriteMode=value=>{
@@ -9422,10 +9422,6 @@ const applyCrmWriteAccess=()=>{
   }
   if(crmStageExceptionsBtn){ crmStageExceptionsBtn.disabled=!canSelectedStage; }
   if(crmStageReserveBtn){ crmStageReserveBtn.disabled=!canSelectedStage; }
-  if(addStageBtn){
-    addStageBtn.hidden=!canAddStages;
-    addStageBtn.disabled=!canAddStages;
-  }
   if(addStageFromListBtn){
     addStageFromListBtn.hidden=false;
     addStageFromListBtn.disabled=!canPickStageFromList;
@@ -13005,7 +13001,6 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
     sections.push('Графики работы переделов');
   }
   if(JSON.stringify(prevSanitized.mapping)!==JSON.stringify(nextSanitized.mapping)){
-    sections.push('Сопоставление данных');
   }
   if(JSON.stringify(prevSanitized.trashRetention)!==JSON.stringify(nextSanitized.trashRetention)){
     sections.push('Корзина');
@@ -14460,7 +14455,7 @@ function renderCrmStageGantt(rows, schedule){
     const label=document.createElement('div');
     label.className='crm-stage-gantt-left-row';
     const baseOrderTitle=`${displayIndex}. ${row.orderTitle||'Заказ'}`;
-    const stageOpName=(row.stage?.name||'').toString().trim();
+    const stageOpName=((Number(row.occurrenceTotal)||0)>1)?getCrmStageStepDisplayLabel(row.stage?.name||''):'';
     if(stageOpName){
       label.innerHTML=`${escapeHtml(baseOrderTitle)} <span class="crm-stage-dup-badge">${escapeHtml(stageOpName)}</span>`;
     }else{
@@ -16112,9 +16107,9 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     }
     const labelTextSpan=document.createElement('span');
     labelTextSpan.className='crm-stage-route-label__text';
-    const baseLabel=stage?.name || CRM_STAGE_LABELS[key] || key;
-    const suffix=snapshot.occurrenceTotal>1?` №${snapshot.occurrenceIndex}`:'';
-    labelTextSpan.textContent=`${baseLabel}${suffix}`;
+    const stepLabel=getCrmStageStepDisplayLabel(stage?.name||'');
+    const baseLabel=(snapshot.occurrenceTotal>1 && stepLabel)?stepLabel:(stage?.name || CRM_STAGE_LABELS[key] || key);
+    labelTextSpan.textContent=baseLabel;
     labelCell.appendChild(labelIcon);
     labelCell.appendChild(labelTextSpan);
     tr.appendChild(labelCell);
@@ -19502,7 +19497,6 @@ function hideTooltip(){if(_tt){_tt.remove();_tt=null}}
 /* ORDER DIALOG */
 const orderDlg=$('#orderDlg'),orderForm=$('#orderForm'),statusSel=$('#statusSel'),deleteOrderBtn=$('#deleteOrderBtn'),dlgTitle=$('#dlgTitle'),dlgTitleMeta=$('#dlgTitleMeta'),presetStagesBtn=$('#presetStagesBtn'),allStagesBtn=$('#allStagesBtn'),clearStagesListBtn=$('#clearStagesListBtn'),stagesTableBody=$('#stagesTable tbody'),splitBtn=$('#splitBtn'),dateTodayChk=$('#dateToday'),calcStageDatesBtn=$('#calcStageDatesBtn'),clearStageDatesBtn=$('#clearStageDatesBtn'),orderCommentSection=$('#orderCommentSection'),orderCommentSummary=$('#orderCommentSummary'),orderCommentBadge=$('#orderCommentBadge'),orderCommentThread=$('#orderCommentThread'),orderCommentInput=$('#orderCommentInput'),orderCommentSend=$('#orderCommentSend'),orderNotesHidden=$('#orderNotesHidden');
 const crmServiceMetricLabelEl=$('#crmServiceMetricLabel');
-addStageBtn=$('#addStageBtn');
 addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
 let orderDraftBaseline=null;
@@ -20387,12 +20381,6 @@ async function handleOrderDoneChange(){
   }
 }
 
-if(addStageBtn){
-  addStageBtn.addEventListener('click',e=>{
-    e.preventDefault();
-    showStagePicker(addStageBtn);
-  });
-}
 if(addStageFromListBtn){
   addStageFromListBtn.addEventListener('click',e=>{
     e.preventDefault();
@@ -20491,15 +20479,10 @@ function setOrderFormReadOnly(readOnly){
   if(splitBtn){
     splitBtn.disabled=readOnly;
   }
-  if(addStageBtn){
-    const canAdd=crmCanAddStages();
-    addStageBtn.disabled=readOnly || !canAdd;
-    addStageBtn.hidden=!canAdd;
-  }
   if(addStageFromListBtn){
     const canPick=crmCanManageStages();
     addStageFromListBtn.disabled=readOnly || !canPick;
-    addStageFromListBtn.hidden=false;
+    addStageFromListBtn.hidden=!canPick;
   }
   if(presetStagesBtn){
     presetStagesBtn.disabled=readOnly;
@@ -22818,7 +22801,8 @@ function renderCrmStagePresetSettingsUI(){
     typeInput.name='crmStagePresetHours';
     typeInput.checked=entry.hasHours!==false;
     const typeText=document.createElement('span');
-    typeText.textContent='Часы';
+    typeText.textContent='🕒';
+    typeText.title='Часы';
     typeLabel.append(typeInput,typeText);
     const visibleLabel=document.createElement('label');
     visibleLabel.className='crm-mapping-row__hours';
@@ -22827,7 +22811,8 @@ function renderCrmStagePresetSettingsUI(){
     visibleInput.name='crmStagePresetVisible';
     visibleInput.checked=entry.visible!==false;
     const visibleText=document.createElement('span');
-    visibleText.textContent='Активно';
+    visibleText.textContent='👁';
+    visibleText.title='Активно';
     visibleLabel.append(visibleInput,visibleText);
     const defaultLabel=document.createElement('label');
     defaultLabel.className='crm-mapping-row__hours';
@@ -22836,7 +22821,8 @@ function renderCrmStagePresetSettingsUI(){
     defaultInput.name='crmStagePresetDefault';
     defaultInput.checked=entry.inDefault===true || crmDefaultStagePresetDraft.has(entry.id);
     const defaultText=document.createElement('span');
-    defaultText.textContent='Базовые';
+    defaultText.textContent='⭐';
+    defaultText.title='Базовые';
     defaultLabel.append(defaultInput,defaultText);
     const deleteBtn=document.createElement('button');
     deleteBtn.type='button';
@@ -22923,8 +22909,7 @@ if(crmMappingContainer){
       if(row){
         row.remove();
       }
-      renderCrmMappingSettingsUI();
-    }
+        }
   });
 }
 
@@ -23221,7 +23206,6 @@ function openBoard(){
   boardForm.name.value=b.name;
   boardForm.lanes.value=b.lanes.join(', ');
   boardForm.id.value=b.id;
-  crmMappingRemovedDraft=new Set();
   crmStagePresetDraft=getCrmStagePresets().map(item=>({ ...item }));
   crmDefaultStagePresetDraft=new Set(getCrmDefaultStagePresetIds());
   const statuses=Array.isArray(state.settings?.unaccountedStatuses)?state.settings.unaccountedStatuses:[];
@@ -23261,7 +23245,6 @@ function openBoard(){
   renderCrmStageSchedulesUI(scheduleMap);
   renderCrmPreferencesSettingsUI();
   renderCrmStartViewSettingsUI();
-  renderCrmMappingSettingsUI();
   renderCrmStagePresetSettingsUI();
   setCrmSettingsActiveTab(crmSettingsActiveTabId);
   boardDlg.showModal();
@@ -23378,25 +23361,6 @@ boardForm.addEventListener('submit',e=>{
   if(state.settings && Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
     delete state.settings.hourlessSchedule;
   }
-  const mappingRows=[...boardForm.querySelectorAll('.crm-mapping-row')];
-  const mappingDraft={};
-  mappingRows.forEach(row=>{
-    const normalized=row?.dataset?.normalized?normalizeCrmStageKey(row.dataset.normalized):'';
-    if(!normalized) return;
-    const select=row.querySelector('select[name="crmMappingSelect"]');
-    const hoursInput=row.querySelector('input[name="crmMappingHours"]');
-    const stageValue=select?select.value:'';
-    if(stageValue===CRM_STAGE_IGNORE){
-      mappingDraft[normalized]={ stage:CRM_STAGE_IGNORE, hasHours:false };
-      return;
-    }
-    const record={
-      stage:CRM_STAGE_KEYS.includes(stageValue)?stageValue:'',
-      hasHours:hoursInput?!!hoursInput.checked:true
-    };
-    mappingDraft[normalized]=record;
-  });
-  state.settings.mapping=sanitizeCrmStageMapping(mappingDraft);
   const stagePresetInputs=collectCrmStagePresetInputs();
   const stagePresetDraft=sanitizeCrmStagePresetList(stagePresetInputs);
   const defaultPresetIds=sanitizeCrmDefaultStagePresetIds(
@@ -24941,7 +24905,6 @@ window.addEventListener('beforeunload',()=>{
 const CRM_HINT_TARGETS=[
   { selector:'#calcStageDatesBtn', level1:'Рассчитать даты', level2:'Автозаполняет пустые даты переделов, не трогая уже введённые значения.' },
   { selector:'#clearStageDatesBtn', level1:'Очистка дат', level2:'Сбрасывает даты всех переделов в заказе, чтобы начать планирование заново.' },
-  { selector:'#addStageBtn', level1:'Добавить передел', level2:'Создаёт пустую строку передела для ручного ввода.' },
   { selector:'#addStageFromListBtn', level1:'Передел из списка', level2:'Открывает справочник стандартных переделов для вставки.' },
   { selector:'#presetStagesBtn', level1:'Базовые переделы', level2:'Добавляет преднастроенный набор шагов в заказ.' },
   { selector:'#allStagesBtn', level1:'Все переделы', level2:'Открывает полный справочник переделов для вставки в заказ.' },
