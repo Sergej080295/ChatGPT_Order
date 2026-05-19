@@ -4056,6 +4056,33 @@
     min-width: 140px;
   }
 
+
+  .stage-picker-group {
+    position: relative;
+  }
+
+  .stage-picker-submenu {
+    display: none;
+    position: absolute;
+    left: calc(100% + 6px);
+    top: 0;
+    min-width: 220px;
+    max-height: 280px;
+    overflow: auto;
+    padding: 6px;
+    border: 1px solid var(--pc-border);
+    border-radius: var(--pc-radius-md);
+    background: var(--pc-surface);
+    box-shadow: var(--pc-shadow-popover, 0 18px 42px rgba(15, 23, 42, 0.24));
+    z-index: 20;
+  }
+
+  .stage-picker-group:hover .stage-picker-submenu,
+  .stage-picker-group:focus-within .stage-picker-submenu {
+    display: grid;
+    gap: 4px;
+  }
+
   .crm-orders-panel {
     position: relative;
     border: 1px solid var(--pc-border);
@@ -7542,6 +7569,39 @@ const crmStageFilterByKey=new Map();
 const CRM_STAGE_FILTERS=new Set(['current','all','done','late']);
 const CRM_ROUTE_DAY_FILTERS=new Set(['all','busy','free']);
 const normalizeStageName=name=>(name==null?'':String(name)).replace(/\s+/g,' ').trim().toLowerCase();
+const CRM_STAGE_STEP_SEPARATOR=' — ';
+function splitCrmStageStepName(name){
+  const raw=(name==null?'':String(name)).replace(/\s+/g,' ').trim();
+  if(!raw) return { base:'', step:'', full:'' };
+  const separators=[CRM_STAGE_STEP_SEPARATOR,' - ',' / '];
+  for(const separator of separators){
+    const index=raw.indexOf(separator);
+    if(index>0){
+      const base=raw.slice(0,index).trim();
+      const step=raw.slice(index+separator.length).trim();
+      if(base && step) return { base, step, full:raw };
+    }
+  }
+  return { base:raw, step:'', full:raw };
+}
+function buildCrmStageStepName(base, step){
+  const cleanBase=(base||'').toString().replace(/\s+/g,' ').trim();
+  const cleanStep=(step||'').toString().replace(/\s+/g,' ').trim();
+  return cleanBase && cleanStep ? `${cleanBase}${CRM_STAGE_STEP_SEPARATOR}${cleanStep}` : cleanBase;
+}
+function parseCrmStageSteps(value){
+  const source=Array.isArray(value)?value:(typeof value==='string'?value.split(/[\n,;]+/):[]);
+  const seen=new Set();
+  const result=[];
+  source.forEach(item=>{
+    const step=(item==null?'':String(item)).replace(/\s+/g,' ').trim();
+    const key=normalizeStageName(step);
+    if(!key || seen.has(key)) return;
+    seen.add(key);
+    result.push(step);
+  });
+  return result;
+}
 const CRM_BASE_NOHOUR_STAGE_KEYS=new Set(CRM_NOHOUR_STAGES);
 let crmDynamicStageKeys=[];
 let crmStageCatalogSignature='';
@@ -8357,7 +8417,8 @@ function sanitizeCrmStagePresetEntry(raw){
   const iconRaw=typeof raw.icon==='string'?raw.icon.trim():'';
   const icon=CRM_STAGE_ICON_VALUES.has(iconRaw)?iconRaw:'';
   const color=sanitizeCrmStageColor(raw.color)||'#64748b';
-  return { id, name, hasHours, visible, icon, color };
+  const steps=parseCrmStageSteps(raw.steps);
+  return { id, name, hasHours, visible, icon, color, steps };
 }
 
 function sanitizeCrmStagePresetList(raw){
@@ -8702,6 +8763,53 @@ function getCrmStagePresetNames(){
     .filter(item=>item.visible!==false)
     .map(item=>item.name)
     .filter(Boolean);
+}
+
+function getCrmStageChoiceOptions(options={}){
+  const includeHidden=!!options.includeHidden;
+  const choices=[];
+  getCrmStagePresets().forEach(preset=>{
+    if(!preset || (!includeHidden && preset.visible===false)) return;
+    const base=(preset.name||'').trim();
+    if(!base) return;
+    const steps=parseCrmStageSteps(preset.steps);
+    if(steps.length){
+      steps.forEach((step,index)=>{
+        choices.push({ value:buildCrmStageStepName(base, step), label:step, base, step, first:index===0 });
+      });
+    }else{
+      choices.push({ value:base, label:base, base, step:'', first:true });
+    }
+  });
+  return choices;
+}
+
+function getCrmStageChoiceValue(name){
+  const raw=(name||'').toString().replace(/\s+/g,' ').trim();
+  if(!raw) return '';
+  const rawKey=normalizeStageName(raw);
+  const choices=getCrmStageChoiceOptions({ includeHidden:true });
+  const exact=choices.find(choice=>normalizeStageName(choice.value)===rawKey);
+  if(exact) return exact.value;
+  const split=splitCrmStageStepName(raw);
+  const baseKey=normalizeStageName(split.base);
+  const baseChoices=choices.filter(choice=>normalizeStageName(choice.base)===baseKey);
+  if(split.step){
+    const stepKey=normalizeStageName(split.step);
+    const stepMatch=baseChoices.find(choice=>normalizeStageName(choice.step)===stepKey);
+    if(stepMatch) return stepMatch.value;
+  }
+  if(baseChoices.length) return baseChoices[0].value;
+  return '';
+}
+
+function getCrmDefaultStageChoiceNames(){
+  const choices=getCrmStageChoiceOptions();
+  const byBase=new Map(choices.map(choice=>[normalizeStageName(choice.base), choice]));
+  return getCrmDefaultStagePresetNames().map(name=>{
+    const choice=byBase.get(normalizeStageName(name));
+    return choice?choice.value:name;
+  });
 }
 
 function sanitizeCrmDefaultStagePresetIds(rawIds, presets){
@@ -9574,9 +9682,15 @@ function getStageHoursPreference(normalized){
 function stageNameHasHours(normalized){
   const key=normalizeStageName(normalized||'');
   if(!key) return false;
+  const split=splitCrmStageStepName(normalized||'');
+  const baseKey=normalizeStageName(split.base)||key;
   const preference=getStageHoursPreference(key);
   if(preference!==null) return preference;
-  const presetEntry=getCrmStagePresets().find(item=>normalizeStageName(item.name)===key);
+  if(baseKey!==key){
+    const basePreference=getStageHoursPreference(baseKey);
+    if(basePreference!==null) return basePreference;
+  }
+  const presetEntry=getCrmStagePresets().find(item=>normalizeStageName(item.name)===baseKey || normalizeStageName(item.name)===key);
   if(presetEntry){
     return presetEntry.hasHours!==false;
   }
@@ -11798,7 +11912,7 @@ function normalizeCrmFilter(value){
 }
 
 function resolveCrmStageKey(name){
-  const normalized=normalizeStageName(name||'');
+  const normalized=normalizeStageName(splitCrmStageStepName(name||'').base);
   if(!normalized) return null;
   for(const [key,aliases] of Object.entries(CRM_STAGE_ALIASES)){
     if(aliases.includes(normalized)) return key;
@@ -11807,7 +11921,9 @@ function resolveCrmStageKey(name){
 }
 
 function resolveCrmStageKeyWithMapping(name){
-  const normalized=normalizeStageName(name||'');
+  const split=splitCrmStageStepName(name||'');
+  const normalized=normalizeStageName(split.full);
+  const baseNormalized=normalizeStageName(split.base);
   if(!normalized) return null;
   const mappingEntry=getCrmStageMappingEntry(normalized);
   if(mappingEntry){
@@ -11816,7 +11932,14 @@ function resolveCrmStageKeyWithMapping(name){
       return mappingEntry.stage;
     }
   }
-  return resolveCrmStageKey(normalized);
+  if(baseNormalized && baseNormalized!==normalized){
+    const baseEntry=getCrmStageMappingEntry(baseNormalized);
+    if(baseEntry){
+      if(baseEntry.stage===CRM_STAGE_IGNORE) return null;
+      if(baseEntry.stage && CRM_STAGE_KEYS.includes(baseEntry.stage)) return baseEntry.stage;
+    }
+  }
+  return resolveCrmStageKey(split.base||normalized);
 }
 
 function getCrmStageFilter(stageKey){
@@ -12211,13 +12334,17 @@ function formatCrmStageHoursWithDays(hours){
 }
 
 function buildCrmStageSnapshot(order){
+  const stageKeys=getCrmCurrentRouteStageKeys();
+  const allowedStages=new Set(stageKeys);
+  const hourlyStageKeys=stageKeys.filter(stageKey=>!CRM_NOHOUR_STAGES.has(stageKey));
+  const hourlessStageKeys=stageKeys.filter(stageKey=>CRM_NOHOUR_STAGES.has(stageKey));
   const map=new Map();
   const stageGroups=new Map();
   const stages=Array.isArray(order?.stages)?order.stages:[];
   stages.forEach(stage=>{
     if(!stage) return;
     const key=resolveCrmStageKeyWithMapping(stage.name);
-    if(!key) return;
+    if(!key || (allowedStages.size && !allowedStages.has(key))) return;
     const bucket=stageGroups.get(key)||[];
     bucket.push(stage);
     stageGroups.set(key,bucket);
@@ -12226,7 +12353,7 @@ function buildCrmStageSnapshot(order){
     }
   });
   const progress={};
-  CRM_PROGRESS_STAGES.forEach(stageKey=>{
+  hourlyStageKeys.forEach(stageKey=>{
     const segments=stageGroups.get(stageKey)||[];
     const segment=segments[0]||null;
     const doneBySegments=segments.length>0 && segments.every(item=>item&&(item.done||normalizeStageProgress(item.progress)>=100));
@@ -12257,7 +12384,7 @@ function buildCrmStageSnapshot(order){
     progress[stageKey]={segment,pct,hours,remaining,expected,behind,done};
   });
   const indicator={};
-  CRM_INDICATOR_STAGES.forEach(stageKey=>{
+  hourlessStageKeys.forEach(stageKey=>{
     const segments=stageGroups.get(stageKey)||[];
     const segment=segments[0]||null;
     const segDone=segments.length>0 && segments.every(item=>item&&(item.done||normalizeStageProgress(item.progress)>=100));
@@ -12891,7 +13018,9 @@ function describeCrmSettingsChanges(prevSettings,nextSettings,prevBoardMeta,next
 
 function collectCrmOrdersForList(filterMode){
   const board=currentBoard();
-  const totals={ orders:0, proc:0, supply:0, shear:0, coop:0, pack:0, ship:0, draw:0, laser:0, bend:0, weld:0, mech:0 };
+  const stageKeys=getCrmCurrentRouteStageKeys();
+  const totals={ orders:0 };
+  stageKeys.forEach(stageKey=>{ totals[stageKey]=0; });
   if(!board){
     return { rows:[], totals, meta:{ totalOrders:0, totalActive:0, filteredTotal:0, filteredActive:0 } };
   }
@@ -12902,11 +13031,13 @@ function collectCrmOrdersForList(filterMode){
   board.orders.forEach((order,index)=>{
     const snapshot=buildCrmStageSnapshot(order);
     const { progress, indicator }=snapshot;
-    const stagesDone=CRM_PROGRESS_STAGES.every(stageKey=>{
+    const hourlyStageKeys=stageKeys.filter(stageKey=>!CRM_NOHOUR_STAGES.has(stageKey));
+    const hourlessStageKeys=stageKeys.filter(stageKey=>CRM_NOHOUR_STAGES.has(stageKey));
+    const stagesDone=hourlyStageKeys.every(stageKey=>{
       const info=progress[stageKey];
       return !info || info.done || info.pct>=100;
     });
-    const indicatorDone=CRM_INDICATOR_STAGES.every(stageKey=>{
+    const indicatorDone=hourlessStageKeys.every(stageKey=>{
       const info=indicator[stageKey];
       return !info || info.state!=='pending';
     });
@@ -12917,14 +13048,14 @@ function collectCrmOrdersForList(filterMode){
     if(!orderMatchesSearch(order)) return;
     const stageMap=snapshot&&snapshot.map instanceof Map?snapshot.map:new Map();
     const todayTime=today0().getTime();
-    const progressLate=CRM_PROGRESS_STAGES.some(stageKey=>{
+    const progressLate=hourlyStageKeys.some(stageKey=>{
       const info=progress[stageKey];
       if(info?.behind) return true;
       const stage=stageMap.get(stageKey);
       return stageEntryIsLate(stage,{ todayTime });
     });
     let hourlessLate=false;
-    CRM_INDICATOR_STAGES.forEach(stageKey=>{
+    hourlessStageKeys.forEach(stageKey=>{
       const indicatorInfo=indicator[stageKey];
       if(!indicatorInfo) return;
       const stage=stageMap.get(stageKey);
@@ -12970,16 +13101,83 @@ function collectCrmOrdersForList(filterMode){
   rows.forEach((entry,idx)=>{entry.displayIndex=idx+1;});
   rows.forEach(entry=>{
     totals.orders+=1;
-    CRM_PROGRESS_STAGES.forEach(stageKey=>{
-      const info=entry.snapshot.progress[stageKey];
-      if(info) totals[stageKey]+=info.remaining;
-    });
-    CRM_INDICATOR_STAGES.forEach(stageKey=>{
-      const info=entry.snapshot.indicator[stageKey];
-      if(info && info.state!=='missing') totals[stageKey]+=1;
+    stageKeys.forEach(stageKey=>{
+      if(CRM_NOHOUR_STAGES.has(stageKey)){
+        const info=entry.snapshot.indicator[stageKey];
+        if(info && info.state!=='missing') totals[stageKey]+=1;
+      }else{
+        const info=entry.snapshot.progress[stageKey];
+        if(info) totals[stageKey]+=info.remaining;
+      }
     });
   });
   return { rows, totals, meta };
+}
+
+function getCrmOrdersStageColumns(){
+  const stageKeys=getCrmCurrentRouteStageKeys();
+  if(crmOrdersStageFilter.size){
+    const activeSet=new Set(stageKeys);
+    Array.from(crmOrdersStageFilter).forEach(stageKey=>{ if(!activeSet.has(stageKey)) crmOrdersStageFilter.delete(stageKey); });
+  }
+  const visibleKeys=crmOrdersStageFilter.size
+    ? stageKeys.filter(stageKey=>crmOrdersStageFilter.has(stageKey))
+    : stageKeys;
+  return visibleKeys.map(stageKey=>({
+    key:stageKey,
+    label:CRM_STAGE_LABELS[stageKey]||stageKey,
+    hourless:CRM_NOHOUR_STAGES.has(stageKey)
+  }));
+}
+
+function ensureCrmOrdersTableColumns(){
+  const table=document.getElementById('crmOrdersTable');
+  if(!table) return [];
+  const columns=getCrmOrdersStageColumns();
+  const colgroup=table.querySelector('colgroup');
+  if(colgroup){
+    colgroup.innerHTML='<col style="width:56px"><col style="width:92px"><col style="width:240px">';
+    columns.forEach(col=>{
+      const el=document.createElement('col');
+      el.style.width=col.hourless?'92px':'150px';
+      el.dataset.stage=col.key;
+      colgroup.appendChild(el);
+    });
+  }
+  const headRow=table.querySelector('thead tr');
+  if(headRow){
+    headRow.innerHTML='<th>№</th><th title="Маршрут заказа">Маршрут</th><th>Заказ</th>';
+    columns.forEach(col=>{
+      const th=document.createElement('th');
+      th.dataset.stage=col.key;
+      th.textContent=col.hourless?col.label:`${col.label}, ч`;
+      headRow.appendChild(th);
+    });
+  }
+  const totalsTable=crmOrdersTotalsBox?.querySelector('table');
+  if(totalsTable){
+    const totalsColgroup=totalsTable.querySelector('colgroup');
+    if(totalsColgroup){
+      totalsColgroup.innerHTML='<col style="width:56px"><col style="width:92px"><col style="width:240px">';
+      columns.forEach(col=>{
+        const el=document.createElement('col');
+        el.style.width=col.hourless?'92px':'150px';
+        el.dataset.stage=col.key;
+        totalsColgroup.appendChild(el);
+      });
+    }
+    const totalRow=totalsTable.querySelector('tbody tr');
+    if(totalRow){
+      totalRow.innerHTML='<td class="orders-total" data-total="orders">Итого: 0</td><td></td><td></td>';
+      columns.forEach(col=>{
+        const td=document.createElement('td');
+        td.dataset.totalStage=col.key;
+        td.textContent=col.hourless?'0 шт':'0ч';
+        totalRow.appendChild(td);
+      });
+    }
+  }
+  return columns;
 }
 
 const CRM_ORDERS_STAGE_COLUMN_INDEX=Object.freeze({
@@ -12987,36 +13185,16 @@ const CRM_ORDERS_STAGE_COLUMN_INDEX=Object.freeze({
 });
 
 function getCrmOrdersVisibleColumnCount(){
-  const hidden=crmOrdersStageFilter.size ? Object.keys(CRM_ORDERS_STAGE_COLUMN_INDEX).filter(key=>!crmOrdersStageFilter.has(key)).length : 0;
-  return 14-hidden;
+  return 3+getCrmOrdersStageColumns().length;
 }
 
 function applyCrmOrdersStageColumnFilter(){
-  const table=document.getElementById('crmOrdersTable');
-  const totalsTable=crmOrdersTotalsBox?.querySelector('table');
-  const hiddenKeys=crmOrdersStageFilter.size
-    ? Object.keys(CRM_ORDERS_STAGE_COLUMN_INDEX).filter(key=>!crmOrdersStageFilter.has(key))
-    : [];
-  const hiddenIndexes=new Set(hiddenKeys.map(key=>CRM_ORDERS_STAGE_COLUMN_INDEX[key]));
-  [table, totalsTable].forEach(targetTable=>{
-    if(!targetTable) return;
-    targetTable.querySelectorAll('tr').forEach(tr=>{
-      Array.from(tr.children).forEach((cell,idx)=>{
-        const visible=!hiddenIndexes.has(idx);
-        cell.style.display=visible?'':'none';
-      });
-    });
-    const colgroup=targetTable.querySelector('colgroup');
-    if(colgroup){
-      Array.from(colgroup.children).forEach((col,idx)=>{
-        col.style.display=!hiddenIndexes.has(idx)?'':'none';
-      });
-    }
-  });
+  ensureCrmOrdersTableColumns();
 }
 
+
 function getCrmOrdersStageFilterOptions(){
-  return CRM_STAGE_SEQUENCE.map(stageKey=>({
+  return getCrmCurrentRouteStageKeys().map(stageKey=>({
     key:stageKey,
     label:CRM_STAGE_LABELS[stageKey]||stageKey
   }));
@@ -15237,7 +15415,7 @@ function formatCrmOrderCount(count){
 function updateCrmStageRouteSummary(dataset){
   if(!crmStageRouteSummary) return;
   const orders=Array.isArray(dataset?.orders)?dataset.orders:[];
-  const visibleStages=CRM_STAGE_SEQUENCE.filter(stage=>!crmRouteHiddenStages.has(stage));
+  const visibleStages=getCrmCurrentRouteStageKeys().filter(stage=>!crmRouteHiddenStages.has(stage));
   if(!orders.length || !visibleStages.length){
     crmStageRouteSummary.innerHTML='';
     return;
@@ -15854,11 +16032,12 @@ function buildCrmOrderRouteContent(order,currentStageKey){
   if(!order||typeof order!=='object') return null;
   crmStageRouteActualScheduleCache.clear();
   const stages=Array.isArray(order.stages)?order.stages:[];
+  const allowedStages=new Set(getCrmCurrentRouteStageKeys());
   const entries=[];
   stages.forEach((stage, stageIndex)=>{
     if(!stage||typeof stage!=='object') return;
     const key=resolveCrmStageKeyWithMapping(stage.name);
-    if(!key) return;
+    if(!key || (allowedStages.size && !allowedStages.has(key))) return;
     const snapshot=snapshotCrmStageRowForRoute(order, key, stage, stageIndex);
     if(!snapshot) return;
     entries.push({ key, stage, snapshot });
@@ -15880,14 +16059,13 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     });
   });
   const orderedEntries=[];
-  CRM_STAGE_SEQUENCE.forEach(stageKey=>{
+  getCrmCurrentRouteStageKeys().forEach(stageKey=>{
     const bucket=grouped.get(stageKey);
     if(bucket){
       bucket.forEach(entry=>orderedEntries.push(entry));
       grouped.delete(stageKey);
     }
   });
-  grouped.forEach(bucket=>bucket.forEach(entry=>orderedEntries.push(entry)));
   if(!orderedEntries.length) return null;
   const wrapper=document.createElement('div');
   wrapper.className='crm-route-mini-wrapper';
@@ -17404,24 +17582,16 @@ function renderCrmProgressLabelSimple(actual, expected, done, behind){
 
 function updateCrmOrdersTotals(totals){
   if(!crmOrdersTotalsBox) return;
-  const setText=(stage,text)=>{
-    const cell=crmOrdersTotalsBox.querySelector(`[data-total-stage="${stage}"]`);
-    if(cell) cell.textContent=text;
-  };
   const ordersCell=crmOrdersTotalsBox.querySelector('[data-total="orders"]');
-  if(ordersCell) ordersCell.textContent=`Итого: ${totals.orders}`;
-  setText('proc',`${totals.proc} шт`);
-  setText('supply',`${totals.supply} шт`);
-  setText('shear',`${totals.shear} шт`);
-  setText('coop',`${totals.coop} шт`);
-  setText('pack',`${totals.pack} шт`);
-  setText('ship',`${totals.ship} шт`);
-  setText('draw',formatCrmStageHoursWithDays(totals.draw));
-  setText('laser',formatCrmStageHoursWithDays(totals.laser));
-  setText('bend',formatCrmStageHoursWithDays(totals.bend));
-  setText('weld',formatCrmStageHoursWithDays(totals.weld));
-  setText('mech',formatCrmStageHoursWithDays(totals.mech));
+  if(ordersCell) ordersCell.textContent=`Итого: ${totals.orders||0}`;
+  getCrmOrdersStageColumns().forEach(col=>{
+    const cell=crmOrdersTotalsBox.querySelector(`[data-total-stage="${col.key}"]`);
+    if(!cell) return;
+    const value=totals[col.key]||0;
+    cell.textContent=col.hourless?`${value} шт`:formatCrmStageHoursWithDays(value);
+  });
 }
+
 
 function syncCrmOrdersTotals(){
   const table=document.getElementById('crmOrdersTable');
@@ -17495,6 +17665,7 @@ function renderOrdersTable(){
   if(!crmOrdersTableBody) return;
   const filterValue=crmOrdersFilter?crmOrdersFilter.value:'current';
   const { rows, totals, meta }=collectCrmOrdersForList(filterValue);
+  const stageColumns=ensureCrmOrdersTableColumns();
   crmOrdersTableBody.innerHTML='';
   if(!rows.length){
     const tr=document.createElement('tr');
@@ -17520,21 +17691,15 @@ function renderOrdersTable(){
     const titleMarkup=entry.order?.id && crmCanViewOrderDetails()
       ? `<span class="crm-linklike crm-order-title" data-order-id="${escapeHtml(entry.order.id)}">${escapeHtml(title)}</span>`
       : escapeHtml(title);
+    const stageCells=stageColumns.map(col=>col.hourless
+      ? `<td data-stage="${escapeHtml(col.key)}">${renderIndicatorCell(entry.snapshot.indicator[col.key])}</td>`
+      : `<td class="progress-cell" data-stage="${escapeHtml(col.key)}">${renderProgressCell(entry.snapshot.progress[col.key])}</td>`
+    ).join('');
     tr.innerHTML=`
       <td>${entry.displayIndex}</td>
       <td>${renderOrderRouteCell(entry.order)}</td>
       <td>${titleMarkup}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.proc)}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.supply)}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.shear)}</td>
-      <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.draw)}</td>
-      <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.laser)}</td>
-      <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.bend)}</td>
-      <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.weld)}</td>
-      <td class="progress-cell">${renderProgressCell(entry.snapshot.progress.mech)}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.coop)}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.pack)}</td>
-      <td>${renderIndicatorCell(entry.snapshot.indicator.ship)}</td>
+      ${stageCells}
     `;
     const routeBtn=tr.querySelector('.crm-order-route-btn');
     if(routeBtn){
@@ -18421,6 +18586,18 @@ function setCrmView(view){
   }
 }
 
+function syncCrmSimpleGanttHeaderHeight(leftHeader, header){
+  if(!leftHeader) return;
+  leftHeader.style.removeProperty('min-height');
+  if(!header) return;
+  const apply=()=>{
+    const height=header.offsetHeight||0;
+    if(height>0) leftHeader.style.minHeight=`${height}px`;
+  };
+  if(typeof requestAnimationFrame==='function') requestAnimationFrame(apply);
+  else setTimeout(apply,0);
+}
+
 function renderCrmSimpleGantt(targets, rows, schedule){
   const left=targets?.left;
   const header=targets?.header;
@@ -18429,37 +18606,71 @@ function renderCrmSimpleGantt(targets, rows, schedule){
   const leftHeader=targets?.leftHeader;
   if(!left||!header||!body) return;
   left.innerHTML=''; header.innerHTML=''; body.innerHTML='';
+  header.style.removeProperty('transform');
   const safeRows=Array.isArray(rows)?rows.filter(row=>row&&row.identity):[];
-  if(!schedule||!safeRows.length){ if(empty) empty.hidden=false; return; }
+  if(!schedule||!safeRows.length){ if(empty) empty.hidden=false; syncCrmSimpleGanttHeaderHeight(leftHeader, header); return; }
   const today=today0();
+  const todayKey=fmtDateISO(today);
   const days=Array.from(schedule.perDay.entries()).map(([key,day])=>({key,day})).filter(x=>x.day.date>=today).sort((a,b)=>a.day.date-b.day.date);
-  if(!days.length){ if(empty) empty.hidden=false; return; }
+  if(!days.length){ if(empty) empty.hidden=false; syncCrmSimpleGanttHeaderHeight(leftHeader, header); return; }
   if(empty) empty.hidden=true;
   const dayWidth=120;
   const template=`repeat(${days.length}, ${dayWidth}px)`;
   const width=`${days.length*dayWidth}px`;
   header.style.gridTemplateColumns=template; header.style.width=width; header.style.minWidth=width; body.style.width=width; body.style.minWidth=width;
-  if(leftHeader) leftHeader.style.removeProperty('min-height');
-  days.forEach(({day,key})=>{ const cell=document.createElement('span'); const dow=document.createElement('span'); dow.className='crm-gantt-dow'; dow.textContent=weekdayShort(day.date); const label=document.createElement('span'); label.textContent=fmtDateHuman(day.date); cell.append(dow,label); if([0,6].includes(day.date.getDay())) cell.classList.add('weekend'); if(key===fmtDateISO(today)) cell.classList.add('today'); header.appendChild(cell); });
+  days.forEach(({day,key})=>{
+    const cell=document.createElement('span');
+    const dow=document.createElement('span'); dow.className='crm-gantt-dow'; dow.textContent=weekdayShort(day.date);
+    const label=document.createElement('span'); label.textContent=fmtDateHuman(day.date);
+    cell.append(dow,label);
+    const isOffDay=!!(day.meta&&day.meta.patternOff);
+    if(isOffDay){ cell.classList.add('offday'); cell.title='Выходной по графику'; }
+    if([0,6].includes(day.date.getDay())) cell.classList.add('weekend');
+    if(key===todayKey) cell.classList.add('today');
+    header.appendChild(cell);
+  });
+  syncCrmSimpleGanttHeaderHeight(leftHeader, header);
   const perTask=schedule.perTask instanceof Map?schedule.perTask:new Map();
-  safeRows.forEach((row,index)=>{
+  const orderedRows=safeRows.slice().sort((a,b)=>(Number(a.displayIndex)||0)-(Number(b.displayIndex)||0));
+  orderedRows.forEach((row,index)=>{
     const leftRow=document.createElement('div');
     leftRow.className='crm-stage-gantt-left-row';
-    leftRow.textContent=`${index+1}. ${row.orderTitle||'Заказ'}`;
+    leftRow.textContent=`${Number.isFinite(row.displayIndex)?row.displayIndex:index+1}. ${row.orderTitle||'Заказ'}`;
     left.appendChild(leftRow);
     const rowEl=document.createElement('div');
     rowEl.className='crm-stage-gantt-row';
     rowEl.style.gridTemplateColumns=template; rowEl.style.width=width; rowEl.style.minWidth=width;
     const segments=perTask.get(row.identity)?.segments||[];
+    const overdue=getOrderOverdueFlags(row.order);
+    const orderLate=row.orderLate===true || row.orderLate==='true' || overdue.orderLate;
+    const legacyLate=!('orderLate' in row) && row.isLate===true;
+    const rowStageLate=segments.some(seg=>seg.late) || orderLate || legacyLate;
+    const shipLate=row.shipLate===true || row.shipLate==='true' || overdue.shipLate;
+    const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     days.forEach(({key,day})=>{
       const cell=document.createElement('div'); cell.className='crm-stage-gantt-cell';
+      const isOffDay=!!(day.meta&&day.meta.patternOff);
+      if(isOffDay){ cell.classList.add('offday'); cell.title='Выходной по графику'; }
       if([0,6].includes(day.date.getDay())) cell.classList.add('weekend');
-      const total=segments.filter(seg=>fmtDateISO(seg.date)===key).reduce((sum,seg)=>sum+(Number(seg.hours)||0),0);
-      if(total>0){ const fill=document.createElement('div'); fill.className='crm-stage-gantt-fill status-ok'; fill.textContent=formatStageWorkload(total,{ hourless:schedule.isHourless }); cell.appendChild(fill); }
+      if(key===todayKey) cell.classList.add('today');
+      const segs=segments.filter(seg=>fmtDateISO(seg.date)===key);
+      const total=segs.reduce((sum,seg)=>sum+(Number(seg.hours)||0),0);
+      if(total>0){
+        const fill=document.createElement('div');
+        fill.className=`crm-stage-gantt-fill ${fillStatusClass}`;
+        fill.textContent=formatStageWorkload(total,{ hourless:schedule.isHourless });
+        fill.title=`Запланировано: ${formatStageWorkload(total,{ hourless:schedule.isHourless })}`;
+        if(shipLate) fill.classList.add('late');
+        cell.appendChild(fill);
+      }
       rowEl.appendChild(cell);
     });
     body.appendChild(rowEl);
   });
+  const scroll=header.closest('.crm-stage-gantt-scroll');
+  if(scroll){
+    scroll.onscroll=()=>{ header.style.transform=`translateX(${-scroll.scrollLeft}px)`; };
+  }
 }
 
 function renderCrmAllGanttView(){
@@ -20179,8 +20390,7 @@ async function handleOrderDoneChange(){
 if(addStageBtn){
   addStageBtn.addEventListener('click',e=>{
     e.preventDefault();
-    const row=appendStageRow({name:'',done:false,progress:0,start:'',end:'',value:''});
-    focusStageRow(row);
+    showStagePicker(addStageBtn);
   });
 }
 if(addStageFromListBtn){
@@ -20190,10 +20400,10 @@ if(addStageFromListBtn){
   });
 }
 if(presetStagesBtn){
-  presetStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmDefaultStagePresetNames()));
+  presetStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmDefaultStageChoiceNames()));
 }
 if(allStagesBtn){
-  allStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmStagePresetNames()));
+  allStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmStageChoiceOptions().map(choice=>choice.value)));
 }
 function clearStageList(){
   if(!crmCanEditStageDetails()){
@@ -20416,7 +20626,7 @@ function openOrder(id=null){
     orderForm.id.value='';
     orderForm.progress.value=0;
     orderDone.checked=false;
-    applyStagePreset(getCrmDefaultStagePresetNames());
+    applyStagePreset(getCrmDefaultStageChoiceNames());
     window._editingOrigValues=null;
     updateOrderDialogMeta();
     if(deleteOrderBtn){
@@ -20486,7 +20696,7 @@ function fillOrderForm(o,b){
   renderOrderComments();
   resetOrderCommentInputs();
   collapseOrderCommentSection();
-  const stageList=o.stages?.length?o.stages:getCrmDefaultStagePresetNames().map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}));
+  const stageList=o.stages?.length?o.stages:getCrmDefaultStageChoiceNames().map(n=>({name:n,done:false,progress:0,start:'',end:'',value:''}));
   stageList.forEach(st=>{
     const stageId=ensureStageIdentity(st);
     if(editingOrderId){
@@ -20858,7 +21068,7 @@ function moveStageRow(tr,direction){
     tr.dataset.completedLate='false';
   }
     tr.innerHTML=`
-      <td><input class="stg-name" data-k="name" type="text" value="${escapeHtml(nmRaw)}" ${canEditStageDetails?'':'disabled'} /></td>
+      <td><select class="stg-name pc-select" data-k="name" ${canEditStageDetails?'':'disabled'}></select></td>
       <td class="chk"><input class="ready-switch" data-k="done" type="checkbox" ${st.done?'checked':''} ${canUpdateProgress?'':'disabled'} /></td>
       <td class="col-progress">${isBoolOnly?'<span class="muted">—</span>':`<div class="progress-expected-cell"><input data-k="progress" type="number" min="0" max="100" value="${progressValue}" ${canUpdateProgress?'':'disabled'} /><span class="expected-indicator"></span></div>`}</td>
       <td class="col-start"><div class="stage-date-cell"><input data-k="start" type="date" value="${escapeHtml(st.start||'')}" ${canEditStageDates?'':'disabled'} /><span class="stage-date-dow" data-dow></span></div></td>
@@ -20869,6 +21079,36 @@ function moveStageRow(tr,direction){
   reorderCell.className='reorder';
   reorderCell.innerHTML=`<div class="crm-stage-reorder"><button type="button" data-stage-move="up" title="Переместить выше" ${canEditStageDetails?'':'disabled'}>▲</button><button type="button" data-stage-move="down" title="Переместить ниже" ${canEditStageDetails?'':'disabled'}>▼</button></div>`;
   tr.insertBefore(reorderCell, tr.firstChild);
+  const nameSelect=tr.querySelector('[data-k="name"]');
+  if(nameSelect){
+    const selectedValue=getCrmStageChoiceValue(nmRaw);
+    nameSelect.innerHTML='';
+    const grouped=new Map();
+    getCrmStageChoiceOptions({ includeHidden:true }).forEach(choice=>{
+      const key=choice.base||'Передел';
+      if(!grouped.has(key)) grouped.set(key,[]);
+      grouped.get(key).push(choice);
+    });
+    grouped.forEach((items,base)=>{
+      if(items.length>1){
+        const group=document.createElement('optgroup');
+        group.label=base;
+        items.forEach(choice=>group.appendChild(new Option(choice.label, choice.value)));
+        nameSelect.appendChild(group);
+      }else{
+        const choice=items[0];
+        nameSelect.appendChild(new Option(choice.label||choice.value, choice.value));
+      }
+    });
+    if(selectedValue){
+      nameSelect.value=selectedValue;
+    }else if(nmRaw){
+      const option=new Option(`${nmRaw} (нет в списке)`, nmRaw);
+      option.disabled=true;
+      nameSelect.appendChild(option);
+      nameSelect.value=nmRaw;
+    }
+  }
   const origMap=window._editingOrigValues||null;
   if(origMap&&!suppressValue){const nameNow=nmRaw||'Передел';const orig=Number(origMap[nameNow]);const box=tr.querySelector('[data-orig]');if(box&&Number.isFinite(orig))box.textContent=`(исх: ${orig.toLocaleString('ru-RU')})`}
 
@@ -21003,7 +21243,7 @@ function moveStageRow(tr,direction){
   function resolveKnownStageName(name){
     const normalized=normalizeStageName(name||'');
     if(!normalized) return '';
-    const matched=getCrmStagePresetNames().find(stage=>normalizeStageName(stage)===normalized);
+    const matched=getCrmStageChoiceOptions({ includeHidden:true }).map(choice=>choice.value).find(stage=>normalizeStageName(stage)===normalized);
     return matched || name.trim();
   }
 
@@ -21085,10 +21325,10 @@ function suppressValueForStage(normalizedName){
 }
 
 function showStagePicker(anchor){
-  const presets=getCrmStagePresetNames().filter(Boolean);
+  const presets=getCrmStageChoiceOptions().filter(choice=>choice&&choice.value);
   closePopup();
   if(!presets.length){
-    appendStageByName('');
+    showToast({ title:'CRM', message:'Список переделов пуст. Добавьте переделы в настройках.', tone:'warn' });
     return;
   }
   const rect=anchor?.getBoundingClientRect?.();
@@ -21097,20 +21337,38 @@ function showStagePicker(anchor){
   menu.innerHTML='<h4>Выберите передел из списка</h4>';
   const list=document.createElement('div');
   list.className='items';
-  presets.forEach(stageName=>{
-    const item=document.createElement('button');
-    item.type='button';
-    item.className='item';
-    item.textContent=stageName;
-    item.onclick=()=>{appendStageByName(stageName);closePopup();};
-    item.addEventListener('keydown',ev=>{
-      if(ev.key==='Enter' || ev.key===' '){
-        ev.preventDefault();
-        appendStageByName(stageName);
-        closePopup();
-      }
-    });
-    list.appendChild(item);
+  const grouped=new Map();
+  presets.forEach(choice=>{
+    const key=choice.base||choice.value;
+    if(!grouped.has(key)) grouped.set(key,[]);
+    grouped.get(key).push(choice);
+  });
+  grouped.forEach((items,base)=>{
+    const wrap=document.createElement('div');
+    wrap.className='stage-picker-group';
+    const baseBtn=document.createElement('button');
+    baseBtn.type='button';
+    baseBtn.className='item';
+    baseBtn.textContent=items.length>1?`${base} ›`:base;
+    if(items.length===1){
+      baseBtn.onclick=()=>{appendStageByName(items[0].value);closePopup();};
+    }
+    wrap.appendChild(baseBtn);
+    if(items.length>1){
+      const sub=document.createElement('div');
+      sub.className='stage-picker-submenu';
+      items.forEach(choice=>{
+        const item=document.createElement('button');
+        item.type='button';
+        item.className='item';
+        item.textContent=choice.label;
+        item.title=`${choice.base}: ${choice.label}`;
+        item.onclick=()=>{appendStageByName(choice.value);closePopup();};
+        sub.appendChild(item);
+      });
+      wrap.appendChild(sub);
+    }
+    list.appendChild(wrap);
   });
   menu.appendChild(list);
   const host=orderDlg||document.body;
@@ -22269,6 +22527,7 @@ function collectCrmStagePresetInputs(){
     const visibleInput=row.querySelector('input[name="crmStagePresetVisible"]');
     const iconInput=row.querySelector('select[name="crmStagePresetIcon"]');
     const defaultInput=row.querySelector('input[name="crmStagePresetDefault"]');
+    const stepsInput=row.querySelector('textarea[name="crmStagePresetSteps"]');
     return {
       id:idInput?idInput.value:'',
       name:nameInput?nameInput.value:'',
@@ -22276,6 +22535,7 @@ function collectCrmStagePresetInputs(){
       visible:visibleInput?!!visibleInput.checked:true,
       icon:iconInput?iconInput.value:'',
       color:(row.querySelector('input[name="crmStagePresetColor"]')?.value||''),
+      steps:parseCrmStageSteps(stepsInput?stepsInput.value:''),
       inDefault:defaultInput?!!defaultInput.checked:false
     };
   });
@@ -22299,6 +22559,7 @@ function normalizeCrmStagePresetDraftList(raw){
       visible:safeEntry.visible!==false,
       icon:CRM_STAGE_ICON_VALUES.has(safeEntry.icon)?safeEntry.icon:'',
       color:sanitizeCrmStageColor(safeEntry.color)||'#64748b',
+      steps:parseCrmStageSteps(safeEntry.steps),
       inDefault:safeEntry.inDefault===true
     };
   });
@@ -22334,6 +22595,40 @@ function buildCrmStagePresetDiff(previousList,nextList){
   return { renamed, removed };
 }
 
+
+
+function buildCrmStageStepChangeMap(previousList,nextList){
+  const prevMap=new Map((previousList||[]).map(item=>[normalizeStageName(item?.name), parseCrmStageSteps(item?.steps)]));
+  const changes=[];
+  (nextList||[]).forEach(item=>{
+    const key=normalizeStageName(item?.name);
+    if(!key) return;
+    const prevSteps=prevMap.get(key)||[];
+    const nextSteps=parseCrmStageSteps(item?.steps);
+    if(!prevSteps.length && nextSteps.length){
+      changes.push({ base:item.name, firstStep:nextSteps[0], full:buildCrmStageStepName(item.name,nextSteps[0]) });
+    }
+  });
+  return changes;
+}
+
+function applyCrmStageStepChangesToOrders(changes){
+  if(!Array.isArray(changes)||!changes.length) return 0;
+  const byBase=new Map(changes.map(change=>[normalizeStageName(change.base), change]));
+  let changed=0;
+  state.boards.forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
+        const key=normalizeStageName(stage?.name);
+        const change=byBase.get(key);
+        if(!change||!stage) return;
+        stage.name=change.full;
+        changed+=1;
+      });
+    });
+  });
+  return changed;
+}
 
 function buildCrmStageTypeChangeMap(previousList,nextList){
   const prevMap=new Map((previousList||[]).map(item=>[normalizeStageName(item?.name), item?.hasHours!==false]));
@@ -22494,6 +22789,13 @@ function renderCrmStagePresetSettingsUI(){
     nameInput.value=entry.name||'';
     nameInput.placeholder='Название передела';
     title.append(idInput,nameInput);
+    const stepsInput=document.createElement('textarea');
+    stepsInput.className='pc-input';
+    stepsInput.name='crmStagePresetSteps';
+    stepsInput.rows=2;
+    stepsInput.placeholder='Этапы передела (каждый с новой строки)';
+    stepsInput.value=parseCrmStageSteps(entry.steps).join('\n');
+    title.appendChild(stepsInput);
     const controls=document.createElement('div');
     controls.className='crm-mapping-row__controls';
     const iconSelect=document.createElement('select');
@@ -23103,6 +23405,7 @@ boardForm.addEventListener('submit',e=>{
   );
   const stagePresetDiff=buildCrmStagePresetDiff(prevStagePresets, stagePresetDraft);
   const stageTypeChanges=buildCrmStageTypeChangeMap(prevStagePresets, stagePresetDraft);
+  const stageStepChanges=buildCrmStageStepChangeMap(prevStagePresets, stagePresetDraft);
   syncCrmStagePresetDiffToMapping(stagePresetDiff);
   state.settings.stagePresets=stagePresetDraft;
   state.settings.defaultStagePresetIds=defaultPresetIds;
@@ -23110,6 +23413,10 @@ boardForm.addEventListener('submit',e=>{
   syncCrmStagePresetHoursToMapping(stagePresetDraft);
   applyCrmStagePresetDiffToOrders(stagePresetDiff);
   const stageTypeAdjusted=applyCrmStageTypeChangesToOrders(stageTypeChanges);
+  const stageStepAdjusted=applyCrmStageStepChangesToOrders(stageStepChanges);
+  if(stageStepAdjusted>0){
+    showToast({ title:'CRM', message:`Для ${stageStepAdjusted} передел(ов) применён первый этап после добавления этапов в настройках.`, tone:'info' });
+  }
   ensureHourlyStagesCapacity(stagePresetDraft, prevStagePresets);
   applyTrashRetention();
   applyJournalRetention();
