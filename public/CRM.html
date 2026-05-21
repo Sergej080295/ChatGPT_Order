@@ -2102,6 +2102,11 @@
     color: var(--pc-text-muted);
   }
 
+  .crm-stage-preset-icon {
+    width: 96px;
+    min-width: 96px;
+  }
+
   .crm-mapping-row__hours input[type="checkbox"] {
     transform: translateY(1px);
   }
@@ -2154,6 +2159,10 @@
     .crm-mapping-row__controls {
       flex-wrap: nowrap;
       gap: var(--pc-spacing-sm);
+    }
+
+    .crm-stage-preset-name {
+      flex: 1 1 auto;
     }
 
     .crm-mapping-row__select {
@@ -6926,11 +6935,6 @@
                     <div class="crm-field__hint muted">Фильтр раздела «Не учтённые» общий для всех пользователей.</div>
                   </div>
                 </div>
-              </div>
-            </details>
-            <details class="crm-settings-group" open>
-              <summary>Сопоставление переделов</summary>
-              <div class="crm-settings-fields">
               </div>
             </details>
             <details class="crm-settings-group" open>
@@ -15134,10 +15138,11 @@ function renderCrmRouteDetailed(dataset, days){
         const stageKey=instance.stageKey;
         const stageLabel=document.createElement('div');
         stageLabel.className='crm-route-label stage';
-        let text=`— ${CRM_STAGE_LABELS[stageKey]||stageKey}`;
-        if(instance.occurrenceTotal>1){
-          const opName=(instance.stage?.name||'').toString().trim();
-          text+=opName?` • ${opName}`:` №${instance.occurrenceIndex}`;
+        const opName=(instance.stage?.name||'').toString().trim();
+        const stepLabel=getCrmStageStepDisplayLabel(opName);
+        let text=`— ${stepLabel||CRM_STAGE_LABELS[stageKey]||stageKey}`;
+        if(instance.occurrenceTotal>1 && !stepLabel){
+          text+=` №${instance.occurrenceIndex}`;
         }
         stageLabel.textContent=text;
         stageLabel.title=text.slice(2);
@@ -22767,7 +22772,7 @@ function renderCrmStagePresetSettingsUI(){
     idInput.value=entry.id||`preset:${normalizeStageName(entry.name)}`;
     const nameInput=document.createElement('input');
     nameInput.type='text';
-    nameInput.className='pc-input';
+    nameInput.className='pc-input crm-stage-preset-name';
     nameInput.name='crmStagePresetName';
     nameInput.value=entry.name||'';
     nameInput.placeholder='Название передела';
@@ -22782,7 +22787,7 @@ function renderCrmStagePresetSettingsUI(){
     const controls=document.createElement('div');
     controls.className='crm-mapping-row__controls';
     const iconSelect=document.createElement('select');
-    iconSelect.className='pc-select';
+    iconSelect.className='pc-select crm-stage-preset-icon';
     iconSelect.name='crmStagePresetIcon';
     iconSelect.appendChild(new Option('Авто-иконка',''));
     CRM_STAGE_ICON_OPTIONS.forEach(option=>{
