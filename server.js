@@ -5760,14 +5760,35 @@ async function persistSnapshotWithSql(options) {
   normalizeSnapshotCollections(parsedSnapshot);
   ensureModeScopedState(parsedSnapshot);
   ensureLocalStorageMetadata(parsedSnapshot);
-  const persistedSettings = writePlannerSettingsToSql(parsedSnapshot.meta?.settings || {});
+  let persistedSettings = sanitizeSharedSettingsForStorage(parsedSnapshot.meta?.settings || {});
+  try {
+    persistedSettings = writePlannerSettingsToSql(parsedSnapshot.meta?.settings || {});
+  } catch (err) {
+    if (err instanceof StorageWriteError || err?.code === 'STORAGE_PERMISSION') {
+      console.warn('[CRM] Planner settings mirror write skipped due to storage permissions', {
+        path: err.path || SQLITE_FILE
+      });
+    } else {
+      console.warn('[CRM] Planner settings mirror write skipped due to unexpected error', err);
+    }
+  }
   if (isPlainObject(parsedSnapshot.meta)) {
     parsedSnapshot.meta.settings = persistedSettings;
   }
 
   const { stageAllocations } = mergeCrmTasksIntoSnapshot(parsedSnapshot);
 
-  writeStageAllocationsToSql(stageAllocations);
+  try {
+    writeStageAllocationsToSql(stageAllocations);
+  } catch (err) {
+    if (err instanceof StorageWriteError || err?.code === 'STORAGE_PERMISSION') {
+      console.warn('[CRM] Stage allocations mirror write skipped due to storage permissions', {
+        path: err.path || SQLITE_FILE
+      });
+    } else {
+      console.warn('[CRM] Stage allocations mirror write skipped due to unexpected error', err);
+    }
+  }
 
   const storedMeta = sanitizeMetaForStorage(meta);
 
