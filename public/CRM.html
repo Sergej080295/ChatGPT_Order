@@ -2107,6 +2107,18 @@
     min-width: 96px;
   }
 
+  .crm-stage-preset-order {
+    display: inline-flex;
+    gap: 2px;
+    align-items: center;
+  }
+
+  .crm-stage-preset-order .pc-icon-btn {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+  }
+
   .crm-mapping-row__hours input[type="checkbox"] {
     transform: translateY(1px);
   }
@@ -6949,8 +6961,11 @@
     </div>
     <div class="crm-modal-actions">
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
+      <button type="button" class="pc-btn pc-btn--ghost" id="crmSettingsExportBtn">Экспорт настроек</button>
+      <button type="button" class="pc-btn pc-btn--ghost" id="crmSettingsImportBtn">Импорт настроек</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
+    <input type="file" id="crmSettingsImportFile" accept="application/json,.json" hidden />
     <input type="hidden" name="unaccountedStatuses" id="crmUnaccountedHidden" />
     <input type="hidden" name="unaccountedHiddenStatuses" id="crmUnaccountedHiddenFilter" />
     <input type="hidden" name="id" />
@@ -9555,10 +9570,10 @@ function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY){
   const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_CAPACITY;
   CRM_STAGE_KEYS.forEach(stage=>{
     const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_CAPACITY[stage]);
-    const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>=0?Math.round(fallbackRaw*100)/100:0;
+    const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>0?Math.round(fallbackRaw*100)/100:1;
     const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
     const num=Number(raw);
-    result[stage]=Number.isFinite(num)&&num>=0?Math.round(num*100)/100:fallbackValue;
+    result[stage]=Number.isFinite(num)&&num>0?Math.round(num*100)/100:fallbackValue;
   });
   return result;
 }
@@ -21580,6 +21595,9 @@ orderForm.addEventListener('submit',e=>{
 
 /* Настройки доски */
 const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#deleteBoardBtn');
+const crmSettingsExportBtn=$('#crmSettingsExportBtn');
+const crmSettingsImportBtn=$('#crmSettingsImportBtn');
+const crmSettingsImportFile=$('#crmSettingsImportFile');
 const crmUnaccountedHidden=$('#crmUnaccountedHidden');
 const crmUnaccountedHiddenFilters=$('#crmUnaccountedHiddenFilter');
 const crmUnaccountedSummary=$('#crmUnaccountedSummary');
@@ -21686,11 +21704,11 @@ function renderCrmCapacitySettingsUI(){
     title.textContent=CRM_STAGE_LABELS[stage]||stage;
     const input=document.createElement('input');
     input.type='number';
-    input.min='0';
+    input.min='0.25';
     input.step='0.25';
     input.dataset.crmSetting='capacity';
     input.dataset.crmStage=stage;
-    input.value=String(values[stage]??0);
+    input.value=String(values[stage]??1);
     item.append(title, input);
     matrix.appendChild(item);
   });
@@ -22786,6 +22804,25 @@ function renderCrmStagePresetSettingsUI(){
     title.appendChild(stepsInput);
     const controls=document.createElement('div');
     controls.className='crm-mapping-row__controls';
+    const orderTools=document.createElement('div');
+    orderTools.className='crm-stage-preset-order';
+    const moveUpBtn=document.createElement('button');
+    moveUpBtn.type='button';
+    moveUpBtn.className='pc-icon-btn';
+    moveUpBtn.textContent='↑';
+    moveUpBtn.title='Поднять передел выше';
+    moveUpBtn.dataset.stagePresetMove=String(index);
+    moveUpBtn.dataset.direction='up';
+    moveUpBtn.disabled=index===0;
+    const moveDownBtn=document.createElement('button');
+    moveDownBtn.type='button';
+    moveDownBtn.className='pc-icon-btn';
+    moveDownBtn.textContent='↓';
+    moveDownBtn.title='Опустить передел ниже';
+    moveDownBtn.dataset.stagePresetMove=String(index);
+    moveDownBtn.dataset.direction='down';
+    moveDownBtn.disabled=index===presets.length-1;
+    orderTools.append(moveUpBtn,moveDownBtn);
     const iconSelect=document.createElement('select');
     iconSelect.className='pc-select crm-stage-preset-icon';
     iconSelect.name='crmStagePresetIcon';
@@ -22835,7 +22872,7 @@ function renderCrmStagePresetSettingsUI(){
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(iconSelect,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
+    controls.append(orderTools,iconSelect,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -22933,6 +22970,18 @@ if(crmStagePresetContainer){
       if(!window.confirm('Заменить текущий список переделов базовым набором?')) return;
       crmStagePresetDraft=CRM_BASE_STAGE_PRESETS.map(item=>({ ...item }));
       crmDefaultStagePresetDraft=new Set(crmStagePresetDraft.map(item=>item.id).filter(Boolean));
+      renderCrmStagePresetSettingsUI();
+      return;
+    }
+    if(target.dataset.stagePresetMove!==undefined){
+      const source=collectCrmStagePresetInputs();
+      const index=Number(target.dataset.stagePresetMove);
+      const direction=target.dataset.direction==='down'?1:-1;
+      const nextIndex=index+direction;
+      if(!Number.isInteger(index) || index<0 || index>=source.length || nextIndex<0 || nextIndex>=source.length) return;
+      [source[index],source[nextIndex]]=[source[nextIndex],source[index]];
+      crmDefaultStagePresetDraft=new Set(source.filter(item=>item.inDefault).map(item=>item.id).filter(Boolean));
+      crmStagePresetDraft=source;
       renderCrmStagePresetSettingsUI();
       return;
     }
@@ -23205,6 +23254,87 @@ if(crmUnaccountedEditorDone){
 if(crmUnaccountedSettingsDlg){
   crmUnaccountedSettingsDlg.addEventListener('cancel',()=>closeCrmUnaccountedEditor());
 }
+
+function buildCrmSettingsExportPayload(){
+  return {
+    type:'planecore-crm-settings',
+    version:'5.6.7',
+    exportedAt:new Date().toISOString(),
+    board:{
+      id:currentBoard()?.id||'',
+      name:currentBoard()?.name||'',
+      lanes:Array.isArray(currentBoard()?.lanes)?currentBoard().lanes.slice():[]
+    },
+    settings:deepClone(sanitizeCrmSettings(state?.settings||{}))
+  };
+}
+
+function downloadCrmSettingsExport(){
+  const payload=buildCrmSettingsExportPayload();
+  const data=JSON.stringify(payload,null,2);
+  const blob=new Blob([data],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`planecore_settings_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),0);
+}
+
+function extractCrmSettingsImportPayload(raw){
+  if(!raw||typeof raw!=='object') return null;
+  if(raw.type==='planecore-crm-settings' && raw.settings && typeof raw.settings==='object') return raw.settings;
+  if(raw.settings && typeof raw.settings==='object' && (raw.board||raw.exportedAt||raw.version)) return raw.settings;
+  if(raw.crmSettings && typeof raw.crmSettings==='object') return raw.crmSettings;
+  return raw;
+}
+
+async function importCrmSettingsFile(file){
+  if(!file) return;
+  const text=await file.text();
+  const parsed=JSON.parse(text);
+  const importedSettings=extractCrmSettingsImportPayload(parsed);
+  if(!importedSettings||typeof importedSettings!=='object' || Array.isArray(importedSettings)){
+    throw new Error('Файл не содержит настройки CRM');
+  }
+  const prevSettings=deepClone(state.settings||{});
+  state.settings=mergeCrmSettings(importedSettings, state.settings||{});
+  ensureCrmDynamicStageCatalog();
+  const sectionsChanged=describeCrmSettingsChanges(prevSettings,state.settings,null,null);
+  recordCrmJournalEntry(CRM_JOURNAL_TYPES.settingsUpdated,{
+    sections:sectionsChanged.length?sectionsChanged:['Импорт настроек'],
+    snapshot:deepClone(state.settings)
+  });
+  save('Импорт настроек CRM');
+  renderAll();
+  if(boardDlg?.open){
+    boardDlg.close();
+    openBoard();
+  }
+  showToast({ title:'CRM', message:'Настройки импортированы', tone:'success' });
+}
+
+if(crmSettingsExportBtn){
+  crmSettingsExportBtn.addEventListener('click',downloadCrmSettingsExport);
+}
+if(crmSettingsImportBtn && crmSettingsImportFile){
+  crmSettingsImportBtn.addEventListener('click',()=>crmSettingsImportFile.click());
+  crmSettingsImportFile.addEventListener('change',async event=>{
+    const file=event.target.files?.[0];
+    if(!file) return;
+    try{
+      await importCrmSettingsFile(file);
+    }catch(err){
+      console.error('Ошибка импорта настроек CRM',err);
+      showToast({ title:'CRM', message:err.message||'Не удалось импортировать настройки', tone:'error' });
+    }finally{
+      event.target.value='';
+    }
+  });
+}
+
 function openBoard(){
   ensureCrmDynamicStageCatalog();
   const b=currentBoard();
@@ -23310,7 +23440,7 @@ boardForm.addEventListener('submit',e=>{
     const stage=input.dataset.crmStage;
     if(!stage) return;
     const value=Number(input.value);
-    if(Number.isFinite(value)&&value>=0){
+    if(Number.isFinite(value)&&value>0){
       capacityDraft[stage]=value;
     }
   });

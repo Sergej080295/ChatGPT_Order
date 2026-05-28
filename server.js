@@ -2688,7 +2688,7 @@ function sanitizeSharedSettingsForStorage(source) {
   const capacity = {};
   for (const code of PLANNER_STAGE_CODES) {
     const num = Number(capacityRaw[code]);
-    if (Number.isFinite(num) && num >= 0) {
+    if (Number.isFinite(num) && num > 0) {
       capacity[code] = Math.round(num * 100) / 100;
     }
   }
