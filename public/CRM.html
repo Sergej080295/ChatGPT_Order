@@ -2107,10 +2107,29 @@
     min-width: 96px;
   }
 
-  .crm-stage-preset-upload {
+  .crm-stage-preset-icon-wrap {
     display: inline-flex;
     align-items: center;
     gap: 4px;
+  }
+
+  .crm-stage-preset-icon-preview {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    border-radius: var(--pc-radius-sm);
+    background: color-mix(in srgb, var(--pc-surface) 92%, transparent);
+    flex: 0 0 auto;
+  }
+
+  .crm-stage-preset-flags {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+    align-items: center;
   }
 
   .crm-stage-icon-img {
@@ -2135,6 +2154,12 @@
 
   .crm-stage-hours-pair__total {
     justify-self: start;
+  }
+
+  .crm-stage-hours-cell,
+  #crmStageTotalHours,
+  #crmStageTotalRest {
+    text-align: center;
   }
 
   .crm-stage-preset-order {
@@ -3123,7 +3148,7 @@
 
   .crm-stage-gantt-grid {
     display: grid;
-    grid-template-columns: 260px 1fr;
+    grid-template-columns: 312px 1fr;
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     overflow: hidden;
@@ -7531,6 +7556,7 @@ const CRM_STAGE_ICON_OPTIONS=Object.freeze([
   { value:'🧊', label:'Склад / хранение' }
 ]);
 const CRM_STAGE_ICON_VALUES=new Set(CRM_STAGE_ICON_OPTIONS.map(item=>item.value));
+const CRM_STAGE_ICON_UPLOAD_VALUE='__upload_custom_icon__';
 function sanitizeCrmStageColor(value){
   if(typeof value!=='string') return '';
   const trimmed=value.trim();
@@ -22971,33 +22997,51 @@ function renderCrmStagePresetSettingsUI(){
     moveDownBtn.dataset.direction='down';
     moveDownBtn.disabled=index===presets.length-1;
     orderTools.append(moveUpBtn,moveDownBtn);
+    const iconWrap=document.createElement('div');
+    iconWrap.className='crm-stage-preset-icon-wrap';
     const iconSelect=document.createElement('select');
     iconSelect.className='pc-select crm-stage-preset-icon';
     iconSelect.name='crmStagePresetIcon';
-    iconSelect.appendChild(new Option('Авто-иконка',''));
+    iconSelect.appendChild(new Option('Авто',''));
     CRM_STAGE_ICON_OPTIONS.forEach(option=>{
-      iconSelect.appendChild(new Option(`${option.value} ${option.label}`, option.value));
+      const iconOption=new Option(option.value, option.value);
+      iconOption.title=option.label;
+      iconSelect.appendChild(iconOption);
     });
     const customIcon=sanitizeCrmStageIcon(entry.icon);
-    iconSelect.value=CRM_STAGE_ICON_VALUES.has(customIcon)?customIcon:'';
     const customIconInput=document.createElement('input');
     customIconInput.type='hidden';
     customIconInput.name='crmStagePresetIconCustom';
     customIconInput.value=isCrmCustomStageIcon(customIcon)?customIcon:'';
-    const uploadWrap=document.createElement('label');
-    uploadWrap.className='crm-stage-preset-upload pc-btn pc-btn--ghost';
-    uploadWrap.textContent=customIconInput.value?'Иконка загружена':'Загрузить иконку';
+    if(customIconInput.value){
+      const customOption=new Option('Своя', customIconInput.value);
+      customOption.title='Своя загруженная иконка';
+      customOption.dataset.customIcon='1';
+      iconSelect.appendChild(customOption);
+      iconSelect.value=customIconInput.value;
+    }else{
+      iconSelect.value=CRM_STAGE_ICON_VALUES.has(customIcon)?customIcon:'';
+    }
+    const uploadOption=new Option('＋', CRM_STAGE_ICON_UPLOAD_VALUE);
+    uploadOption.title='Загрузить свою иконку';
+    iconSelect.appendChild(uploadOption);
+    const iconPreview=document.createElement('span');
+    iconPreview.className='crm-stage-preset-icon-preview';
+    iconPreview.title=customIconInput.value?'Своя загруженная иконка':(iconSelect.selectedOptions[0]?.title||'Авто-иконка');
+    renderCrmIconInto(iconPreview, customIconInput.value||iconSelect.value, '•');
     const uploadInput=document.createElement('input');
     uploadInput.type='file';
     uploadInput.accept='image/*';
     uploadInput.hidden=true;
     uploadInput.dataset.stagePresetIconUpload=String(index);
-    uploadWrap.appendChild(uploadInput);
+    iconWrap.append(iconSelect, iconPreview, uploadInput);
     const colorInput=document.createElement('input');
     colorInput.type='color';
     colorInput.name='crmStagePresetColor';
     colorInput.title='Цвет передела в общем маршруте';
     colorInput.value=sanitizeCrmStageColor(entry.color)||'#64748b';
+    const flagsWrap=document.createElement('div');
+    flagsWrap.className='crm-stage-preset-flags';
     const typeLabel=document.createElement('label');
     typeLabel.className='crm-mapping-row__hours';
     const typeInput=document.createElement('input');
@@ -23028,13 +23072,14 @@ function renderCrmStagePresetSettingsUI(){
     defaultText.textContent='⭐';
     defaultText.title='Базовые';
     defaultLabel.append(defaultInput,defaultText);
+    flagsWrap.append(typeLabel,visibleLabel,defaultLabel);
     const deleteBtn=document.createElement('button');
     deleteBtn.type='button';
     deleteBtn.className='pc-icon-btn crm-mapping-row__delete';
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(orderTools,iconSelect,customIconInput,uploadWrap,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
+    controls.append(orderTools,iconWrap,customIconInput,colorInput,flagsWrap,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -23123,10 +23168,19 @@ if(crmStagePresetContainer){
     if(target instanceof HTMLSelectElement && target.name==='crmStagePresetIcon'){
       const row=target.closest('[data-stage-preset-row]');
       const custom=row?.querySelector('input[name="crmStagePresetIconCustom"]');
-      const uploadLabel=row?.querySelector('.crm-stage-preset-upload');
-      if(custom && target.value){
+      const preview=row?.querySelector('.crm-stage-preset-icon-preview');
+      const upload=row?.querySelector('input[data-stage-preset-icon-upload]');
+      if(target.value===CRM_STAGE_ICON_UPLOAD_VALUE){
+        target.value=custom?.value || '';
+        if(upload) upload.click();
+        return;
+      }
+      if(custom && target.value!==custom.value){
         custom.value='';
-        if(uploadLabel) uploadLabel.firstChild.textContent='Загрузить иконку';
+      }
+      if(preview){
+        preview.title=target.selectedOptions[0]?.title||'Авто-иконка';
+        renderCrmIconInto(preview, target.value, '•');
       }
       return;
     }
@@ -23138,10 +23192,23 @@ if(crmStagePresetContainer){
         const dataUrl=await normalizeCrmStageIconFile(file);
         const custom=row?.querySelector('input[name="crmStagePresetIconCustom"]');
         const select=row?.querySelector('select[name="crmStagePresetIcon"]');
+        const preview=row?.querySelector('.crm-stage-preset-icon-preview');
         if(custom) custom.value=dataUrl;
-        if(select) select.value='';
-        const uploadLabel=target.closest('.crm-stage-preset-upload');
-        if(uploadLabel) uploadLabel.firstChild.textContent='Иконка загружена';
+        if(select){
+          let customOption=Array.from(select.options).find(option=>option.dataset.customIcon==='1');
+          if(!customOption){
+            customOption=new Option('Своя', dataUrl);
+            customOption.title='Своя загруженная иконка';
+            customOption.dataset.customIcon='1';
+            select.insertBefore(customOption, Array.from(select.options).find(option=>option.value===CRM_STAGE_ICON_UPLOAD_VALUE)||null);
+          }
+          customOption.value=dataUrl;
+          select.value=dataUrl;
+        }
+        if(preview){
+          preview.title='Своя загруженная иконка';
+          renderCrmIconInto(preview, dataUrl, '•');
+        }
         showToast({ title:'CRM', message:'Иконка передела загружена и будет сохранена вместе с настройками.', tone:'success' });
       }catch(err){
         console.error('Не удалось загрузить иконку передела',err);
@@ -23453,7 +23520,7 @@ if(crmUnaccountedSettingsDlg){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.6.7',
+    version:'5.6.9',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
