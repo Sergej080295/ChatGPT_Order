@@ -2107,6 +2107,36 @@
     min-width: 96px;
   }
 
+  .crm-stage-preset-upload {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .crm-stage-icon-img {
+    width: 1.35em;
+    height: 1.35em;
+    object-fit: contain;
+    display: block;
+  }
+
+  .crm-stage-hours-pair {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    justify-items: center;
+    gap: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .crm-stage-hours-pair__base {
+    justify-self: end;
+  }
+
+  .crm-stage-hours-pair__total {
+    justify-self: start;
+  }
+
   .crm-stage-preset-order {
     display: inline-flex;
     gap: 2px;
@@ -7622,6 +7652,73 @@ function parseCrmStageSteps(value){
   });
   return result;
 }
+function isCrmCustomStageIcon(value){
+  return typeof value==='string' && /^data:image\/(?:png|jpe?g|webp|gif|svg\+xml);base64,/i.test(value.trim());
+}
+function sanitizeCrmStageIcon(value){
+  const raw=typeof value==='string'?value.trim():'';
+  if(!raw) return '';
+  if(CRM_STAGE_ICON_VALUES.has(raw)) return raw;
+  return isCrmCustomStageIcon(raw)?raw:'';
+}
+function renderCrmIconInto(element, iconValue, fallbackText='', fallbackClass=''){
+  if(!element) return;
+  element.textContent='';
+  if(fallbackClass) element.classList.toggle(fallbackClass, false);
+  const icon=sanitizeCrmStageIcon(iconValue);
+  if(isCrmCustomStageIcon(icon)){
+    const img=document.createElement('img');
+    img.className='crm-stage-icon-img';
+    img.src=icon;
+    img.alt='';
+    img.decoding='async';
+    element.appendChild(img);
+    return;
+  }
+  if(icon){
+    element.textContent=icon;
+    return;
+  }
+  element.textContent=fallbackText||'';
+  if(fallbackClass) element.classList.add(fallbackClass);
+}
+function readImageFileAsDataUrl(file){
+  return new Promise((resolve,reject)=>{
+    if(!file || !/^image\//i.test(file.type||'')){
+      reject(new Error('Выберите файл изображения'));
+      return;
+    }
+    const reader=new FileReader();
+    reader.onerror=()=>reject(new Error('Не удалось прочитать файл иконки'));
+    reader.onload=()=>resolve(String(reader.result||''));
+    reader.readAsDataURL(file);
+  });
+}
+async function normalizeCrmStageIconFile(file){
+  const dataUrl=await readImageFileAsDataUrl(file);
+  if(!dataUrl.startsWith('data:image/')) return '';
+  return new Promise(resolve=>{
+    const img=new Image();
+    img.onload=()=>{
+      const size=64;
+      const canvas=document.createElement('canvas');
+      canvas.width=size;
+      canvas.height=size;
+      const ctx=canvas.getContext('2d');
+      if(!ctx){ resolve(dataUrl); return; }
+      ctx.clearRect(0,0,size,size);
+      const scale=Math.min(size/img.width, size/img.height, 1);
+      const width=Math.max(1, Math.round(img.width*scale));
+      const height=Math.max(1, Math.round(img.height*scale));
+      const x=Math.round((size-width)/2);
+      const y=Math.round((size-height)/2);
+      ctx.drawImage(img,x,y,width,height);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror=()=>resolve(dataUrl);
+    img.src=dataUrl;
+  });
+}
 const CRM_BASE_NOHOUR_STAGE_KEYS=new Set(CRM_NOHOUR_STAGES);
 let crmDynamicStageKeys=[];
 let crmStageCatalogSignature='';
@@ -8435,7 +8532,7 @@ function sanitizeCrmStagePresetEntry(raw){
   const visible=raw.visible!==false;
   const id=idRaw||`preset:${normalized}`;
   const iconRaw=typeof raw.icon==='string'?raw.icon.trim():'';
-  const icon=CRM_STAGE_ICON_VALUES.has(iconRaw)?iconRaw:'';
+  const icon=sanitizeCrmStageIcon(iconRaw);
   const color=sanitizeCrmStageColor(raw.color)||'#64748b';
   const steps=parseCrmStageSteps(raw.steps);
   return { id, name, hasHours, visible, icon, color, steps };
@@ -8535,8 +8632,9 @@ function ensureCrmDynamicStageCatalog(){
       : resolveCrmStageKey(entry.name||'');
     if(fixedStage){
       CRM_STAGE_LABELS[fixedStage]=entry.name;
-      if(CRM_STAGE_ICON_VALUES.has(entry.icon)){
-        CRM_STAGE_ICONS[fixedStage]=entry.icon;
+      const fixedIcon=sanitizeCrmStageIcon(entry.icon);
+      if(fixedIcon){
+        CRM_STAGE_ICONS[fixedStage]=fixedIcon;
       }
       if(entry.hasHours===false){
         CRM_NOHOUR_STAGES.add(fixedStage);
@@ -8558,7 +8656,7 @@ function ensureCrmDynamicStageCatalog(){
     CRM_STAGE_KEYS.push(key);
     CRM_STAGE_SEQUENCE.push(key);
     CRM_STAGE_LABELS[key]=entry.name;
-    CRM_STAGE_ICONS[key]=CRM_STAGE_ICON_VALUES.has(entry.icon)?entry.icon:'🏭';
+    CRM_STAGE_ICONS[key]=sanitizeCrmStageIcon(entry.icon)||'🏭';
     CRM_ROUTE_STAGE_CLASS[key]='crm-route-stage--custom';
     CRM_STAGE_ALIASES[key]=[key, normalizeStageName(entry.name)].filter(Boolean);
     if(entry.hasHours===false){
@@ -11454,7 +11552,7 @@ function formatStageOptionLabel(stageKey, baseLabel){
   const label=typeof baseLabel==='string'?baseLabel.trim():'';
   if(!label) return label;
   const icon=stageIconForKey(stageKey);
-  if(icon){
+  if(icon && !isCrmCustomStageIcon(icon)){
     return `${icon} ${label}`;
   }
   const letter=stageLetterForKey(stageKey);
@@ -11671,13 +11769,7 @@ function buildCrmStageSelectMenu(){
     const icon=document.createElement('span');
     icon.className='crm-stage-route-label__icon';
     const iconSymbol=stageIconForKey(option.value);
-    if(iconSymbol){
-      icon.textContent=iconSymbol;
-      icon.classList.remove('crm-stage-route-label__icon--fallback');
-    }else{
-      icon.textContent=stageLetterForKey(option.value);
-      icon.classList.add('crm-stage-route-label__icon--fallback');
-    }
+    renderCrmIconInto(icon, iconSymbol, stageLetterForKey(option.value), 'crm-stage-route-label__icon--fallback');
     const label=document.createElement('span');
     label.className='crm-stage-select-option__label';
     const baseLabel=option.dataset.baseLabel||stripStageOptionPrefix(option.textContent, option.value);
@@ -11702,13 +11794,7 @@ function updateCrmStageSelectDisplay(){
   const currentOption=crmStageSelect.options[crmStageSelect.selectedIndex]||null;
   const stageKey=currentOption?currentOption.value:'';
   const iconSymbol=stageIconForKey(stageKey);
-  if(iconSymbol){
-    crmStageSelectDisplayIcon.textContent=iconSymbol;
-    crmStageSelectDisplayIcon.classList.remove('crm-stage-route-label__icon--fallback');
-  }else{
-    crmStageSelectDisplayIcon.textContent=stageLetterForKey(stageKey)||'';
-    crmStageSelectDisplayIcon.classList.add('crm-stage-route-label__icon--fallback');
-  }
+  renderCrmIconInto(crmStageSelectDisplayIcon, iconSymbol, stageLetterForKey(stageKey)||'', 'crm-stage-route-label__icon--fallback');
   const baseLabel=currentOption?(currentOption.dataset.baseLabel||stripStageOptionPrefix(currentOption.textContent, stageKey)):'Передел';
   crmStageSelectDisplayLabel.textContent=baseLabel||'Передел';
   if(crmStageSelectDisplay){
@@ -11719,18 +11805,15 @@ function updateCrmStageSelectDisplay(){
 function renderCrmStageTabLabel(stageKey){
   if(!crmStageTabBtn) return;
   const label=CRM_STAGE_LABELS[stageKey]||'Переделы';
-  const iconSymbol=stageIconForKey(stageKey)||stageLetterForKey(stageKey)||'';
-  const hasIcon=Boolean(iconSymbol);
+  const iconSymbol=stageIconForKey(stageKey);
+  const hasIcon=Boolean(iconSymbol||stageLetterForKey(stageKey));
   crmStageTabBtn.innerHTML='';
   const content=document.createElement('span');
   content.className='crm-stage-tab__content';
   if(hasIcon){
     const icon=document.createElement('span');
     icon.className='crm-stage-tab__icon crm-stage-route-label__icon';
-    if(!stageIconForKey(stageKey)){
-      icon.classList.add('crm-stage-route-label__icon--fallback');
-    }
-    icon.textContent=iconSymbol;
+    renderCrmIconInto(icon, iconSymbol, stageLetterForKey(stageKey)||'', 'crm-stage-route-label__icon--fallback');
     content.appendChild(icon);
   }
   const text=document.createElement('span');
@@ -12082,6 +12165,12 @@ function formatStageHoursDisplay(base,total,extra){
     return `${toLabel(base)} / ${toLabel(total)}`;
   }
   return toLabel(base);
+}
+function formatStageHoursMarkup(base,total,extra){
+  const text=formatStageHoursDisplay(base,total,extra);
+  if(!(Number(extra)>0.0001)) return escapeHtml(text);
+  const parts=text.split('/');
+  return `<span class="crm-stage-hours-pair"><span class="crm-stage-hours-pair__base">${escapeHtml((parts[0]||'').trim())}</span><span class="crm-stage-hours-pair__sep">/</span><span class="crm-stage-hours-pair__total">${escapeHtml((parts[1]||'').trim())}</span></span>`;
 }
 
 function formatStageHoursTotal(value){
@@ -13203,7 +13292,8 @@ function getCrmOrdersVisibleColumnCount(){
 }
 
 function applyCrmOrdersStageColumnFilter(){
-  ensureCrmOrdersTableColumns();
+  // Колонки уже пересобираются перед отрисовкой таблицы. Повторная пересборка здесь
+  // сбрасывала строку итогов после updateCrmOrdersTotals().
 }
 
 
@@ -13459,7 +13549,7 @@ function runCrmAutoOptimization({ reason='auto', stageKeys=null, targetEntries=n
   const todayTime=today.getTime();
   CRM_STAGE_SEQUENCE.forEach(stageKey=>{
     if(stageFilter && !stageFilter.has(stageKey)) return;
-    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+    const { rows }=collectCrmStageRows(stageKey)||{};
     if(!Array.isArray(rows) || !rows.length) return;
     const isHourless=CRM_NOHOUR_STAGES.has(stageKey);
     const capacity=isHourless
@@ -15885,13 +15975,7 @@ function renderCrmStageRouteOverview(rows, stageKey, filterMode, dayFilter, from
       const icon=document.createElement('span');
       icon.className='crm-route-legend-icon';
       const iconSymbol=stageIconForKey(stage);
-      if(iconSymbol){
-        icon.textContent=iconSymbol;
-        icon.classList.remove('crm-route-legend-icon--fallback');
-      }else{
-        icon.textContent=stageLetterForKey(stage);
-        icon.classList.add('crm-route-legend-icon--fallback');
-      }
+      renderCrmIconInto(icon, iconSymbol, stageLetterForKey(stage), 'crm-route-legend-icon--fallback');
       const name=document.createElement('span');
       name.className='crm-route-legend-name';
       name.textContent=CRM_STAGE_LABELS[stage]||stage;
@@ -16118,13 +16202,7 @@ function buildCrmOrderRouteContent(order,currentStageKey){
     const labelIcon=document.createElement('span');
     labelIcon.className='crm-stage-route-label__icon';
     const iconSymbol=stageIconForKey(key);
-    if(iconSymbol){
-      labelIcon.textContent=iconSymbol;
-      labelIcon.classList.remove('crm-stage-route-label__icon--fallback');
-    }else{
-      labelIcon.textContent=stageLetterForKey(key);
-      labelIcon.classList.add('crm-stage-route-label__icon--fallback');
-    }
+    renderCrmIconInto(labelIcon, iconSymbol, stageLetterForKey(key), 'crm-stage-route-label__icon--fallback');
     const labelTextSpan=document.createElement('span');
     labelTextSpan.className='crm-stage-route-label__text';
     const stepLabel=getCrmStageStepDisplayLabel(stage?.name||'');
@@ -17912,7 +17990,7 @@ function renderCrmStageTable(){
     if(entry.isLate) tr.classList.add('crm-stage-late');
     const isHourless=CRM_NOHOUR_STAGES.has(entry.stageKey);
     const stageEditable=crmCanManageStage(entry.stageKey);
-    const stageProgressEditable=crmCanUpdateStageProgressForStage(entry.stageKey);
+    const stageProgressEditable=crmCanUpdateStageProgressForStage(entry.stageKey)||crmCanManageStage(entry.stageKey);
     if(entry.done){
       doneCount+=1;
     }else{
@@ -17935,7 +18013,7 @@ function renderCrmStageTable(){
         tips:advice
       });
     }
-    const hoursCell=isHourless?'—':formatStageBaseHours(entry.baseHours);
+    const hoursCell=isHourless?'—':formatStageHoursMarkup(entry.baseHours, entry.totalHours, entry.extraHours);
     const restCell=isHourless?'—':formatStageRestLabel(entry.restHours);
     const reserveDisabled=(!stageEditable||isHourless)?'disabled':'';
     const reserveChecked=entry.useReserve?'checked':'';
@@ -17972,7 +18050,7 @@ function renderCrmStageTable(){
       <td><button class="${pinClasses.join(' ')}" type="button" title="${escapeHtml(pinTitle)}" ${pinDisabledAttr}${pinModeAttr}>📎</button></td>
       <td>${titleMarkup}</td>
       <td>${progressMarkup}</td>
-      <td>${escapeHtml(hoursCell)}</td>
+      <td class="crm-stage-hours-cell">${isHourless?escapeHtml(hoursCell):hoursCell}</td>
       <td>${escapeHtml(restCell)}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.startRaw))}</td>
       <td>${escapeHtml(formatStageDateLabel(entry.endRaw))}</td>
@@ -18087,7 +18165,11 @@ function updateCrmStageTotals(totals){
   const total=totals?.totalHours||0;
   const extra=totals?.extraHours||0;
   const rest=totals?.restHours||0;
-  crmStageTotalHours.textContent=hourless?'—':formatStageHoursDisplay(base,total,extra);
+  if(hourless){
+    crmStageTotalHours.textContent='—';
+  }else{
+    crmStageTotalHours.innerHTML=formatStageHoursMarkup(base,total,extra);
+  }
   crmStageTotalRest.textContent=hourless?'—':formatStageRestLabel(rest);
 }
 
@@ -18260,7 +18342,10 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
     return;
   }
   const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
-  if(!order || !stage) return;
+  if(!order || !stage){
+    showToast({ title:'CRM', message:'Не удалось найти передел для изменения брони. Обновите страницу и попробуйте ещё раз.', tone:'error' });
+    return;
+  }
   const previousSnapshot=snapshotOrderForJournal(order);
   stage.useReserve=!!checked;
   updateOrderAfterStageChange(order);
@@ -18315,12 +18400,16 @@ function promptStageCompletionStatus(order){
 }
 
 async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sourceInput=null){
-  if(!crmCanUpdateStageProgressForStage(stageKey)){
+  if(!crmCanUpdateStageProgressForStage(stageKey)&&!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для отметки прогресса этого передела.', tone:'warn' });
     return;
   }
   const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
-  if(!order || !stage) return;
+  if(!order || !stage){
+    if(sourceInput) sourceInput.checked=!checked;
+    showToast({ title:'CRM', message:'Не удалось найти передел для изменения готовности. Обновите страницу и попробуйте ещё раз.', tone:'error' });
+    return;
+  }
   const previousSnapshot=snapshotOrderForJournal(order);
   const completionMeta=async()=>{
     const now=new Date();
@@ -18358,7 +18447,7 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
     return { doneAt:doneAt.toISOString(), completedLate, delayReason:completedLate?delayReason:'' };
   };
   if(checked){
-    const targetStatus=await promptStageCompletionStatus(order);
+    const targetStatus=crmCanCompleteOrders()?await promptStageCompletionStatus(order):(order.status||'');
     if(targetStatus===null){
       if(sourceInput) sourceInput.checked=!!stage.done;
       return;
@@ -18621,7 +18710,6 @@ function renderCrmSimpleGantt(targets, rows, schedule){
   const leftHeader=targets?.leftHeader;
   if(!left||!header||!body) return;
   left.innerHTML=''; header.innerHTML=''; body.innerHTML='';
-  header.style.removeProperty('transform');
   const safeRows=Array.isArray(rows)?rows.filter(row=>row&&row.identity):[];
   if(!schedule||!safeRows.length){ if(empty) empty.hidden=false; syncCrmSimpleGanttHeaderHeight(leftHeader, header); return; }
   const today=today0();
@@ -18651,6 +18739,12 @@ function renderCrmSimpleGantt(targets, rows, schedule){
     const leftRow=document.createElement('div');
     leftRow.className='crm-stage-gantt-left-row';
     leftRow.textContent=`${Number.isFinite(row.displayIndex)?row.displayIndex:index+1}. ${row.orderTitle||'Заказ'}`;
+    const orderId=row.orderId||row.order?.id||'';
+    if(orderId && crmCanViewOrderDetails()){
+      leftRow.classList.add('crm-linklike','crm-order-title');
+      leftRow.title='Открыть карточку заказа';
+      leftRow.addEventListener('click',()=>openOrder(orderId));
+    }
     left.appendChild(leftRow);
     const rowEl=document.createElement('div');
     rowEl.className='crm-stage-gantt-row';
@@ -18684,7 +18778,19 @@ function renderCrmSimpleGantt(targets, rows, schedule){
   });
   const scroll=header.closest('.crm-stage-gantt-scroll');
   if(scroll){
-    scroll.onscroll=()=>{ header.style.transform=`translateX(${-scroll.scrollLeft}px)`; };
+    let lock=false;
+    scroll.onscroll=()=>{
+      if(lock) return;
+      lock=true;
+      left.scrollTop=scroll.scrollTop;
+      lock=false;
+    };
+    left.onscroll=()=>{
+      if(lock) return;
+      lock=true;
+      scroll.scrollTop=left.scrollTop;
+      lock=false;
+    };
   }
 }
 
@@ -18694,7 +18800,7 @@ function renderCrmAllGanttView(){
   const stages=getCrmCurrentRouteStageKeys();
   stages.forEach(stageKey=>{
     const stageLabel=CRM_STAGE_LABELS[stageKey]||stageKey;
-    const { rows }=collectCrmStageRows(stageKey,{ ignoreSearch:true })||{};
+    const { rows }=collectCrmStageRows(stageKey)||{};
     const stageRows=Array.isArray(rows)?rows:[];
     const schedule=stageRows.length?buildCrmStageSchedule(stageKey, stageRows):null;
     const details=document.createElement('details');
@@ -22532,6 +22638,7 @@ function collectCrmStagePresetInputs(){
     const hoursInput=row.querySelector('input[name="crmStagePresetHours"]');
     const visibleInput=row.querySelector('input[name="crmStagePresetVisible"]');
     const iconInput=row.querySelector('select[name="crmStagePresetIcon"]');
+    const customIconInput=row.querySelector('input[name="crmStagePresetIconCustom"]');
     const defaultInput=row.querySelector('input[name="crmStagePresetDefault"]');
     const stepsInput=row.querySelector('textarea[name="crmStagePresetSteps"]');
     return {
@@ -22539,7 +22646,7 @@ function collectCrmStagePresetInputs(){
       name:nameInput?nameInput.value:'',
       hasHours:hoursInput?!!hoursInput.checked:true,
       visible:visibleInput?!!visibleInput.checked:true,
-      icon:iconInput?iconInput.value:'',
+      icon:(customIconInput&&customIconInput.value)?customIconInput.value:(iconInput?iconInput.value:''),
       color:(row.querySelector('input[name="crmStagePresetColor"]')?.value||''),
       steps:parseCrmStageSteps(stepsInput?stepsInput.value:''),
       inDefault:defaultInput?!!defaultInput.checked:false
@@ -22563,7 +22670,7 @@ function normalizeCrmStagePresetDraftList(raw){
       name:typeof safeEntry.name==='string'?safeEntry.name:'',
       hasHours:safeEntry.hasHours!==false,
       visible:safeEntry.visible!==false,
-      icon:CRM_STAGE_ICON_VALUES.has(safeEntry.icon)?safeEntry.icon:'',
+      icon:sanitizeCrmStageIcon(safeEntry.icon),
       color:sanitizeCrmStageColor(safeEntry.color)||'#64748b',
       steps:parseCrmStageSteps(safeEntry.steps),
       inDefault:safeEntry.inDefault===true
@@ -22693,6 +22800,47 @@ function ensureHourlyStagesCapacity(stageList, prevList){
     state.settings.capacity=normalizeCapacityMap(capacity, CRM_DEFAULT_CAPACITY);
     showToast({ title:'CRM', message:`Для новых/изменённых часовых переделов установлена вместимость 1: ${Array.from(new Set(touched)).join(', ')}. Проверьте значения в настройках.`, tone:'warn' });
   }
+}
+
+function ensureCrmStagePresetStepsFromOrders(){
+  if(!state||!state.settings) return null;
+  const presets=sanitizeCrmStagePresetList(state.settings.stagePresets);
+  const byBase=new Map(presets.map((preset,index)=>[normalizeStageName(preset.name), { preset, index }]));
+  const additions=new Map();
+  (Array.isArray(state.boards)?state.boards:[]).forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
+        const split=splitCrmStageStepName(stage?.name||'');
+        const baseKey=normalizeStageName(split.base);
+        const stepKey=normalizeStageName(split.step);
+        if(!baseKey || !stepKey) return;
+        if(!byBase.has(baseKey)){
+          const preset={ id:`preset:migrated:${baseKey}:${safeRandomUUID()}`, name:split.base, hasHours:stageNameHasHours(split.base), visible:true, icon:'', color:'#64748b', steps:[] };
+          byBase.set(baseKey,{ preset, index:presets.length });
+          presets.push(preset);
+        }
+        const entry=byBase.get(baseKey);
+        const currentSteps=parseCrmStageSteps(entry.preset.steps);
+        if(currentSteps.some(item=>normalizeStageName(item)===stepKey)) return;
+        entry.preset.steps=[...currentSteps, split.step];
+        const key=entry.preset.name;
+        if(!additions.has(key)) additions.set(key,new Map());
+        const stepMap=additions.get(key);
+        if(!stepMap.has(split.step)) stepMap.set(split.step,new Set());
+        stepMap.get(split.step).add(buildCrmOrderTitle(order));
+      });
+    });
+  });
+  if(!additions.size) return null;
+  state.settings.stagePresets=sanitizeCrmStagePresetList(presets);
+  ensureCrmDynamicStageCatalog();
+  const details=[];
+  additions.forEach((stepMap,base)=>{
+    stepMap.forEach((orders,step)=>{
+      details.push(`${base}: «${step}» (${Array.from(orders).filter(Boolean).slice(0,3).join(', ')})`);
+    });
+  });
+  return { count:details.length, details };
 }
 
 function applyCrmStagePresetDiffToOrders(diff){
@@ -22830,7 +22978,21 @@ function renderCrmStagePresetSettingsUI(){
     CRM_STAGE_ICON_OPTIONS.forEach(option=>{
       iconSelect.appendChild(new Option(`${option.value} ${option.label}`, option.value));
     });
-    iconSelect.value=CRM_STAGE_ICON_VALUES.has(entry.icon)?entry.icon:'';
+    const customIcon=sanitizeCrmStageIcon(entry.icon);
+    iconSelect.value=CRM_STAGE_ICON_VALUES.has(customIcon)?customIcon:'';
+    const customIconInput=document.createElement('input');
+    customIconInput.type='hidden';
+    customIconInput.name='crmStagePresetIconCustom';
+    customIconInput.value=isCrmCustomStageIcon(customIcon)?customIcon:'';
+    const uploadWrap=document.createElement('label');
+    uploadWrap.className='crm-stage-preset-upload pc-btn pc-btn--ghost';
+    uploadWrap.textContent=customIconInput.value?'Иконка загружена':'Загрузить иконку';
+    const uploadInput=document.createElement('input');
+    uploadInput.type='file';
+    uploadInput.accept='image/*';
+    uploadInput.hidden=true;
+    uploadInput.dataset.stagePresetIconUpload=String(index);
+    uploadWrap.appendChild(uploadInput);
     const colorInput=document.createElement('input');
     colorInput.type='color';
     colorInput.name='crmStagePresetColor';
@@ -22872,7 +23034,7 @@ function renderCrmStagePresetSettingsUI(){
     deleteBtn.textContent='✖';
     deleteBtn.title='Удалить передел';
     deleteBtn.dataset.stagePresetDelete=String(index);
-    controls.append(orderTools,iconSelect,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
+    controls.append(orderTools,iconSelect,customIconInput,uploadWrap,colorInput,typeLabel,visibleLabel,defaultLabel,deleteBtn);
     rowEl.append(title,controls);
     list.appendChild(rowEl);
   });
@@ -22956,6 +23118,39 @@ if(crmMappingContainer){
 }
 
 if(crmStagePresetContainer){
+  crmStagePresetContainer.addEventListener('change',async event=>{
+    const target=event.target;
+    if(target instanceof HTMLSelectElement && target.name==='crmStagePresetIcon'){
+      const row=target.closest('[data-stage-preset-row]');
+      const custom=row?.querySelector('input[name="crmStagePresetIconCustom"]');
+      const uploadLabel=row?.querySelector('.crm-stage-preset-upload');
+      if(custom && target.value){
+        custom.value='';
+        if(uploadLabel) uploadLabel.firstChild.textContent='Загрузить иконку';
+      }
+      return;
+    }
+    if(target instanceof HTMLInputElement && target.dataset.stagePresetIconUpload!==undefined){
+      const file=target.files?.[0];
+      if(!file) return;
+      const row=target.closest('[data-stage-preset-row]');
+      try{
+        const dataUrl=await normalizeCrmStageIconFile(file);
+        const custom=row?.querySelector('input[name="crmStagePresetIconCustom"]');
+        const select=row?.querySelector('select[name="crmStagePresetIcon"]');
+        if(custom) custom.value=dataUrl;
+        if(select) select.value='';
+        const uploadLabel=target.closest('.crm-stage-preset-upload');
+        if(uploadLabel) uploadLabel.firstChild.textContent='Иконка загружена';
+        showToast({ title:'CRM', message:'Иконка передела загружена и будет сохранена вместе с настройками.', tone:'success' });
+      }catch(err){
+        console.error('Не удалось загрузить иконку передела',err);
+        showToast({ title:'CRM', message:err.message||'Не удалось загрузить иконку', tone:'error' });
+      }finally{
+        target.value='';
+      }
+    }
+  });
   crmStagePresetContainer.addEventListener('click',event=>{
     const target=event.target instanceof Element ? event.target.closest('button') : null;
     if(!(target instanceof HTMLButtonElement)) return;
@@ -25777,7 +25972,21 @@ window.addEventListener('resize',()=>{
   syncCrmRouteHeaders();
 });
 setupCrmHintTargets();
+const crmStageStepMigration=ensureCrmStagePresetStepsFromOrders();
+if(crmStageStepMigration){
+  persistLocal();
+}
 renderAll();
+if(crmStageStepMigration){
+  save('Миграция этапов переделов');
+  const details=crmStageStepMigration.details.slice(0,5).join('; ');
+  showToast({
+    title:'CRM',
+    message:`Автоматически добавлены недостающие этапы переделов из старых заказов: ${details}${crmStageStepMigration.details.length>5?' …':''}`,
+    tone:'info',
+    autoClose:9000
+  });
+}
 
 updateCrmUserMenu();
 updateCrmNavigationAccess();
