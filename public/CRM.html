@@ -2168,6 +2168,27 @@
     align-items: center;
   }
 
+  .crm-settings-conflicts {
+    display: grid;
+    gap: var(--pc-spacing-sm);
+  }
+
+  .crm-settings-conflicts__group {
+    border: 1px solid color-mix(in srgb, var(--pc-border) 70%, transparent);
+    border-radius: var(--pc-radius-md);
+    padding: var(--pc-spacing-sm);
+    background: color-mix(in srgb, var(--pc-surface) 94%, transparent);
+  }
+
+  .crm-settings-conflicts__group h4 {
+    margin: 0 0 6px;
+  }
+
+  .crm-settings-conflicts__group ul {
+    margin: 0;
+    padding-left: 18px;
+  }
+
   .crm-stage-preset-order .pc-icon-btn {
     width: 28px;
     height: 28px;
@@ -3172,16 +3193,22 @@
 
   .crm-stage-gantt-left-body {
     flex: 1;
-    overflow: auto;
+    overflow-y: auto;
+    overflow-x: hidden;
     font-size: 12px;
   }
 
   .crm-stage-gantt-left-row {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 28px;
     padding: 6px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 24%, transparent);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
   }
 
   .crm-stage-all-gantt-list {
@@ -7018,6 +7045,7 @@
       <button type="button" class="pc-btn pc-btn--danger" id="deleteBoardBtn">Удалить доску</button>
       <button type="button" class="pc-btn pc-btn--ghost" id="crmSettingsExportBtn">Экспорт настроек</button>
       <button type="button" class="pc-btn pc-btn--ghost" id="crmSettingsImportBtn">Импорт настроек</button>
+      <button type="button" class="pc-btn pc-btn--ghost" id="crmSettingsConflictsBtn">Конфликты данных</button>
       <button type="submit" class="pc-btn pc-btn--primary">Сохранить</button>
     </div>
     <input type="file" id="crmSettingsImportFile" accept="application/json,.json" hidden />
@@ -7025,6 +7053,19 @@
     <input type="hidden" name="unaccountedHiddenStatuses" id="crmUnaccountedHiddenFilter" />
     <input type="hidden" name="id" />
   </form>
+</dialog>
+
+<dialog id="crmSettingsConflictsDlg" class="pc-modal pc-modal--sm">
+  <div class="dlg-head">
+    <strong>Конфликтующие данные</strong>
+    <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmSettingsConflictsCloseIcon" aria-label="Закрыть">✖</button>
+  </div>
+  <div class="dlg-body">
+    <div id="crmSettingsConflictsContent" class="crm-settings-conflicts"></div>
+  </div>
+  <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--secondary" id="crmSettingsConflictsClose">Закрыть</button>
+  </div>
 </dialog>
 
 <!-- Диалог настройки состояний -->
@@ -13953,19 +13994,16 @@ function buildCrmStageSchedule(stageKey, rows, options){
       }
     });
     if(isHourless){
-      const targetCap=Math.max(originalPubCap, sanitizedSegments.length);
-      day.meta.pubCap=targetCap;
+      day.meta.pubCap=originalPubCap;
       day.meta.pubRem=0;
       day.meta.resLim=0;
       day.meta.resRem=0;
       day.meta.pubUsed=sanitizedSegments.length;
       day.meta.resUsed=0;
     }else{
-      const targetPublicCap=Math.max(originalPubCap, publicUsed);
-      const targetReserveCap=Math.max(originalResLim, reserveUsed);
-      day.meta.pubCap=targetPublicCap;
+      day.meta.pubCap=originalPubCap;
       day.meta.pubRem=0;
-      day.meta.resLim=targetReserveCap;
+      day.meta.resLim=originalResLim;
       day.meta.resRem=0;
       day.meta.pubUsed=publicUsed;
       day.meta.resUsed=reserveUsed;
@@ -21730,6 +21768,11 @@ const boardDlg=$('#boardDlg'),boardForm=$('#boardForm'),deleteBoardBtn=$('#delet
 const crmSettingsExportBtn=$('#crmSettingsExportBtn');
 const crmSettingsImportBtn=$('#crmSettingsImportBtn');
 const crmSettingsImportFile=$('#crmSettingsImportFile');
+const crmSettingsConflictsBtn=$('#crmSettingsConflictsBtn');
+const crmSettingsConflictsDlg=$('#crmSettingsConflictsDlg');
+const crmSettingsConflictsContent=$('#crmSettingsConflictsContent');
+const crmSettingsConflictsClose=$('#crmSettingsConflictsClose');
+const crmSettingsConflictsCloseIcon=$('#crmSettingsConflictsCloseIcon');
 const crmUnaccountedHidden=$('#crmUnaccountedHidden');
 const crmUnaccountedHiddenFilters=$('#crmUnaccountedHiddenFilter');
 const crmUnaccountedSummary=$('#crmUnaccountedSummary');
@@ -21815,6 +21858,42 @@ let crmStageScheduleExtrasList=null;
 let crmStageScheduleExtrasInput=null;
 let crmStageScheduleExtrasAddBtn=null;
 
+function getCrmCapacityStageKeysForSettings(){
+  ensureCrmDynamicStageCatalog();
+  const keys=new Set();
+  getCrmStagePresets().forEach(item=>{
+    const key=resolveCrmStageKeyWithMapping(item?.name);
+    if(key && !CRM_NOHOUR_STAGES.has(key)) keys.add(key);
+  });
+  Object.keys(state?.settings?.capacity||{}).forEach(key=>{
+    const normalized=normalizeCrmStageKey(key);
+    if(normalized && CRM_STAGE_KEYS.includes(normalized) && !CRM_NOHOUR_STAGES.has(normalized)) keys.add(normalized);
+  });
+  (Array.isArray(state?.boards)?state.boards:[]).forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
+        const key=resolveCrmStageKeyWithMapping(stage?.name);
+        if(key && !CRM_NOHOUR_STAGES.has(key)) keys.add(key);
+      });
+    });
+  });
+  CRM_STAGE_SEQUENCE.forEach(key=>{
+    if(!CRM_NOHOUR_STAGES.has(key) && (keys.has(key) || Object.prototype.hasOwnProperty.call(CRM_DEFAULT_CAPACITY,key))){
+      keys.add(key);
+    }
+  });
+  return Array.from(keys).sort((a,b)=>{
+    const ai=CRM_STAGE_SEQUENCE.indexOf(a);
+    const bi=CRM_STAGE_SEQUENCE.indexOf(b);
+    if(ai>=0 || bi>=0){
+      if(ai<0) return 1;
+      if(bi<0) return -1;
+      if(ai!==bi) return ai-bi;
+    }
+    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
+  });
+}
+
 function renderCrmCapacitySettingsUI(){
   if(!crmCapacityContainer) return;
   crmCapacityContainer.innerHTML='';
@@ -21828,8 +21907,8 @@ function renderCrmCapacitySettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmCapacitySettings();
-  const presentStageKeys=Array.from(new Set(getCrmStagePresets().map(item=>resolveCrmStageKeyWithMapping(item?.name)).filter(Boolean)));
-  presentStageKeys.filter(key=>!CRM_NOHOUR_STAGES.has(key)).forEach(stage=>{
+  const presentStageKeys=getCrmCapacityStageKeysForSettings();
+  presentStageKeys.forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
     const title=document.createElement('label');
@@ -21854,6 +21933,42 @@ function renderCrmCapacitySettingsUI(){
   crmCapacityContainer.appendChild(row);
 }
 
+function getCrmParallelStageKeysForSettings(){
+  ensureCrmDynamicStageCatalog();
+  const keys=new Set();
+  getCrmStagePresets().forEach(item=>{
+    const key=resolveCrmStageKeyWithMapping(item?.name);
+    if(key && CRM_NOHOUR_STAGES.has(key)) keys.add(key);
+  });
+  Object.keys(state?.settings?.parallel||{}).forEach(key=>{
+    const normalized=normalizeCrmStageKey(key);
+    if(normalized && CRM_STAGE_KEYS.includes(normalized) && CRM_NOHOUR_STAGES.has(normalized)) keys.add(normalized);
+  });
+  (Array.isArray(state?.boards)?state.boards:[]).forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
+        const key=resolveCrmStageKeyWithMapping(stage?.name);
+        if(key && CRM_NOHOUR_STAGES.has(key)) keys.add(key);
+      });
+    });
+  });
+  CRM_STAGE_SEQUENCE.forEach(key=>{
+    if(CRM_NOHOUR_STAGES.has(key) && (keys.has(key) || Object.prototype.hasOwnProperty.call(CRM_DEFAULT_PARALLEL,key))){
+      keys.add(key);
+    }
+  });
+  return Array.from(keys).sort((a,b)=>{
+    const ai=CRM_STAGE_SEQUENCE.indexOf(a);
+    const bi=CRM_STAGE_SEQUENCE.indexOf(b);
+    if(ai>=0 || bi>=0){
+      if(ai<0) return 1;
+      if(bi<0) return -1;
+      if(ai!==bi) return ai-bi;
+    }
+    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
+  });
+}
+
 function renderCrmParallelSettingsUI(){
   if(!crmParallelContainer) return;
   crmParallelContainer.innerHTML='';
@@ -21867,8 +21982,8 @@ function renderCrmParallelSettingsUI(){
   const matrix=document.createElement('div');
   matrix.className='crm-settings-matrix';
   const values=getCrmParallelSettings();
-  const presentStageKeys=Array.from(new Set(getCrmStagePresets().map(item=>resolveCrmStageKeyWithMapping(item?.name)).filter(Boolean)));
-  presentStageKeys.filter(stage=>CRM_NOHOUR_STAGES.has(stage)).forEach(stage=>{
+  const presentStageKeys=getCrmParallelStageKeysForSettings();
+  presentStageKeys.forEach(stage=>{
     const item=document.createElement('div');
     item.className='crm-settings-matrix-row';
     const title=document.createElement('label');
@@ -23517,10 +23632,90 @@ if(crmUnaccountedSettingsDlg){
   crmUnaccountedSettingsDlg.addEventListener('cancel',()=>closeCrmUnaccountedEditor());
 }
 
+function collectCrmSettingsConflicts(){
+  ensureCrmDynamicStageCatalog();
+  const groups=[];
+  const stagePresets=getCrmStagePresets();
+  const presetByBase=new Map(stagePresets.map(item=>[normalizeStageName(item.name), item]));
+  const unknownStages=new Map();
+  const missingSteps=new Map();
+  (Array.isArray(state?.boards)?state.boards:[]).forEach(board=>{
+    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
+      const orderTitle=buildCrmOrderTitle(order);
+      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
+        const rawName=(stage?.name||'').toString().trim();
+        if(!rawName) return;
+        const split=splitCrmStageStepName(rawName);
+        const baseKey=normalizeStageName(split.base);
+        const preset=presetByBase.get(baseKey);
+        if(!preset){
+          if(!unknownStages.has(split.base)) unknownStages.set(split.base,new Set());
+          unknownStages.get(split.base).add(orderTitle);
+          return;
+        }
+        if(split.step){
+          const knownSteps=parseCrmStageSteps(preset.steps).map(normalizeStageName);
+          if(!knownSteps.includes(normalizeStageName(split.step))){
+            const label=`${preset.name} — ${split.step}`;
+            if(!missingSteps.has(label)) missingSteps.set(label,new Set());
+            missingSteps.get(label).add(orderTitle);
+          }
+        }
+      });
+    });
+  });
+  const orphanCapacity=Object.keys(state?.settings?.capacity||{}).filter(key=>!CRM_STAGE_KEYS.includes(normalizeCrmStageKey(key)));
+  const orphanParallel=Object.keys(state?.settings?.parallel||{}).filter(key=>!CRM_STAGE_KEYS.includes(normalizeCrmStageKey(key)));
+  const toItems=map=>Array.from(map.entries()).map(([name,orders])=>`${name}: ${Array.from(orders).filter(Boolean).slice(0,5).join(', ')||'заказы не найдены'}`);
+  if(unknownStages.size) groups.push({ title:'Переделы есть в заказах, но отсутствуют в «Списке переделов»', items:toItems(unknownStages) });
+  if(missingSteps.size) groups.push({ title:'Этапы есть в заказах, но не прописаны в настройках передела', items:toItems(missingSteps) });
+  if(orphanCapacity.length) groups.push({ title:'Вместимость сохранена для неактуальных ключей переделов', items:orphanCapacity });
+  if(orphanParallel.length) groups.push({ title:'Параллельность сохранена для неактуальных ключей переделов', items:orphanParallel });
+  return groups;
+}
+
+function renderCrmSettingsConflicts(){
+  if(!crmSettingsConflictsContent) return;
+  const groups=collectCrmSettingsConflicts();
+  crmSettingsConflictsContent.innerHTML='';
+  if(!groups.length){
+    const empty=document.createElement('div');
+    empty.className='crm-mapping-empty';
+    empty.textContent='Конфликтующие данные не обнаружены.';
+    crmSettingsConflictsContent.appendChild(empty);
+    return;
+  }
+  groups.forEach(group=>{
+    const section=document.createElement('section');
+    section.className='crm-settings-conflicts__group';
+    const title=document.createElement('h4');
+    title.textContent=group.title;
+    const list=document.createElement('ul');
+    (group.items||[]).forEach(item=>{
+      const li=document.createElement('li');
+      li.textContent=item;
+      list.appendChild(li);
+    });
+    section.append(title,list);
+    crmSettingsConflictsContent.appendChild(section);
+  });
+}
+
+function openCrmSettingsConflicts(){
+  renderCrmSettingsConflicts();
+  if(crmSettingsConflictsDlg && !crmSettingsConflictsDlg.open){
+    crmSettingsConflictsDlg.showModal();
+  }
+}
+
+function closeCrmSettingsConflicts(){
+  if(crmSettingsConflictsDlg?.open) crmSettingsConflictsDlg.close();
+}
+
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.6.9',
+    version:'5.7',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -23580,6 +23775,18 @@ async function importCrmSettingsFile(file){
 
 if(crmSettingsExportBtn){
   crmSettingsExportBtn.addEventListener('click',downloadCrmSettingsExport);
+}
+if(crmSettingsConflictsBtn){
+  crmSettingsConflictsBtn.addEventListener('click',openCrmSettingsConflicts);
+}
+if(crmSettingsConflictsClose){
+  crmSettingsConflictsClose.addEventListener('click',closeCrmSettingsConflicts);
+}
+if(crmSettingsConflictsCloseIcon){
+  crmSettingsConflictsCloseIcon.addEventListener('click',closeCrmSettingsConflicts);
+}
+if(crmSettingsConflictsDlg){
+  crmSettingsConflictsDlg.addEventListener('cancel',()=>closeCrmSettingsConflicts());
 }
 if(crmSettingsImportBtn && crmSettingsImportFile){
   crmSettingsImportBtn.addEventListener('click',()=>crmSettingsImportFile.click());

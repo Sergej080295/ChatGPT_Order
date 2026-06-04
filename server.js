@@ -369,7 +369,7 @@ if (DATA_DIR_INFO.source === 'env') {
   console.info(`[CRM] Используется резервный каталог данных ${DATA_DIR}.`);
 }
 
-const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '12', 10)) * 3600 * 1000;
+const SESSION_TTL_MS = Math.max(1, Number.parseInt(process.env.SESSION_TTL_HOURS || '72', 10)) * 3600 * 1000;
 const SESSION_RENEW_THRESHOLD_MS = SESSION_TTL_MS / 3;
 const AUTH_MODE = (process.env.AUTH_MODE || 'local').trim().toLowerCase();
 const ALLOW_GUEST_LOGIN = parseBoolean(process.env.ALLOW_GUEST ?? 'true', true);
