@@ -8145,8 +8145,8 @@ function sanitizeCrmSettings(raw){
     percent:sanitizeExtraPercent(extraSource.percent),
     minimum:sanitizeExtraMinimum(extraSource.minimum)
   };
-  result.capacity=normalizeCapacityMap(base.capacity, CRM_DEFAULT_CAPACITY);
-  result.parallel=normalizeParallelMap(base.parallel, CRM_DEFAULT_PARALLEL);
+  result.capacity=normalizeCapacityMap(base.capacity, {}, { includeFallback:false });
+  result.parallel=normalizeParallelMap(base.parallel, {}, { includeFallback:false });
   result.preferences=sanitizeCrmPreferences(base.preferences);
   result.startView=sanitizeCrmStartView(base.startView);
   result.stagePresets=sanitizeCrmStagePresetList(base.stagePresets);
@@ -9730,29 +9730,84 @@ function parseNumericValue(raw){
   return { number:0, hasValue:false };
 }
 
-function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY){
+function normalizeCapacityMap(source, fallback=CRM_DEFAULT_CAPACITY, options={}){
   const result={};
+  const sourceMap={};
+  if(source&&typeof source==='object'){
+    Object.entries(source).forEach(([key,value])=>{
+      const normalized=normalizeCrmStageKey(key);
+      if(normalized) sourceMap[normalized]=value;
+    });
+  }
   const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_CAPACITY;
-  CRM_STAGE_KEYS.forEach(stage=>{
+  const includeFallback=options?.includeFallback!==false;
+  const explicitStageKeys=Array.isArray(options?.stageKeys)?options.stageKeys:null;
+  const keys=new Set();
+  if(includeFallback){
+    (explicitStageKeys||CRM_STAGE_KEYS).forEach(stage=>keys.add(stage));
+  }else{
+    Object.keys(sourceMap).forEach(stage=>keys.add(normalizeCrmStageKey(stage)));
+    if(explicitStageKeys){
+      explicitStageKeys.forEach(stage=>keys.add(stage));
+    }
+  }
+  keys.forEach(stage=>{
+    if(!stage) return;
+    if(includeFallback && (!CRM_STAGE_KEYS.includes(stage) || CRM_NOHOUR_STAGES.has(stage))) return;
+    if(!includeFallback && CRM_STAGE_KEYS.includes(stage) && CRM_NOHOUR_STAGES.has(stage)) return;
     const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_CAPACITY[stage]);
     const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>0?Math.round(fallbackRaw*100)/100:1;
-    const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
+    if(!includeFallback && !Object.prototype.hasOwnProperty.call(sourceMap,stage)){
+      return;
+    }
+    const raw=Object.prototype.hasOwnProperty.call(sourceMap,stage)?sourceMap[stage]:fallbackValue;
     const num=Number(raw);
-    result[stage]=Number.isFinite(num)&&num>0?Math.round(num*100)/100:fallbackValue;
+    if(Number.isFinite(num)&&num>0){
+      result[stage]=Math.round(num*100)/100;
+    }else if(includeFallback){
+      result[stage]=fallbackValue;
+    }
   });
   return result;
 }
 
-function normalizeParallelMap(source, fallback=CRM_DEFAULT_PARALLEL){
+function normalizeParallelMap(source, fallback=CRM_DEFAULT_PARALLEL, options={}){
   const result={};
+  const sourceMap={};
+  if(source&&typeof source==='object'){
+    Object.entries(source).forEach(([key,value])=>{
+      const normalized=normalizeCrmStageKey(key);
+      if(normalized) sourceMap[normalized]=value;
+    });
+  }
   const fallbackMap=fallback&&typeof fallback==='object'?fallback:CRM_DEFAULT_PARALLEL;
-  CRM_STAGE_KEYS.forEach(stage=>{
-    if(!CRM_NOHOUR_STAGES.has(stage)) return;
+  const includeFallback=options?.includeFallback!==false;
+  const explicitStageKeys=Array.isArray(options?.stageKeys)?options.stageKeys:null;
+  const keys=new Set();
+  if(includeFallback){
+    (explicitStageKeys||CRM_STAGE_KEYS).forEach(stage=>keys.add(stage));
+  }else{
+    Object.keys(sourceMap).forEach(stage=>keys.add(normalizeCrmStageKey(stage)));
+    if(explicitStageKeys){
+      explicitStageKeys.forEach(stage=>keys.add(stage));
+    }
+  }
+  keys.forEach(stage=>{
+    if(!stage) return;
+    if(includeFallback && (!CRM_STAGE_KEYS.includes(stage) || !CRM_NOHOUR_STAGES.has(stage))) return;
+    if(!includeFallback && CRM_STAGE_KEYS.includes(stage) && !CRM_NOHOUR_STAGES.has(stage)) return;
     const fallbackRaw=Object.prototype.hasOwnProperty.call(fallbackMap,stage)?Number(fallbackMap[stage]):Number(CRM_DEFAULT_PARALLEL[stage]);
     const fallbackValue=Number.isFinite(fallbackRaw)&&fallbackRaw>0?Math.max(1,Math.round(fallbackRaw)):Math.max(1,Math.round(CRM_DEFAULT_PARALLEL[stage]??3));
-    const raw=source&&typeof source==='object'&&Object.prototype.hasOwnProperty.call(source,stage)?source[stage]:fallbackValue;
+    if(!includeFallback && !Object.prototype.hasOwnProperty.call(sourceMap,stage)){
+      return;
+    }
+    const raw=Object.prototype.hasOwnProperty.call(sourceMap,stage)?sourceMap[stage]:fallbackValue;
     const num=Number(raw);
-    result[stage]=Number.isFinite(num)&&num>0?Math.max(1,Math.round(num)):fallbackValue;
+    if(Number.isFinite(num)&&num>0){
+      result[stage]=Math.max(1,Math.round(num));
+    }else if(includeFallback){
+      result[stage]=fallbackValue;
+    }
   });
   return result;
 }
@@ -21862,25 +21917,9 @@ function getCrmCapacityStageKeysForSettings(){
   ensureCrmDynamicStageCatalog();
   const keys=new Set();
   getCrmStagePresets().forEach(item=>{
-    const key=resolveCrmStageKeyWithMapping(item?.name);
+    if(!item || item.visible===false || item.hasHours===false) return;
+    const key=resolveCrmStageKeyWithMapping(item.name);
     if(key && !CRM_NOHOUR_STAGES.has(key)) keys.add(key);
-  });
-  Object.keys(state?.settings?.capacity||{}).forEach(key=>{
-    const normalized=normalizeCrmStageKey(key);
-    if(normalized && CRM_STAGE_KEYS.includes(normalized) && !CRM_NOHOUR_STAGES.has(normalized)) keys.add(normalized);
-  });
-  (Array.isArray(state?.boards)?state.boards:[]).forEach(board=>{
-    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
-      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
-        const key=resolveCrmStageKeyWithMapping(stage?.name);
-        if(key && !CRM_NOHOUR_STAGES.has(key)) keys.add(key);
-      });
-    });
-  });
-  CRM_STAGE_SEQUENCE.forEach(key=>{
-    if(!CRM_NOHOUR_STAGES.has(key) && (keys.has(key) || Object.prototype.hasOwnProperty.call(CRM_DEFAULT_CAPACITY,key))){
-      keys.add(key);
-    }
   });
   return Array.from(keys).sort((a,b)=>{
     const ai=CRM_STAGE_SEQUENCE.indexOf(a);
@@ -21937,25 +21976,9 @@ function getCrmParallelStageKeysForSettings(){
   ensureCrmDynamicStageCatalog();
   const keys=new Set();
   getCrmStagePresets().forEach(item=>{
-    const key=resolveCrmStageKeyWithMapping(item?.name);
+    if(!item || item.visible===false || item.hasHours!==false) return;
+    const key=resolveCrmStageKeyWithMapping(item.name);
     if(key && CRM_NOHOUR_STAGES.has(key)) keys.add(key);
-  });
-  Object.keys(state?.settings?.parallel||{}).forEach(key=>{
-    const normalized=normalizeCrmStageKey(key);
-    if(normalized && CRM_STAGE_KEYS.includes(normalized) && CRM_NOHOUR_STAGES.has(normalized)) keys.add(normalized);
-  });
-  (Array.isArray(state?.boards)?state.boards:[]).forEach(board=>{
-    (Array.isArray(board?.orders)?board.orders:[]).forEach(order=>{
-      (Array.isArray(order?.stages)?order.stages:[]).forEach(stage=>{
-        const key=resolveCrmStageKeyWithMapping(stage?.name);
-        if(key && CRM_NOHOUR_STAGES.has(key)) keys.add(key);
-      });
-    });
-  });
-  CRM_STAGE_SEQUENCE.forEach(key=>{
-    if(CRM_NOHOUR_STAGES.has(key) && (keys.has(key) || Object.prototype.hasOwnProperty.call(CRM_DEFAULT_PARALLEL,key))){
-      keys.add(key);
-    }
   });
   return Array.from(keys).sort((a,b)=>{
     const ai=CRM_STAGE_SEQUENCE.indexOf(a);
@@ -23913,7 +23936,7 @@ boardForm.addEventListener('submit',e=>{
       capacityDraft[stage]=value;
     }
   });
-  state.settings.capacity=normalizeCapacityMap(capacityDraft, state.settings?.capacity||CRM_DEFAULT_CAPACITY);
+  state.settings.capacity=normalizeCapacityMap(capacityDraft, state.settings?.capacity||CRM_DEFAULT_CAPACITY, { includeFallback:false, stageKeys:getCrmCapacityStageKeysForSettings() });
   const parallelInputs=[...boardForm.querySelectorAll('input[data-crm-setting="parallel"]')];
   const parallelDraft={};
   parallelInputs.forEach(input=>{
@@ -23924,7 +23947,7 @@ boardForm.addEventListener('submit',e=>{
       parallelDraft[stage]=Math.round(value);
     }
   });
-  state.settings.parallel=normalizeParallelMap(parallelDraft, state.settings?.parallel||CRM_DEFAULT_PARALLEL);
+  state.settings.parallel=normalizeParallelMap(parallelDraft, state.settings?.parallel||CRM_DEFAULT_PARALLEL, { includeFallback:false, stageKeys:getCrmParallelStageKeysForSettings() });
   const overdueLaneInputs=[...boardForm.querySelectorAll('input[data-pref-overdue-lane]')];
   const overdueLaneSelection=overdueLaneInputs.filter(input=>input.checked).map(input=>input.value);
   const overdueLaneByBoard={ ...(state.settings?.preferences?.overdueLaneHighlight?.byBoard||{}) };
