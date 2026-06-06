@@ -1528,6 +1528,7 @@ function buildUserPayload(userRow, roleRows) {
     : [];
   const uniqueRoles = Array.from(new Set(roles.filter(Boolean)));
   const permissions = computePermissions(uniqueRoles);
+  const hasPassword = typeof userRow.password_hash === 'string' && userRow.password_hash.length > 0;
   return {
     id: Number(userRow.id),
     login: userRow.login,
@@ -1535,6 +1536,8 @@ function buildUserPayload(userRow, roleRows) {
     isActive: Number(userRow.is_active) !== 0,
     lastLoginAt: userRow.last_login_at || null,
     lockedUntil: userRow.locked_until || null,
+    hasPassword,
+    passwordUpdatedAt: userRow.password_updated_at || null,
     roles: uniqueRoles,
     roleDetails: buildRoleDetails(uniqueRoles),
     permissions
@@ -2069,7 +2072,7 @@ app.get('/admin/users', requireAuth('manageUsers'), (req, res) => {
   const db = getDatabase();
   const users = db
     .prepare(
-      `SELECT id, login, display_name, is_active, last_login_at, locked_until, failed_attempts
+      `SELECT id, login, display_name, is_active, password_hash, last_login_at, locked_until, failed_attempts, password_updated_at
          FROM users
         ORDER BY login ASC`
     )
