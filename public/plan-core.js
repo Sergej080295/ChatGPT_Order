@@ -1,6 +1,6 @@
 (() => {
   const STORAGE_KEY = 'plancore_theme';
-  const PLANECORE_VERSION = '5.7.2';
+  const PLANECORE_VERSION = '5.7.3';
   const prefersDark = () => window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 
   const getCurrentTheme = () => (document.body.classList.contains('theme-dark') ? 'dark' : 'light');

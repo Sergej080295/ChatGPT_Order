@@ -1243,6 +1243,16 @@
     margin: 0;
   }
 
+  .crm-admin-role-option--field {
+    justify-content: space-between;
+    cursor: default;
+    min-width: 220px;
+  }
+
+  .crm-admin-role-option--field input {
+    max-width: 120px;
+  }
+
   .crm-admin-user-actions {
     display: flex;
     gap: var(--pc-spacing-xs);
@@ -4482,7 +4492,7 @@
     border: 1px solid var(--pc-border);
     border-radius: var(--pc-radius-md);
     background: color-mix(in srgb, var(--pc-surface) 95%, transparent);
-    overflow-x: auto;
+    overflow-x: hidden;
     position: sticky;
     bottom: 0;
     z-index: 2;
@@ -7390,6 +7400,20 @@
           </div>
           <div class="crm-admin-pill">Настройки применяются ко всем пользователям и влияют на видимость стикеров в канбане.</div>
         </div>
+        <div class="crm-admin-field">
+          <label>Сессии пользователей</label>
+          <div class="crm-admin-role-grid">
+            <label class="crm-admin-role-option crm-admin-role-option--field">
+              <span>Выход при бездействии, минут</span>
+              <input type="number" id="crmAdminSessionIdleMinutes" min="0" max="10080" step="5" />
+            </label>
+            <label class="crm-admin-role-option crm-admin-role-option--field">
+              <span>Плановый выход</span>
+              <input type="time" id="crmAdminSessionLogoutTime" />
+            </label>
+          </div>
+          <div class="crm-admin-pill">0 минут использует серверное значение по умолчанию. Плановый выход сработает при следующем обращении после указанного времени.</div>
+        </div>
         <div class="crm-admin-field crm-admin-field--actions">
           <button type="submit" class="pc-btn pc-btn--primary" id="crmAdminSettingsSave">Сохранить</button>
         </div>
@@ -8847,11 +8871,23 @@ function sanitizeCrmKanbanStickerPrefs(raw){
   };
 }
 
+function sanitizeCrmSessionSettings(raw){
+  const source=raw && typeof raw==='object' ? raw : {};
+  const parsed=Number(source.idleTimeoutMinutes);
+  const idleTimeoutMinutes=Number.isFinite(parsed)
+    ? Math.max(0, Math.min(10080, Math.round(parsed)))
+    : 0;
+  const timeRaw=typeof source.scheduledLogoutTime==='string'?source.scheduledLogoutTime.trim():'';
+  const scheduledLogoutTime=/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeRaw)?timeRaw:'';
+  return { idleTimeoutMinutes, scheduledLogoutTime };
+}
+
 function sanitizeCrmAdminSettings(raw){
   const base=raw && typeof raw==='object' ? raw : {};
   return {
     ...base,
-    kanbanStickers:sanitizeCrmKanbanStickerPrefs(base.kanbanStickers)
+    kanbanStickers:sanitizeCrmKanbanStickerPrefs(base.kanbanStickers),
+    session:sanitizeCrmSessionSettings(base.session)
   };
 }
 
@@ -11470,6 +11506,8 @@ const crmNavKanbanBtn=$('#crmNavKanbanBtn'),
       crmAdminStickerDateRange=$('#crmAdminStickerDateRange'),
       crmAdminStickerPartShare=$('#crmAdminStickerPartShare'),
       crmAdminStickerRestShare=$('#crmAdminStickerRestShare'),
+      crmAdminSessionIdleMinutes=$('#crmAdminSessionIdleMinutes'),
+      crmAdminSessionLogoutTime=$('#crmAdminSessionLogoutTime'),
       crmAdminSettingsSave=$('#crmAdminSettingsSave'),
       crmAdminAuditList=$('#crmAdminAuditList'),
       crmAdminAuditFilter=$('#crmAdminAuditFilter'),
@@ -15770,7 +15808,8 @@ function updateCrmStageRouteSummary(dataset){
       parts.push(`<span class="crm-stage-route-stat-hours">${hoursLabel} ч</span>`);
     }
     const className=['crm-stage-route-stat', `crm-stage-route-stat--${stageKey}`].join(' ');
-    return `<div class="${className}" data-stage="${stageKey}">${parts.join('')}</div>`;
+    const style=getCrmRouteStageStatStyle(stageKey);
+    return `<div class="${className}" data-stage="${stageKey}" style="${style}">${parts.join('')}</div>`;
   });
   crmStageRouteSummary.innerHTML=stats.join('');
 }
@@ -16159,6 +16198,11 @@ function applyCrmRouteStageStyle(el, stageKey){
   const meta=getCrmRouteStageMeta(stageKey);
   el.style.setProperty('--crm-route-stage-color', meta.color);
   el.style.setProperty('--crm-route-stage-text', meta.text);
+}
+
+function getCrmRouteStageStatStyle(stageKey){
+  const meta=getCrmRouteStageMeta(stageKey);
+  return `--crmRouteStatColor:${escapeHtml(meta.color)};--crmRouteStatText:${escapeHtml(meta.text)};--crmRouteStatAccent:${escapeHtml(meta.text)};`;
 }
 
 function updateCrmRouteStageVisibility(stageKey, isVisible){
@@ -16821,7 +16865,12 @@ function resetCrmAdminUserForm(){
   if(crmAdminUserLogin){ crmAdminUserLogin.disabled=false; }
   if(crmAdminUserPassword){
     crmAdminUserPassword.value='';
+    crmAdminUserPassword.type='password';
+    crmAdminUserPassword.readOnly=false;
+    crmAdminUserPassword.autocomplete='new-password';
     crmAdminUserPassword.placeholder='Минимум 8 символов';
+    const passwordLabel=crmAdminUserPassword.closest('.crm-admin-field')?.querySelector('label');
+    if(passwordLabel) passwordLabel.textContent='Пароль';
   }
   if(crmAdminUserPasswordStatus){
     crmAdminUserPasswordStatus.textContent='Для нового пользователя пароль обязателен.';
@@ -16846,14 +16895,21 @@ function fillCrmAdminUserForm(user){
     crmAdminUserName.value=user.displayName||'';
   }
   if(crmAdminUserPassword){
-    crmAdminUserPassword.value='';
-    crmAdminUserPassword.placeholder='Оставьте пустым, чтобы сохранить текущий пароль';
+    crmAdminUserPassword.type='text';
+    crmAdminUserPassword.readOnly=true;
+    crmAdminUserPassword.autocomplete='off';
+    crmAdminUserPassword.value=user.hasPassword===false
+      ? 'Пароль не задан'
+      : 'Пароль задан, не отображается';
+    crmAdminUserPassword.placeholder='';
+    const passwordLabel=crmAdminUserPassword.closest('.crm-admin-field')?.querySelector('label');
+    if(passwordLabel) passwordLabel.textContent='Текущий пароль';
   }
   if(crmAdminUserPasswordStatus){
     const updated=user.passwordUpdatedAt?` Обновлён: ${formatDateTimeSafe(user.passwordUpdatedAt)}.`:'';
     crmAdminUserPasswordStatus.textContent=user.hasPassword===false
-      ? 'Текущий пароль не задан. Введите новый пароль перед сохранением.'
-      : `Текущий пароль задан.${updated} Пустое поле не меняет пароль.`;
+      ? 'Пароль не задан. Для установки используйте кнопку с ключом в списке пользователей.'
+      : `Пароль хранится как защищённый хэш и не восстанавливается в открытом виде.${updated} Для смены используйте кнопку с ключом.`;
   }
   if(crmAdminUserActive){
     crmAdminUserActive.checked=user.isActive!==false;
@@ -17131,6 +17187,9 @@ function renderCrmAdminSettings(){
   if(crmAdminStickerServiceLabel) crmAdminStickerServiceLabel.textContent=(metric?.name||'Сумма услуг');
   if(crmAdminStickerPartShare) crmAdminStickerPartShare.checked=prefs.partShare!==false;
   if(crmAdminStickerRestShare) crmAdminStickerRestShare.checked=prefs.restShare!==false;
+  const session=sanitizeCrmSessionSettings(getCrmAdminSettings().session);
+  if(crmAdminSessionIdleMinutes) crmAdminSessionIdleMinutes.value=String(session.idleTimeoutMinutes||0);
+  if(crmAdminSessionLogoutTime) crmAdminSessionLogoutTime.value=session.scheduledLogoutTime||'';
 }
 
 function collectCrmAdminStickerPrefs(){
@@ -17141,6 +17200,13 @@ function collectCrmAdminStickerPrefs(){
     partShare:crmAdminStickerPartShare ? crmAdminStickerPartShare.checked : true,
     restShare:crmAdminStickerRestShare ? crmAdminStickerRestShare.checked : true
   };
+}
+
+function collectCrmAdminSessionSettings(){
+  return sanitizeCrmSessionSettings({
+    idleTimeoutMinutes:crmAdminSessionIdleMinutes?crmAdminSessionIdleMinutes.value:0,
+    scheduledLogoutTime:crmAdminSessionLogoutTime?crmAdminSessionLogoutTime.value:''
+  });
 }
 
 function refreshCrmAdminAuditIfActive(){
@@ -17260,13 +17326,14 @@ function handleCrmAdminSettingsSave(event){
   state=ensureCrmStateShape(state);
   const adminSettings=sanitizeCrmAdminSettings(state.settings?.admin);
   adminSettings.kanbanStickers=sanitizeCrmKanbanStickerPrefs(collectCrmAdminStickerPrefs());
+  adminSettings.session=collectCrmAdminSessionSettings();
   state.settings.admin=adminSettings;
   renderCrmAdminSettings();
   save('Обновление настроек админ-панели', {
     meta:{
       source:'admin-panel',
       summary:'Обновление настроек админ-панели',
-      note:'kanban-stickers'
+      note:'kanban-stickers, sessions'
     },
     skipAutoOptimize:true
   });
@@ -21579,7 +21646,43 @@ function moveStageRow(tr,direction){
   }
   const nameInput=tr.querySelector('[data-k="name"]');
   if(nameInput){
+    nameInput.dataset.previousValue=nameInput.value||nmRaw||'';
+    nameInput.addEventListener('focus',()=>{
+      nameInput.dataset.previousValue=nameInput.value||'';
+    });
     nameInput.addEventListener('input',()=>updateStageAutoHours(tr));
+    nameInput.addEventListener('change',()=>{
+      const previousName=nameInput.dataset.previousValue||nmRaw||'';
+      const nextName=(nameInput.value||'').trim();
+      const previousHourless=suppressValueForStage(normalizeStageName(previousName));
+      const nextHourless=suppressValueForStage(normalizeStageName(nextName));
+      if(previousHourless!==nextHourless){
+        const nextStage=readStageRow(tr)||{};
+        nextStage.name=nextName;
+        nextStage.value='';
+        if(nextHourless){
+          nextStage.progress=nextStage.done?100:0;
+        }
+        const replacement=replaceStageRowWithDraft(tr,nextStage);
+        if(replacement){
+          const replacementName=replacement.querySelector('[data-k="name"]');
+          if(replacementName){
+            replacementName.dataset.previousValue=nextName;
+            replacementName.focus();
+          }
+        }
+        syncAutoProgress();
+        syncAutoDates();
+        updateAllStageExpectations();
+        refreshStageReorderControls();
+        return;
+      }
+      nameInput.dataset.previousValue=nextName;
+      updateStageAutoHours(tr);
+      syncAutoProgress();
+      syncAutoDates();
+      updateStageRowExpectation(tr);
+    });
     nameInput.addEventListener('blur',()=>updateStageAutoHours(tr));
   }
   const startInput=tr.querySelector('[data-k="start"]');
@@ -21619,6 +21722,19 @@ function moveStageRow(tr,direction){
   stagesTableBody.appendChild(tr); syncAutoProgress(); syncAutoDates(); updateStageRowExpectation(tr); updateStageAutoHours(tr); refreshStageReorderControls();
   return tr;
 }
+
+  function replaceStageRowWithDraft(tr, stageDraft){
+    if(!tr || !stagesTableBody) return null;
+    const replacement=appendStageRow(stageDraft||{});
+    stagesTableBody.insertBefore(replacement,tr);
+    tr.remove();
+    syncAutoProgress();
+    syncAutoDates();
+    updateStageRowExpectation(replacement);
+    updateStageAutoHours(replacement);
+    refreshStageReorderControls();
+    return replacement;
+  }
 
   function focusStageRow(tr){
     if(!tr) return;
@@ -21699,7 +21815,11 @@ function mergeStageDraftWithSource(stage){
   if(!key || !stageSourceMap.has(key)) return stage;
   const source=stageSourceMap.get(key);
   if(!source || typeof source!=='object') return stage;
-  const skipKeys=new Set(['name','done','progress','start','end','value','crmStageId','originalStart','originalEnd']);
+  const skipKeys=new Set([
+    'name','done','progress','start','end','value','crmStageId','originalStart','originalEnd',
+    'key','stageKey','stage','stageName','stageLabel','label','baseStage','normalizedName',
+    'hours','totalHours','baseHours','remaining','extraHours','crmMeta','crmSchedule','segments','route'
+  ]);
   Object.keys(source).forEach(prop=>{
     if(skipKeys.has(prop)) return;
     if(stage[prop]!==undefined) return;
@@ -22251,6 +22371,7 @@ function renderCrmStageScheduleExtrasList(){
         draftState.extras=(draftState.extras||[]).filter(item=>item!==iso);
       });
       renderCrmStageScheduleExtrasList();
+      persistCrmStageScheduleEditorChange('Дополнительная смена удалена');
     });
     chip.appendChild(remove);
     crmStageScheduleExtrasList.appendChild(chip);
@@ -22279,6 +22400,7 @@ function addCrmStageScheduleExtra(value){
     draftState.extras=Array.from(next).sort((a,b)=>a.localeCompare(b));
   });
   renderCrmStageScheduleExtrasList();
+  persistCrmStageScheduleEditorChange('Дополнительная смена добавлена');
   return true;
 }
 
@@ -22297,6 +22419,36 @@ function commitCrmStageScheduleInputs(){
     draft.preset=crmStageSchedulePresetSelect?crmStageSchedulePresetSelect.value:draft.preset;
     draft.start=crmStageScheduleStartInput?crmStageScheduleStartInput.value:draft.start;
   });
+}
+
+function persistCrmStageScheduleEditorChange(summary){
+  state=ensureCrmStateShape(state);
+  if(!state.settings) state.settings=sanitizeCrmSettings({});
+  commitCrmStageScheduleInputs();
+  state.settings.stageSchedules=sanitizeCrmStageSchedules(collectCrmStageScheduleDrafts(), state.settings?.hourlessSchedule);
+  if(Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
+    delete state.settings.hourlessSchedule;
+  }
+  save('Обновление графиков работы переделов CRM', {
+    meta:{
+      source:'settings-stage-schedules',
+      summary:summary||'Обновление графиков работы переделов'
+    },
+    skipAutoOptimize:true
+  });
+  showToast({ title:'CRM', message:summary||'График передела сохранён', tone:'success' });
+}
+
+function persistCrmGlobalHolidayChange(summary){
+  state=ensureCrmStateShape(state);
+  save('Обновление общих выходных CRM', {
+    meta:{
+      source:'settings-stage-calendar-global',
+      summary:summary||'Обновление общих выходных / праздников'
+    },
+    skipAutoOptimize:true
+  });
+  showToast({ title:'CRM', message:summary||'Общие выходные сохранены', tone:'success' });
 }
 
 function loadCrmStageScheduleEditor(stage){
@@ -22440,6 +22592,7 @@ function renderCrmStageSchedulesUI(config){
         draft.preset=crmStageSchedulePresetSelect.value;
       });
       updateCrmStageScheduleStartVisibility();
+      persistCrmStageScheduleEditorChange('График передела сохранён');
     };
   }
   if(crmStageScheduleStartInput){
@@ -22447,6 +22600,7 @@ function renderCrmStageSchedulesUI(config){
       updateCrmStageScheduleDraft(crmStageScheduleActiveStage,draft=>{
         draft.start=crmStageScheduleStartInput.value||'';
       });
+      persistCrmStageScheduleEditorChange('Начало цикла сохранено');
     };
   }
   if(crmStageScheduleExtrasAddBtn){
@@ -22478,9 +22632,9 @@ function renderCrmStageSchedulesUI(config){
     const dates=Array.from(map.keys()).sort((a,b)=>a.localeCompare(b));
     globalList.innerHTML=dates.length?'':'';
     if(!dates.length){ globalList.innerHTML='<span class="muted">Общих выходных нет</span>'; return; }
-    dates.forEach(iso=>{ const chip=document.createElement('span'); chip.className='crm-chip'; chip.innerHTML=`<span>${formatCalendarIso(iso)}</span>`; const btn=document.createElement('button'); btn.type='button'; btn.textContent='✕'; btn.onclick=()=>{ const next=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); writeCrmStageCalendarEntries('__global__','exceptions',next); renderGlobal(); }; chip.appendChild(btn); globalList.appendChild(chip); });
+    dates.forEach(iso=>{ const chip=document.createElement('span'); chip.className='crm-chip'; chip.innerHTML=`<span>${formatCalendarIso(iso)}</span>`; const btn=document.createElement('button'); btn.type='button'; btn.textContent='✕'; btn.onclick=()=>{ const next=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); writeCrmStageCalendarEntries('__global__','exceptions',next); renderGlobal(); persistCrmGlobalHolidayChange('Общий выходной удалён'); }; chip.appendChild(btn); globalList.appendChild(chip); });
   };
-  if(globalAdd){ globalAdd.onclick=()=>{ const iso=coerceCalendarIso(globalInput?.value||''); if(!iso) return; const list=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); list.push({iso,value:0}); writeCrmStageCalendarEntries('__global__','exceptions',list); if(globalInput) globalInput.value=''; renderGlobal(); }; }
+  if(globalAdd){ globalAdd.onclick=()=>{ const iso=coerceCalendarIso(globalInput?.value||''); if(!iso) return; const list=getCrmStageCalendarEntryList('__global__','exceptions').filter(x=>x.iso!==iso); list.push({iso,value:0}); writeCrmStageCalendarEntries('__global__','exceptions',list); if(globalInput) globalInput.value=''; renderGlobal(); persistCrmGlobalHolidayChange('Общий выходной добавлен'); }; }
   renderGlobal();
 
   loadCrmStageScheduleEditor(crmStageScheduleActiveStage);
@@ -23550,6 +23704,8 @@ if(crmStagePresetContainer){
       const source=collectCrmStagePresetInputs();
       const index=Number(target.dataset.stagePresetDelete);
       if(!Number.isInteger(index) || index<0 || index>=source.length) return;
+      const presetName=(source[index]?.name||'передел').trim()||'передел';
+      if(!window.confirm(`Удалить передел «${presetName}» из списка переделов? Это действие применится после сохранения настроек.`)) return;
       source.splice(index,1);
       crmDefaultStagePresetDraft=new Set(source.filter(item=>item.inDefault).map(item=>item.id).filter(Boolean));
       crmStagePresetDraft=source;
@@ -23899,7 +24055,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.7.2',
+    version:'5.7.3',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -26500,7 +26656,6 @@ if(crmAdminUserForm){
     const login=crmAdminUserLogin?crmAdminUserLogin.value.trim():'';
     const displayName=crmAdminUserName?crmAdminUserName.value.trim():'';
     const rawPassword=crmAdminUserPassword?crmAdminUserPassword.value:'';
-    const password=rawPassword.trim();
     const isActive=crmAdminUserActive?crmAdminUserActive.checked:true;
     const roles=crmAdminUserRoles
       ? Array.from(crmAdminUserRoles.querySelectorAll('input[type="checkbox"]')).filter(box=>box.checked).map(box=>box.value)
@@ -26508,6 +26663,7 @@ if(crmAdminUserForm){
     const userIdRaw=crmAdminUserForm.dataset.userId;
     const userId=Number(userIdRaw);
     const isEdit=Number.isFinite(userId)&&userId>0;
+    const password=isEdit?'':rawPassword.trim();
     if(!isEdit && !login){
       showToast({ title:'Администрирование', message:'Укажите логин пользователя', tone:'error' });
       return;
@@ -26520,21 +26676,13 @@ if(crmAdminUserForm){
       showToast({ title:'Администрирование', message:'Выберите хотя бы одну роль', tone:'error' });
       return;
     }
-    if(isEdit){
-      if(password && password.length<8){
-        showToast({ title:'Администрирование', message:'Пароль должен содержать не менее 8 символов', tone:'error' });
-        return;
-      }
-    }else if(password.length<8){
+    if(!isEdit && password.length<8){
       showToast({ title:'Администрирование', message:'Пароль должен содержать не менее 8 символов', tone:'error' });
       return;
     }
     const payload=isEdit
       ? { displayName, isActive, roles }
       : { login, displayName, password, roles, isActive };
-    if(isEdit && password){
-      payload.password=password;
-    }
     setCrmAdminBusy(true);
     try{
       if(isEdit){

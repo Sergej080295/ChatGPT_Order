@@ -376,6 +376,17 @@ const ALLOW_GUEST_LOGIN = parseBoolean(process.env.ALLOW_GUEST ?? 'true', true);
 const MAX_FAILED_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_MAX_FAILED_ATTEMPTS || '5', 10));
 const LOCKOUT_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_LOCKOUT_MINUTES || '15', 10));
 const SESSION_IDLE_TIMEOUT_MS = Math.max(SESSION_TTL_MS, 60 * 60 * 1000);
+const ADMIN_SESSION_POLICY_CACHE_MS = 5000;
+const SESSION_IDLE_MIN_MS = 5 * 60 * 1000;
+const SESSION_IDLE_MAX_MS = 10080 * 60 * 1000;
+const DEFAULT_ADMIN_SESSION_POLICY = Object.freeze({
+  idleTimeoutMinutes: 0,
+  scheduledLogoutTime: ''
+});
+let cachedAdminSessionPolicy = {
+  policy: DEFAULT_ADMIN_SESSION_POLICY,
+  loadedAt: 0
+};
 const DEFAULT_ADMIN_LOGIN = (process.env.DEFAULT_ADMIN_LOGIN || 'admin').trim() || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
 const DEFAULT_CREDENTIALS_TEMPLATE = {
@@ -1663,6 +1674,86 @@ function getSessionToken(req) {
   return trimmed ? trimmed : null;
 }
 
+function sanitizeAdminSessionPolicy(raw) {
+  const source = isPlainObject(raw) ? raw : {};
+  const parsedIdle = Number(source.idleTimeoutMinutes);
+  const idleTimeoutMinutes = Number.isFinite(parsedIdle)
+    ? Math.max(0, Math.min(10080, Math.round(parsedIdle)))
+    : 0;
+  const timeRaw = typeof source.scheduledLogoutTime === 'string' ? source.scheduledLogoutTime.trim() : '';
+  const scheduledLogoutTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(timeRaw) ? timeRaw : '';
+  return { idleTimeoutMinutes, scheduledLogoutTime };
+}
+
+function getAdminSessionPolicy() {
+  const now = Date.now();
+  if (cachedAdminSessionPolicy.loadedAt && now - cachedAdminSessionPolicy.loadedAt < ADMIN_SESSION_POLICY_CACHE_MS) {
+    return cachedAdminSessionPolicy.policy;
+  }
+  let snapshot = null;
+  try {
+    snapshot = cachedSnapshot?.snapshot || null;
+  } catch (_err) {
+    snapshot = null;
+  }
+  if (!snapshot) {
+    try {
+      const db = getDatabase();
+      const row = db.prepare('SELECT state_json FROM snapshots ORDER BY rev DESC LIMIT 1').get();
+      snapshot = safeParseJson(row?.state_json || '', null);
+    } catch (_err) {
+      snapshot = null;
+    }
+  }
+  const policy = sanitizeAdminSessionPolicy(snapshot?.crm?.settings?.admin?.session);
+  cachedAdminSessionPolicy = { policy, loadedAt: now };
+  return policy;
+}
+
+function getEffectiveSessionIdleMs(policy = getAdminSessionPolicy()) {
+  const minutes = Number(policy?.idleTimeoutMinutes) || 0;
+  if (minutes > 0) {
+    return Math.max(SESSION_IDLE_MIN_MS, Math.min(SESSION_IDLE_MAX_MS, minutes * 60 * 1000));
+  }
+  return SESSION_IDLE_TIMEOUT_MS;
+}
+
+function getSessionRenewThresholdMs(idleMs) {
+  const parsed = Number(idleMs);
+  const safeIdle = Number.isFinite(parsed) && parsed > 0 ? parsed : SESSION_IDLE_TIMEOUT_MS;
+  return Math.max(60 * 1000, Math.min(SESSION_RENEW_THRESHOLD_MS, safeIdle / 3));
+}
+
+function getLastScheduledLogoutTimestamp(now, scheduledLogoutTime) {
+  if (typeof scheduledLogoutTime !== 'string' || !scheduledLogoutTime) return null;
+  const match = /^(\d{2}):(\d{2})$/.exec(scheduledLogoutTime);
+  if (!match) return null;
+  const date = new Date(now);
+  date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  let cutoff = date.getTime();
+  if (cutoff > now) {
+    cutoff -= 24 * 60 * 60 * 1000;
+  }
+  return Number.isFinite(cutoff) ? cutoff : null;
+}
+
+function shouldExpireSessionByPolicy(row, policy, now) {
+  if (!row) return false;
+  const idleMs = getEffectiveSessionIdleMs(policy);
+  const lastSeen = Date.parse(row.last_seen_at || row.created_at || '');
+  if (Number.isFinite(lastSeen) && idleMs > 0 && lastSeen + idleMs <= now) {
+    return true;
+  }
+  const cutoff = getLastScheduledLogoutTimestamp(now, policy?.scheduledLogoutTime || '');
+  if (Number.isFinite(cutoff)) {
+    const createdAt = Date.parse(row.created_at || '');
+    if (Number.isFinite(createdAt) && createdAt < cutoff && (!Number.isFinite(lastSeen) || lastSeen < cutoff)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function purgeExpiredSessions() {
   const db = getDatabase();
   const nowIso = new Date().toISOString();
@@ -1686,7 +1777,8 @@ function loadSessionRecord(sessionId) {
   }
   const expiresAt = row.expires_at ? Date.parse(row.expires_at) : null;
   const now = Date.now();
-  if (expiresAt && expiresAt <= now) {
+  const policy = getAdminSessionPolicy();
+  if ((expiresAt && expiresAt <= now) || shouldExpireSessionByPolicy(row, policy, now)) {
     try {
       db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
     } catch (_err) {
@@ -1702,11 +1794,12 @@ function touchSession(sessionId, previousLastSeenIso) {
   const db = getDatabase();
   const now = Date.now();
   const lastSeen = previousLastSeenIso ? Date.parse(previousLastSeenIso) : 0;
-  if (Number.isFinite(lastSeen) && now - lastSeen < SESSION_RENEW_THRESHOLD_MS) {
+  const idleMs = getEffectiveSessionIdleMs();
+  if (Number.isFinite(lastSeen) && now - lastSeen < getSessionRenewThresholdMs(idleMs)) {
     return null;
   }
   const nowIso = new Date(now).toISOString();
-  const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
+  const expiresIso = new Date(now + idleMs).toISOString();
   db
     .prepare('UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?')
     .run(nowIso, expiresIso, sessionId);
@@ -1728,7 +1821,7 @@ function createSessionRecord({ userId = null, isGuest = false }) {
   const sessionId = generateSessionId();
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
-  const expiresIso = new Date(now + SESSION_IDLE_TIMEOUT_MS).toISOString();
+  const expiresIso = new Date(now + getEffectiveSessionIdleMs()).toISOString();
   db
     .prepare('INSERT INTO sessions (id, user_id, is_guest, created_at, last_seen_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(sessionId, userId, isGuest ? 1 : 0, nowIso, nowIso, expiresIso);
@@ -1742,7 +1835,7 @@ function setSessionCookie(req, res, sessionId) {
     sameSite: 'lax',
     secure,
     path: '/',
-    maxAge: SESSION_IDLE_TIMEOUT_MS
+    maxAge: getEffectiveSessionIdleMs()
   });
 }
 
@@ -5330,6 +5423,7 @@ async function getCachedSnapshot() {
 
 function invalidateCache() {
   cachedSnapshot = null;
+  cachedAdminSessionPolicy.loadedAt = 0;
 }
 
 function broadcastRevision(event) {
