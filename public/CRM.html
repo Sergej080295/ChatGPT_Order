@@ -516,16 +516,16 @@
           err.detail = trimmed;
         }
         err.body = text;
-        if (res.status === 409 && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT')) {
+        if ((res.status === 409 || res.status === 412 || res.status === 428)
+            && (parsed?.error === 'Conflict' || parsed?.error === 'CONFLICT' || res.status === 412 || res.status === 428)) {
           err.name = 'PlannerConflictError';
         }
-        if (attempt === 0 && (err.status === 409 || err.status === 412 || err.status === 428)) {
+        if (err.name === 'PlannerConflictError') {
           try {
             await loadState({ withMeta: true });
           } catch (_reloadErr) {
-            /* ignore and retry with existing fingerprint */
+            /* keep original conflict */
           }
-          return attemptSave(attempt + 1);
         }
         throw err;
       }
@@ -8689,6 +8689,7 @@ function ensureCrmDynamicStageCatalog(){
   CRM_NOHOUR_STAGES.clear();
   CRM_BASE_NOHOUR_STAGE_KEYS.forEach(key=>CRM_NOHOUR_STAGES.add(key));
   const usedKeys=new Set(CRM_STAGE_KEYS);
+  const assignedPresetStageKeys=new Set();
   presets.forEach(entry=>{
     if(!entry || entry.visible===false) return;
     const normalized=normalizeCrmStageKey(entry.name);
@@ -8697,7 +8698,8 @@ function ensureCrmDynamicStageCatalog(){
     const fixedStage=mappingEntry?.stage && CRM_FIXED_STAGE_KEYS.includes(mappingEntry.stage)
       ? mappingEntry.stage
       : resolveCrmStageKey(entry.name||'');
-    if(fixedStage){
+    if(fixedStage && !assignedPresetStageKeys.has(fixedStage)){
+      assignedPresetStageKeys.add(fixedStage);
       CRM_STAGE_LABELS[fixedStage]=entry.name;
       const fixedIcon=sanitizeCrmStageIcon(entry.icon);
       if(fixedIcon){
@@ -8712,13 +8714,14 @@ function ensureCrmDynamicStageCatalog(){
     }
     const map=settings?.stagePresetKeyMap||{};
     let key=typeof map[entry.id]==='string'?map[entry.id].trim():'';
-    if(!key || usedKeys.has(key)){
+    if(!key || usedKeys.has(key) || assignedPresetStageKeys.has(key)){
       key=buildCustomStageKey(entry.id||entry.name, usedKeys);
       if(settings){
         settings.stagePresetKeyMap[entry.id]=key;
       }
     }
     usedKeys.add(key);
+    assignedPresetStageKeys.add(key);
     crmDynamicStageKeys.push(key);
     CRM_STAGE_KEYS.push(key);
     CRM_STAGE_SEQUENCE.push(key);
@@ -10114,9 +10117,12 @@ if(document.body){
 
 let state=(window.__CRM_INITIAL_STATE__?deepClone(window.__CRM_INITIAL_STATE__):null)??load()??{boards:[defaultBoard('crm-board-1')],currentBoardId:null};
 state=ensureCrmStateShape(state);
-const storedCrmSettings=loadStoredCrmSettings();
-if(storedCrmSettings){
-  state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
+let crmLastSyncedSnapshot=crmDataSource===CRM_DATA_SOURCE.remote?deepClone(state):null;
+if(crmDataSource!==CRM_DATA_SOURCE.remote){
+  const storedCrmSettings=loadStoredCrmSettings();
+  if(storedCrmSettings){
+    state.settings=mergeCrmSettings(state.settings, storedCrmSettings);
+  }
 }
 persistLocal();
 function applyTrashRetention(){
@@ -23738,7 +23744,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.7',
+    version:'5.7.1',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -24409,6 +24415,7 @@ let crmPendingSummary='Изменения CRM';
 let crmPendingMeta=null;
 let crmSuppressNext=false;
 let crmSyncInFlight=false;
+let crmSyncQueuedDuringFlight=false;
 const CRM_DEFAULT_ACTOR='CRM оператор';
 
 function resolveCrmUserDisplay(){
@@ -25161,6 +25168,14 @@ function queueSync(summary, meta){
   if(crmPendingRemotePayload){
     crmPendingRemoteDirty=true;
   }
+  if(crmSyncInFlight){
+    crmSyncQueuedDuringFlight=true;
+    if(crmSyncTimer){
+      clearTimeout(crmSyncTimer);
+      crmSyncTimer=null;
+    }
+    return;
+  }
   if(crmSyncTimer) clearTimeout(crmSyncTimer);
   crmSyncTimer=setTimeout(pushCrmToServer,450);
 }
@@ -25186,8 +25201,236 @@ function buildCrmOrdersSummary(snapshot){
   return { stages:['crm'], totals, orders:sample };
 }
 
+function crmSnapshotString(value){
+  try{return JSON.stringify(value??null);}
+  catch(_err){return String(value);}
+}
+
+function crmValuesEqual(left,right){
+  return crmSnapshotString(left)===crmSnapshotString(right);
+}
+
+function mergeCrmPlainMapForSave(remoteMap, localMap, baseMap){
+  const remote=remoteMap&&typeof remoteMap==='object'&&!Array.isArray(remoteMap)?remoteMap:{};
+  const local=localMap&&typeof localMap==='object'&&!Array.isArray(localMap)?localMap:{};
+  const base=baseMap&&typeof baseMap==='object'&&!Array.isArray(baseMap)?baseMap:{};
+  const result={};
+  const keys=new Set([...Object.keys(remote),...Object.keys(local),...Object.keys(base)]);
+  keys.forEach(key=>{
+    const localHas=Object.prototype.hasOwnProperty.call(local,key);
+    const remoteHas=Object.prototype.hasOwnProperty.call(remote,key);
+    const baseHas=Object.prototype.hasOwnProperty.call(base,key);
+    const localValue=localHas?local[key]:undefined;
+    const baseValue=baseHas?base[key]:undefined;
+    if(localHas && (!baseHas || !crmValuesEqual(localValue,baseValue))){
+      result[key]=deepClone(localValue);
+    }else if(remoteHas){
+      result[key]=deepClone(remote[key]);
+    }
+  });
+  return result;
+}
+
+function mergeCrmSettingsForSave(remoteSettings, localSettings, baseSettings){
+  const remote=sanitizeCrmSettings(remoteSettings);
+  const local=sanitizeCrmSettings(localSettings);
+  const base=sanitizeCrmSettings(baseSettings);
+  const result={};
+  const mapKeys=new Set(['capacity','parallel','mapping','stagePresetKeyMap','stageSchedules']);
+  const keys=new Set([...Object.keys(remote),...Object.keys(local),...Object.keys(base)]);
+  keys.forEach(key=>{
+    if(mapKeys.has(key)){
+      result[key]=mergeCrmPlainMapForSave(remote[key],local[key],base[key]);
+      return;
+    }
+    const localHas=Object.prototype.hasOwnProperty.call(local,key);
+    const remoteHas=Object.prototype.hasOwnProperty.call(remote,key);
+    const baseHas=Object.prototype.hasOwnProperty.call(base,key);
+    const localValue=localHas?local[key]:undefined;
+    const baseValue=baseHas?base[key]:undefined;
+    if(localHas && (!baseHas || !crmValuesEqual(localValue,baseValue))){
+      result[key]=deepClone(localValue);
+    }else if(remoteHas){
+      result[key]=deepClone(remote[key]);
+    }
+  });
+  return sanitizeCrmSettings(result);
+}
+
+function getCrmRecordMergeId(record,index,idKeys){
+  if(record&&typeof record==='object'){
+    for(const key of idKeys){
+      const raw=record[key];
+      if(raw!==undefined&&raw!==null){
+        const value=String(raw).trim();
+        if(value) return `${key}:${value}`;
+      }
+    }
+  }
+  return `index:${index}`;
+}
+
+function mergeCrmRecordArrayForSave(remoteList, localList, baseList, idKeys=['id']){
+  const remote=Array.isArray(remoteList)?remoteList:[];
+  const local=Array.isArray(localList)?localList:[];
+  const base=Array.isArray(baseList)?baseList:[];
+  const baseMap=new Map();
+  const remoteMap=new Map();
+  const localMap=new Map();
+  base.forEach((item,index)=>baseMap.set(getCrmRecordMergeId(item,index,idKeys),item));
+  remote.forEach((item,index)=>remoteMap.set(getCrmRecordMergeId(item,index,idKeys),item));
+  local.forEach((item,index)=>localMap.set(getCrmRecordMergeId(item,index,idKeys),item));
+
+  const merged=remote.map(item=>deepClone(item));
+  const mergedIndex=new Map();
+  remote.forEach((item,index)=>mergedIndex.set(getCrmRecordMergeId(item,index,idKeys),index));
+
+  local.forEach((item,index)=>{
+    const id=getCrmRecordMergeId(item,index,idKeys);
+    const baseItem=baseMap.get(id);
+    if(baseItem && crmValuesEqual(item,baseItem)) return;
+    const copy=deepClone(item);
+    if(mergedIndex.has(id)){
+      merged[mergedIndex.get(id)]=copy;
+    }else{
+      mergedIndex.set(id,merged.length);
+      merged.push(copy);
+    }
+  });
+
+  baseMap.forEach((baseItem,id)=>{
+    if(localMap.has(id)) return;
+    const remoteItem=remoteMap.get(id);
+    if(remoteItem && crmValuesEqual(remoteItem,baseItem) && mergedIndex.has(id)){
+      merged[mergedIndex.get(id)]=null;
+    }
+  });
+
+  return merged.filter(Boolean);
+}
+
+function mergeCrmBoardForSave(remoteBoard, localBoard, baseBoard){
+  if(!baseBoard) return deepClone(localBoard);
+  if(crmValuesEqual(localBoard,baseBoard)) return deepClone(remoteBoard||localBoard);
+  const remote=remoteBoard&&typeof remoteBoard==='object'?remoteBoard:{};
+  const local=localBoard&&typeof localBoard==='object'?localBoard:{};
+  const base=baseBoard&&typeof baseBoard==='object'?baseBoard:{};
+  const result={ ...deepClone(remote) };
+  const keys=new Set([...Object.keys(remote),...Object.keys(local),...Object.keys(base)]);
+  keys.forEach(key=>{
+    if(key==='orders') return;
+    const localHas=Object.prototype.hasOwnProperty.call(local,key);
+    const remoteHas=Object.prototype.hasOwnProperty.call(remote,key);
+    const baseHas=Object.prototype.hasOwnProperty.call(base,key);
+    const localValue=localHas?local[key]:undefined;
+    const baseValue=baseHas?base[key]:undefined;
+    if(localHas && (!baseHas || !crmValuesEqual(localValue,baseValue))){
+      result[key]=deepClone(localValue);
+    }else if(remoteHas){
+      result[key]=deepClone(remote[key]);
+    }else{
+      delete result[key];
+    }
+  });
+  result.orders=mergeCrmRecordArrayForSave(remote.orders,local.orders,base.orders,['id','orderNo']);
+  return result;
+}
+
+function mergeCrmBoardsForSave(remoteBoards, localBoards, baseBoards){
+  const remote=Array.isArray(remoteBoards)?remoteBoards:[];
+  const local=Array.isArray(localBoards)?localBoards:[];
+  const base=Array.isArray(baseBoards)?baseBoards:[];
+  const baseMap=new Map();
+  const remoteMap=new Map();
+  const localMap=new Map();
+  base.forEach((board,index)=>baseMap.set(getCrmRecordMergeId(board,index,['id']),board));
+  remote.forEach((board,index)=>remoteMap.set(getCrmRecordMergeId(board,index,['id']),board));
+  local.forEach((board,index)=>localMap.set(getCrmRecordMergeId(board,index,['id']),board));
+
+  const merged=remote.map(board=>deepClone(board));
+  const mergedIndex=new Map();
+  remote.forEach((board,index)=>mergedIndex.set(getCrmRecordMergeId(board,index,['id']),index));
+
+  local.forEach((board,index)=>{
+    const id=getCrmRecordMergeId(board,index,['id']);
+    const baseBoard=baseMap.get(id);
+    if(baseBoard && crmValuesEqual(board,baseBoard)) return;
+    const nextBoard=baseBoard
+      ? mergeCrmBoardForSave(remoteMap.get(id),board,baseBoard)
+      : deepClone(board);
+    if(mergedIndex.has(id)){
+      merged[mergedIndex.get(id)]=nextBoard;
+    }else{
+      mergedIndex.set(id,merged.length);
+      merged.push(nextBoard);
+    }
+  });
+
+  baseMap.forEach((baseBoard,id)=>{
+    if(localMap.has(id)) return;
+    const remoteBoard=remoteMap.get(id);
+    if(remoteBoard && crmValuesEqual(remoteBoard,baseBoard) && mergedIndex.has(id)){
+      merged[mergedIndex.get(id)]=null;
+    }
+  });
+
+  return merged.filter(Boolean);
+}
+
+function mergeCrmSnapshotForSave(remoteCrm, localCrm, baseCrm){
+  const local=ensureCrmStateShape(deepClone(localCrm)||{boards:[defaultBoard('crm-board-1')],currentBoardId:null});
+  if(!baseCrm){
+    return local;
+  }
+  const remote=ensureCrmStateShape(deepClone(remoteCrm)||{boards:[defaultBoard('crm-board-1')],currentBoardId:null});
+  const base=ensureCrmStateShape(deepClone(baseCrm)||{boards:[defaultBoard('crm-board-1')],currentBoardId:null});
+  const result={ ...deepClone(remote) };
+  result.settings=mergeCrmSettingsForSave(remote.settings,local.settings,base.settings);
+  result.boards=mergeCrmBoardsForSave(remote.boards,local.boards,base.boards);
+
+  const keys=new Set([...Object.keys(remote),...Object.keys(local),...Object.keys(base)]);
+  keys.forEach(key=>{
+    if(key==='settings'||key==='boards') return;
+    if(key==='journal'||key==='trash'){
+      result[key]=mergeCrmRecordArrayForSave(remote[key],local[key],base[key],['id','orderId']);
+      return;
+    }
+    const localHas=Object.prototype.hasOwnProperty.call(local,key);
+    const remoteHas=Object.prototype.hasOwnProperty.call(remote,key);
+    const baseHas=Object.prototype.hasOwnProperty.call(base,key);
+    const localValue=localHas?local[key]:undefined;
+    const baseValue=baseHas?base[key]:undefined;
+    if(localHas && (!baseHas || !crmValuesEqual(localValue,baseValue))){
+      result[key]=deepClone(localValue);
+    }else if(remoteHas){
+      result[key]=deepClone(remote[key]);
+    }else{
+      delete result[key];
+    }
+  });
+
+  return ensureCrmStateShape(result);
+}
+
+function finishCrmSync(){
+  crmSyncInFlight=false;
+  if(crmSyncQueuedDuringFlight){
+    const summary=crmPendingSummary;
+    const meta=crmPendingMeta;
+    crmSyncQueuedDuringFlight=false;
+    queueSync(summary,meta);
+  }
+}
+
 async function pushCrmToServer(){
-  if(crmSyncInFlight) return;
+  if(crmSyncInFlight){
+    crmSyncQueuedDuringFlight=true;
+    if(crmSyncTimer){
+      clearTimeout(crmSyncTimer);
+      crmSyncTimer=null;
+    }
+    return;
+  }
   crmSyncTimer=null;
   if(!crmWriteAccessEnabled()){
     const now=Date.now();
@@ -25200,13 +25443,13 @@ async function pushCrmToServer(){
   crmSyncInFlight=true;
   if(!window.plannerRemote||typeof window.plannerRemote.saveState!=='function'){
     setCrmDataSource(CRM_DATA_SOURCE.local);
-    crmSyncInFlight=false;
+    finishCrmSync();
     return;
   }
   state=ensureCrmStateShape(state);
   const snapshot=deepClone(state);
   if(!snapshot){
-    crmSyncInFlight=false;
+    finishCrmSync();
     return;
   }
   const summaryText = crmPendingSummary || 'Изменения CRM';
@@ -25252,7 +25495,8 @@ async function pushCrmToServer(){
       err.code = 'WRITE_MODE_FORBIDDEN';
       throw err;
     }
-    plannerSnapshot.crm=snapshot;
+    const mergedCrmSnapshot=mergeCrmSnapshotForSave(plannerSnapshot.crm,snapshot,crmLastSyncedSnapshot);
+    plannerSnapshot.crm=mergedCrmSnapshot;
     const nowIso=new Date().toISOString();
     plannerSnapshot.crm.updatedAt=nowIso;
     const actorName=getCrmActorName();
@@ -25267,7 +25511,7 @@ async function pushCrmToServer(){
     versions.crm=(Number(versions.crm)||0)+1;
     meta.lastAuthors=meta.lastAuthors || {};
     meta.lastAuthors.crm={ name:actorName, at:nowIso };
-    const summaryObj=buildCrmOrdersSummary(snapshot);
+    const summaryObj=buildCrmOrdersSummary(plannerSnapshot.crm);
     meta.lastChange={
       stage:'crm',
       stages:['crm'],
@@ -25313,14 +25557,16 @@ async function pushCrmToServer(){
     metaPayload.channel='crm';
     return {
       stateString:JSON.stringify(plannerSnapshot),
-      metaPayload
+      metaPayload,
+      crmSnapshot:plannerSnapshot.crm
     };
   };
 
   let attempt=0;
   let success=false;
   let lastError=null;
-  while(attempt<2 && !success){
+  let savedCrmSnapshot=null;
+  while(attempt<3 && !success){
     attempt+=1;
     let payload;
     try{
@@ -25333,6 +25579,7 @@ async function pushCrmToServer(){
       crmSuppressNext=true;
       await window.plannerRemote.saveState(payload.stateString,payload.metaPayload);
       setCrmDataSource(CRM_DATA_SOURCE.remote);
+      savedCrmSnapshot=payload.crmSnapshot||null;
       success=true;
     }catch(err){
       crmSuppressNext=false;
@@ -25340,7 +25587,7 @@ async function pushCrmToServer(){
       if(err && err.code==='WRITE_MODE_FORBIDDEN'){
         break;
       }
-      if(err && err.name==='PlannerConflictError' && attempt<2){
+      if(err && err.name==='PlannerConflictError' && attempt<3){
         continue;
       }
       break;
@@ -25348,6 +25595,16 @@ async function pushCrmToServer(){
   }
 
   if(success){
+    if(savedCrmSnapshot){
+      crmLastSyncedSnapshot=deepClone(savedCrmSnapshot);
+      if(!crmValuesEqual(state,savedCrmSnapshot)){
+        state=ensureCrmStateShape(deepClone(savedCrmSnapshot));
+        persistLocal();
+        if(!isOrderDialogActive()){
+          renderAll();
+        }
+      }
+    }
     showToast({title:'CRM',message:'Изменения синхронизированы',tone:'success'});
     crmPendingMeta=null;
   }else if(lastError){
@@ -25373,7 +25630,7 @@ async function pushCrmToServer(){
     }
   }
 
-  crmSyncInFlight=false;
+  finishCrmSync();
 }
 
 function captureCrmScrollSnapshot(){
@@ -25463,10 +25720,7 @@ function applyRemoteCrm(crm){
   const uiSnapshot=captureCrmScrollSnapshot();
   const cloned=deepClone(crm) || { boards:[defaultBoard('crm-board-1')], currentBoardId:null };
   state=ensureCrmStateShape(cloned);
-  const storedSettings=loadStoredCrmSettings();
-  if(storedSettings){
-    state.settings=mergeCrmSettings(state.settings, storedSettings);
-  }
+  crmLastSyncedSnapshot=deepClone(state);
   persistLocal();
   renderAll();
   restoreCrmScrollSnapshot(uiSnapshot);
