@@ -7669,7 +7669,7 @@ function getReadableRouteTextColor(color){
 }
 const CRM_STAGE_KEYS=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
 const CRM_STAGE_SEQUENCE=['draw','proc','supply','shear','laser','bend','weld','mech','coop','pack','ship'];
-const CRM_STAGE_PERMISSION_KEYS=Array.from(new Set(CRM_STAGE_SEQUENCE));
+const CRM_STAGE_PERMISSION_KEYS=CRM_STAGE_SEQUENCE;
 const CRM_DEFAULT_CAPACITY={ draw:8, laser:36, bend:15, weld:4, mech:8 };
 const CRM_DEFAULT_PARALLEL={ proc:5, supply:5, shear:5, coop:3, pack:3, ship:5 };
 const CRM_INDICATOR_STAGES=['proc','supply','shear','coop','pack','ship'];
@@ -9663,6 +9663,21 @@ const crmCanUpdateStageProgressForStage=(stage)=>{
   if(!crmCanUpdateStageProgress()) return false;
   return crmCanAccessStage(stage);
 };
+const crmCanEditStageDetailsForStage=(stage)=>{
+  if(!crmCanEditStageDetails()) return false;
+  const key=resolveCrmStageKeyWithMapping(stage)||resolveCrmStageKey(stage);
+  return key ? crmCanAccessStage(key) : true;
+};
+const crmCanEditStageDatesForStage=(stage)=>{
+  if(!crmCanEditStageDates()) return false;
+  const key=resolveCrmStageKeyWithMapping(stage)||resolveCrmStageKey(stage);
+  return key ? crmCanAccessStage(key) : true;
+};
+function resolveCrmStageKeyFromRow(row){
+  if(!row) return null;
+  const name=row.querySelector?.('[data-k="name"]')?.value || '';
+  return resolveCrmStageKeyWithMapping(name)||resolveCrmStageKey(name);
+}
 function updateCrmDbIndicator(){
   if(!crmDbIndicator) return;
   const label=crmDbIndicator.querySelector('.crm-db-indicator__label');
@@ -9698,7 +9713,7 @@ const applyCrmWriteAccess=()=>{
   const canStages=crmCanManageStages();
   const canComplete=crmCanCompleteOrders();
   const canAddStages=crmCanAddStages();
-  const canPickStageFromList=crmCanManageStages();
+  const canPickStageFromList=canAddStages;
   const selectedStage=crmStageSelect?.value||'draw';
   const canSelectedStage=crmCanManageStage(selectedStage);
   if(document.body){
@@ -10192,7 +10207,10 @@ const crmPermissions=(()=>{
   if(!crmCurrentUser||typeof crmCurrentUser.permissions!=='object') return defaults;
   const stageSource=crmCurrentUser.permissions.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'?crmCurrentUser.permissions.stageAccess:{};
   const stageAccess=crmDefaultStageAccess(false);
-  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{ stageAccess[stage]=!!stageSource[stage]; });
+  Object.entries(stageSource).forEach(([rawStage,value])=>{
+    const stage=normalizeCrmStageKey(rawStage);
+    if(stage) stageAccess[stage]=!!value;
+  });
   const roleDerived=ensureRoleDerivedPermissions();
   const merged={ ...defaults, stageAccess };
   CRM_ROLE_PERMISSION_KEYS.forEach(key=>{
@@ -10949,7 +10967,7 @@ function enforceStageDateConstraints(tr, input){
 }
 
 function toggleCrmPlanFreezeDay(stageKey, iso){
-  if(!crmCanManageStages()) return;
+  if(!crmCanManageStage(stageKey)) return;
   const normalizedStage=normalizeCrmStageKey(stageKey);
   const normalizedIso=coerceCalendarIso(iso);
   if(!normalizedStage || !normalizedIso) return;
@@ -14554,7 +14572,7 @@ function renderCrmStageStack(schedule){
     const header=document.createElement('div');
     header.className='crm-stage-stack-header';
     header.appendChild(title);
-    if(crmCanManageStages()){
+    if(crmCanManageStage(schedule.stageKey)){
       const clipBtn=document.createElement('button');
       clipBtn.type='button';
       clipBtn.className='crm-stage-freeze-btn';
@@ -16745,7 +16763,7 @@ function updateCrmUserMenu(){
     }
     crmUserMetaEl.textContent=metaParts.join(' · ');
   }
-  if(!crmCanManageUsers() && !crmCanViewAudit() && crmAdminDlg && crmAdminDlg.open){
+  if(!crmCanManageUsers() && !crmCanManageSettings() && !crmCanViewAudit() && crmAdminDlg && crmAdminDlg.open){
     closeCrmAdmin();
   }
   if(!hasUser){
@@ -16765,7 +16783,7 @@ function updateCrmNavigationAccess(){
     closeCrmJournal();
   }
   if(crmAdminNavBtn){
-    crmAdminNavBtn.hidden=!(crmCanManageUsers() || crmCanViewAudit());
+    crmAdminNavBtn.hidden=!(crmCanManageUsers() || crmCanManageSettings() || crmCanViewAudit());
   }
   if(crmSettingsNavBtn){
     crmSettingsNavBtn.hidden=!crmCanManageSettings();
@@ -16774,17 +16792,19 @@ function updateCrmNavigationAccess(){
 }
 
 function crmCanAccessAdminPanel(){
-  return crmCanManageUsers() || crmCanViewAudit();
+  return crmCanManageUsers() || crmCanManageSettings() || crmCanViewAudit();
 }
 
 function canUseCrmAdminTab(tabId){
   if(tabId==='audit') return crmCanViewAudit();
+  if(tabId==='settings') return crmCanManageSettings();
   return crmCanManageUsers();
 }
 
 function resolveCrmAdminTab(tabId){
   const normalized=(tabId==='roles'||tabId==='audit'||tabId==='settings')?tabId:'users';
   if(canUseCrmAdminTab(normalized)) return normalized;
+  if(crmCanManageSettings()) return 'settings';
   if(crmCanViewAudit()) return 'audit';
   if(crmCanManageUsers()) return 'users';
   return null;
@@ -17319,7 +17339,7 @@ function buildCrmAdminAuditDetails(entry){
 
 function handleCrmAdminSettingsSave(event){
   event.preventDefault();
-  if(!crmCanManageUsers()){
+  if(!crmCanManageSettings()){
     showToast({ title:'Администрирование', message:'Недостаточно прав для изменения настроек.', tone:'error' });
     return;
   }
@@ -17442,7 +17462,10 @@ function getRolePermissionsForUi(role){
   const baseStageAccess=defaults.stageAccess&&typeof defaults.stageAccess==='object'?defaults.stageAccess:{};
   const sourceStageAccess=source.stageAccess&&typeof source.stageAccess==='object'?source.stageAccess:{};
   const stageAccess={};
-  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{
+  const stageKeys=new Set(CRM_STAGE_PERMISSION_KEYS);
+  Object.keys(baseStageAccess).forEach(stage=>stageKeys.add(normalizeCrmStageKey(stage)));
+  Object.keys(sourceStageAccess).forEach(stage=>stageKeys.add(normalizeCrmStageKey(stage)));
+  stageKeys.forEach(stage=>{
     if(typeof sourceStageAccess[stage]==='boolean'){
       stageAccess[stage]=sourceStageAccess[stage];
     }else if(typeof baseStageAccess[stage]==='boolean'){
@@ -18928,7 +18951,8 @@ function toggleCrmStageTaskPin(orderId, stageId, stageKey){
 }
 
 function handleCrmStageManualOptimization(){
-  if(!crmCanManageStages()){
+  const stageKey=crmStageSelect?.value||'';
+  if(!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для оптимизации очереди.', tone:'warn' });
     return;
   }
@@ -18936,7 +18960,7 @@ function handleCrmStageManualOptimization(){
   let changed=false;
   crmAutoOptimizeGuard=true;
   try{
-    changed=runCrmAutoOptimization({ reason:'manual' });
+    changed=runCrmAutoOptimization({ reason:'manual', stageKeys:[stageKey] });
     if(changed){
       save('Ручная оптимизация очереди');
     }
@@ -20372,7 +20396,16 @@ function handleClearStageDates(){
     return;
   }
   if(!stagesTableBody) return;
-  stagesTableBody.querySelectorAll('tr').forEach(tr=>{
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const blocked=rows.some(tr=>{
+    const stageKey=resolveCrmStageKeyFromRow(tr);
+    return stageKey && !crmCanEditStageDatesForStage(stageKey);
+  });
+  if(blocked){
+    showToast({ title:'CRM', message:'Нет прав для очистки дат одного из переделов.', tone:'warn' });
+    return;
+  }
+  rows.forEach(tr=>{
     const startInput=tr.querySelector('[data-k="start"]');
     const endInput=tr.querySelector('[data-k="end"]');
       if(startInput){
@@ -20427,6 +20460,10 @@ function calculateOrderStageDates(options={}){
       return;
     }
     const stageLabel=stageDraft.name||CRM_STAGE_LABELS[stageKey]||'Передел';
+    if(!crmCanEditStageDatesForStage(stageKey)){
+      errors.push(`«${stageLabel}»: нет прав для пересчета дат`);
+      return;
+    }
     if(manualStart || manualEnd){
       const manualEndDate=manualEnd?parseDateInputValue(manualEnd):null;
       if(manualEndDate) previousEndDate=manualEndDate;
@@ -20857,14 +20894,21 @@ async function handleOrderDoneChange(){
 if(addStageFromListBtn){
   addStageFromListBtn.addEventListener('click',e=>{
     e.preventDefault();
+    if(!crmCanAddStages()) return;
     showStagePicker(addStageFromListBtn);
   });
 }
 if(presetStagesBtn){
-  presetStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmDefaultStageChoiceNames()));
+  presetStagesBtn.addEventListener('click',()=>{
+    if(!crmCanAddStages()) return;
+    applyStagePreset(getCrmDefaultStageChoiceNames().filter(name=>crmCanAddStageName(name)));
+  });
 }
 if(allStagesBtn){
-  allStagesBtn.addEventListener('click',()=>applyStagePreset(getCrmStageChoiceOptions().map(choice=>choice.value)));
+  allStagesBtn.addEventListener('click',()=>{
+    if(!crmCanAddStages()) return;
+    applyStagePreset(getCrmStageChoiceOptions().map(choice=>choice.value).filter(name=>crmCanAddStageName(name)));
+  });
 }
 function clearStageList(){
   if(!crmCanEditStageDetails()){
@@ -20872,6 +20916,15 @@ function clearStageList(){
     return;
   }
   if(!stagesTableBody) return;
+  const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
+  const blocked=rows.some(tr=>{
+    const stageKey=resolveCrmStageKeyFromRow(tr);
+    return stageKey && !crmCanEditStageDetailsForStage(stageKey);
+  });
+  if(blocked){
+    showToast({ title:'CRM', message:'Нет прав для очистки одного из переделов.', tone:'warn' });
+    return;
+  }
   if(stagesTableBody.children.length && !confirm('Очистить все переделы в заказе?')) return;
   if(editingOrderId && stageSourceMap instanceof Map){
     Array.from(stagesTableBody.querySelectorAll('tr')).forEach((tr,index)=>{
@@ -20953,7 +21006,7 @@ function setOrderFormReadOnly(readOnly){
     splitBtn.disabled=readOnly;
   }
   if(addStageFromListBtn){
-    const canPick=crmCanManageStages();
+    const canPick=crmCanAddStages();
     addStageFromListBtn.disabled=readOnly || !canPick;
     addStageFromListBtn.hidden=!canPick;
   }
@@ -20981,10 +21034,12 @@ function setOrderFormReadOnly(readOnly){
   if(stagesTableBody){
     stagesTableBody.querySelectorAll('[data-k="done"], [data-k="progress"]').forEach(input=>{
       if(!input) return;
+      const stageKey=resolveCrmStageKeyFromRow(input.closest('tr'));
+      const canUpdateThisStage=stageKey ? crmCanUpdateStageProgressForStage(stageKey) : canUpdateProgress;
       if(input.dataset.readonlyWasDisabled===undefined){
         input.dataset.readonlyWasDisabled=input.disabled?'1':'0';
       }
-      if(!canUpdateProgress){
+      if(!canUpdateThisStage){
         input.disabled=true;
       }else if(!readOnly){
         input.disabled=input.dataset.readonlyWasDisabled==='1';
@@ -20992,17 +21047,21 @@ function setOrderFormReadOnly(readOnly){
     });
     stagesTableBody.querySelectorAll('[data-k="name"], [data-k="value"], .btn-circle, [data-stage-move]').forEach(input=>{
       if(!input) return;
+      const stageKey=resolveCrmStageKeyFromRow(input.closest('tr'));
+      const canEditThisStage=stageKey ? crmCanEditStageDetailsForStage(stageKey) : canEditStageDetails;
       if(input.dataset.detailWasDisabled===undefined){
         input.dataset.detailWasDisabled=input.disabled?'1':'0';
       }
-      input.disabled=readOnly || !canEditStageDetails ? true : input.dataset.detailWasDisabled==='1';
+      input.disabled=readOnly || !canEditThisStage ? true : input.dataset.detailWasDisabled==='1';
     });
     stagesTableBody.querySelectorAll('[data-k="start"], [data-k="end"]').forEach(input=>{
       if(!input) return;
+      const stageKey=resolveCrmStageKeyFromRow(input.closest('tr'));
+      const canEditThisStageDates=stageKey ? crmCanEditStageDatesForStage(stageKey) : canEditStageDates;
       if(input.dataset.dateWasDisabled===undefined){
         input.dataset.dateWasDisabled=input.disabled?'1':'0';
       }
-      input.disabled=readOnly || !canEditStageDates ? true : input.dataset.dateWasDisabled==='1';
+      input.disabled=readOnly || !canEditThisStageDates ? true : input.dataset.dateWasDisabled==='1';
     });
   }
 }
@@ -21410,7 +21469,9 @@ async function processStageCompletionChange(tr, isDone){
 
 async function handleStageDoneToggle(tr, doneEl, options={}){
   if(!tr||!doneEl) return true;
-  if(!crmCanUpdateStageProgress()){
+  const stageKey=resolveCrmStageKeyFromRow(tr);
+  const canUpdateStage=stageKey ? crmCanUpdateStageProgressForStage(stageKey) : crmCanUpdateStageProgress();
+  if(!canUpdateStage){
     showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
     return false;
   }
@@ -21457,6 +21518,12 @@ function refreshStageReorderControls(){
 
 function moveStageRow(tr,direction){
   if(!stagesTableBody||!tr) return;
+  const stageKey=resolveCrmStageKeyFromRow(tr);
+  const canEditStage=stageKey ? crmCanEditStageDetailsForStage(stageKey) : crmCanEditStageDetails();
+  if(!canEditStage){
+    showToast({ title:'CRM', message:'Нет прав для перемещения этого передела.', tone:'warn' });
+    return;
+  }
   const rows=Array.from(stagesTableBody.querySelectorAll('tr'));
   const index=rows.indexOf(tr);
   if(index<0) return;
@@ -21507,9 +21574,10 @@ function moveStageRow(tr,direction){
   const suppressValue=isStageNameHourless(nmNormalized);
   const progressValue=normalizeStageProgress(st.progress??0);
   const tr=document.createElement('tr');
-  const canUpdateProgress=crmCanUpdateStageProgress();
-  const canEditStageDetails=crmCanEditStageDetails();
-  const canEditStageDates=crmCanEditStageDates();
+  const stageAccessKey=resolveCrmStageKeyWithMapping(st.name)||resolveCrmStageKey(st.name);
+  const canUpdateProgress=stageAccessKey ? crmCanUpdateStageProgressForStage(stageAccessKey) : crmCanUpdateStageProgress();
+  const canEditStageDetails=stageAccessKey ? crmCanEditStageDetailsForStage(stageAccessKey) : crmCanEditStageDetails();
+  const canEditStageDates=stageAccessKey ? crmCanEditStageDatesForStage(stageAccessKey) : crmCanEditStageDates();
   const stageId=ensureStageIdentity(st);
   tr.dataset.stageId=stageId;
   if(typeof st.doneAt==='string' && st.doneAt){
@@ -21570,6 +21638,12 @@ function moveStageRow(tr,direction){
 
   const delBtn=tr.querySelector('.btn-circle');
   delBtn.onclick=()=>{
+    const currentStageKey=resolveCrmStageKeyFromRow(tr);
+    const canDeleteStage=currentStageKey ? crmCanEditStageDetailsForStage(currentStageKey) : crmCanEditStageDetails();
+    if(!canDeleteStage){
+      showToast({ title:'CRM', message:'Нет прав для удаления этого передела.', tone:'warn' });
+      return;
+    }
     if(!confirm('Удалить передел?'))return;
     const stageKey=tr.dataset.stageId||'';
     if(editingOrderId && stageKey && stageSourceMap instanceof Map && stageSourceMap.has(stageKey)){
@@ -21599,7 +21673,9 @@ function moveStageRow(tr,direction){
   const doneEl=tr.querySelector('[data-k="done"]');
   if(doneEl){
     doneEl.addEventListener('change',async ()=>{
-      if(!crmCanUpdateStageProgress()){
+      const currentStageKey=resolveCrmStageKeyFromRow(tr);
+      const canUpdateCurrent=currentStageKey ? crmCanUpdateStageProgressForStage(currentStageKey) : crmCanUpdateStageProgress();
+      if(!canUpdateCurrent){
         doneEl.checked=!doneEl.checked;
         showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
         return;
@@ -21612,7 +21688,9 @@ function moveStageRow(tr,direction){
       progEl.dataset.prevValue=progEl.value||'';
     });
     progEl.addEventListener('input',async e=>{
-      if(!crmCanUpdateStageProgress()){
+      const currentStageKey=resolveCrmStageKeyFromRow(tr);
+      const canUpdateCurrent=currentStageKey ? crmCanUpdateStageProgressForStage(currentStageKey) : crmCanUpdateStageProgress();
+      if(!canUpdateCurrent){
         e.target.value=progEl.dataset.prevValue||'';
         showToast({ title:'CRM', message:'Нет прав для изменения прогресса передела.', tone:'warn' });
         return;
@@ -21642,7 +21720,19 @@ function moveStageRow(tr,direction){
   }
   const valueInput=tr.querySelector('[data-k="value"]');
   if(valueInput&&!suppressValue){
-    valueInput.addEventListener('input',()=>updateStageAutoHours(tr));
+    valueInput.addEventListener('focus',()=>{
+      valueInput.dataset.prevValue=valueInput.value||'';
+    });
+    valueInput.addEventListener('input',()=>{
+      const currentStageKey=resolveCrmStageKeyFromRow(tr);
+      const canEditCurrent=currentStageKey ? crmCanEditStageDetailsForStage(currentStageKey) : crmCanEditStageDetails();
+      if(!canEditCurrent){
+        valueInput.value=valueInput.dataset.prevValue||'';
+        showToast({ title:'CRM', message:'Нет прав для изменения данных этого передела.', tone:'warn' });
+        return;
+      }
+      updateStageAutoHours(tr);
+    });
   }
   const nameInput=tr.querySelector('[data-k="name"]');
   if(nameInput){
@@ -21654,6 +21744,15 @@ function moveStageRow(tr,direction){
     nameInput.addEventListener('change',()=>{
       const previousName=nameInput.dataset.previousValue||nmRaw||'';
       const nextName=(nameInput.value||'').trim();
+      const previousKey=resolveCrmStageKeyWithMapping(previousName)||resolveCrmStageKey(previousName);
+      const nextKey=resolveCrmStageKeyWithMapping(nextName)||resolveCrmStageKey(nextName);
+      const canEditPrevious=previousKey ? crmCanEditStageDetailsForStage(previousKey) : crmCanEditStageDetails();
+      const canEditNext=nextKey ? crmCanEditStageDetailsForStage(nextKey) : crmCanEditStageDetails();
+      if(!canEditPrevious || !canEditNext){
+        nameInput.value=previousName;
+        showToast({ title:'CRM', message:'Нет прав для изменения этого передела.', tone:'warn' });
+        return;
+      }
       const previousHourless=suppressValueForStage(normalizeStageName(previousName));
       const nextHourless=suppressValueForStage(normalizeStageName(nextName));
       if(previousHourless!==nextHourless){
@@ -21695,7 +21794,13 @@ function moveStageRow(tr,direction){
         startInput.dataset.prevValue=startInput.value||startInput.dataset.lastAccepted||'';
       });
       startInput.addEventListener('change',()=>{
-        if(!crmCanEditStageDates()){ startInput.value=startInput.dataset.prevValue||startInput.dataset.lastAccepted||''; return; }
+        const currentStageKey=resolveCrmStageKeyFromRow(tr);
+        const canEditCurrentDates=currentStageKey ? crmCanEditStageDatesForStage(currentStageKey) : crmCanEditStageDates();
+        if(!canEditCurrentDates){
+          startInput.value=startInput.dataset.prevValue||startInput.dataset.lastAccepted||'';
+          showToast({ title:'CRM', message:'Нет прав для изменения дат этого передела.', tone:'warn' });
+          return;
+        }
         enforceStageDateConstraints(tr, startInput);
         applyStageDateHighlight(startInput,startInput.dataset.original||'','Исходная дата начала');
         updateStageDateWeekday(startInput);
@@ -21711,7 +21816,13 @@ function moveStageRow(tr,direction){
         endInput.dataset.prevValue=endInput.value||endInput.dataset.lastAccepted||'';
       });
       endInput.addEventListener('change',()=>{
-        if(!crmCanEditStageDates()){ endInput.value=endInput.dataset.prevValue||endInput.dataset.lastAccepted||''; return; }
+        const currentStageKey=resolveCrmStageKeyFromRow(tr);
+        const canEditCurrentDates=currentStageKey ? crmCanEditStageDatesForStage(currentStageKey) : crmCanEditStageDates();
+        if(!canEditCurrentDates){
+          endInput.value=endInput.dataset.prevValue||endInput.dataset.lastAccepted||'';
+          showToast({ title:'CRM', message:'Нет прав для изменения дат этого передела.', tone:'warn' });
+          return;
+        }
         enforceStageDateConstraints(tr, endInput);
         applyStageDateHighlight(endInput,endInput.dataset.original||'','Исходная дата конца');
         updateStageDateWeekday(endInput);
@@ -21764,9 +21875,20 @@ function moveStageRow(tr,direction){
 
   function appendStageByName(name){
     const targetName=resolveKnownStageName(name);
+    if(!crmCanAddStageName(targetName)){
+      showToast({ title:'CRM', message:'Нет прав для добавления этого передела.', tone:'warn' });
+      return;
+    }
     const row=appendStageRow({name:targetName,done:false,progress:0,start:'',end:'',value:''});
     focusStageRow(row);
   }
+
+function crmCanAddStageName(name){
+  if(!crmCanAddStages()) return false;
+  const targetName=resolveKnownStageName(name);
+  const stageKey=resolveCrmStageKeyWithMapping(targetName)||resolveCrmStageKey(targetName);
+  return stageKey ? crmCanAccessStage(stageKey) : true;
+}
 
 function applyStagePreset(names){
   stagesTableBody.innerHTML='';
@@ -21834,7 +21956,7 @@ function suppressValueForStage(normalizedName){
 }
 
 function showStagePicker(anchor){
-  const presets=getCrmStageChoiceOptions().filter(choice=>choice&&choice.value);
+  const presets=getCrmStageChoiceOptions().filter(choice=>choice&&choice.value&&crmCanAddStageName(choice.value));
   closePopup();
   if(!presets.length){
     showToast({ title:'CRM', message:'Список переделов пуст. Добавьте переделы в настройках.', tone:'warn' });
@@ -24055,7 +24177,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.7.4',
+    version:'5.7.5',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -26623,7 +26745,7 @@ if(crmJournalDetailDlg){
 if(crmAdminNavBtn){
   crmAdminNavBtn.addEventListener('click',()=>{
     setCrmUserMenuOpen(false);
-    openCrmAdmin(crmCanManageUsers() ? 'users' : 'audit');
+    openCrmAdmin(crmCanManageUsers() ? 'users' : (crmCanManageSettings() ? 'settings' : 'audit'));
   });
 }
 if(crmAdminCloseBtn){
@@ -26759,41 +26881,41 @@ if(crmAdminRolesSave){
       return;
     }
     const rolesPayload={};
+    const ensureRolePayload=(slug)=>{
+      const normalized=(slug||'').trim();
+      if(!normalized) return null;
+      if(!rolesPayload[normalized]){
+        const role=(crmAdminState.roles||[]).find(item=>String(item?.slug||'')===normalized);
+        rolesPayload[normalized]={ permissions:JSON.parse(JSON.stringify(getRolePermissionsForUi(role||{ slug:normalized }))) };
+      }else if(!rolesPayload[normalized].permissions){
+        rolesPayload[normalized].permissions={};
+      }
+      return rolesPayload[normalized];
+    };
     if(crmAdminRolesGrid){
       crmAdminRolesGrid.querySelectorAll('textarea[data-role-slug]').forEach(textarea=>{
         const slug=(textarea.dataset.roleSlug||'').trim();
         if(!slug) return;
-        if(!rolesPayload[slug]){
-          rolesPayload[slug]={ permissions:{} };
-        }
-        rolesPayload[slug].description=textarea.value;
+        const entry=ensureRolePayload(slug);
+        if(entry) entry.description=textarea.value;
       });
       crmAdminRolesGrid.querySelectorAll('input[data-role-permission]').forEach(input=>{
         const slug=(input.dataset.roleSlug||'').trim();
         const perm=(input.dataset.rolePermission||'').trim();
         if(!slug||!perm) return;
-        if(!rolesPayload[slug]){
-          rolesPayload[slug]={ permissions:{} };
-        }
-        if(!rolesPayload[slug].permissions){
-          rolesPayload[slug].permissions={};
-        }
-        rolesPayload[slug].permissions[perm]=input.checked;
+        const entry=ensureRolePayload(slug);
+        if(entry) entry.permissions[perm]=input.checked;
       });
       crmAdminRolesGrid.querySelectorAll('input[data-role-stage]').forEach(input=>{
         const slug=(input.dataset.roleSlug||'').trim();
         const stage=(input.dataset.roleStage||'').trim();
         if(!slug||!stage) return;
-        if(!rolesPayload[slug]){
-          rolesPayload[slug]={ permissions:{} };
+        const entry=ensureRolePayload(slug);
+        if(!entry) return;
+        if(!entry.permissions.stageAccess){
+          entry.permissions.stageAccess={};
         }
-        if(!rolesPayload[slug].permissions){
-          rolesPayload[slug].permissions={};
-        }
-        if(!rolesPayload[slug].permissions.stageAccess){
-          rolesPayload[slug].permissions.stageAccess={};
-        }
-        rolesPayload[slug].permissions.stageAccess[stage]=input.checked;
+        entry.permissions.stageAccess[stage]=input.checked;
       });
     }
     setCrmAdminBusy(true);

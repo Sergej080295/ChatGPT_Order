@@ -1066,7 +1066,36 @@ function normalizeRoleSlug(input) {
   if (ROLE_LOOKUP.has(candidate) || rolePermissionCache.has(candidate)) {
     return candidate;
   }
+  if (/^[a-z0-9_-]{3,32}$/.test(candidate)) {
+    return candidate;
+  }
   return null;
+}
+
+function normalizeStageAccessKey(input) {
+  if (!input && input !== 0) return null;
+  const normalized = String(input).trim().toLowerCase();
+  if (!normalized) return null;
+  if (!/^[\p{L}\p{N}_-]{1,96}$/u.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function collectStageAccessKeys(...sources) {
+  const keys = new Set(STAGE_SLUGS);
+  sources.forEach((source) => {
+    if (!source || typeof source !== 'object') {
+      return;
+    }
+    Object.keys(source).forEach((rawKey) => {
+      const key = normalizeStageAccessKey(rawKey);
+      if (key) {
+        keys.add(key);
+      }
+    });
+  });
+  return Array.from(keys);
 }
 
 function normalizeRolePermissions(payload, slug) {
@@ -1109,7 +1138,7 @@ function normalizeRolePermissions(payload, slug) {
   const stageDefaults = defaults.stageAccess && typeof defaults.stageAccess === 'object' ? defaults.stageAccess : {};
   const sourceStages = source && typeof source.stageAccess === 'object' ? source.stageAccess : {};
   const stageAccess = {};
-  for (const stage of STAGE_SLUGS) {
+  for (const stage of collectStageAccessKeys(stageDefaults, sourceStages)) {
     if (typeof sourceStages[stage] === 'boolean') {
       stageAccess[stage] = sourceStages[stage];
     } else if (typeof stageDefaults[stage] === 'boolean') {
@@ -1118,6 +1147,13 @@ function normalizeRolePermissions(payload, slug) {
       stageAccess[stage] = !!result.manageStages;
     }
   }
+  Object.entries(sourceStages).forEach(([rawKey, rawValue]) => {
+    const key = normalizeStageAccessKey(rawKey);
+    if (!key || typeof rawValue !== 'boolean') {
+      return;
+    }
+    stageAccess[key] = rawValue;
+  });
   result.stageAccess = stageAccess;
   return result;
 }
@@ -1503,8 +1539,9 @@ function computePermissions(roleSlugs) {
       }
     }
     if (rolePerms.stageAccess && typeof rolePerms.stageAccess === 'object') {
-      for (const stage of STAGE_SLUGS) {
-        if (rolePerms.stageAccess[stage]) {
+      for (const [rawStage, value] of Object.entries(rolePerms.stageAccess)) {
+        const stage = normalizeStageAccessKey(rawStage);
+        if (stage && value) {
           permissions.stageAccess[stage] = true;
         }
       }
@@ -6804,6 +6841,8 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
     const hash = computeSnapshotHash(stateString);
     const current = await getCachedSnapshot();
     const currentHash = current?.hash || null;
+    const actor = normalizedMeta.actor || requestMeta?.actor || requestMeta?.user || 'planner-ui';
+    const source = normalizedMeta.source || 'planner-ui';
     const ifMatch = parseIfMatchHeader(req.headers['if-match']);
     const baseHashFromMeta = normalizedMeta.concurrency.baseHash
       || normalizeWeakEtag(normalizedMeta.concurrency.baseEtag || null);
@@ -6824,6 +6863,13 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
     if (!isWriteChannelAllowed(writeMode, channel)) {
       logSaveEvent('warn', 'write rejected due to mode', { requestId, channel, writeMode });
       res.status(403).json({ error: 'Write mode restriction', channel, writeMode });
+      return;
+    }
+    if (source === 'admin-panel'
+        && !req.user?.permissions?.manageSettings
+        && !req.user?.permissions?.manageUsers) {
+      logSaveEvent('warn', 'admin settings write rejected due to role permissions', { requestId, channel, source });
+      res.status(403).json({ error: 'Forbidden', permission: 'manageSettings' });
       return;
     }
 
@@ -6854,8 +6900,6 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       return;
     }
 
-    const actor = normalizedMeta.actor || requestMeta?.actor || requestMeta?.user || 'planner-ui';
-    const source = normalizedMeta.source || 'planner-ui';
     const note = normalizedMeta.note || null;
     const summary = normalizedMeta.summary || null;
     const storedMeta = sanitizeMetaForStorage({
