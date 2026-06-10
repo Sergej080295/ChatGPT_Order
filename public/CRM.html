@@ -9649,11 +9649,58 @@ const crmCanViewAudit=()=> !!crmPermissions.viewAudit;
 const crmCanManageSettings=()=> !!crmPermissions.manageSettings;
 const crmCanEditComments=()=> crmWriteAccessEnabled() && !!crmPermissions.editComments;
 const crmCanDeleteComments=()=> crmWriteAccessEnabled() && !!crmPermissions.deleteComments;
+function resolveCrmStageAccessKeys(stage){
+  const keys=new Set();
+  const add=value=>{
+    const key=(value==null?'':String(value)).trim().toLowerCase();
+    if(key) keys.add(key);
+  };
+  const addResolved=value=>{
+    const mapped=resolveCrmStageKeyWithMapping(value);
+    if(mapped) add(mapped);
+    const resolved=resolveCrmStageKey(value);
+    if(resolved) add(resolved);
+  };
+  const raw=(stage==null?'':String(stage)).replace(/\s+/g,' ').trim();
+  if(!raw) return [];
+  add(raw);
+  addResolved(raw);
+  const split=splitCrmStageStepName(raw);
+  if(split.base && split.base!==raw){
+    add(split.base);
+    addResolved(split.base);
+  }
+  const normalized=normalizeStageName(raw);
+  Object.entries(CRM_STAGE_LABELS).forEach(([key,label])=>{
+    if(normalizeStageName(label)===normalized) add(key);
+  });
+  Object.entries(CRM_STAGE_ALIASES).forEach(([key,aliases])=>{
+    if(Array.isArray(aliases) && aliases.includes(normalized)) add(key);
+  });
+  return Array.from(keys);
+}
+function syncCrmPermissionsStageAccess(){
+  if(!crmPermissions || !crmPermissions.stageAccess || typeof crmPermissions.stageAccess!=='object') return;
+  ensureCrmDynamicStageCatalog();
+  const source=crmCurrentUser?.permissions?.stageAccess&&typeof crmCurrentUser.permissions.stageAccess==='object'
+    ? crmCurrentUser.permissions.stageAccess
+    : {};
+  CRM_STAGE_PERMISSION_KEYS.forEach(stage=>{
+    const key=normalizeCrmStageKey(stage);
+    if(!key) return;
+    if(typeof source[key]==='boolean'){
+      crmPermissions.stageAccess[key]=source[key];
+    }else if(typeof crmPermissions.stageAccess[key]!=='boolean'){
+      crmPermissions.stageAccess[key]=!!crmPermissions.manageStages;
+    }
+  });
+}
 const crmCanAccessStage=(stage)=>{
-  const key=resolveCrmStageKey(stage)|| (typeof stage==='string'?stage.trim().toLowerCase():null);
-  if(!key) return false;
+  syncCrmPermissionsStageAccess();
+  const keys=resolveCrmStageAccessKeys(stage);
+  if(!keys.length) return false;
   const stageAccess=(crmPermissions.stageAccess&&typeof crmPermissions.stageAccess==='object')?crmPermissions.stageAccess:{};
-  return !!stageAccess[key];
+  return keys.some(key=>!!stageAccess[key]);
 };
 const crmCanManageStage=(stage)=>{
   if(!crmCanManageStages()) return false;
@@ -9665,18 +9712,16 @@ const crmCanUpdateStageProgressForStage=(stage)=>{
 };
 const crmCanEditStageDetailsForStage=(stage)=>{
   if(!crmCanEditStageDetails()) return false;
-  const key=resolveCrmStageKeyWithMapping(stage)||resolveCrmStageKey(stage);
-  return key ? crmCanAccessStage(key) : true;
+  return crmCanAccessStage(stage);
 };
 const crmCanEditStageDatesForStage=(stage)=>{
   if(!crmCanEditStageDates()) return false;
-  const key=resolveCrmStageKeyWithMapping(stage)||resolveCrmStageKey(stage);
-  return key ? crmCanAccessStage(key) : true;
+  return crmCanAccessStage(stage);
 };
 function resolveCrmStageKeyFromRow(row){
   if(!row) return null;
   const name=row.querySelector?.('[data-k="name"]')?.value || '';
-  return resolveCrmStageKeyWithMapping(name)||resolveCrmStageKey(name);
+  return name || null;
 }
 function updateCrmDbIndicator(){
   if(!crmDbIndicator) return;
@@ -24177,7 +24222,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.7.5',
+    version:'5.7.6',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
