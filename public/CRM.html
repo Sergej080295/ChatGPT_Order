@@ -9695,12 +9695,44 @@ function syncCrmPermissionsStageAccess(){
     }
   });
 }
+function crmStageAccessValue(stageAccess,key){
+  const normalized=normalizeCrmStageKey(key);
+  if(!normalized || !stageAccess || typeof stageAccess!=='object') return undefined;
+  if(Object.prototype.hasOwnProperty.call(stageAccess,normalized) && typeof stageAccess[normalized]==='boolean'){
+    return stageAccess[normalized];
+  }
+  return undefined;
+}
+function resolveCrmStageAccessPrimaryKey(stage){
+  ensureCrmDynamicStageCatalog();
+  const raw=(stage==null?'':String(stage)).replace(/\s+/g,' ').trim();
+  if(!raw) return null;
+  const direct=normalizeCrmStageKey(raw);
+  if(direct && CRM_STAGE_PERMISSION_KEYS.includes(direct)) return direct;
+  const mapped=resolveCrmStageKeyWithMapping(raw);
+  if(mapped && CRM_STAGE_PERMISSION_KEYS.includes(mapped)) return mapped;
+  const split=splitCrmStageStepName(raw);
+  if(split.base && split.base!==raw){
+    const baseDirect=normalizeCrmStageKey(split.base);
+    if(baseDirect && CRM_STAGE_PERMISSION_KEYS.includes(baseDirect)) return baseDirect;
+    const baseMapped=resolveCrmStageKeyWithMapping(split.base);
+    if(baseMapped && CRM_STAGE_PERMISSION_KEYS.includes(baseMapped)) return baseMapped;
+  }
+  const normalized=normalizeStageName(raw);
+  for(const [key,label] of Object.entries(CRM_STAGE_LABELS)){
+    if(normalizeStageName(label)===normalized && CRM_STAGE_PERMISSION_KEYS.includes(key)) return key;
+  }
+  return direct || mapped || null;
+}
 const crmCanAccessStage=(stage)=>{
   syncCrmPermissionsStageAccess();
+  const stageAccess=(crmPermissions.stageAccess&&typeof crmPermissions.stageAccess==='object')?crmPermissions.stageAccess:{};
+  const primary=resolveCrmStageAccessPrimaryKey(stage);
+  const primaryValue=crmStageAccessValue(stageAccess,primary);
+  if(typeof primaryValue==='boolean') return primaryValue;
   const keys=resolveCrmStageAccessKeys(stage);
   if(!keys.length) return false;
-  const stageAccess=(crmPermissions.stageAccess&&typeof crmPermissions.stageAccess==='object')?crmPermissions.stageAccess:{};
-  return keys.some(key=>!!stageAccess[key]);
+  return keys.some(key=>crmStageAccessValue(stageAccess,key)===true);
 };
 const crmCanManageStage=(stage)=>{
   if(!crmCanManageStages()) return false;
@@ -24222,7 +24254,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.7.8',
+    version:'5.7.9',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',

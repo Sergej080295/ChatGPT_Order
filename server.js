@@ -1856,6 +1856,45 @@ function destroySession(sessionId) {
   db.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
 }
 
+function destroyUserSessions(userId, exceptSessionId = null) {
+  const numericUserId = Number(userId);
+  if (!Number.isFinite(numericUserId) || numericUserId <= 0) return 0;
+  const db = getDatabase();
+  const except = typeof exceptSessionId === 'string' && exceptSessionId.trim() ? exceptSessionId.trim() : null;
+  const statement = except
+    ? db.prepare('DELETE FROM sessions WHERE user_id = ? AND id != ?')
+    : db.prepare('DELETE FROM sessions WHERE user_id = ?');
+  const info = except
+    ? statement.run(numericUserId, except)
+    : statement.run(numericUserId);
+  return Number(info?.changes || 0);
+}
+
+function destroySessionsForRoleSlugs(roleSlugs, exceptSessionId = null) {
+  const normalized = Array.isArray(roleSlugs)
+    ? Array.from(new Set(roleSlugs.map(normalizeRoleSlug).filter(Boolean)))
+    : [];
+  if (!normalized.length) return 0;
+  const db = getDatabase();
+  const placeholders = normalized.map(() => '?').join(',');
+  const params = normalized.slice();
+  let sql = `
+    DELETE FROM sessions
+     WHERE user_id IN (
+       SELECT DISTINCT ur.user_id
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+        WHERE r.slug IN (${placeholders})
+     )`;
+  const except = typeof exceptSessionId === 'string' && exceptSessionId.trim() ? exceptSessionId.trim() : null;
+  if (except) {
+    sql += ' AND id != ?';
+    params.push(except);
+  }
+  const info = db.prepare(sql).run(...params);
+  return Number(info?.changes || 0);
+}
+
 function generateSessionId() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -2005,7 +2044,7 @@ function registerFailedLogin(userId) {
     lockedUntil = lockUntilDate.toISOString();
   }
   db
-    .prepare('UPDATE users SET failed_attempts = ?, locked_until = COALESCE(?, locked_until), updated_at = ? WHERE id = ?')
+    .prepare('UPDATE users SET failed_attempts = ?, locked_until = ?, updated_at = ? WHERE id = ?')
     .run(attempts, lockedUntil, nowIso, userId);
   return { attempts, lockedUntil };
 }
@@ -2050,23 +2089,42 @@ function saveUserRoles(userId, roleSlugs) {
 }
 
 function ensureAdminPreserved(userId, nextRoleSlugs) {
+  return ensureActiveAdminPreserved(userId, nextRoleSlugs, true);
+}
+
+function countActiveAdmins({ excludeUserId = null, roleSlug = null } = {}) {
+  const db = getDatabase();
+  const params = [];
+  const roleFilter = roleSlug
+    ? 'r.slug = ?'
+    : "r.slug IN ('admin','superadmin')";
+  if (roleSlug) {
+    params.push(roleSlug);
+  }
+  let sql = `
+    SELECT COUNT(DISTINCT u.id) AS count
+      FROM users u
+      JOIN user_roles ur ON ur.user_id = u.id
+      JOIN roles r ON r.id = ur.role_id
+     WHERE u.is_active = 1
+       AND ${roleFilter}`;
+  const exclude = Number(excludeUserId);
+  if (Number.isFinite(exclude) && exclude > 0) {
+    sql += ' AND u.id != ?';
+    params.push(exclude);
+  }
+  const row = db.prepare(sql).get(...params);
+  return Number(row?.count || 0);
+}
+
+function ensureActiveAdminPreserved(userId, nextRoleSlugs, nextIsActive = true) {
   const normalized = Array.isArray(nextRoleSlugs)
     ? nextRoleSlugs.map(normalizeRoleSlug).filter(Boolean)
     : [];
-  if (normalized.includes('admin') || normalized.includes('superadmin')) {
+  if (nextIsActive && (normalized.includes('admin') || normalized.includes('superadmin'))) {
     return true;
   }
-  const db = getDatabase();
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS count
-         FROM user_roles ur
-         JOIN roles r ON r.id = ur.role_id
-        WHERE r.slug IN ('admin','superadmin') AND ur.user_id != ?`
-    )
-    .get(userId);
-  const count = Number(row?.count || 0);
-  return count > 0;
+  return countActiveAdmins({ excludeUserId: userId }) > 0;
 }
 
 function ensureCriticalRolesRetained(userId, removedRoleSlugs) {
@@ -2077,18 +2135,15 @@ function ensureCriticalRolesRetained(userId, removedRoleSlugs) {
     return { ok: true, slug: null };
   }
   const db = getDatabase();
+  const currentUser = db.prepare('SELECT is_active FROM users WHERE id = ?').get(userId);
+  const currentIsActive = Number(currentUser?.is_active) !== 0;
+  if (!currentIsActive) {
+    return { ok: true, slug: null };
+  }
   const critical = ['superadmin', 'admin'];
   for (const slug of critical) {
     if (!normalized.includes(slug)) continue;
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS count
-           FROM user_roles ur
-           JOIN roles r ON r.id = ur.role_id
-          WHERE r.slug = ? AND ur.user_id != ?`
-      )
-      .get(slug, userId);
-    const count = Number(row?.count || 0);
+    const count = countActiveAdmins({ excludeUserId: userId, roleSlug: slug });
     if (count === 0) {
       return { ok: false, slug };
     }
@@ -2306,6 +2361,8 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
   const nowIso = new Date().toISOString();
   let passwordChanged = false;
   let unlockApplied = false;
+  let activeChanged = false;
+  let roleChanged = false;
 
   if (body.displayName !== undefined) {
     const name = typeof body.displayName === 'string' ? body.displayName.trim() : '';
@@ -2318,10 +2375,12 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
 
   if (body.isActive !== undefined) {
     const active = parseBoolean(body.isActive, true);
-    if (!active && !ensureAdminPreserved(userId, body.roles ?? current.roles?.map((r) => r.slug))) {
+    const targetRoles = body.roles ?? current.roles?.map((r) => r.slug);
+    if (!ensureActiveAdminPreserved(userId, targetRoles, active)) {
       res.status(400).json({ error: 'Нельзя отключить последнего администратора' });
       return;
     }
+    activeChanged = beforeSnapshot.isActive !== active;
     updates.push({ column: 'is_active', value: active ? 1 : 0 });
   }
 
@@ -2332,11 +2391,13 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
       res.status(400).json({ error: 'Назначьте хотя бы одну роль' });
       return;
     }
-    if (!ensureAdminPreserved(userId, nextRoles)) {
+    const nextIsActive = body.isActive !== undefined ? parseBoolean(body.isActive, true) : beforeSnapshot.isActive;
+    if (!ensureActiveAdminPreserved(userId, nextRoles, nextIsActive)) {
       res.status(400).json({ error: 'В системе должен оставаться хотя бы один админ' });
       return;
     }
     appliedRoles = saveUserRoles(userId, nextRoles);
+    roleChanged = JSON.stringify(beforeSnapshot.roles) !== JSON.stringify(appliedRoles);
   }
 
   if (body.unlock === true) {
@@ -2405,6 +2466,9 @@ app.patch('/admin/users/:id', requireAuth('manageUsers'), async (req, res) => {
       after: afterSnapshot
     }
   });
+  if (activeChanged || roleChanged || passwordChanged) {
+    destroyUserSessions(userId);
+  }
   ensureUsersExportSnapshot();
   res.json({ user: response });
 });
@@ -2429,6 +2493,7 @@ app.delete('/admin/users/:id', requireAuth('manageUsers'), (req, res) => {
   }
   const db = getDatabase();
   db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+  destroyUserSessions(userId);
   ensureUsersExportSnapshot();
   recordAuditEvent({ user: req.user, action: 'admin.user.delete', details: { userId, login: current.user?.login || null } });
   res.status(204).send();
@@ -2551,7 +2616,13 @@ app.put('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
   }
 
   refreshRolePermissionCache();
-  recordAuditEvent({ user: req.user, action: 'admin.roles.update' });
+  const affectedRoleSlugs = Array.from(updates.keys());
+  const invalidatedSessions = destroySessionsForRoleSlugs(affectedRoleSlugs);
+  recordAuditEvent({
+    user: req.user,
+    action: 'admin.roles.update',
+    details: { roles: affectedRoleSlugs, invalidatedSessions }
+  });
   res.json({ roles: listAllRoles() });
 });
 
@@ -5769,6 +5840,441 @@ function validateSnapshotStructure(snapshot, { autoFix = false } = {}) {
   return { ok: missing.length === 0 || autoFix, missing };
 }
 
+function crmPermissionValue(user, permission) {
+  const permissions = user?.permissions && typeof user.permissions === 'object' ? user.permissions : {};
+  return permissions[permission] === true;
+}
+
+function normalizeCrmStageMappingValue(value) {
+  if (value === CRM_STAGE_IGNORE) {
+    return CRM_STAGE_IGNORE;
+  }
+  if (typeof value === 'string') {
+    const normalized = normalizeStageAccessKey(value);
+    return normalized || null;
+  }
+  if (isPlainObject(value)) {
+    if (value.stage === CRM_STAGE_IGNORE) {
+      return CRM_STAGE_IGNORE;
+    }
+    const normalized = normalizeStageAccessKey(value.stage || value.key || value.stageKey);
+    return normalized || null;
+  }
+  return null;
+}
+
+function buildCrmStagePermissionKey(seed, used) {
+  const normalized = normalizeCrmStageKey(seed)
+    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/^_+|_+$/g, '');
+  const base = normalizeStageAccessKey(`custom_${normalized || 'stage'}`) || 'custom_stage';
+  let candidate = base;
+  let suffix = 1;
+  while (used.has(candidate)) {
+    suffix += 1;
+    candidate = `${base}_${suffix}`;
+  }
+  return candidate;
+}
+
+function mapCrmPermissionStageName(label, customMap = null) {
+  const normalized = normalizeCrmStageKey(label);
+  if (!normalized) {
+    return null;
+  }
+  if (customMap && Object.prototype.hasOwnProperty.call(customMap, normalized)) {
+    const mapped = customMap[normalized];
+    return mapped === CRM_STAGE_IGNORE ? null : normalizeStageAccessKey(mapped);
+  }
+  const exact = new Map([
+    ['подготовка', 'draw'],
+    ['подготовка в работу', 'draw'],
+    ['пвр', 'draw'],
+    ['закупка', 'proc'],
+    ['закуп', 'proc'],
+    ['поставка дс', 'supply'],
+    ['поставка сырья', 'supply'],
+    ['давальческое сырье', 'supply'],
+    ['давальческое сырьё', 'supply'],
+    ['дс', 'supply'],
+    ['рубка', 'shear'],
+    ['резка', 'shear'],
+    ['раскрой', 'shear'],
+    ['лазер', 'laser'],
+    ['лазерная резка', 'laser'],
+    ['лазерная', 'laser'],
+    ['гибка', 'bend'],
+    ['гиб', 'bend'],
+    ['сварка', 'weld'],
+    ['сборка', 'weld'],
+    ['св', 'weld'],
+    ['мехобработка', 'mech'],
+    ['мех.обработка', 'mech'],
+    ['мех. обработка', 'mech'],
+    ['мех-обработка', 'mech'],
+    ['мех', 'mech'],
+    ['мехобр', 'mech'],
+    ['кооперация', 'coop'],
+    ['кооп', 'coop'],
+    ['покраска', 'coop'],
+    ['цинкование', 'coop'],
+    ['упаковка', 'pack'],
+    ['упак', 'pack'],
+    ['отгрузка', 'ship'],
+    ['отгруз', 'ship'],
+    ['доставка', 'ship']
+  ]);
+  if (exact.has(normalized)) {
+    return exact.get(normalized);
+  }
+  const includesAny = (...parts) => parts.some((part) => normalized.includes(part));
+  if (includesAny('лазер', 'laser')) return 'laser';
+  if (includesAny('гиб', 'bend')) return 'bend';
+  if (includesAny('свар', 'сборк', 'weld')) return 'weld';
+  if (includesAny('мех', 'зенк', 'сверл', 'резьб', 'пукл', 'заклеп', 'фрез', 'токар', 'mech')) return 'mech';
+  if (includesAny('кооп', 'покрас', 'цинк', 'анод', 'гальван', 'coop')) return 'coop';
+  if (includesAny('упак', 'комплект', 'pack')) return 'pack';
+  if (includesAny('отгруз', 'отправ', 'достав', 'ship')) return 'ship';
+  if (includesAny('поставк', 'даваль', 'сыр', 'дс')) return 'supply';
+  if (includesAny('закуп', 'снабж', 'proc')) return 'proc';
+  if (includesAny('рубк', 'резк', 'раскр', 'shear')) return 'shear';
+  if (includesAny('подгот', 'технолог', 'планир', 'draw')) return 'draw';
+  return mapCrmStageName(label, customMap);
+}
+
+function buildCrmStagePermissionCatalog(crm) {
+  const settings = isPlainObject(crm?.settings) ? crm.settings : {};
+  const stageKeys = new Set(STAGE_SLUGS);
+  const labelMap = new Map();
+  const rawMapping = isPlainObject(settings.mapping) ? settings.mapping : {};
+  const mapping = {};
+  Object.entries(rawMapping).forEach(([rawLabel, rawValue]) => {
+    const labelKey = normalizeCrmStageKey(rawLabel);
+    if (!labelKey) return;
+    const stageKey = normalizeCrmStageMappingValue(rawValue);
+    if (!stageKey) return;
+    mapping[labelKey] = stageKey;
+    if (stageKey !== CRM_STAGE_IGNORE) {
+      stageKeys.add(stageKey);
+      labelMap.set(labelKey, stageKey);
+    }
+  });
+
+  const used = new Set(stageKeys);
+  const keyMap = isPlainObject(settings.stagePresetKeyMap) ? settings.stagePresetKeyMap : {};
+  const presets = Array.isArray(settings.stagePresets) ? settings.stagePresets : [];
+  presets.forEach((entry) => {
+    if (!isPlainObject(entry) || entry.visible === false) return;
+    const name = sanitizeString(entry.name);
+    if (!name) return;
+    const labelKey = normalizeCrmStageKey(name);
+    const mapped = labelKey ? mapping[labelKey] : null;
+    if (mapped === CRM_STAGE_IGNORE) return;
+    let stageKey = mapped || null;
+    if (!stageKey && entry.id !== undefined && entry.id !== null) {
+      const mappedKey = normalizeStageAccessKey(keyMap[entry.id]);
+      if (mappedKey) {
+        stageKey = mappedKey;
+      }
+    }
+    if (!stageKey) {
+      const resolved = mapCrmPermissionStageName(name, mapping);
+      if (resolved) {
+        stageKey = resolved;
+      }
+    }
+    if (!stageKey) {
+      stageKey = buildCrmStagePermissionKey(entry.id || name, used);
+    }
+    if (!stageKey) return;
+    stageKeys.add(stageKey);
+    used.add(stageKey);
+    if (labelKey) {
+      labelMap.set(labelKey, stageKey);
+    }
+  });
+
+  return { stageKeys, labelMap, mapping };
+}
+
+function resolveCrmPermissionStageKey(stage, crm) {
+  if (!isPlainObject(stage)) {
+    return null;
+  }
+  const catalog = buildCrmStagePermissionCatalog(crm);
+  const directFields = [
+    stage.stageKey,
+    stage.crmStageKey,
+    stage.stage_code,
+    stage.stageCode,
+    stage.stage,
+    stage.code,
+    stage.key
+  ];
+  for (const value of directFields) {
+    const key = normalizeStageAccessKey(value);
+    if (key && catalog.stageKeys.has(key)) {
+      return key;
+    }
+  }
+
+  const nameFields = [
+    stage.name,
+    stage.stageName,
+    stage.title,
+    stage.label,
+    stage.displayName
+  ];
+  for (const value of nameFields) {
+    const raw = sanitizeString(value);
+    if (!raw) continue;
+    const normalized = normalizeCrmStageKey(raw);
+    if (catalog.labelMap.has(normalized)) {
+      return catalog.labelMap.get(normalized);
+    }
+    const parts = raw.split(/\s+(?:-|\/|—)\s+/).map((part) => part.trim()).filter(Boolean);
+    if (parts.length > 1) {
+      const base = normalizeCrmStageKey(parts[0]);
+      if (catalog.labelMap.has(base)) {
+        return catalog.labelMap.get(base);
+      }
+    }
+    const mapped = mapCrmPermissionStageName(raw, catalog.mapping);
+    if (mapped) {
+      return mapped;
+    }
+    const direct = normalizeStageAccessKey(raw);
+    if (direct && catalog.stageKeys.has(direct)) {
+      return direct;
+    }
+  }
+  return null;
+}
+
+function crmCanAccessStage(user, stageKey) {
+  const key = normalizeStageAccessKey(stageKey);
+  if (!key) {
+    return true;
+  }
+  const permissions = user?.permissions && typeof user.permissions === 'object' ? user.permissions : {};
+  const stageAccess = permissions.stageAccess && typeof permissions.stageAccess === 'object'
+    ? permissions.stageAccess
+    : {};
+  if (typeof stageAccess[key] === 'boolean') {
+    return stageAccess[key];
+  }
+  return permissions.manageStages === true;
+}
+
+function crmSnapshotValueEquals(left, right) {
+  try {
+    return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  } catch (_err) {
+    return left === right;
+  }
+}
+
+function getCrmRecordKey(record, index, idFields) {
+  if (isPlainObject(record)) {
+    for (const field of idFields) {
+      const raw = record[field];
+      if (raw !== undefined && raw !== null) {
+        const value = sanitizeString(raw);
+        if (value) {
+          return `${field}:${value}`;
+        }
+      }
+    }
+  }
+  return `index:${index}`;
+}
+
+function indexCrmRecords(list, idFields) {
+  const map = new Map();
+  (Array.isArray(list) ? list : []).forEach((entry, index) => {
+    map.set(getCrmRecordKey(entry, index, idFields), entry);
+  });
+  return map;
+}
+
+function getCrmRecordExplicitKey(record, idFields) {
+  if (!isPlainObject(record)) {
+    return null;
+  }
+  for (const field of idFields) {
+    const raw = record[field];
+    if (raw !== undefined && raw !== null) {
+      const value = sanitizeString(raw);
+      if (value) {
+        return `${field}:${value}`;
+      }
+    }
+  }
+  return null;
+}
+
+const CRM_STAGE_ID_FIELDS = Object.freeze(['crmStageId', 'stageId', 'id', 'uid', 'identity']);
+const CRM_ORDER_ID_FIELDS = Object.freeze(['id', 'orderId', 'crmOrderId', 'uid']);
+const CRM_STAGE_IDENTITY_FIELDS = new Set([
+  'crmStageId',
+  'stageId',
+  'id',
+  'uid',
+  'identity',
+  'originalStart',
+  'originalEnd'
+]);
+const CRM_STAGE_PROGRESS_FIELDS = new Set(['done', 'progress', 'doneAt', 'completedLate', 'delayReason']);
+const CRM_STAGE_DATE_FIELDS = new Set(['start', 'end', 'startDate', 'endDate', 'plannedStart', 'plannedEnd']);
+const CRM_STAGE_MANAGE_FIELDS = new Set(['useReserve', 'reserve', 'reserved']);
+
+function getChangedCrmStagePermissions(previousStage, nextStage) {
+  if (!isPlainObject(previousStage) || !isPlainObject(nextStage)) {
+    return [];
+  }
+  const permissions = new Set();
+  const keys = new Set([...Object.keys(previousStage), ...Object.keys(nextStage)]);
+  keys.forEach((key) => {
+    if (CRM_STAGE_IDENTITY_FIELDS.has(key)) return;
+    const before = previousStage[key];
+    const after = nextStage[key];
+    if (crmSnapshotValueEquals(before, after)) return;
+    if (CRM_STAGE_PROGRESS_FIELDS.has(key)) {
+      permissions.add('updateStageProgress');
+    } else if (CRM_STAGE_DATE_FIELDS.has(key)) {
+      permissions.add('editStageDates');
+    } else if (CRM_STAGE_MANAGE_FIELDS.has(key)) {
+      permissions.add('manageStages');
+    } else {
+      permissions.add('editStageDetails');
+    }
+  });
+  return Array.from(permissions);
+}
+
+function buildCrmRoleViolation(permission, stageKey, stageLabel) {
+  return {
+    ok: false,
+    permission,
+    stage: stageKey || null,
+    stageLabel: stageLabel || stageKey || null
+  };
+}
+
+function ensureCrmStagePermission(user, crm, stage, permission) {
+  const stageKey = resolveCrmPermissionStageKey(stage, crm);
+  const stageLabel = sanitizeString(stage?.name || stage?.label || stageKey);
+  if (!crmPermissionValue(user, permission)) {
+    return buildCrmRoleViolation(permission, stageKey, stageLabel);
+  }
+  if (!crmCanAccessStage(user, stageKey)) {
+    return buildCrmRoleViolation('stageAccess', stageKey, stageLabel);
+  }
+  return { ok: true };
+}
+
+function validateCrmStageListPermissions(previousStages, nextStages, user, crm) {
+  const previousList = Array.isArray(previousStages) ? previousStages : [];
+  const nextList = Array.isArray(nextStages) ? nextStages : [];
+  const previousByExplicitKey = new Map();
+  previousList.forEach((stage, index) => {
+    const key = getCrmRecordExplicitKey(stage, CRM_STAGE_ID_FIELDS);
+    if (key && !previousByExplicitKey.has(key)) {
+      previousByExplicitKey.set(key, { stage, index });
+    }
+  });
+  const usedPreviousIndexes = new Set();
+  const findPreviousStage = (nextStage, nextIndex) => {
+    const explicitKey = getCrmRecordExplicitKey(nextStage, CRM_STAGE_ID_FIELDS);
+    if (explicitKey && previousByExplicitKey.has(explicitKey)) {
+      const match = previousByExplicitKey.get(explicitKey);
+      if (match && !usedPreviousIndexes.has(match.index)) {
+        return match;
+      }
+    }
+    const sameIndex = previousList[nextIndex];
+    if (isPlainObject(sameIndex) && !usedPreviousIndexes.has(nextIndex)) {
+      const previousName = normalizeCrmStageKey(sameIndex.name || sameIndex.label || sameIndex.stageName);
+      const nextName = normalizeCrmStageKey(nextStage?.name || nextStage?.label || nextStage?.stageName);
+      if (!previousName || !nextName || previousName === nextName) {
+        return { stage: sameIndex, index: nextIndex };
+      }
+    }
+    const nextName = normalizeCrmStageKey(nextStage?.name || nextStage?.label || nextStage?.stageName);
+    if (nextName) {
+      for (let index = 0; index < previousList.length; index += 1) {
+        if (usedPreviousIndexes.has(index)) continue;
+        const candidate = previousList[index];
+        if (!isPlainObject(candidate)) continue;
+        const candidateName = normalizeCrmStageKey(candidate.name || candidate.label || candidate.stageName);
+        if (candidateName === nextName) {
+          return { stage: candidate, index };
+        }
+      }
+    }
+    return null;
+  };
+
+  for (let index = 0; index < nextList.length; index += 1) {
+    const nextStage = nextList[index];
+    if (!isPlainObject(nextStage)) continue;
+    const previousMatch = findPreviousStage(nextStage, index);
+    const previousStage = previousMatch?.stage || null;
+    if (!previousStage) {
+      const guard = ensureCrmStagePermission(user, crm, nextStage, 'addStages');
+      if (!guard.ok) return guard;
+      continue;
+    }
+    usedPreviousIndexes.add(previousMatch.index);
+    const permissions = getChangedCrmStagePermissions(previousStage, nextStage);
+    if (!permissions.length) continue;
+    for (const permission of permissions) {
+      const nextGuard = ensureCrmStagePermission(user, crm, nextStage, permission);
+      if (!nextGuard.ok) return nextGuard;
+      const prevGuard = ensureCrmStagePermission(user, crm, previousStage, permission);
+      if (!prevGuard.ok) return prevGuard;
+    }
+  }
+  for (let index = 0; index < previousList.length; index += 1) {
+    if (usedPreviousIndexes.has(index)) continue;
+    const previousStage = previousList[index];
+    if (!isPlainObject(previousStage)) continue;
+    const guard = ensureCrmStagePermission(user, crm, previousStage, 'editStageDetails');
+    if (!guard.ok) return guard;
+  }
+  return { ok: true };
+}
+
+function validateCrmSnapshotRolePermissions(previousSnapshot, nextSnapshot, user) {
+  if (!isPlainObject(previousSnapshot?.crm) || !isPlainObject(nextSnapshot?.crm)) {
+    return { ok: true };
+  }
+  const crm = nextSnapshot.crm;
+  const previousBoards = Array.isArray(previousSnapshot.crm.boards) ? previousSnapshot.crm.boards : [];
+  const nextBoards = Array.isArray(nextSnapshot.crm.boards) ? nextSnapshot.crm.boards : [];
+  const previousBoardMap = indexCrmRecords(previousBoards, ['id']);
+  for (const [boardKey, nextBoard] of indexCrmRecords(nextBoards, ['id']).entries()) {
+    if (!isPlainObject(nextBoard)) continue;
+    const previousBoard = previousBoardMap.get(boardKey);
+    if (!previousBoard) continue;
+    const previousOrders = Array.isArray(previousBoard.orders) ? previousBoard.orders : [];
+    const nextOrders = Array.isArray(nextBoard.orders) ? nextBoard.orders : [];
+    const previousOrderMap = indexCrmRecords(previousOrders, CRM_ORDER_ID_FIELDS);
+    for (const [orderKey, nextOrder] of indexCrmRecords(nextOrders, CRM_ORDER_ID_FIELDS).entries()) {
+      if (!isPlainObject(nextOrder)) continue;
+      const previousOrder = previousOrderMap.get(orderKey);
+      if (!previousOrder) {
+        const guard = validateCrmStageListPermissions([], nextOrder.stages, user, crm);
+        if (!guard.ok) return guard;
+        continue;
+      }
+      const guard = validateCrmStageListPermissions(previousOrder.stages, nextOrder.stages, user, crm);
+      if (!guard.ok) return guard;
+    }
+  }
+  return { ok: true };
+}
+
 function normalizeSnapshotCollections(snapshot) {
   if (!isPlainObject(snapshot)) {
     return;
@@ -6896,13 +7402,31 @@ app.put('/api/state', requireAuth('write'), async (req, res) => {
       }
       res.set('Cache-Control', 'no-store');
       res.status(412).json({
-        error: 'Conflict',
+        error: 'Precondition Failed',
+        code: 'SNAPSHOT_HASH_MISMATCH',
         message: 'Snapshot hash mismatch',
         expectedHash: currentHash,
         providedHash: expectedHash,
         currentHash,
         rev: current?.rev || 0,
         etag: latestEtag || null
+      });
+      return;
+    }
+
+    const roleGuard = validateCrmSnapshotRolePermissions(current?.snapshot, snapshot, req.user);
+    if (!roleGuard.ok) {
+      logSaveEvent('warn', 'crm write rejected due to stage role permissions', {
+        requestId,
+        permission: roleGuard.permission,
+        stage: roleGuard.stage,
+        stageLabel: roleGuard.stageLabel
+      });
+      res.status(403).json({
+        error: 'Forbidden',
+        permission: roleGuard.permission,
+        stage: roleGuard.stage,
+        stageLabel: roleGuard.stageLabel
       });
       return;
     }
