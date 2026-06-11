@@ -1529,6 +1529,7 @@ function computePermissions(roleSlugs) {
   if (!Array.isArray(roleSlugs)) {
     return permissions;
   }
+  const stageAccess = new Map(Object.entries(permissions.stageAccess || {}));
   for (const slugRaw of roleSlugs) {
     const slug = normalizeRoleSlug(slugRaw);
     if (!slug) continue;
@@ -1541,12 +1542,18 @@ function computePermissions(roleSlugs) {
     if (rolePerms.stageAccess && typeof rolePerms.stageAccess === 'object') {
       for (const [rawStage, value] of Object.entries(rolePerms.stageAccess)) {
         const stage = normalizeStageAccessKey(rawStage);
-        if (stage && value) {
-          permissions.stageAccess[stage] = true;
+        if (!stage || typeof value !== 'boolean') {
+          continue;
+        }
+        if (value) {
+          stageAccess.set(stage, true);
+        } else if (stageAccess.get(stage) !== true) {
+          stageAccess.set(stage, false);
         }
       }
     }
   }
+  permissions.stageAccess = Object.fromEntries(stageAccess.entries());
   return permissions;
 }
 
