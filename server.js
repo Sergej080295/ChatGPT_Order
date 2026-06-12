@@ -718,7 +718,13 @@ const ROLE_PERMISSION_KEYS = Object.freeze([
   'useJournal',
   'editComments',
   'deleteComments',
-  'addStages'
+  'addStages',
+  'exportOrders',
+  'importOrders',
+  'exportSettings',
+  'importSettings',
+  'exportUsers',
+  'importUsers'
 ]);
 
 function createStageAccessDefaults(enabled) {
@@ -748,6 +754,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: true,
     deleteComments: true,
     addStages: true,
+    exportOrders: true,
+    importOrders: true,
+    exportSettings: true,
+    importSettings: true,
+    exportUsers: true,
+    importUsers: true,
     stageAccess: createStageAccessDefaults(true)
   },
   admin: {
@@ -769,6 +781,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: true,
     deleteComments: true,
     addStages: true,
+    exportOrders: true,
+    importOrders: true,
+    exportSettings: true,
+    importSettings: true,
+    exportUsers: false,
+    importUsers: false,
     stageAccess: createStageAccessDefaults(true)
   },
   master: {
@@ -790,6 +808,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: false,
     deleteComments: false,
     addStages: true,
+    exportOrders: true,
+    importOrders: false,
+    exportSettings: false,
+    importSettings: false,
+    exportUsers: false,
+    importUsers: false,
     stageAccess: createStageAccessDefaults(true)
   },
   guest: {
@@ -811,6 +835,12 @@ const DEFAULT_ROLE_PERMISSIONS = {
     editComments: false,
     deleteComments: false,
     addStages: false,
+    exportOrders: false,
+    importOrders: false,
+    exportSettings: false,
+    importSettings: false,
+    exportUsers: false,
+    importUsers: false,
     stageAccess: createStageAccessDefaults(false)
   }
 };
@@ -1285,6 +1315,182 @@ function ensureUsersExportSnapshot() {
   } catch (err) {
     console.warn('Failed to write users snapshot', err);
   }
+}
+
+function buildUsersRolesExportPayload() {
+  const db = getDatabase();
+  const users = db
+    .prepare(
+      `SELECT id, login, display_name, is_active, password_hash, created_at, updated_at, last_login_at, password_updated_at
+         FROM users
+        ORDER BY login ASC`
+    )
+    .all();
+  const rolePairs = db
+    .prepare(
+      `SELECT ur.user_id AS userId, r.slug AS roleSlug
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id`
+    )
+    .all();
+  const roleMap = new Map();
+  rolePairs.forEach((pair) => {
+    if (!pair) return;
+    const list = roleMap.get(pair.userId) || [];
+    list.push(pair.roleSlug);
+    roleMap.set(pair.userId, list);
+  });
+  return {
+    type: 'planecore-users-roles',
+    version: '5.8.0',
+    exportedAt: new Date().toISOString(),
+    authMode: AUTH_MODE,
+    roles: listAllRoles().map((role) => ({
+      slug: role.slug,
+      displayName: role.displayName,
+      description: role.description || '',
+      permissions: role.permissions || normalizeRolePermissions({}, role.slug)
+    })),
+    users: users.map((row) => ({
+      login: row.login,
+      displayName: row.display_name,
+      isActive: Number(row.is_active) !== 0,
+      passwordHash: row.password_hash,
+      roles: Array.from(new Set((roleMap.get(row.id) || []).map(normalizeRoleSlug).filter(Boolean))),
+      createdAt: row.created_at || null,
+      updatedAt: row.updated_at || null,
+      lastLoginAt: row.last_login_at || null,
+      passwordUpdatedAt: row.password_updated_at || null
+    }))
+  };
+}
+
+function normalizeUsersRolesImportPayload(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return null;
+  }
+  const source = raw.type === 'planecore-users-roles' ? raw : raw.users || raw.roles ? raw : raw.data;
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return null;
+  }
+  return {
+    roles: Array.isArray(source.roles) ? source.roles : [],
+    users: Array.isArray(source.users) ? source.users : []
+  };
+}
+
+function importUsersRolesPayload(rawPayload) {
+  const payload = normalizeUsersRolesImportPayload(rawPayload);
+  if (!payload || (!payload.roles.length && !payload.users.length)) {
+    throw new Error('Invalid users import payload');
+  }
+  const db = getDatabase();
+  const nowIso = new Date().toISOString();
+  const summary = { rolesCreated: 0, rolesUpdated: 0, usersCreated: 0, usersUpdated: 0, skippedUsers: 0 };
+  const tx = db.transaction(() => {
+    const selectRole = db.prepare('SELECT id FROM roles WHERE slug = ?');
+    const insertRole = db.prepare(
+      'INSERT INTO roles (slug, display_name, description, permissions_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    const updateRole = db.prepare(
+      'UPDATE roles SET display_name = ?, description = ?, permissions_json = ?, updated_at = ? WHERE slug = ?'
+    );
+    payload.roles.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const slug = normalizeRoleSlugForCreate(entry.slug) || normalizeRoleSlug(entry.slug);
+      if (!slug) return;
+      const displayName = sanitizeRoleDisplayName(entry.displayName || entry.display_name || entry.name) || slug;
+      const description = typeof entry.description === 'string' ? entry.description.trim() : '';
+      const permissions = normalizeRolePermissions(entry.permissions, slug);
+      const existing = selectRole.get(slug);
+      if (existing?.id) {
+        updateRole.run(displayName, description, JSON.stringify(permissions), nowIso, slug);
+        summary.rolesUpdated += 1;
+      } else {
+        insertRole.run(slug, displayName, description, JSON.stringify(permissions), nowIso, nowIso);
+        summary.rolesCreated += 1;
+      }
+      updateRoleLookup(slug, { displayName, description });
+    });
+
+    refreshRolePermissionCache();
+    const selectUser = db.prepare('SELECT id, password_hash FROM users WHERE login = ?');
+    const insertUser = db.prepare(
+      `INSERT INTO users (login, password_hash, display_name, is_active, created_at, updated_at, last_login_at, password_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
+    );
+    const updateUserWithPassword = db.prepare(
+      `UPDATE users
+          SET display_name = ?, is_active = ?, password_hash = ?, password_updated_at = ?, updated_at = ?
+        WHERE id = ?`
+    );
+    const updateUserNoPassword = db.prepare(
+      `UPDATE users
+          SET display_name = ?, is_active = ?, updated_at = ?
+        WHERE id = ?`
+    );
+    const deleteUserRoles = db.prepare('DELETE FROM user_roles WHERE user_id = ?');
+    const selectRoleId = db.prepare('SELECT id FROM roles WHERE slug = ?');
+    const insertUserRole = db.prepare('INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)');
+    payload.users.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const login = sanitizeLogin(entry.login || entry.username || entry.user);
+      if (!login) {
+        summary.skippedUsers += 1;
+        return;
+      }
+      const existing = selectUser.get(login);
+      const displayNameRaw = entry.displayName || entry.display_name || entry.name;
+      const displayName = typeof displayNameRaw === 'string' && displayNameRaw.trim() ? displayNameRaw.trim() : login;
+      const isActive = entry.isActive !== undefined ? !!parseBoolean(entry.isActive, true) : true;
+      const roleSlugs = Array.isArray(entry.roles)
+        ? Array.from(new Set(entry.roles.map(normalizeRoleSlug).filter(Boolean)))
+        : [];
+      let passwordHash = typeof entry.passwordHash === 'string' && looksLikeBcryptHash(entry.passwordHash)
+        ? entry.passwordHash.trim()
+        : '';
+      if (!passwordHash && typeof entry.password_hash === 'string' && looksLikeBcryptHash(entry.password_hash)) {
+        passwordHash = entry.password_hash.trim();
+      }
+      if (!passwordHash && typeof entry.password === 'string' && validatePassword(entry.password)) {
+        passwordHash = bcrypt.hashSync(entry.password.trim(), 10);
+      }
+      if (!existing?.id && !passwordHash) {
+        summary.skippedUsers += 1;
+        return;
+      }
+      let userId = Number(existing?.id || 0);
+      if (existing?.id) {
+        if (passwordHash) {
+          updateUserWithPassword.run(displayName, isActive ? 1 : 0, passwordHash, nowIso, nowIso, userId);
+        } else {
+          updateUserNoPassword.run(displayName, isActive ? 1 : 0, nowIso, userId);
+        }
+        summary.usersUpdated += 1;
+      } else {
+        const result = insertUser.run(login, passwordHash, displayName, isActive ? 1 : 0, nowIso, nowIso, nowIso);
+        userId = Number(result.lastInsertRowid);
+        summary.usersCreated += 1;
+      }
+      if (Number.isFinite(userId) && userId > 0 && roleSlugs.length) {
+        deleteUserRoles.run(userId);
+        roleSlugs.forEach((slug) => {
+          const roleRow = selectRoleId.get(slug);
+          if (roleRow?.id) {
+            insertUserRole.run(userId, roleRow.id);
+          }
+        });
+      }
+    });
+
+    if (countActiveAdmins({}) <= 0) {
+      throw new Error('At least one active administrator is required');
+    }
+  });
+  tx();
+  refreshRolePermissionCache();
+  ensureUsersExportSnapshot();
+  return summary;
 }
 
 function ensureCredentialTemplateFile() {
@@ -2624,6 +2830,37 @@ app.put('/admin/roles/description', requireAuth('manageUsers'), (req, res) => {
     details: { roles: affectedRoleSlugs, invalidatedSessions }
   });
   res.json({ roles: listAllRoles() });
+});
+
+app.get('/admin/export/users', requireAuth('exportUsers'), (req, res) => {
+  const payload = buildUsersRolesExportPayload();
+  recordAuditEvent({ user: req.user, action: 'admin.users.export', details: { users: payload.users.length, roles: payload.roles.length } });
+  res.json(payload);
+});
+
+app.post('/admin/import/users', requireAuth('importUsers'), (req, res) => {
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({ error: 'Invalid payload' });
+    return;
+  }
+  try {
+    const summary = importUsersRolesPayload(req.body);
+    const except = req.session?.id || null;
+    const invalidatedSessions = except
+      ? getDatabase().prepare('DELETE FROM sessions WHERE id != ?').run(except).changes || 0
+      : getDatabase().prepare('DELETE FROM sessions').run().changes || 0;
+    recordAuditEvent({
+      user: req.user,
+      action: 'admin.users.import',
+      details: { ...summary, invalidatedSessions }
+    });
+    res.json({ ok: true, summary, invalidatedSessions, roles: listAllRoles() });
+  } catch (err) {
+    const message = err?.message === 'At least one active administrator is required'
+      ? 'В системе должен остаться хотя бы один активный администратор'
+      : 'Файл не содержит корректный экспорт пользователей и ролей';
+    res.status(400).json({ error: message });
+  }
 });
 
 app.get('/admin/audit', requireAuth('viewAudit'), (req, res) => {
