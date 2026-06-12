@@ -3789,24 +3789,26 @@
     padding: 10px 14px;
     min-width: 160px;
     border-radius: var(--pc-radius-sm);
-    border: 1px solid color-mix(in srgb, var(--crmRouteStatColor, var(--pc-border)) 45%, transparent);
-    background: color-mix(in srgb, var(--crmRouteStatColor, var(--pc-border)) 18%, transparent);
+    border: 1px solid var(--crmRouteStatColor, var(--pc-border));
+    background: var(--crmRouteStatColor, var(--pc-surface));
     color: var(--crmRouteStatText, var(--pc-text));
   }
 
   .crm-stage-route-stat span:first-child {
     font-weight: var(--pc-font-weight-medium, var(--pc-font-weight-semibold));
-    color: color-mix(in srgb, var(--crmRouteStatColor, var(--pc-text-muted)) 45%, var(--pc-text-muted));
+    color: inherit;
+    opacity: 0.9;
   }
 
   .crm-stage-route-stat strong {
     font-size: 14px;
-    color: var(--crmRouteStatAccent, color-mix(in srgb, var(--crmRouteStatColor, var(--pc-text)) 65%, var(--pc-text)));
+    color: inherit;
   }
 
   .crm-stage-route-stat-hours {
     font-size: 12px;
-    color: color-mix(in srgb, var(--crmRouteStatColor, var(--pc-text-muted)) 35%, var(--pc-text-muted));
+    color: inherit;
+    opacity: 0.9;
   }
 
   .crm-stage-route-stat--draw { --crmRouteStatColor:#38bdf8; }
@@ -4733,6 +4735,21 @@
 
   .crm-journal-modal__controls .pc-btn {
     white-space: nowrap;
+  }
+
+  .crm-journal-modal__controls #crmJournalMarkAllRead {
+    min-width: 104px;
+    max-width: 112px;
+    min-height: 40px;
+    height: auto;
+    white-space: normal;
+    line-height: 1.08;
+    text-align: center;
+    padding-block: 6px;
+  }
+
+  .crm-journal-modal__controls #crmJournalMarkAllRead span {
+    display: block;
   }
 
   .crm-order-history {
@@ -7217,7 +7234,7 @@
       <select class="pc-select" id="crmJournalFilter" aria-label="Фильтр журнала">
         <option value="all">Все типы</option>
       </select>
-      <button class="pc-btn pc-btn--secondary" type="button" id="crmJournalMarkAllRead">Прочитать все</button>
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmJournalMarkAllRead"><span>Прочитать</span><span>все</span></button>
       <button class="pc-btn pc-btn--ghost" type="button" id="crmJournalClear">Очистить</button>
       <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalClose" aria-label="Закрыть">✖</button>
     </div>
@@ -8051,11 +8068,35 @@ function cloneCrmScheduleEntry(entry){
   };
 }
 
-function sanitizeCrmStageSchedules(source, fallback){
+function getCrmStageScheduleKeysForSanitize(options){
+  const explicit=options&&Array.isArray(options.stageKeys)?options.stageKeys:null;
+  const source=explicit||CRM_STAGE_KEYS;
+  const result=[];
+  const seen=new Set();
+  source.forEach(stage=>{
+    const key=normalizeCrmStageKey(stage);
+    if(!key || seen.has(key) || !CRM_STAGE_KEYS.includes(key)) return;
+    seen.add(key);
+    result.push(key);
+  });
+  if(result.length){
+    return result;
+  }
+  CRM_STAGE_KEYS.forEach(stage=>{
+    const key=normalizeCrmStageKey(stage);
+    if(key && !seen.has(key)){
+      seen.add(key);
+      result.push(key);
+    }
+  });
+  return result;
+}
+
+function sanitizeCrmStageSchedules(source, fallback, options={}){
   const raw=source&&typeof source==='object'?source:{};
   const fallbackEntry=cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule(fallback));
   const result={};
-  CRM_STAGE_KEYS.forEach(stage=>{
+  getCrmStageScheduleKeysForSanitize(options).forEach(stage=>{
     if(raw && Object.prototype.hasOwnProperty.call(raw, stage)){
       result[stage]=cloneCrmScheduleEntry(sanitizeCrmHourlessSchedule(raw[stage]));
     }else{
@@ -18680,8 +18721,21 @@ function renderCrmStageTable(){
     if(doneInput){
       doneInput.addEventListener('click',evt=>evt.stopPropagation());
       if(!doneInput.disabled){
-        doneInput.addEventListener('change',()=>{
-          handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, doneInput.checked, doneInput);
+        doneInput.addEventListener('change',async()=>{
+          const checked=doneInput.checked;
+          const previous=!checked;
+          doneInput.disabled=true;
+          try{
+            await handleCrmStageDoneToggle(tr.dataset.orderId, tr.dataset.stageId, tr.dataset.stageKey, checked, doneInput);
+          }catch(err){
+            console.error('Failed to update stage completion from stage list',err);
+            doneInput.checked=previous;
+            showToast({ title:'CRM', message:'Не удалось изменить готовность передела. Обновите страницу и попробуйте ещё раз.', tone:'error' });
+          }finally{
+            if(doneInput.isConnected){
+              doneInput.disabled=false;
+            }
+          }
         });
       }
     }
@@ -18980,12 +19034,22 @@ function promptStageCompletionStatus(order){
     dialog.querySelector('[data-act="cancel"]')?.addEventListener('click',handleCancel);
     dialog.querySelector('[data-act="apply"]')?.addEventListener('click',handleApply);
     document.body.appendChild(dialog);
-    dialog.showModal();
+    try{
+      if(typeof dialog.showModal==='function'){
+        dialog.showModal();
+      }else{
+        dialog.setAttribute('open','');
+      }
+    }catch(err){
+      console.warn('Falling back to non-modal stage completion dialog',err);
+      dialog.setAttribute('open','');
+    }
   });
 }
 
 async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sourceInput=null){
   if(!crmCanUpdateStageProgressForStage(stageKey)&&!crmCanManageStage(stageKey)){
+    if(sourceInput) sourceInput.checked=!checked;
     showToast({ title:'CRM', message:'У вас нет прав для отметки прогресса этого передела.', tone:'warn' });
     return;
   }
@@ -22625,6 +22689,34 @@ let crmStageScheduleExtrasList=null;
 let crmStageScheduleExtrasInput=null;
 let crmStageScheduleExtrasAddBtn=null;
 
+function compareCrmStageKeysForSettings(a,b){
+  const ai=CRM_STAGE_SEQUENCE.indexOf(a);
+  const bi=CRM_STAGE_SEQUENCE.indexOf(b);
+  if(ai>=0 || bi>=0){
+    if(ai<0) return 1;
+    if(bi<0) return -1;
+    if(ai!==bi) return ai-bi;
+  }
+  return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
+}
+
+function getCrmStageScheduleKeysForSettings(){
+  ensureCrmDynamicStageCatalog();
+  const keys=new Set();
+  getCrmStagePresets().forEach(item=>{
+    if(!item || item.visible===false) return;
+    const key=resolveCrmStageKeyForPreset(item, keys);
+    if(key) keys.add(key);
+  });
+  const result=Array.from(keys);
+  if(!result.length){
+    CRM_STAGE_SEQUENCE.forEach(key=>{
+      if(CRM_STAGE_KEYS.includes(key)) result.push(key);
+    });
+  }
+  return result.sort(compareCrmStageKeysForSettings);
+}
+
 function getCrmCapacityStageKeysForSettings(){
   ensureCrmDynamicStageCatalog();
   const keys=new Set();
@@ -22633,16 +22725,7 @@ function getCrmCapacityStageKeysForSettings(){
     const key=resolveCrmStageKeyForPreset(item, keys);
     if(key && !CRM_NOHOUR_STAGES.has(key)) keys.add(key);
   });
-  return Array.from(keys).sort((a,b)=>{
-    const ai=CRM_STAGE_SEQUENCE.indexOf(a);
-    const bi=CRM_STAGE_SEQUENCE.indexOf(b);
-    if(ai>=0 || bi>=0){
-      if(ai<0) return 1;
-      if(bi<0) return -1;
-      if(ai!==bi) return ai-bi;
-    }
-    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
-  });
+  return Array.from(keys).sort(compareCrmStageKeysForSettings);
 }
 
 function renderCrmCapacitySettingsUI(){
@@ -22692,16 +22775,7 @@ function getCrmParallelStageKeysForSettings(){
     const key=resolveCrmStageKeyForPreset(item, keys);
     if(key && CRM_NOHOUR_STAGES.has(key)) keys.add(key);
   });
-  return Array.from(keys).sort((a,b)=>{
-    const ai=CRM_STAGE_SEQUENCE.indexOf(a);
-    const bi=CRM_STAGE_SEQUENCE.indexOf(b);
-    if(ai>=0 || bi>=0){
-      if(ai<0) return 1;
-      if(bi<0) return -1;
-      if(ai!==bi) return ai-bi;
-    }
-    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
-  });
+  return Array.from(keys).sort(compareCrmStageKeysForSettings);
 }
 
 function renderCrmParallelSettingsUI(){
@@ -22753,8 +22827,9 @@ function ensureCrmStageScheduleDraft(stage){
   if(!stage){
     return null;
   }
-  if(!CRM_STAGE_KEYS.includes(stage)){
-    const fallback=CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||null;
+  const availableStages=getCrmStageScheduleKeysForSettings();
+  if(!availableStages.includes(stage)){
+    const fallback=availableStages[0]||CRM_STAGE_SEQUENCE[0]||CRM_STAGE_KEYS[0]||null;
     stage=fallback||stage;
   }
   if(!crmStageScheduleDrafts[stage]){
@@ -22856,7 +22931,8 @@ function persistCrmStageScheduleEditorChange(summary){
   state=ensureCrmStateShape(state);
   if(!state.settings) state.settings=sanitizeCrmSettings({});
   commitCrmStageScheduleInputs();
-  state.settings.stageSchedules=sanitizeCrmStageSchedules(collectCrmStageScheduleDrafts(), state.settings?.hourlessSchedule);
+  const scheduleKeys=getCrmStageScheduleKeysForSettings();
+  state.settings.stageSchedules=sanitizeCrmStageSchedules(collectCrmStageScheduleDrafts(), state.settings?.hourlessSchedule, { stageKeys:scheduleKeys });
   if(Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
     delete state.settings.hourlessSchedule;
   }
@@ -22903,16 +22979,12 @@ function loadCrmStageScheduleEditor(stage){
 
 function renderCrmStageSchedulesUI(config){
   if(!crmStageScheduleContainer) return;
-  const scheduleMap=sanitizeCrmStageSchedules(config||getCrmStageSchedules(), state?.settings?.hourlessSchedule);
+  const availableStages=getCrmStageScheduleKeysForSettings();
+  const scheduleMap=sanitizeCrmStageSchedules(config||getCrmStageSchedules(), state?.settings?.hourlessSchedule, { stageKeys:availableStages });
   crmStageScheduleDrafts={};
-  CRM_STAGE_KEYS.forEach(stage=>{
+  availableStages.forEach(stage=>{
     crmStageScheduleDrafts[stage]=cloneCrmScheduleEntry(scheduleMap[stage]);
   });
-  const orderedStages=CRM_STAGE_SEQUENCE.filter(stage=>CRM_STAGE_KEYS.includes(stage));
-  const fallbackStages=Object.keys(crmStageScheduleDrafts).sort((a,b)=>{
-    return (CRM_STAGE_LABELS[a]||a).localeCompare(CRM_STAGE_LABELS[b]||b,'ru',{sensitivity:'base'});
-  });
-  const availableStages=orderedStages.length?orderedStages:fallbackStages;
   crmStageScheduleActiveStage=availableStages[0]||CRM_STAGE_KEYS[0]||'';
   crmStageScheduleContainer.innerHTML='';
   const row=document.createElement('div');
@@ -23073,7 +23145,7 @@ function renderCrmStageSchedulesUI(config){
 
 function collectCrmStageScheduleDrafts(){
   const result={};
-  CRM_STAGE_KEYS.forEach(stage=>{
+  getCrmStageScheduleKeysForSettings().forEach(stage=>{
     const entry=ensureCrmStageScheduleDraft(stage);
     if(entry){
       result[stage]=cloneCrmScheduleEntry(entry);
@@ -24488,7 +24560,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.8.2',
+    version:'5.8.3',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -24774,7 +24846,8 @@ boardForm.addEventListener('submit',e=>{
   const startViewSelect=boardForm.querySelector('select[name="startView"]');
   state.settings.startView=sanitizeCrmStartView(startViewSelect?startViewSelect.value:'');
   const scheduleDraft=collectCrmStageScheduleDrafts();
-  state.settings.stageSchedules=sanitizeCrmStageSchedules(scheduleDraft, state.settings?.stageSchedules||state.settings?.hourlessSchedule);
+  const scheduleKeys=getCrmStageScheduleKeysForSettings();
+  state.settings.stageSchedules=sanitizeCrmStageSchedules(scheduleDraft, state.settings?.stageSchedules||state.settings?.hourlessSchedule, { stageKeys:scheduleKeys });
   if(state.settings && Object.prototype.hasOwnProperty.call(state.settings,'hourlessSchedule')){
     delete state.settings.hourlessSchedule;
   }
