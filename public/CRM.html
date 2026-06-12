@@ -6324,13 +6324,13 @@
 </head>
 <body data-section="crm">
 <header class="pc-header">
-  <div class="pc-header__logo" aria-label="PlanCore">
+  <button class="pc-header__logo" type="button" id="crmLogoHomeBtn" aria-label="Перейти на главную страницу PlanCore" title="Главная страница">
     <span class="pc-logo-icon" aria-hidden="true">
       <img class="pc-logo-img--light" src="assets/planecore-logo-light.png" alt="" />
       <img class="pc-logo-img--dark" src="assets/planecore-logo-dark.png" alt="" />
     </span>
     <span class="pc-logo-text">PlanCore</span>
-  </div>
+  </button>
   <nav class="pc-nav" aria-label="Основные разделы">
     <button class="pc-nav__link" type="button" id="crmNavKanbanBtn" data-section="crm" data-view="kanban" data-tooltip-primary="CRM" data-tooltip-secondary="Главная доска с плитками заказов и быстрым переходом к стадиям.">CRM</button>
     <button class="pc-nav__link" type="button" id="crmOrdersTabBtn" data-section="orders" data-view="orders" data-tooltip-primary="Заказы" data-tooltip-secondary="Табличный список заказов, поиск, фильтрация и переход в карточки.">Заказы</button>
@@ -7217,6 +7217,7 @@
       <select class="pc-select" id="crmJournalFilter" aria-label="Фильтр журнала">
         <option value="all">Все типы</option>
       </select>
+      <button class="pc-btn pc-btn--secondary" type="button" id="crmJournalMarkAllRead">Прочитать все</button>
       <button class="pc-btn pc-btn--ghost" type="button" id="crmJournalClear">Очистить</button>
       <button class="pc-icon-btn" data-variant="ghost" type="button" id="crmJournalClose" aria-label="Закрыть">✖</button>
     </div>
@@ -9639,6 +9640,7 @@ let crmOrderReadinessEmpty=null;
 let crmOrderReadinessClose=null;
 let crmOrderReadinessCloseIcon=null;
 let crmJournalClear=null;
+let crmJournalMarkAllRead=null;
 let orderDone=null;
 let crmOptimizeResolver=null;
 let crmOptimizeCurrentEntries=[];
@@ -11455,6 +11457,7 @@ function getCrmStageCalendar(stageKey){
   stageExceptions.forEach((value,iso)=>exceptions.set(iso,value));
   return {
     exceptions,
+    stageExceptions,
     reserves:mapFromCalendarEntries(entry.reserves, false),
     globalExceptions:mapFromCalendarEntries(globalEntry.exceptions, true)
   };
@@ -11709,6 +11712,7 @@ crmOrderReadinessEmpty=document.getElementById('crmOrderReadinessEmpty');
 crmOrderReadinessClose=document.getElementById('crmOrderReadinessClose');
 crmOrderReadinessCloseIcon=document.getElementById('crmOrderReadinessCloseIcon');
 crmJournalClear=$('#crmJournalClear');
+crmJournalMarkAllRead=$('#crmJournalMarkAllRead');
 let crmJournalFilterType='all';
 let crmAdminAuditFilterAction='all';
 orderHistoryBtn=$('#orderHistoryBtn');
@@ -14243,10 +14247,14 @@ function buildCrmStageSchedule(stageKey, rows, options){
       const exceptionValue=hasException?Number(exceptionMap.get(ds)):null;
       const working=!scheduleEvaluator || scheduleEvaluator.isWorking(date);
       const extraShift=!!(scheduleEvaluator && typeof scheduleEvaluator.isExtraShift==='function' && scheduleEvaluator.isExtraShift(date));
+      const hasStageException=calendar.stageExceptions instanceof Map && calendar.stageExceptions.has(ds);
+      const hasGlobalException=calendar.globalExceptions instanceof Map && calendar.globalExceptions.has(ds);
+      const extraOverridesGlobalHoliday=extraShift && hasGlobalException && !hasStageException && (!Number.isFinite(exceptionValue) || exceptionValue<=0);
+      const effectiveHasException=hasException && !extraOverridesGlobalHoliday;
       let capDay=working?baseCapacity:0;
       let patternOff=!working;
       if(working){
-        const rawCap=hasException?exceptionValue:baseCapacity;
+        const rawCap=effectiveHasException?exceptionValue:baseCapacity;
         if(!Number.isFinite(rawCap) || rawCap<=0){
           capDay=0;
           patternOff=true;
@@ -14274,7 +14282,8 @@ function buildCrmStageSchedule(stageKey, rows, options){
           patternOff,
           extraShift,
           reserveExclusive:!isHourless && capDay>1e-6 && resLim>=capDay-1e-6,
-          exceptionValue:Number.isFinite(exceptionValue)?exceptionValue:null,
+          exceptionValue:effectiveHasException && Number.isFinite(exceptionValue)?exceptionValue:null,
+          extraOverridesGlobalHoliday,
           capDay
         }
       });
@@ -14718,7 +14727,7 @@ function renderCrmStageStack(schedule){
     const excluded=Math.max(0, Number(meta.excluded||0));
     const reserveLimit=Math.max(0, Number(meta.resLim||0));
     const formatWorkloadValue=value=>formatStageWorkload(value,{ hourless:schedule.isHourless });
-    const isOffDay=!!meta.patternOff;
+    const isOffDay=isCrmStageScheduleOffDay(day);
     const isExtraShift=!!meta.extraShift;
     const capValue=Number(meta.capDay||0);
     const hasException=Number.isFinite(meta.exceptionValue);
@@ -14985,22 +14994,7 @@ function renderCrmStageGantt(rows, schedule){
     const dateLabel=document.createElement('span');
     dateLabel.textContent=fmtDateHuman(day.date);
     headerCell.append(dow, dateLabel);
-    const isOffDay=!!(day.meta && day.meta.patternOff);
-    const isExtraShift=!!(day.meta && day.meta.extraShift);
-    if(isOffDay){
-      headerCell.classList.add('offday');
-      headerCell.title='Выходной по графику';
-    }
-    if(isExtraShift && !isOffDay){
-      headerCell.classList.add('extra-shift');
-      headerCell.title='Дополнительная смена';
-    }
-    if([0,6].includes(day.date.getDay())){
-      headerCell.classList.add('weekend');
-    }
-    if(key===todayKey){
-      headerCell.classList.add('today');
-    }
+    applyCrmStageDayClasses(headerCell, day, key, todayKey);
     crmStageGanttHeader.appendChild(headerCell);
   });
   const perTask=schedule.perTask;
@@ -15085,22 +15079,7 @@ function renderCrmStageGantt(rows, schedule){
     filteredDays.forEach(({ key, day })=>{
       const cell=document.createElement('div');
       cell.className='crm-stage-gantt-cell';
-      const isOffDay=!!(day.meta && day.meta.patternOff);
-      const isExtraShift=!!(day.meta && day.meta.extraShift);
-      if(isOffDay){
-        cell.classList.add('offday');
-        cell.title='Выходной по графику';
-      }
-      if(isExtraShift && !isOffDay){
-        cell.classList.add('extra-shift');
-        cell.title='Дополнительная смена';
-      }
-      if([0,6].includes(day.date.getDay())){
-        cell.classList.add('weekend');
-      }
-      if(key===todayKey){
-        cell.classList.add('today');
-      }
+      applyCrmStageDayClasses(cell, day, key, todayKey);
       const segs=rowSegments.filter(seg=>fmtDateISO(seg.date)===key);
       const total=segs.reduce((sum,seg)=>sum+seg.hours,0);
       const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
@@ -15154,21 +15133,7 @@ function renderCrmStageGantt(rows, schedule){
     filteredDays.forEach(({ key, day })=>{
       const cell=document.createElement('div');
       cell.className='crm-stage-gantt-cell crm-stage-gantt-cell--total';
-      const isOffDay=!!(day.meta && day.meta.patternOff);
-      const isExtraShift=!!(day.meta && day.meta.extraShift);
-      if(isOffDay){
-        cell.classList.add('offday');
-      }
-      if(isExtraShift && !isOffDay){
-        cell.classList.add('extra-shift');
-        cell.title='Дополнительная смена';
-      }
-      if([0,6].includes(day.date.getDay())){
-        cell.classList.add('weekend');
-      }
-      if(key===todayKey){
-        cell.classList.add('today');
-      }
+      applyCrmStageDayClasses(cell, day, key, todayKey);
 
       const capacityInfo=dayCapacityMap.get(key)||{ capacity:schedule.baseCapacity, free:0, used:0 };
       const baseCapacity=Number.isFinite(capacityInfo.capacity)?capacityInfo.capacity:schedule.baseCapacity;
@@ -19311,6 +19276,62 @@ function setCrmView(view){
   }
 }
 
+function isCrmStageScheduleOffDay(day){
+  const meta=day?.meta||{};
+  if(meta.patternOff) return true;
+  const capacity=Number(meta.capDay);
+  return Number.isFinite(capacity) && capacity<=1e-6 && !meta.extraShift;
+}
+
+function applyCrmStageDayClasses(element, day, key, todayKey){
+  if(!element || !day) return { off:false, extra:false };
+  const isOffDay=isCrmStageScheduleOffDay(day);
+  const isExtraShift=!!(day.meta&&day.meta.extraShift);
+  if(isOffDay){
+    element.classList.add('offday','weekend');
+    element.title='Выходной день по графику передела';
+  }else if(isExtraShift){
+    element.classList.add('extra-shift');
+    element.title='Дополнительная смена';
+  }
+  if(key===todayKey){
+    element.classList.add('today');
+  }
+  return { off:isOffDay, extra:isExtraShift && !isOffDay };
+}
+
+function navigateCrmLogoHome(){
+  const home=getCrmStartViewSetting();
+  if(CRM_STAGE_KEYS.includes(home)){
+    if(crmStageSelect){
+      const options=Array.from(crmStageSelect.options||[]);
+      const hasTarget=options.some(option=>option.value===home);
+      const fallback=options.find(option=>option.value)?.value||initialStageViewKey||home;
+      const target=hasTarget?home:fallback;
+      if(crmStageSelect.value!==target){
+        if(typeof applyCrmStageSelectValue==='function'){
+          applyCrmStageSelectValue(target, false);
+        }else{
+          crmStageSelect.value=target;
+          updateCrmStageSelectDisplay();
+          updateCrmStageSelectMenuSelection();
+        }
+        updateStageSelectAppearance(target);
+        renderCrmStageTabLabel(target);
+        persistCrmSessionStage(target);
+        updateCrmCalendarButtons(target);
+      }
+    }
+    setCrmView('stage');
+    return;
+  }
+  if(home==='orders'){
+    setCrmView('orders');
+    return;
+  }
+  setCrmView('kanban');
+}
+
 function syncCrmSimpleGanttHeaderHeight(leftHeader, header){
   if(!leftHeader) return;
   leftHeader.style.removeProperty('min-height');
@@ -19347,12 +19368,7 @@ function renderCrmSimpleGantt(targets, rows, schedule){
     const dow=document.createElement('span'); dow.className='crm-gantt-dow'; dow.textContent=weekdayShort(day.date);
     const label=document.createElement('span'); label.textContent=fmtDateHuman(day.date);
     cell.append(dow,label);
-    const isOffDay=!!(day.meta&&day.meta.patternOff);
-    const isExtraShift=!!(day.meta&&day.meta.extraShift);
-    if(isOffDay){ cell.classList.add('offday'); cell.title='Выходной по графику'; }
-    if(isExtraShift && !isOffDay){ cell.classList.add('extra-shift'); cell.title='Дополнительная смена'; }
-    if([0,6].includes(day.date.getDay())) cell.classList.add('weekend');
-    if(key===todayKey) cell.classList.add('today');
+    applyCrmStageDayClasses(cell, day, key, todayKey);
     header.appendChild(cell);
   });
   syncCrmSimpleGanttHeaderHeight(leftHeader, header);
@@ -19381,12 +19397,7 @@ function renderCrmSimpleGantt(targets, rows, schedule){
     const fillStatusClass=shipLate?'status-ship-late':rowStageLate?'status-stage-late':'status-ok';
     days.forEach(({key,day})=>{
       const cell=document.createElement('div'); cell.className='crm-stage-gantt-cell';
-      const isOffDay=!!(day.meta&&day.meta.patternOff);
-      const isExtraShift=!!(day.meta&&day.meta.extraShift);
-      if(isOffDay){ cell.classList.add('offday'); cell.title='Выходной по графику'; }
-      if(isExtraShift && !isOffDay){ cell.classList.add('extra-shift'); cell.title='Дополнительная смена'; }
-      if([0,6].includes(day.date.getDay())) cell.classList.add('weekend');
-      if(key===todayKey) cell.classList.add('today');
+      applyCrmStageDayClasses(cell, day, key, todayKey);
       const segs=segments.filter(seg=>fmtDateISO(seg.date)===key);
       const total=segs.reduce((sum,seg)=>sum+(Number(seg.hours)||0),0);
       if(total>0){
@@ -24477,7 +24488,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.8.1',
+    version:'5.8.2',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -25340,6 +25351,9 @@ function renderCrmJournalList(){
   if(crmJournalClear){
     crmJournalClear.disabled=allEntries.length===0;
   }
+  if(crmJournalMarkAllRead){
+    crmJournalMarkAllRead.disabled=countCrmJournalUnread()===0;
+  }
   if(crmJournalEmpty){
     crmJournalEmpty.textContent=allEntries.length
       ? 'Нет записей выбранного типа.'
@@ -25418,7 +25432,26 @@ function updateCrmJournalUi(){
   }
 }
 
-function markCrmJournalEntriesRead(){
+function persistCrmJournalReadState(summary){
+  try{persistLocal();}
+  catch(_err){/* ignore */}
+  try{queueSync(summary||'Обновление прочитанных уведомлений CRM',{ source:'journal-read-state' });}
+  catch(_err){/* ignore */}
+}
+
+function markCrmJournalEntryRead(entryId, options={}){
+  if(!entryId) return false;
+  const entry=getCrmJournalEntries().find(item=>item?.id===entryId);
+  if(!entry || !entry.unread) return false;
+  entry.unread=false;
+  updateCrmJournalUi();
+  if(options.sync!==false){
+    persistCrmJournalReadState('Уведомление CRM прочитано');
+  }
+  return true;
+}
+
+function markCrmJournalEntriesRead(options={}){
   const entries=getCrmJournalEntries();
   let changed=false;
   entries.forEach(entry=>{
@@ -25428,14 +25461,16 @@ function markCrmJournalEntriesRead(){
     }
   });
   if(changed){
-    try{persistLocal();}
-    catch(_err){/* ignore */}
+    updateCrmJournalUi();
+    if(options.sync!==false){
+      persistCrmJournalReadState('Все уведомления CRM прочитаны');
+    }
   }
+  return changed;
 }
 
 function openCrmJournal(){
   if(!crmJournalDlg) return;
-  markCrmJournalEntriesRead();
   renderCrmJournalList();
   updateCrmJournalUi();
   try{crmJournalDlg.showModal();}
@@ -25475,6 +25510,12 @@ function handleCrmJournalClear(){
   catch(_err){/* ignore */}
 }
 
+function handleCrmJournalMarkAllRead(){
+  markCrmJournalEntriesRead();
+  renderCrmJournalList();
+  updateCrmJournalUi();
+}
+
 function closeCrmJournalDetail(){
   if(crmJournalDetailDlg){
     crmJournalDetailDlg.close();
@@ -25484,6 +25525,9 @@ function closeCrmJournalDetail(){
 function openCrmJournalDetail(entryId){
   if(!crmJournalDetailDlg) return;
   const entry=getCrmJournalEntries().find(item=>item.id===entryId);
+  if(entry?.unread){
+    markCrmJournalEntryRead(entry.id);
+  }
   renderCrmJournalDetail(entry||null);
   try{crmJournalDetailDlg.showModal();}
   catch(_err){crmJournalDetailDlg.open=true;}
@@ -26757,6 +26801,10 @@ if(crmGanttTabBtn){
 if(crmRouteTabBtn){
   crmRouteTabBtn.addEventListener('click',()=>setCrmView('route'));
 }
+const crmLogoHomeBtn=document.getElementById('crmLogoHomeBtn');
+if(crmLogoHomeBtn){
+  crmLogoHomeBtn.addEventListener('click',navigateCrmLogoHome);
+}
 if(crmStageNavItem && crmStageNavDropdown){
   const openStageDropdown=()=>{
     if(crmStageNavHoverTimeout){
@@ -27034,6 +27082,9 @@ if(crmJournalClose){
 }
 if(crmJournalClear){
   crmJournalClear.addEventListener('click',()=>handleCrmJournalClear());
+}
+if(crmJournalMarkAllRead){
+  crmJournalMarkAllRead.addEventListener('click',()=>handleCrmJournalMarkAllRead());
 }
 if(crmJournalFilter){
   crmJournalFilter.addEventListener('change',()=>{

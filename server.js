@@ -1342,7 +1342,7 @@ function buildUsersRolesExportPayload() {
   });
   return {
     type: 'planecore-users-roles',
-    version: '5.8.1',
+    version: '5.8.2',
     exportedAt: new Date().toISOString(),
     authMode: AUTH_MODE,
     roles: listAllRoles().map((role) => ({
