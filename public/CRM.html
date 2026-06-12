@@ -6326,7 +6326,8 @@
 <header class="pc-header">
   <div class="pc-header__logo" aria-label="PlanCore">
     <span class="pc-logo-icon" aria-hidden="true">
-      <img src="assets/planecore-logo.png" alt="" />
+      <img class="pc-logo-img--light" src="assets/planecore-logo-light.png" alt="" />
+      <img class="pc-logo-img--dark" src="assets/planecore-logo-dark.png" alt="" />
     </span>
     <span class="pc-logo-text">PlanCore</span>
   </div>
@@ -20251,6 +20252,7 @@ addStageFromListBtn=$('#addStageFromListBtn');
 let suppressAutoStatusUpdate=false;
 let orderDraftBaseline=null;
 let orderDialogClosing=false;
+let orderClosePromptActive=false;
 
 if(orderForm){
   const orderNoInput=orderForm.querySelector('input[name="orderNo"]');
@@ -21425,6 +21427,7 @@ if(orderDlg){
     stageSourceMap=new Map();
     orderDraftBaseline=null;
     orderDialogClosing=false;
+    orderClosePromptActive=false;
     if(dlgTitleMeta){
       dlgTitleMeta.textContent='';
     }
@@ -22321,14 +22324,59 @@ function hasOrderDraftChanges(){
   return JSON.stringify(current)!==JSON.stringify(orderDraftBaseline);
 }
 
-function attemptCloseOrderDialog(){
+function askOrderCloseSaveChoice(){
+  if(orderClosePromptActive) return Promise.resolve(null);
+  orderClosePromptActive=true;
+  return new Promise(resolve=>{
+    const dialog=document.createElement('dialog');
+    dialog.className='pc-modal pc-modal--sm';
+    dialog.setAttribute('aria-label','Сохранить изменения перед закрытием');
+    dialog.innerHTML=[
+      '<div class="dlg-head"><h3>Закрыть карточку заказа?</h3></div>',
+      '<div class="dlg-body"><p>Есть несохранённые изменения. Сохранить перед закрытием?</p></div>',
+      '<div class="dlg-footer">',
+      '<button type="button" class="pc-btn pc-btn--secondary" data-order-close-choice="no">Нет</button>',
+      '<button type="button" class="pc-btn pc-btn--primary" data-order-close-choice="yes">Да</button>',
+      '</div>'
+    ].join('');
+    let resolved=false;
+    const finish=value=>{
+      if(resolved) return;
+      resolved=true;
+      orderClosePromptActive=false;
+      dialog.close();
+      dialog.remove();
+      resolve(value);
+    };
+    dialog.addEventListener('cancel',event=>{
+      event.preventDefault();
+      finish(false);
+    });
+    dialog.querySelector('[data-order-close-choice="yes"]')?.addEventListener('click',()=>finish(true));
+    dialog.querySelector('[data-order-close-choice="no"]')?.addEventListener('click',()=>finish(false));
+    document.body.appendChild(dialog);
+    try{
+      if(typeof dialog.showModal==='function'){
+        dialog.showModal();
+      }else{
+        dialog.setAttribute('open','');
+      }
+    }catch(_err){
+      dialog.setAttribute('open','');
+    }
+    dialog.querySelector('[data-order-close-choice="yes"]')?.focus();
+  });
+}
+
+async function attemptCloseOrderDialog(){
   if(!orderDlg || !orderDlg.open) return;
   if(orderDialogClosing){
     orderDlg.close();
     return;
   }
   if(hasOrderDraftChanges()){
-    const saveNow=window.confirm('Есть несохранённые изменения. Сохранить перед закрытием?');
+    const saveNow=await askOrderCloseSaveChoice();
+    if(saveNow===null) return;
     if(saveNow){
       orderDialogClosing=true;
       if(typeof orderForm.requestSubmit==='function'){
@@ -24429,7 +24477,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.8.0',
+    version:'5.8.1',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
