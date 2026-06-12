@@ -4716,8 +4716,13 @@
 
   .crm-journal-modal,
   .crm-journal-detail-modal {
-    width: min(520px, 92vw);
-    max-width: 640px;
+    width: min(680px, 94vw);
+    max-width: 760px;
+  }
+
+  dialog#crmJournalDlg.crm-journal-modal {
+    width: min(760px, 96vw);
+    max-width: 820px;
   }
 
   .crm-journal-modal__head {
@@ -7132,6 +7137,7 @@
     <div id="crmSettingsConflictsContent" class="crm-settings-conflicts"></div>
   </div>
   <div class="dlg-footer">
+    <button type="button" class="pc-btn pc-btn--primary" id="crmSettingsConflictsCleanup" hidden>Очистить устаревшие ключи</button>
     <button type="button" class="pc-btn pc-btn--secondary" id="crmSettingsConflictsClose">Закрыть</button>
   </div>
 </dialog>
@@ -22601,6 +22607,7 @@ const crmSettingsImportFile=$('#crmSettingsImportFile');
 const crmSettingsConflictsBtn=$('#crmSettingsConflictsBtn');
 const crmSettingsConflictsDlg=$('#crmSettingsConflictsDlg');
 const crmSettingsConflictsContent=$('#crmSettingsConflictsContent');
+const crmSettingsConflictsCleanup=$('#crmSettingsConflictsCleanup');
 const crmSettingsConflictsClose=$('#crmSettingsConflictsClose');
 const crmSettingsConflictsCloseIcon=$('#crmSettingsConflictsCloseIcon');
 const crmUnaccountedHidden=$('#crmUnaccountedHidden');
@@ -24509,8 +24516,9 @@ function collectCrmSettingsConflicts(){
       });
     });
   });
-  const orphanCapacity=Object.keys(state?.settings?.capacity||{}).filter(key=>!CRM_STAGE_KEYS.includes(normalizeCrmStageKey(key)));
-  const orphanParallel=Object.keys(state?.settings?.parallel||{}).filter(key=>!CRM_STAGE_KEYS.includes(normalizeCrmStageKey(key)));
+  const orphanSettings=getCrmOrphanStageSettingKeys();
+  const orphanCapacity=orphanSettings.capacity;
+  const orphanParallel=orphanSettings.parallel;
   const toItems=map=>Array.from(map.entries()).map(([name,orders])=>`${name}: ${Array.from(orders).filter(Boolean).slice(0,5).join(', ')||'заказы не найдены'}`);
   if(unknownStages.size) groups.push({ title:'Переделы есть в заказах, но отсутствуют в «Списке переделов»', items:toItems(unknownStages) });
   if(missingSteps.size) groups.push({ title:'Этапы есть в заказах, но не прописаны в настройках передела', items:toItems(missingSteps) });
@@ -24519,9 +24527,68 @@ function collectCrmSettingsConflicts(){
   return groups;
 }
 
+function getCrmOrphanStageSettingKeys(){
+  ensureCrmDynamicStageCatalog();
+  const validCapacity=new Set(getCrmCapacityStageKeysForSettings().map(normalizeCrmStageKey).filter(Boolean));
+  const validParallel=new Set(getCrmParallelStageKeysForSettings().map(normalizeCrmStageKey).filter(Boolean));
+  const collect=(source, validKeys)=>{
+    if(!source || typeof source!=='object') return [];
+    return Object.keys(source).filter(key=>{
+      const normalized=normalizeCrmStageKey(key);
+      return normalized && !validKeys.has(normalized);
+    });
+  };
+  return {
+    capacity:collect(state?.settings?.capacity, validCapacity),
+    parallel:collect(state?.settings?.parallel, validParallel)
+  };
+}
+
+function removeCrmStageSettingKeys(map, keys){
+  const source=map&&typeof map==='object'?map:{};
+  const result={ ...source };
+  (Array.isArray(keys)?keys:[]).forEach(key=>{
+    delete result[key];
+    const normalized=normalizeCrmStageKey(key);
+    if(normalized) delete result[normalized];
+  });
+  return result;
+}
+
+function handleCrmSettingsConflictsCleanup(){
+  const orphans=getCrmOrphanStageSettingKeys();
+  const capacityCount=orphans.capacity.length;
+  const parallelCount=orphans.parallel.length;
+  if(!capacityCount && !parallelCount){
+    renderCrmSettingsConflicts();
+    return;
+  }
+  state=ensureCrmStateShape(state);
+  if(!state.settings) state.settings=sanitizeCrmSettings({});
+  state.settings.capacity=removeCrmStageSettingKeys(state.settings.capacity, orphans.capacity);
+  state.settings.parallel=removeCrmStageSettingKeys(state.settings.parallel, orphans.parallel);
+  save('Очистка устаревших ключей переделов CRM', {
+    meta:{
+      source:'settings-conflicts-cleanup',
+      summary:'Удалены устаревшие ключи вместимости и параллельности'
+    },
+    skipAutoOptimize:true
+  });
+  renderCrmCapacitySettingsUI();
+  renderCrmParallelSettingsUI();
+  renderCrmSettingsConflicts();
+  const total=capacityCount+parallelCount;
+  showToast({ title:'CRM', message:`Удалено устаревших записей: ${total}.`, tone:'success' });
+}
+
 function renderCrmSettingsConflicts(){
   if(!crmSettingsConflictsContent) return;
   const groups=collectCrmSettingsConflicts();
+  const orphans=getCrmOrphanStageSettingKeys();
+  const hasCleanupItems=orphans.capacity.length>0 || orphans.parallel.length>0;
+  if(crmSettingsConflictsCleanup){
+    crmSettingsConflictsCleanup.hidden=!hasCleanupItems || !crmCanManageSettings();
+  }
   crmSettingsConflictsContent.innerHTML='';
   if(!groups.length){
     const empty=document.createElement('div');
@@ -24560,7 +24627,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.8.3',
+    version:'5.8.4',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -24621,6 +24688,9 @@ if(crmSettingsExportBtn){
 }
 if(crmSettingsConflictsBtn){
   crmSettingsConflictsBtn.addEventListener('click',openCrmSettingsConflicts);
+}
+if(crmSettingsConflictsCleanup){
+  crmSettingsConflictsCleanup.addEventListener('click',handleCrmSettingsConflictsCleanup);
 }
 if(crmSettingsConflictsClose){
   crmSettingsConflictsClose.addEventListener('click',closeCrmSettingsConflicts);
