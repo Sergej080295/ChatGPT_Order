@@ -3628,6 +3628,12 @@
     scrollbar-gutter: stable;
   }
 
+  .crm-stage-route-left-body {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .crm-stage-route-right {
     display: flex;
     flex-direction: column;
@@ -3708,6 +3714,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    width: 100%;
     padding: 0 10px;
     border-bottom: 1px solid color-mix(in srgb, var(--pc-border) 65%, transparent);
     font-size: 13px;
@@ -3716,6 +3723,10 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .crm-stage-route-left-body .crm-route-label.crm-linklike {
+    display: flex;
   }
 
   .crm-route-label--header {
@@ -9929,9 +9940,8 @@ const applyCrmWriteAccess=()=>{
 
 function updateCrmCalendarButtons(stageKey){
   const key=stageKey||crmStageSelect?.value||'draw';
-  const { exceptions, reserves }=getCrmStageCalendar(key);
-  const hasExceptions=exceptions instanceof Map && exceptions.size>0;
-  const hasReserves=reserves instanceof Map && reserves.size>0;
+  const hasExceptions=hasActiveCrmStageCalendarEntries(key, 'exceptions');
+  const hasReserves=hasActiveCrmStageCalendarEntries(key, 'reserves');
   const applyFlag=(btn, active, info=false)=>{
     if(!btn) return;
     btn.classList.toggle('crm-calendar-flag', !!active);
@@ -12548,6 +12558,25 @@ function resolveCrmStageKeyWithMapping(name){
     }
   }
   return resolveCrmStageKey(split.base||normalized);
+}
+
+function resolveCrmStageKeyForRecord(stage){
+  if(!stage || typeof stage!=='object') return null;
+  const directFields=[stage.stageKey, stage.crmStageKey, stage.key, stage.code];
+  for(const value of directFields){
+    const normalized=normalizeCrmStageKey(value);
+    if(normalized && CRM_STAGE_KEYS.includes(normalized)){
+      return normalized;
+    }
+  }
+  const name=stage.name || stage.label || stage.stageName || stage.title || '';
+  return resolveCrmStageKeyWithMapping(name) || resolveCrmStageKey(name);
+}
+
+function crmStageRecordMatchesKey(stage, stageKey){
+  const normalized=normalizeCrmStageKey(stageKey);
+  if(!normalized) return false;
+  return resolveCrmStageKeyForRecord(stage)===normalized;
 }
 
 function getCrmStageFilter(stageKey){
@@ -16128,6 +16157,11 @@ function splitCrmCalendarEntries(stageKey, kind){
   return { upcoming, archived };
 }
 
+function hasActiveCrmStageCalendarEntries(stageKey, kind){
+  const { upcoming }=splitCrmCalendarEntries(stageKey, kind);
+  return Array.isArray(upcoming) && upcoming.length>0;
+}
+
 function formatCrmCalendarRow(item, kind){
   const metaParts=[formatCalendarIso(item.iso)];
   if(item.time) metaParts.push(item.time);
@@ -18941,7 +18975,7 @@ function findCrmStageContext(orderId, stageId, stageKey){
     orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>ensureStageIdentity(st)===normalizedStageId));
   }
   if(orderIndex<0 && typeof stageKey==='string'){
-    orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>resolveCrmStageKey(st?.name)===stageKey));
+    orderIndex=orders.findIndex(o=>Array.isArray(o?.stages)&&o.stages.some(st=>crmStageRecordMatchesKey(st, stageKey)));
   }
   let order=orderIndex>=0?orders[orderIndex]:null;
   if(!order && normalizedStageId){
@@ -18959,7 +18993,7 @@ function findCrmStageContext(orderId, stageId, stageKey){
     stageIndex=stages.findIndex(st=>ensureStageIdentity(st)===normalizedStageId);
   }
   if(stageIndex<0 && typeof stageKey==='string'){
-    stageIndex=stages.findIndex(st=>resolveCrmStageKey(st?.name)===stageKey);
+    stageIndex=stages.findIndex(st=>crmStageRecordMatchesKey(st, stageKey));
   }
   if(stageIndex>=0){
     stage=stages[stageIndex];
@@ -18981,12 +19015,49 @@ function updateOrderAfterStageChange(order){
   order.done=allDone;
 }
 
+function writeCrmOrderBackToState(order, contextBoard=null, contextIndex=-1){
+  if(!order || typeof order!=='object') return null;
+  state=ensureCrmStateShape(state);
+  const orderId=String(order.id||'').trim();
+  const boardIds=new Set();
+  if(contextBoard?.id) boardIds.add(String(contextBoard.id));
+  if(state.currentBoardId) boardIds.add(String(state.currentBoardId));
+  const candidates=[];
+  const addBoard=board=>{
+    if(!board || !Array.isArray(board.orders) || candidates.includes(board)) return;
+    candidates.push(board);
+  };
+  (Array.isArray(state.boards)?state.boards:[]).forEach(board=>{
+    if(!boardIds.size || boardIds.has(String(board.id||''))){
+      addBoard(board);
+    }
+  });
+  addBoard(currentBoard());
+  for(const board of candidates){
+    let index=-1;
+    if(orderId){
+      index=board.orders.findIndex(item=>String(item?.id||'').trim()===orderId);
+    }
+    if(index<0 && Number.isInteger(contextIndex) && contextIndex>=0 && contextIndex<board.orders.length){
+      const candidate=board.orders[contextIndex];
+      if(!orderId || String(candidate?.id||'').trim()===orderId){
+        index=contextIndex;
+      }
+    }
+    if(index>=0){
+      board.orders[index]=order;
+      return { board, index };
+    }
+  }
+  return null;
+}
+
 function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   if(!crmCanManageStage(stageKey)){
     showToast({ title:'CRM', message:'У вас нет прав для управления бронью этого передела.', tone:'warn' });
     return;
   }
-  const { order, stage }=findCrmStageContext(orderId, stageId, stageKey);
+  const { board, order, orderIndex, stage }=findCrmStageContext(orderId, stageId, stageKey);
   if(!order || !stage){
     showToast({ title:'CRM', message:'Не удалось найти передел для изменения брони. Обновите страницу и попробуйте ещё раз.', tone:'error' });
     return;
@@ -18994,6 +19065,7 @@ function handleCrmStageReserveToggle(orderId, stageId, stageKey, checked){
   const previousSnapshot=snapshotOrderForJournal(order);
   stage.useReserve=!!checked;
   updateOrderAfterStageChange(order);
+  writeCrmOrderBackToState(order, board, orderIndex);
   if(stageId) crmStageSelectionId=stageId;
   commitCrmOrderJournal(previousSnapshot, order);
   save('Обновление брони передела');
@@ -19140,6 +19212,7 @@ async function handleCrmStageDoneToggle(orderId, stageId, stageKey, checked, sou
     board.orders[orderIndex]=order;
   }
   updateOrderAfterStageChange(order);
+  writeCrmOrderBackToState(order, board, orderIndex);
   if(stageId) crmStageSelectionId=stageId;
   commitCrmOrderJournal(previousSnapshot, order);
   save('Изменение готовности передела');
@@ -19151,13 +19224,14 @@ function handleCrmStageDelete(orderId, stageId, stageKey){
     showToast({ title:'CRM', message:'У вас нет прав для удаления этого передела.', tone:'warn' });
     return;
   }
-  const { board, order, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
+  const { board, order, orderIndex, stage, stageIndex }=findCrmStageContext(orderId, stageId, stageKey);
   if(!board || !order || stageIndex<0 || !stage) return;
   if(!confirm('Удалить передел из заказа? Он будет перемещён в «Корзину».')) return;
   const previousSnapshot=snapshotOrderForJournal(order);
   const removed=order.stages.splice(stageIndex,1)[0];
   pushStageToTrash(order, removed, board, stageIndex);
   updateOrderAfterStageChange(order);
+  writeCrmOrderBackToState(order, board, orderIndex);
   if(stageId && crmStageSelectionId===stageId){
     crmStageSelectionId=null;
   }
@@ -24627,7 +24701,7 @@ function closeCrmSettingsConflicts(){
 function buildCrmSettingsExportPayload(){
   return {
     type:'planecore-crm-settings',
-    version:'5.8.4',
+    version:'5.8.5',
     exportedAt:new Date().toISOString(),
     board:{
       id:currentBoard()?.id||'',
@@ -26443,6 +26517,20 @@ function finishCrmSync(){
   }
 }
 
+function hasCrmLocalSyncPending(){
+  try{
+    return !!crmSyncInFlight || !!crmSyncTimer;
+  }catch(_err){
+    return false;
+  }
+}
+
+function clearCrmDeferredRemotePayload(){
+  crmPendingRemotePayload=null;
+  crmPendingRemoteDirty=false;
+  crmPendingRemoteNotified=false;
+}
+
 async function pushCrmToServer(){
   if(crmSyncInFlight){
     crmSyncQueuedDuringFlight=true;
@@ -26616,6 +26704,9 @@ async function pushCrmToServer(){
   }
 
   if(success){
+    if(crmPendingRemotePayload){
+      clearCrmDeferredRemotePayload();
+    }
     if(savedCrmSnapshot){
       crmLastSyncedSnapshot=deepClone(savedCrmSnapshot);
       if(!crmValuesEqual(state,savedCrmSnapshot)){
@@ -26787,6 +26878,12 @@ if(window.plannerRemote&&typeof window.plannerRemote.onRemoteUpdate==='function'
     if(!payload||!payload.state) return;
     if(isOrderDialogActive()){
       deferPlannerRemotePayload(payload);
+      return;
+    }
+    if(hasCrmLocalSyncPending()){
+      crmPendingRemotePayload=payload;
+      crmPendingRemoteDirty=true;
+      crmPendingRemoteNotified=false;
       return;
     }
     applyPlannerRemotePayload(payload);
