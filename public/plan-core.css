@@ -30,7 +30,7 @@
   --pc-shadow-surface: 0 10px 25px rgba(0, 0, 0, 0.06);
   --pc-shadow-surface-dark: 0 12px 30px rgba(0, 0, 0, 0.35);
 
-  --pc-primary: #FFC400;
+  --pc-primary: #D6A300;
   --pc-danger: #D73C2C;
   --pc-info: #0EA5E9;
   --pc-ok: #22C55E;
@@ -40,11 +40,22 @@
   --pc-status-overdue: #D73C2C;
   --pc-status-waiting: #FFC400;
 
-  --pc-bg: #F7F8FA;
-  --pc-surface: #FFFFFF;
-  --pc-text: #1E1E1E;
+  --pc-bg: #FBFAF6;
+  --pc-surface: rgba(255, 255, 255, 0.94);
+  --pc-surface-base: rgba(255, 255, 255, 0.96);
+  --pc-surface-subtle: rgba(248, 242, 229, 0.86);
+  --pc-text: #1F1A12;
+  --pc-text-base: #1F1A12;
+  --pc-text-strong: #17120A;
   --pc-text-muted: #6B7280;
-  --pc-border: #E5E7EB;
+  --pc-border: #E6D8B8;
+  --pc-border-subtle: #E8D9B8;
+  --pc-border-strong: #C8A45B;
+  --pc-accent: #D6A300;
+  --pc-accent-primary: #B88900;
+  --pc-accent-muted: rgba(214, 163, 0, 0.16);
+  --pc-accent-on-muted: #6A4B00;
+  --pc-accent-on-primary: #17120A;
   --pc-backdrop: rgba(15, 17, 21, 0.46);
   --pc-scrollbar: rgba(148, 163, 184, 0.5);
 
@@ -54,11 +65,22 @@
 
 body.theme-dark {
   color-scheme: dark;
-  --pc-bg: #0F1115;
-  --pc-surface: #14161C;
-  --pc-text: #F3F4F6;
-  --pc-text-muted: #9CA3AF;
-  --pc-border: #1F2937;
+  --pc-bg: #101010;
+  --pc-surface: rgba(23, 22, 19, 0.94);
+  --pc-surface-base: rgba(27, 25, 21, 0.96);
+  --pc-surface-subtle: rgba(44, 38, 27, 0.78);
+  --pc-text: #F5EBD3;
+  --pc-text-base: #F5EBD3;
+  --pc-text-strong: #FFF4D8;
+  --pc-text-muted: #B8AC92;
+  --pc-border: #3B3322;
+  --pc-border-subtle: #4A3E27;
+  --pc-border-strong: #7C642D;
+  --pc-accent: #D8A820;
+  --pc-accent-primary: #F0C653;
+  --pc-accent-muted: rgba(216, 168, 32, 0.18);
+  --pc-accent-on-muted: #FFE7A3;
+  --pc-accent-on-primary: #17120A;
   --pc-backdrop: rgba(10, 12, 16, 0.75);
   --pc-scrollbar: rgba(75, 85, 99, 0.7);
 }
@@ -79,6 +101,26 @@ body {
   display: flex;
   flex-direction: column;
   transition: background var(--pc-transition-medium), color var(--pc-transition-short);
+}
+
+body[data-pc-bg="image"] {
+  background-color: var(--pc-bg);
+  background-image:
+    linear-gradient(180deg, rgba(251, 250, 246, 0.66), rgba(251, 250, 246, 0.78)),
+    url("assets/planecore-bg-light.png");
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+body.theme-dark[data-pc-bg="image"] {
+  background-image:
+    linear-gradient(180deg, rgba(16, 16, 16, 0.5), rgba(16, 16, 16, 0.68)),
+    url("assets/planecore-bg-dark.png");
+}
+
+body[data-pc-bg="plain"] {
+  background-image: none;
 }
 
 body::selection {
@@ -165,23 +207,35 @@ body.theme-dark .pc-surface {
 }
 
 .pc-header__logo {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--pc-spacing-sm);
   font-weight: var(--pc-font-weight-semibold);
   color: var(--pc-text);
+  cursor: pointer;
+  border-radius: var(--pc-radius-sm);
+}
+
+.pc-header__logo:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--pc-accent-primary) 48%, transparent);
+  outline-offset: 4px;
 }
 
 .pc-logo-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 12px;
+  width: clamp(230px, 22vw, 340px);
+  height: 76px;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(140deg, rgba(255, 196, 0, 0.85), rgba(255, 196, 0, 0.35));
-  box-shadow: 0 8px 16px rgba(255, 196, 0, 0.25);
+  background: transparent;
+  box-shadow: none;
   color: #1F2937;
+  overflow: hidden;
 }
 
 .pc-logo-icon svg {
@@ -189,9 +243,26 @@ body.theme-dark .pc-surface {
   height: 20px;
 }
 
+.pc-logo-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pc-logo-img--dark {
+  display: none;
+}
+
+body.theme-dark .pc-logo-img--light {
+  display: none;
+}
+
+body.theme-dark .pc-logo-img--dark {
+  display: block;
+}
+
 .pc-logo-text {
-  font-size: 18px;
-  letter-spacing: 0.3px;
+  display: none;
 }
 
 .pc-nav {
@@ -1281,4 +1352,20 @@ body.theme-dark .pc-btn--primary {
 
 #crmOptimizeDlg[data-compact="0"] .crm-optimize-item__stats {
   display: none;
+}
+
+.pc-version-badge {
+  position: fixed;
+  top: 10px;
+  right: 12px;
+  z-index: 9999;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--pc-text-muted) 80%, transparent);
+  background: color-mix(in srgb, var(--pc-surface) 75%, transparent);
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pc-border) 65%, transparent);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
 }
